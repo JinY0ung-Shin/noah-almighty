@@ -22,13 +22,13 @@ export interface PiCompactDescription {
 /** Keyed `<server>/<tool>`. */
 export const PI_COMPACT_DESCRIPTIONS: Record<string, PiCompactDescription> = {
   "canvas/show": {
-    replaces: "9a7c99fb97dcfe46",
+    replaces: "281529f50b2272b4",
     text:
-      "Show a visual canvas in the chat side panel to share and refine a diagram, mockup, layout, chart or option comparison — not to repeat text the chat already renders. " +
-      "contentType: 'markdown'; 'vega' (ONLY a compact Vega-Lite JSON spec, data inlined, no remote data URLs — prefer it for any data chart over hand-drawn SVG); 'mermaid' (ONLY the diagram source; double-quote every node/edge label with punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] — a parse error comes back to you to fix); 'svg' (an inline <svg> for what Vega/mermaid cannot express); 'html' (a static page in its own sandboxed frame: scripts never run, links don't open); 'widget' (EXPERIMENTAL: a calculator, what-if or filterable table the user changes values in — recomputes locally, you are NOT called; a tag + expression source: read manual topic `canvas-widget` FIRST; no `controls`/`editable`). Never put scripts or executable JS in content; it is sanitized away. " +
-      "`controls` collect a decision ANCHORED TO the artifact shown: 'buttons' (cards, single or multiSelect), 'select' (many options), 'slider'/'number' (min/max/step), 'date', 'text'; each is required unless `required:false`. For a plain question with nothing visual to show, use AskUserQuestion instead — never open a canvas just to ask. " +
-      "On this runtime the tool NEVER waits: it returns at once and the user's submission arrives as their NEXT message referencing this canvas, so after showing controls finish your answer and say what you are waiting for (`wait` is ignored); never ask the user to type a choice the controls can capture. " +
-      "`editable:true` (best with markdown) lets the user edit the content and send it back. To REFINE, call again with the SAME `canvasId`: it updates that canvas in place (a version is kept), not a new one.",
+      "Show a visual canvas in the chat side panel to share and refine a diagram, mockup, chart or option comparison — not to repeat text the chat already renders. " +
+      "contentType: 'markdown'; 'vega' (ONLY a compact Vega-Lite JSON spec, data inlined, no remote data URLs — prefer it for any data chart over hand-drawn SVG); 'mermaid' (ONLY the diagram source; double-quote every node/edge label with punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] — a parse error comes back to you to fix); 'svg' (inline <svg> for what Vega/mermaid cannot express); 'html' (a static page in its own sandboxed frame: scripts never run, links don't open); 'widget' (EXPERIMENTAL, renders INLINE in your answer where you call it, not in the panel — don't repeat it in prose: a calculator, quiz, choices or filterable table the user operates; recomputes locally, you are NOT called; read manual `canvas-widget` FIRST; no `controls`/`editable`). Never put scripts or executable JS in content; it is sanitized away. " +
+      "`controls` collect a decision ANCHORED TO the artifact shown: 'buttons' (cards, single or multiSelect), 'select' (many options), 'slider'/'number' (min/max/step), 'date', 'text'; each is required unless `required:false`. For a plain question with nothing visual, use AskUserQuestion — never open a canvas just to ask. " +
+      "On this runtime the tool NEVER waits: it returns at once and the user's submission arrives as their NEXT message referencing this canvas, so after showing controls finish your answer and say what you wait for (`wait` is ignored); never ask the user to type a choice the controls can capture. " +
+      "`editable:true` (best with markdown) lets the user edit the content and send it back. To REFINE, call again with the SAME `canvasId`: it updates that canvas in place (a version is kept).",
   },
   "browser/type": {
     replaces: "59e842a7a640177d",
@@ -86,7 +86,7 @@ export const PI_DISCOVERY_SENTENCES: Record<string, string> = {
   "brain/propose_team_note": "Share a fact, decision or fix with the whole team in the team brain.",
   "brain/list_team_proposals": "Check team-brain proposals: their status, or the ones awaiting review.",
   "browser/click": "Click a button, link, checkbox, menu item or tab.",
-  "canvas/show": "Draw a diagram or mockup for the user to review, or build an interactive calculator or what-if widget.",
+  "canvas/show": "Draw a diagram or mockup for the user to review, or put an interactive calculator, quiz or what-if widget inline in the answer.",
   "repo/write_file": "Save a note or file, e.g. a second-brain wiki/ note.",
   "git_repo/commit": "Commit changes in the git repository opened with mcp__git_repo__open_repo.",
   "git_repo/register_repo": "Register or connect a GitHub repository.",

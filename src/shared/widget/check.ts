@@ -286,18 +286,32 @@ class Checker {
     if (spec.labelFromChildren && !seen.has("label") && !this.hasText(node.children)) {
       this.problem(`<${spec.tag}> needs a label: put text between its tags, or pass label="…".`, node.s);
     }
+    if (spec.textRequired && !this.hasText(node.children)) {
+      this.problem(`<${spec.tag}> needs its text between the tags: <${spec.tag} …>text</${spec.tag}>.`, node.s);
+    }
+    if (spec.oneOf) {
+      // What the control does must be ONE declared thing, so it can be shown before it is pressed.
+      const given = spec.oneOf.filter((name) => seen.has(name));
+      if (given.length !== 1) {
+        const choices = spec.oneOf.map((name) => `${name} (${spec.props[name].doc ?? name})`).join("; ");
+        this.problem(
+          `<${spec.tag}> needs EXACTLY ONE of ${spec.oneOf.join(" | ")} — ${choices}. ` +
+            (given.length === 0 ? "It has none." : `It has ${given.join(" and ")}: keep one (use separate <${spec.tag}>s for separate actions).`),
+          node.s,
+        );
+      }
+    }
 
     if (spec.child === "none") {
       if (this.hasContent(node.children)) this.problem(`<${spec.tag}> takes no children. Write it as <${spec.tag} … />.`, node.s);
       return;
     }
     if (spec.child === "inline") {
-      const bad = this.firstElement(node.children);
+      const allowed = spec.inlineTags ?? [];
+      const bad = this.firstElement(node.children, allowed);
       if (bad) {
-        this.problem(
-          `<${spec.tag}> takes text and {expr} only, but contains <${bad.name}>. Put <${bad.name}> next to it (for example both inside a <row>).`,
-          bad.s,
-        );
+        const takes = allowed.length ? `text, {expr} and ${allowed.map((t) => `<${t}>`).join(", ")} only` : "text and {expr} only";
+        this.problem(`<${spec.tag}> takes ${takes}, but contains <${bad.name}>. Put <${bad.name}> next to it (for example both inside a <row>).`, bad.s);
       }
     }
     this.children(node.children, scope);
@@ -335,16 +349,17 @@ class Checker {
     return nodes.some((n) => (n.t === "text" ? n.value.trim() !== "" : true));
   }
 
-  firstElement(nodes: TNode[]): ElNode | null {
+  /** The first element in an inline body that is not one of the `allowed` tags (blocks are looked into). */
+  firstElement(nodes: TNode[], allowed: readonly string[] = []): ElNode | null {
     for (const n of nodes) {
-      if (n.t === "el") return n;
+      if (n.t === "el" && !allowed.includes(n.name)) return n;
       if (n.t === "each") {
-        const inner = this.firstElement(n.children) ?? (n.empty ? this.firstElement(n.empty) : null);
+        const inner = this.firstElement(n.children, allowed) ?? (n.empty ? this.firstElement(n.empty, allowed) : null);
         if (inner) return inner;
       }
       if (n.t === "if") {
         for (const b of n.branches) {
-          const inner = this.firstElement(b.children);
+          const inner = this.firstElement(b.children, allowed);
           if (inner) return inner;
         }
       }

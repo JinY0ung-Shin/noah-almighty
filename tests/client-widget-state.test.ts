@@ -9,6 +9,7 @@ import {
   WIDGET_STATE_INDEX_KEY,
   createWidgetStateSaver,
   loadWidgetState,
+  removeConversationWidgetState,
   removeWidgetState,
   saveWidgetState,
   widgetStateKey,
@@ -148,6 +149,47 @@ describe("widgetState", () => {
     expect(JSON.parse(storage.data.get(WIDGET_STATE_INDEX_KEY)!)).toEqual([widgetStateKey(ref("u1", "cv2"))!]);
     removeWidgetState(ref("u1", "cv2"), storage);
     expect(storage.data.size).toBe(0);
+  });
+
+  it("forgets every widget of a deleted conversation, and only that conversation's", () => {
+    const storage = memoryStorage();
+    const record = { n: { sig: "n = 2", value: 5 } };
+    saveWidgetState(ref("u1", "cv1", "conv-1"), record, dataSize, storage);
+    saveWidgetState(ref("u1", "cv2", "conv-1"), record, dataSize, storage);
+    saveWidgetState(ref("u1", "cv1", "conv-10"), record, dataSize, storage); // a longer id with the same start
+    saveWidgetState(ref("u2", "cv1", "conv-1"), record, dataSize, storage); // another account
+    // A key the index lost track of is still swept when the storage can be enumerated.
+    const stray = widgetStateKey(ref("u1", "stray", "conv-1"))!;
+    storage.data.set(stray, JSON.stringify(record));
+    const enumerable = {
+      ...storage,
+      get length() {
+        return storage.data.size;
+      },
+      key: (i: number) => [...storage.data.keys()][i] ?? null,
+    };
+
+    removeConversationWidgetState("u1", "conv-1", enumerable);
+    expect(loadWidgetState(ref("u1", "cv1", "conv-1"), storage)).toBeNull();
+    expect(loadWidgetState(ref("u1", "cv2", "conv-1"), storage)).toBeNull();
+    expect(storage.data.has(stray)).toBe(false);
+    expect(loadWidgetState(ref("u1", "cv1", "conv-10"), storage)).toEqual(record);
+    expect(loadWidgetState(ref("u2", "cv1", "conv-1"), storage)).toEqual(record);
+    expect(JSON.parse(storage.data.get(WIDGET_STATE_INDEX_KEY)!).sort()).toEqual(
+      [widgetStateKey(ref("u1", "cv1", "conv-10"))!, widgetStateKey(ref("u2", "cv1", "conv-1"))!].sort(),
+    );
+
+    // Index-only storage (no enumeration), nothing to remove, missing ids, blocked storage: all quiet.
+    saveWidgetState(ref("u1", "cv9", "conv-9"), record, dataSize, storage);
+    removeConversationWidgetState("u1", "conv-9", storage);
+    expect(loadWidgetState(ref("u1", "cv9", "conv-9"), storage)).toBeNull();
+    expect(() => {
+      removeConversationWidgetState("u1", "conv-none", storage);
+      removeConversationWidgetState(null, "conv-1", storage);
+      removeConversationWidgetState("u1", "", storage);
+      removeConversationWidgetState("u1", "conv-1", brokenStorage);
+      removeConversationWidgetState("u1", "conv-1", null);
+    }).not.toThrow();
   });
 
   it("never throws when storage is blocked or missing", () => {

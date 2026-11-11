@@ -1,9 +1,10 @@
 import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import request from "supertest";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentRequest,
   AgentResponse,
@@ -26,7 +27,7 @@ import {
   MAX_SAVED_CAPTURES_PER_TURN,
   MAX_SHARED_SCREENSHOTS_PER_MESSAGE,
 } from "../src/server/chatFiles.js";
-import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, resolveStoredImage } from "../src/server/chatImages.js";
+import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, readChatImages, resolveStoredImage } from "../src/server/chatImages.js";
 import { renderDocumentPreviews } from "../src/server/deckRender.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
 import {
@@ -39,10 +40,11 @@ import {
 } from "../src/server/routes/chat.js";
 import {
   newShareTokenSalt,
+  pickShareLinkCard,
   SHARE_LINK_CAP_ERROR,
   SHARE_LINK_UNSHOWABLE_ERROR,
 } from "../src/server/shareLinks.js";
-import { PPTX_MEDIA_TYPE, type ShareViewPayload } from "../src/shared/shareLinks.js";
+import { PPTX_MEDIA_TYPE, shareSlideAttachments, type ShareViewPayload } from "../src/shared/shareLinks.js";
 
 // Shared control surface for the mocked agent layer. `impl`, when set, fully
 // drives a turn (fires the events callbacks the route wires); otherwise a default
@@ -1059,6 +1061,405 @@ describe("canvas submission turns (#50)", () => {
       .send({ avatarId: ownerId, conversationId: "conv-cap4", canvasSubmission: { canvasId: "cv", values: maxKeys } })
       .expect(200);
     expect(H.requests[3].message).toContain(`- k${MAX_CANVAS_SUBMISSION_KEYS - 1}: ${MAX_CANVAS_SUBMISSION_KEYS - 1}`);
+  });
+
+  it("persists an ACCEPTED async canvas submission, so a reload still shows what was sent", async () => {
+    // The values used to live only in the turn text: the panel's "응답 완료" was
+    // the client's optimistic state and vanished on reload.
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "cvkeep").expect(201)).body.user.id as string;
+    const mate = request.agent(app);
+    const mateId = (await signup(mate, "cvkeepmate").expect(201)).body.user.id as string;
+    store.setSuspended(mateId, false);
+    store.touchConversation(ownerId, "conv-keep", ownerId, "seed");
+    store.touchConversation(ownerId, "conv-keep-2", ownerId, "seed");
+    const widget = { artifactId: "cv-w", title: "대출 계산기", content: "<submit values={{ months }}>보내기</submit>", contentType: "widget", interaction: "async" as const };
+    store.upsertCanvasArtifact(ownerId, "conv-keep", widget);
+    const reload = async (conversationId = "conv-keep") =>
+      (await owner.get("/api/messages").query({ conversationId }).expect(200)).body.canvases as { id: string; submittedValues?: unknown }[];
+    expect((await reload())[0]!.submittedValues).toBeUndefined();
+
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep", canvasSubmission: { canvasId: "cv-w", values: { months: 24, tags: ["a", "b"] } } })
+      .expect(200);
+    expect(H.requests[0].message).toContain("- months: 24");
+    // What the client rebuilds the panel from after a reload.
+    expect(await reload()).toEqual([
+      expect.objectContaining({ id: "cv-w", interaction: "async", submittedValues: { months: 24, tags: ["a", "b"] } }),
+    ]);
+
+    // 다시 보내기: the latest values win.
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep", canvasSubmission: { canvasId: "cv-w", values: { months: 36 } } })
+      .expect(200);
+    expect((await reload())[0]!.submittedValues).toEqual({ months: 36 });
+
+    // A turn that is REFUSED records nothing (an over-limit submission never runs).
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep", canvasSubmission: { canvasId: "cv-w", values: { note: "가".repeat(MAX_CANVAS_SUBMISSION_CHARS) } } })
+      .expect(400);
+    expect((await reload())[0]!.submittedValues).toEqual({ months: 36 });
+
+    // An edit carries no values: the stored answer is untouched.
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep", canvasSubmission: { canvasId: "cv-w", editedContent: "고친 내용" } })
+      .expect(200);
+    expect((await reload())[0]!.submittedValues).toEqual({ months: 36 });
+
+    // Never across a boundary. Another conversation of the same user naming this
+    // canvas: the turn runs (the text still reaches the avatar) but nothing is written…
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep-2", canvasSubmission: { canvasId: "cv-w", values: { months: 1 } } })
+      .expect(200);
+    // …nor by another user naming it from their own conversation…
+    await mate
+      .post("/api/chat/stream")
+      .send({ avatarId: mateId, conversationId: "conv-mate", canvasSubmission: { canvasId: "cv-w", values: { months: 2 } } })
+      .expect(200);
+    // …and an unknown canvas id is skipped quietly.
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-keep", canvasSubmission: { canvasId: "no-such-canvas", values: { months: 3 } } })
+      .expect(200);
+    expect((await reload())[0]!.submittedValues).toEqual({ months: 36 });
+    expect(await reload("conv-keep-2")).toEqual([]);
+
+    // The avatar refines the canvas (a new version): it starts unanswered, and a
+    // rollback brings the earlier version's own answer back.
+    store.upsertCanvasArtifact(ownerId, "conv-keep", { ...widget, content: "v2" });
+    expect((await reload())[0]!.submittedValues).toBeUndefined();
+    const rolled = await owner.post("/api/chat/canvases/cv-w/rollback").send({ version: 1 }).expect(200);
+    expect(rolled.body.canvas.submittedValues).toEqual({ months: 36 });
+  });
+});
+
+describe("inline widget: a shown `widget` canvas rides the message as an attachment", () => {
+  const WIDGET_MEDIA = "application/vnd.noah.canvas-widget+json";
+  const widgetShow = (artifactId: string, content: string, over: Record<string, unknown> = {}) => ({
+    artifactId,
+    title: `제목 ${artifactId}`,
+    content,
+    contentType: "widget" as const,
+    awaitInput: false,
+    ...over,
+  });
+  const text = (config: AppConfig, value: string): AgentResponse => ({ kind: "text", runtime: config.agentRuntime, summary: "mock", text: value });
+  async function setupInline(name: string) {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, name).expect(201)).body.user.id as string;
+    const turn = (conversationId: string, body: Record<string, unknown> = {}) =>
+      owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId, message: "보여줘", ...body }).expect(200);
+    const assistants = (conversationId: string) =>
+      store.listMessages(ownerId, conversationId).filter((m) => m.role === "assistant");
+    return { store, app, owner, ownerId, turn, assistants };
+  }
+
+  it("emits `canvas` then a `file` frame and persists ONE widget attachment per message, anchored where the tool ran", async () => {
+    const { store, owner, ownerId, turn, assistants } = await setupInline("wdginline");
+    H.impl = async (_request, _roots, config, _store, events) => {
+      events.onDelta?.("이자를 계산해 볼게요.");
+      await events.onCanvas!(widgetShow("w-loan", "v1", { anchor: 12 }));
+      // The same canvas again in the SAME message (a refinement): no second card.
+      await events.onCanvas!(widgetShow("w-loan", "v2", { title: "대출 계산기", anchor: 30 }));
+      // A panel canvas in the same turn attaches nothing.
+      await events.onCanvas!({ artifactId: "c-md", title: "메모", content: "# hi", contentType: "markdown", awaitInput: false });
+      // A second, different widget gets its own card.
+      await events.onCanvas!(widgetShow("w-quiz", "q1", { anchor: 40 }));
+      return text(config, "이자를 계산해 볼게요. 아래에서 바꿔 보세요.");
+    };
+    let res: request.Response;
+    try {
+      res = await turn("conv-inline");
+    } finally {
+      H.impl = null;
+    }
+    const frames = parseSse(res.text);
+    const fileFrames = frames.filter((f) => f.event === "file").map((f) => frameData(f).attachment);
+    expect(fileFrames).toEqual([
+      { id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-loan", anchor: 12 },
+      { id: "w-quiz", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-quiz", anchor: 40 },
+    ]);
+    // The canvas frame comes first: the client holds the content when the card arrives.
+    const firstCanvas = frames.findIndex((f) => f.event === "canvas");
+    const firstFile = frames.findIndex((f) => f.event === "file");
+    expect(firstCanvas).toBeGreaterThanOrEqual(0);
+    expect(firstCanvas).toBeLessThan(firstFile);
+    expect(frames.filter((f) => f.event === "canvas")).toHaveLength(4); // every show still reaches the panel/canvas state
+
+    // Persisted on the assistant row: the first card keeps its place, its name follows the latest title.
+    const [message] = assistants("conv-inline");
+    expect(message!.attachments).toEqual([
+      { id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "대출 계산기", anchor: 12 },
+      { id: "w-quiz", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-quiz", anchor: 40 },
+    ]);
+    expect(frameData(frames.find((f) => f.event === "done")!).message.attachments).toEqual(message!.attachments);
+    // The content lives in the canvas tables (current version), exactly as before.
+    const reload = await owner.get("/api/messages").query({ conversationId: "conv-inline" }).expect(200);
+    expect(reload.body.canvases.map((c: { id: string; content: string; contentType: string }) => [c.id, c.contentType, c.content])).toEqual([
+      ["w-loan", "widget", "v2"],
+      ["c-md", "markdown", "# hi"],
+      ["w-quiz", "widget", "q1"],
+    ]);
+    expect(reload.body.messages.find((m: { role: string }) => m.role === "assistant").attachments).toEqual(message!.attachments);
+
+    // A LATER turn that shows the same canvas id attaches it to ITS message too
+    // (the client draws the last one as the live widget).
+    H.impl = async (_request, _roots, config, _store, events) => {
+      await events.onCanvas!(widgetShow("w-loan", "v3"));
+      return text(config, "고쳤어요.");
+    };
+    try {
+      await turn("conv-inline");
+    } finally {
+      H.impl = null;
+    }
+    const rows = assistants("conv-inline");
+    expect(rows).toHaveLength(2);
+    // No anchor from the tool (an older runner) → the card simply renders after the text.
+    expect(rows[1]!.attachments).toEqual([{ id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-loan" }]);
+    expect(store.getCanvasArtifact(ownerId, "w-loan")).toMatchObject({ content: "v3", currentVersion: 3 });
+  });
+
+  it("gives each message of a run its own card: a steer follow-up turn re-attaches, and a text fold re-anchors to 0", async () => {
+    const { turn, assistants } = await setupInline("wdgsteer");
+    H.impl = async (_request, _roots, config, _store, events) => {
+      events.onDelta?.("먼저 이걸 보세요.");
+      await events.onCanvas!(widgetShow("w-a", "a1", { anchor: 9 }));
+      events.onTurnResult?.({ text: "먼저 이걸 보세요.", steerPending: true });
+      // The follow-up turn of the SAME run: a new message, so the same id is attached again…
+      events.onDelta?.("중간 설명");
+      await events.onCanvas!(widgetShow("w-a", "a2", { anchor: 5 }));
+      // …and when the model's interim text is folded away, the card moves before the new text.
+      events.onTextFold?.("중간 설명");
+      events.onTurnResult?.({ text: "수정했어요.", steerPending: false });
+      return text(config, "수정했어요.");
+    };
+    try {
+      await turn("conv-steer-widget");
+    } finally {
+      H.impl = null;
+    }
+    const rows = assistants("conv-steer-widget");
+    expect(rows.map((m) => m.content)).toEqual(["먼저 이걸 보세요.", "수정했어요."]);
+    expect(rows[0]!.attachments).toEqual([{ id: "w-a", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-a", anchor: 9 }]);
+    expect(rows[1]!.attachments).toEqual([{ id: "w-a", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-a", anchor: 0 }]);
+  });
+
+  it("is never a file: no serving route, share link or image re-feed resolves a widget attachment's id", async () => {
+    const { services, app, store } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "wdgnofile").expect(201)).body.user.id as string;
+    // The avatar picks the canvas id — here it deliberately names a real image of the conversation.
+    let imageId = "";
+    H.impl = async (agentRequest, _roots, config, _store, events) => {
+      fs.writeFileSync(path.join(agentRequest.cwd!, "shot.png"), PNG_BYTES);
+      const shown = await events.onFile!({ path: "shot.png", hidden: true });
+      if (shown.behavior !== "shown") throw new Error("image was not published");
+      imageId = shown.attachment.id;
+      await events.onCanvas!(widgetShow(imageId, "<image />"));
+      await events.onCanvas!(widgetShow("w-plain", "x"));
+      return text(config, "ok");
+    };
+    try {
+      await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-nofile", message: "보여줘" }).expect(200);
+    } finally {
+      H.impl = null;
+    }
+    const attachments = store.listMessages(ownerId, "conv-nofile").find((m) => m.role === "assistant")!.attachments!;
+    const widgets = attachments.filter((att) => att.kind === "widget");
+    expect(widgets.map((att) => att.id)).toEqual([imageId, "w-plain"]);
+
+    // Serving routes look files up by the URL id, never through an attachment: a widget id has nothing behind it.
+    await owner.get("/api/conversations/conv-nofile/images/w-plain").expect(404);
+    await owner.get("/api/conversations/conv-nofile/files/w-plain").expect(404);
+    // Share links: a widget is never a deck card and never a slide.
+    expect(pickShareLinkCard([attachments], "w-plain")).toHaveProperty("error");
+    expect(pickShareLinkCard([widgets])).toHaveProperty("error");
+    expect(shareSlideAttachments(widgets, "w-plain")).toEqual([]);
+    await owner.post("/api/conversations/conv-nofile/files/w-plain/share-links").send({}).expect(404);
+    // Re-feeding a message's images (regenerate) reads IMAGE attachments only —
+    // a widget whose id equals an image's id does not smuggle that image in.
+    expect(readChatImages(services.config, "conv-nofile", widgets)).toEqual([]);
+    expect(readChatImages(services.config, "conv-nofile", attachments.filter((att) => att.kind === "image"))).toHaveLength(1);
+  });
+
+  it("follows the canvas rewind: a widget first shown in a dropped message is deleted, one refined there goes back to its earlier version", async () => {
+    const { store, owner, ownerId, turn, assistants } = await setupInline("wdgrewind");
+    const show = (shows: [string, string][], reply: string) => {
+      H.impl = async (_request, _roots, config, _store, events) => {
+        for (const [id, content] of shows) await events.onCanvas!(widgetShow(id, content));
+        return text(config, reply);
+      };
+    };
+    try {
+      show([["w-old", "old-1"]], "첫 답");
+      await turn("conv-rw", { message: "첫 질문" });
+      // The cutoff is compared against created_at: keep the two turns on different timestamps.
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      show([["w-old", "old-2"], ["w-new", "new-1"]], "둘째 답");
+      await turn("conv-rw", { message: "둘째 질문" });
+      expect(assistants("conv-rw")[1]!.attachments!.map((att) => att.id)).toEqual(["w-old", "w-new"]);
+
+      // Regenerate the second answer: its message (and the cards on it) is dropped.
+      show([], "다시 쓴 둘째 답");
+      await turn("conv-rw", { message: "", regenerate: true });
+    } finally {
+      H.impl = null;
+    }
+    const rows = assistants("conv-rw");
+    expect(rows.map((m) => m.content)).toEqual(["첫 답", "다시 쓴 둘째 답"]);
+    expect(rows[1]!.attachments ?? []).toEqual([]);
+    // The kept message still names w-old, whose canvas is back on the version that message showed…
+    expect(rows[0]!.attachments!.map((att) => [att.kind, att.id])).toEqual([["widget", "w-old"]]);
+    expect(store.getCanvasArtifact(ownerId, "w-old")).toMatchObject({ content: "old-1", currentVersion: 1 });
+    // …and the widget that only the dropped message showed is gone with it.
+    expect(store.getCanvasArtifact(ownerId, "w-new")).toBeNull();
+    const reload = await owner.get("/api/messages").query({ conversationId: "conv-rw" }).expect(200);
+    expect(reload.body.canvases.map((c: { id: string }) => c.id)).toEqual(["w-old"]);
+  });
+
+  it("deleting the conversation takes the widget canvases with it (the attachment rows go with the messages)", async () => {
+    const { store, owner, ownerId, turn } = await setupInline("wdgdel");
+    H.impl = async (_request, _roots, config, _store, events) => {
+      await events.onCanvas!(widgetShow("w-gone", "x"));
+      return text(config, "ok");
+    };
+    try {
+      await turn("conv-wdel");
+    } finally {
+      H.impl = null;
+    }
+    expect(store.getCanvasArtifact(ownerId, "w-gone")).not.toBeNull();
+    await owner.delete("/api/conversations/conv-wdel").expect(200);
+    expect(store.getCanvasArtifact(ownerId, "w-gone")).toBeNull();
+    expect(store.listMessages(ownerId, "conv-wdel")).toEqual([]);
+  });
+});
+
+describe("canvas render reports (browser → the conversation's next turn)", () => {
+  async function setupReports(name: string) {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, name).expect(201)).body.user.id as string;
+    store.touchConversation(ownerId, "conv-r", ownerId, "seed");
+    store.touchConversation(ownerId, "conv-r2", ownerId, "seed");
+    const show = (artifactId: string, content: string, conversationId = "conv-r") =>
+      store.upsertCanvasArtifact(ownerId, conversationId, { artifactId, title: `제목 ${artifactId}`, content, contentType: "widget" });
+    show("cv-w", "v1");
+    const report = (canvasId: string, body: unknown, agent = owner) => agent.post(`/api/canvases/${canvasId}/render-report`).send(body as object);
+    const turn = (body: Record<string, unknown>) =>
+      owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-r", message: "계속", ...body }).expect(200);
+    return { store, app, owner, ownerId, show, report, turn };
+  }
+
+  it("queues a sanitized report (204) and hands it to exactly ONE turn of that conversation", async () => {
+    const { report, turn, owner, ownerId } = await setupReports("cvrep");
+    const res = await report("cv-w", {
+      conversationId: "conv-r",
+      errors: ["rate is not defined\n(line 3)", 7, "가".repeat(400), "a", "b", "c", "d"],
+    }).expect(204);
+    expect(res.text).toBe("");
+
+    // A turn of ANOTHER conversation does not carry (or consume) it.
+    await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-r2", message: "다른 대화" }).expect(200);
+    expect(H.requests[0].canvasRenderReports).toBeUndefined();
+
+    await turn({});
+    expect(H.requests[1].canvasRenderReports).toEqual([
+      {
+        canvasId: "cv-w",
+        title: "제목 cv-w",
+        // One line each, non-strings dropped, 300 chars and 5 lines at most.
+        errors: ["rate is not defined (line 3)", "가".repeat(300), "a", "b", "c"],
+      },
+    ]);
+    // Consumed: the turn after it hears nothing.
+    await turn({});
+    expect(H.requests[2].canvasRenderReports).toBeUndefined();
+    // The browser redraws after a reload and reports the SAME failure: not news.
+    await report("cv-w", { conversationId: "conv-r", errors: ["rate is not defined\n(line 3)", "가".repeat(400), "a", "b", "c"] }).expect(204);
+    await turn({});
+    expect(H.requests[3].canvasRenderReports).toBeUndefined();
+    // A different failure is.
+    await report("cv-w", { conversationId: "conv-r", errors: ["months is not defined"] }).expect(204);
+    await turn({});
+    expect(H.requests[4].canvasRenderReports).toEqual([{ canvasId: "cv-w", title: "제목 cv-w", errors: ["months is not defined"] }]);
+  });
+
+  it("answers ONE 404 for a canvas that is not the caller's in that conversation, 400 for a malformed body, 401 unauthenticated", async () => {
+    const { app, report, turn, show } = await setupReports("cvrep404");
+    show("cv-other-conv", "x", "conv-r2");
+    const stranger = request.agent(app);
+    await signup(stranger, "cvrepstranger").expect(201);
+
+    await report("no-such", { conversationId: "conv-r", errors: ["e"] }).expect(404);
+    await report("cv-other-conv", { conversationId: "conv-r", errors: ["e"] }).expect(404); // the user's canvas, another conversation
+    await report("cv-w", { conversationId: "conv-unknown", errors: ["e"] }).expect(404);
+    await report("cv-w", { conversationId: "conv-r", errors: ["e"] }, stranger).expect(404); // someone else's canvas
+    await report("cv-w", { errors: ["e"] }).expect(400);
+    await report("cv-w", { conversationId: "conv-r" }).expect(400);
+    await report("cv-w", { conversationId: "conv-r", errors: "boom" }).expect(400);
+    await request(app).post("/api/canvases/cv-w/render-report").send({ conversationId: "conv-r", errors: ["e"] }).expect(401);
+
+    // None of them queued anything.
+    await turn({});
+    expect(H.requests[0].canvasRenderReports).toBeUndefined();
+  });
+
+  it("waits for a turn that has the canvas, and drops a report whose canvas was deleted, refined or cleared", async () => {
+    const { store, ownerId, owner, report, turn, show } = await setupReports("cvrepdrop");
+    // The canvas tool group is off for this turn: the avatar could not fix it, so the report waits.
+    await report("cv-w", { conversationId: "conv-r", errors: ["boom"] }).expect(204);
+    await turn({ mcpToolGroups: ["git_repo"] });
+    expect(H.requests[0].canvasRenderReports).toBeUndefined();
+    await turn({ mcpToolGroups: ["canvas"] });
+    expect(H.requests[1].canvasRenderReports).toEqual([{ canvasId: "cv-w", title: "제목 cv-w", errors: ["boom"] }]);
+
+    // The avatar shows a NEW version of the same id during a turn (the real onCanvas path): the old report is gone.
+    await report("cv-w", { conversationId: "conv-r", errors: ["old version failure"] }).expect(204);
+    H.impl = async (_request, _roots, config, _store, events) => {
+      await events.onCanvas?.({ artifactId: "cv-w", title: "제목 cv-w", content: "v2", contentType: "widget", awaitInput: false });
+      return { kind: "text", runtime: config.agentRuntime, summary: "mock", text: "고쳤어요" };
+    };
+    try {
+      await turn({});
+    } finally {
+      H.impl = null;
+    }
+    // (That turn itself carried the report — it started before the refinement.)
+    expect(H.requests[2].canvasRenderReports).toEqual([{ canvasId: "cv-w", title: "제목 cv-w", errors: ["old version failure"] }]);
+    expect(store.getCanvasArtifact(ownerId, "cv-w")!.currentVersion).toBe(2);
+    // A report that raced the refinement — sent for v1 just before v2 was recorded — is dropped with it.
+    show("cv-w", "v2"); // unchanged re-show: no new version
+    await report("cv-w", { conversationId: "conv-r", errors: ["v2 failure"] }).expect(204);
+    show("cv-w", "v3");
+    await turn({});
+    expect(H.requests[3].canvasRenderReports).toBeUndefined();
+
+    // Deleted through the canvas route → dropped.
+    show("cv-del", "x");
+    await report("cv-del", { conversationId: "conv-r", errors: ["boom"] }).expect(204);
+    await owner.delete("/api/chat/canvases/cv-del").expect(200);
+    // An empty list means it draws fine now → the waiting report is cleared.
+    await report("cv-w", { conversationId: "conv-r", errors: ["v3 failure"] }).expect(204);
+    await report("cv-w", { conversationId: "conv-r", errors: [] }).expect(204);
+    await turn({});
+    expect(H.requests[4].canvasRenderReports).toBeUndefined();
+
+    // Deleting the conversation forgets its reports (the id may be reused by the client).
+    await report("cv-w", { conversationId: "conv-r", errors: ["last"] }).expect(204);
+    await owner.delete("/api/conversations/conv-r").expect(200);
+    store.touchConversation(ownerId, "conv-r", ownerId, "seed");
+    show("cv-w", "v3");
+    await turn({});
+    expect(H.requests[5].canvasRenderReports).toBeUndefined();
   });
 });
 
@@ -3397,11 +3798,23 @@ describe("admin MCP tool policy clamps the run", () => {
 });
 
 describe("working-repo resolution (opened repo becomes the run cwd)", () => {
+  // A registered repo's local source must sit OUTSIDE Noah's data root (a path
+  // inside it is refused as a source), so these remotes get their own temp dir.
+  const remoteDirs: string[] = [];
+  const outsideRemote = (name: string): string => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "noah-routes-chat-remote-"));
+    remoteDirs.push(dir);
+    return makeBareRemote(path.join(dir, name));
+  };
+  afterEach(() => {
+    for (const dir of remoteDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("runs inside the opened repo's clone and frees the per-clone lock afterwards", async () => {
     const { store, config, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "repoopen").expect(201)).body.user.id as string;
-    const remote = makeBareRemote(path.join(tempDir, "work-remote.git"));
+    const remote = outsideRemote("work-remote.git");
     store.upsertGitRepo(ownerId, "workrepo", remote, null);
     store.touchConversation(ownerId, "conv-open", ownerId, "seed");
     store.setConversationWorkingRepo("conv-open", "workrepo");
@@ -3429,7 +3842,7 @@ describe("working-repo resolution (opened repo becomes the run cwd)", () => {
     const owner = request.agent(app);
     const signupRes = await signup(owner, "repocapture").expect(201);
     const ownerId = signupRes.body.user.id as string;
-    const remote = makeBareRemote(path.join(tempDir, "capture-remote.git"));
+    const remote = outsideRemote("capture-remote.git");
     store.upsertGitRepo(ownerId, "caprepo", remote, null);
     store.touchConversation(ownerId, "conv-repo-cap", ownerId, "seed");
     store.setConversationWorkingRepo("conv-repo-cap", "caprepo");

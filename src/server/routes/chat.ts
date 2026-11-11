@@ -37,6 +37,7 @@ import type {
 } from "../agent/events.js";
 import { isPiResponseId } from "../agent/pi/runPiAgent.js";
 import {
+  CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE,
   formatSubmission,
   MAX_CANVAS_CONTENT_CHARS,
 } from "../agent/canvasTools.js";
@@ -120,6 +121,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
+import { sanitizeCanvasRenderErrors } from "../canvasRenderReports.js";
 import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
@@ -1632,6 +1634,17 @@ export async function executeChatTurn(
         emitRunEvent(runId, "status", { label: `플러그인 경고: ${warn}` });
       }
 
+      // What the viewer's browser could not draw of a canvas since the last turn
+      // (POST /api/canvases/:canvasId/render-report). CONSUMED here, where the
+      // turn really starts, so it rides exactly one turn's preamble — and only a
+      // turn that registers the canvas (this route always supplies the sink, so
+      // the tool group decides, as in runCapabilities): a turn with the canvas
+      // off leaves the reports waiting for one that can act on them.
+      const canvasRenderReports =
+        !ctx.compact && effectiveMcpToolGroupsForRun.includes("canvas")
+          ? store.takeCanvasRenderReports(ownerUserId, conversationId)
+          : [];
+
       const response = await runAgentStream(
         {
           message: agentMessage,
@@ -1673,6 +1686,7 @@ export async function executeChatTurn(
           model: conversationModel ?? undefined,
           effort: conversationEffort ?? undefined,
           mcpToolGroups: effectiveMcpToolGroupsForRun,
+          ...(canvasRenderReports.length ? { canvasRenderReports } : {}),
           viewerUserId: ownerUserId,
           viewerName: ctx.ownerDisplayName,
           viewerIsOwner,
@@ -1883,6 +1897,34 @@ export async function executeChatTurn(
               interaction: interaction ?? null,
               editable: Boolean(editable),
             });
+            // A WIDGET is drawn inline in the answer, at the point the avatar
+            // called the tool — so it also rides the message's attachments, like
+            // a team-brain card (id = the canvas id, no file behind it; the
+            // bubble reads the content from the canvas tables). After the
+            // `canvas` frame, so a client already holds the content when the
+            // card arrives. ONE per message: showing the same canvas again in
+            // this turn (a refinement, a retry after a check error) keeps the
+            // first card where it is and only follows the title; a LATER turn
+            // attaches the id to its own message. Every other content type
+            // stays a side-panel artifact and attaches nothing.
+            if (contentType === "widget") {
+              const earlier = shownAttachments
+                .slice(persistedAttachmentsOffset)
+                .find((att) => att.kind === "widget" && att.id === artifactId);
+              if (earlier) {
+                if (title) earlier.name = title;
+              } else {
+                const attachment: MessageAttachment = {
+                  id: artifactId,
+                  kind: "widget",
+                  mediaType: CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE,
+                  ...(title ? { name: title } : {}),
+                  ...(requestData.anchor !== undefined ? { anchor: requestData.anchor } : {}),
+                };
+                shownAttachments.push(attachment);
+                emitRunEvent(runId, "file", { runId, attachment });
+              }
+            }
             const record = (submittedValues?: Record<string, unknown>) => {
               // Persist to the dedicated canvas tables (version history). Refining
               // the same id appends a version; an unchanged re-show just refreshes
@@ -3048,6 +3090,36 @@ export function createChatRouter({
     },
   );
 
+  // A canvas the viewer's browser could not draw completely (a widget block
+  // that failed to evaluate, a chart the renderer rejected): the server only
+  // parses + statically checks a canvas, so without this the avatar never
+  // learns. Queued in process memory and handed to this conversation's NEXT
+  // turn, once (executeChatTurn → buildPiTurnPreamble). Same access rule as the
+  // canvas routes above — the caller's own canvas — plus the conversation it
+  // names; every miss is ONE 404. An empty `errors` clears a waiting report.
+  router.post(
+    "/api/canvases/:canvasId/render-report",
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const conversationId = safeString(req.body?.conversationId);
+      if (!conversationId || !Array.isArray(req.body?.errors)) {
+        apiError(res, 400, "conversationId와 errors가 필요합니다.");
+        return;
+      }
+      const reported = store.reportCanvasRenderErrors(
+        req.user!.id,
+        conversationId,
+        req.params.canvasId,
+        sanitizeCanvasRenderErrors(req.body.errors),
+      );
+      if (!reported) {
+        apiError(res, 404, "캔버스를 찾을 수 없습니다.");
+        return;
+      }
+      res.status(204).end();
+    },
+  );
+
   // Persist the activity-tree snapshot (tools/agents the avatar ran) onto a stored
   // assistant message so the completed bubble keeps showing it after reload. The
   // client posts its already-humanized snapshot once the turn finishes.
@@ -3438,6 +3510,19 @@ export function createChatRouter({
             if (!attachRunClient(runId, req.user!.id, res)) {
               res.end();
               return false;
+            }
+            // The turn is ACCEPTED (run reserved, client attached — the same
+            // moment the client stops treating its "응답 완료" as optimistic):
+            // keep the submitted values on the canvas's current version, so the
+            // panel shows them again after a reload. Only this user's canvas in
+            // THIS conversation is written; anything else is skipped.
+            if (canvasSubmission?.values) {
+              store.setCanvasSubmittedValues(
+                req.user!.id,
+                conversationId,
+                canvasSubmission.canvasId,
+                canvasSubmission.values,
+              );
             }
             emitRunEvent(runId, "open", {
               conversationId,

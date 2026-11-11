@@ -6,7 +6,7 @@
  */
 import type { Expr } from "./expr.js";
 import { NOOP_HANDLER, sanitizeData, toStr } from "./interp.js";
-import { ALIGN, BACKGROUND_TOKENS, COLOR_TOKENS, JUSTIFY, MAX_SPACING_UNITS, TONE_TOKENS, clamp } from "./style.js";
+import { ALIGN, BACKGROUND_TOKENS, COLOR_TOKENS, JUSTIFY, MAX_SPACING_UNITS, TONE_TOKENS, clamp, conversationImageRef, safeLinkUrl } from "./style.js";
 
 export type PropType =
   | { k: "enum"; values: readonly string[] }
@@ -24,7 +24,13 @@ export type PropType =
   /** Table rows: an array of plain objects. */
   | { k: "rows" }
   /** A plain object (a Vega-Lite spec, the values of a submit). */
-  | { k: "object" };
+  | { k: "object" }
+  /** Text a button sends as the user's next chat message: 1–MAX_SEND_CHARS characters after trimming. */
+  | { k: "send" }
+  /** An absolute http(s) URL (`safeLinkUrl`). The normalized href is what the renderer gets. */
+  | { k: "url" }
+  /** The address of an image of a conversation (`conversationImageRef`): `/api/conversations/<id>/images/<id>`. */
+  | { k: "image" };
 
 export interface PropSpec {
   type: PropType;
@@ -32,10 +38,16 @@ export interface PropSpec {
   doc?: string;
 }
 
-/** What a component may contain. `inline`: text and `{expr}` only. `block`: other components too. */
+/**
+ * What a component may contain. `inline`: text and `{expr}` (plus the few tags
+ * its `inlineTags` names). `block`: other components too.
+ */
 export type ChildKind = "block" | "inline" | "none";
 
-export type ComponentGroup = "Layout" | "Text" | "Inputs" | "Data" | "Submit";
+export type ComponentGroup = "Layout" | "Text" | "Inputs" | "Data" | "Media" | "Submit";
+
+/** Longest text a button's `send` may carry. */
+export const MAX_SEND_CHARS = 2000;
 
 export interface ComponentSpec {
   tag: string;
@@ -44,6 +56,12 @@ export interface ComponentSpec {
   props: Record<string, PropSpec>;
   /** The visible label may be the component's text children instead of a `label` prop. */
   labelFromChildren?: boolean;
+  /** For an `inline` component: the tags it may still contain (a `<link>` inside a `<text>`). */
+  inlineTags?: readonly string[];
+  /** EXACTLY ONE of these props must be written (a button's action). */
+  oneOf?: readonly string[];
+  /** The component is its text: it needs non-empty children. */
+  textRequired?: boolean;
   doc: string;
 }
 
@@ -60,6 +78,8 @@ const BOOL: PropType = { k: "boolean" };
 const HANDLER: PropType = { k: "handler" };
 const LABEL: PropSpec = { type: { k: "string", max: 200 }, required: true, doc: "visible label (required: every input is labelled)" };
 const SHORT: PropType = { k: "string", max: 200 };
+/** Tags that may sit inside running text. */
+const IN_TEXT: readonly string[] = ["link"];
 
 function component(
   tag: string,
@@ -107,20 +127,51 @@ const LIST: ComponentSpec[] = [
     size: { type: SPACING },
   }),
 
-  component("title", "Text", "inline", "A heading.", {
-    size: { type: { k: "enum", values: ["sm", "md", "lg", "xl"] } },
-    color: { type: COLOR },
-  }),
-  component("text", "Text", "inline", "A paragraph of text with `{expr}` interpolation.", {
-    size: { type: { k: "enum", values: ["xs", "sm", "md", "lg"] } },
-    color: { type: COLOR },
-    weight: { type: { k: "enum", values: ["normal", "medium", "bold"] } },
-    align: { type: { k: "enum", values: ["start", "center", "end"] } },
-    tabular: { type: BOOL, doc: "tabular digits, for numbers that change in place" },
-  }),
-  component("badge", "Text", "inline", "A small status label.", {
-    tone: { type: TONE },
-  }),
+  component(
+    "title",
+    "Text",
+    "inline",
+    "A heading.",
+    {
+      size: { type: { k: "enum", values: ["sm", "md", "lg", "xl"] } },
+      color: { type: COLOR },
+    },
+    { inlineTags: IN_TEXT },
+  ),
+  component(
+    "text",
+    "Text",
+    "inline",
+    "A paragraph of text with `{expr}` interpolation.",
+    {
+      size: { type: { k: "enum", values: ["xs", "sm", "md", "lg"] } },
+      color: { type: COLOR },
+      weight: { type: { k: "enum", values: ["normal", "medium", "bold"] } },
+      align: { type: { k: "enum", values: ["start", "center", "end"] } },
+      tabular: { type: BOOL, doc: "tabular digits, for numbers that change in place" },
+    },
+    { inlineTags: IN_TEXT },
+  ),
+  component(
+    "badge",
+    "Text",
+    "inline",
+    "A small status label.",
+    {
+      tone: { type: TONE },
+    },
+    { inlineTags: IN_TEXT },
+  ),
+  component(
+    "link",
+    "Text",
+    "inline",
+    "A link that opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.",
+    {
+      href: { type: { k: "url" }, required: true, doc: "absolute http(s) URL" },
+    },
+    { textRequired: true },
+  ),
   component("callout", "Text", "block", "A highlighted note.", {
     tone: { type: { k: "enum", values: ["info", "success", "warning", "danger"] } },
     title: { type: SHORT },
@@ -130,14 +181,16 @@ const LIST: ComponentSpec[] = [
     "button",
     "Inputs",
     "inline",
-    "Runs `onClick`. It changes state locally — it does NOT send anything to you (use <submit> for that).",
+    "Does ONE thing, shown to the user before they press: give exactly one of onClick | send | href.",
     {
-      onClick: { type: HANDLER, required: true },
+      onClick: { type: HANDLER, doc: "runs a function: changes state locally, sends nothing to you" },
+      send: { type: { k: "send" }, doc: `the text becomes the user's NEXT chat message when pressed (1–${MAX_SEND_CHARS} chars; may be computed from state)` },
+      href: { type: { k: "url" }, doc: "opens this absolute http(s) URL in a new tab" },
       label: { type: SHORT },
       variant: { type: { k: "enum", values: ["primary", "secondary", "ghost"] } },
       disabled: { type: BOOL },
     },
-    { labelFromChildren: true },
+    { labelFromChildren: true, oneOf: ["onClick", "send", "href"] },
   ),
   component("segmented-control", "Inputs", "none", "One choice out of a few, shown side by side.", {
     value: { type: { k: "value" }, required: true },
@@ -234,10 +287,25 @@ const LIST: ComponentSpec[] = [
   }),
 
   component(
+    "image",
+    "Media",
+    "none",
+    "An image of THIS conversation only (the URL a file-output tool returned); no remote or data URLs.",
+    {
+      src: { type: { k: "image" }, required: true, doc: "/api/conversations/<conversationId>/images/<imageId>" },
+      alt: { type: { k: "string", max: 300 }, required: true, doc: "what the image shows (required)" },
+      width: { type: { k: "number", min: 16, max: 800 }, doc: "px" },
+      maxHeight: { type: { k: "number", min: 40, max: 800 }, doc: "px" },
+      radius: { type: { k: "enum", values: ["none", "sm", "md", "lg"] } },
+      fit: { type: { k: "enum", values: ["cover", "contain"] } },
+    },
+  ),
+
+  component(
     "submit",
     "Submit",
     "inline",
-    "The ONLY way back to you: sends `values` as the user's next message (shown with a fixed send-to-avatar look).",
+    "Sends `values` to you as STRUCTURED data in the user's next message (shown with a fixed send-to-avatar look).",
     {
       values: { type: { k: "object" }, required: true, doc: "object of string/number/boolean (or arrays of them); up to 20 keys" },
       label: { type: SHORT },
@@ -291,6 +359,12 @@ function typeLabel(t: PropType): string {
       return "[object]";
     case "object":
       return "object";
+    case "send":
+      return "text";
+    case "url":
+      return "http(s) URL";
+    case "image":
+      return "conversation image URL";
   }
 }
 
@@ -306,7 +380,8 @@ export function widgetComponentReference(): string {
       group = c.group;
       lines.push(group);
     }
-    const shape = c.child === "none" ? `<${c.tag} />` : c.child === "inline" ? `<${c.tag}>text and {expr}</${c.tag}>` : `<${c.tag}>…components…</${c.tag}>`;
+    const inner = c.inlineTags?.length ? `text, {expr}, ${c.inlineTags.map((t) => `<${t}>`).join(", ")}` : "text and {expr}";
+    const shape = c.child === "none" ? `<${c.tag} />` : c.child === "inline" ? `<${c.tag}>${inner}</${c.tag}>` : `<${c.tag}>…components…</${c.tag}>`;
     const label = c.labelFromChildren ? " Its text children are its label (or pass `label`)." : "";
     lines.push(`- ${shape} — ${c.doc}${label}`);
     const props = Object.entries(c.props).map(
@@ -324,8 +399,46 @@ export function widgetComponentReference(): string {
  * forms are judged (a computed `{expr}` is normalized at render time).
  * Returns the fix as English text, or null when the form is acceptable.
  */
+/** Why a KNOWN text is not a valid `send` / link / image value (null when it is). Shared by the static check and the renderer. */
+/** A `send` text as it is sent: no control characters except line breaks and tabs, trimmed. */
+function cleanSendText(text: string): string {
+  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim();
+}
+
+function textProblem(kind: "send" | "url" | "image", text: string): string | null {
+  switch (kind) {
+    case "send": {
+      // Judged on the text that would actually be SENT (control characters gone,
+      // trimmed), so a slash hidden behind one cannot slip through.
+      const t = cleanSendText(text);
+      if (t.length === 0) return "is empty — nothing would be sent";
+      // The message arrives exactly like a typed one, and a typed "/…" is a chat
+      // command (/compact, /routine, /todo …): a widget button must never run one.
+      if (t.startsWith("/")) return `must not start with "/" — that is a chat command, which a widget button may not send; word it as a sentence`;
+      return t.length > MAX_SEND_CHARS ? `is too long (limit ${MAX_SEND_CHARS} chars)` : null;
+    }
+    case "url":
+      if (text.trim().length === 0) return "is empty — there is no link to open";
+      return safeLinkUrl(text) ? null : `must be an absolute http(s) URL, e.g. "https://example.com/page" (no javascript:, data:, relative or //host URLs)`;
+    case "image":
+      if (text.length === 0) return "is empty — there is no image to show";
+      return conversationImageRef(text)
+        ? null
+        : `must be an image of THIS conversation, "/api/conversations/<conversationId>/images/<imageId>" (the URL a file-output tool returned); remote, data: and other URLs are not allowed`;
+  }
+}
+
 export function literalProblem(type: PropType, value: Expr | string | true): string | null {
   if (value === true) return type.k === "boolean" ? null : `needs a value (it is not a boolean prop)`;
+  if (type.k === "send" || type.k === "url" || type.k === "image") {
+    // Only a text KNOWN at check time is judged; a computed one is validated when it renders.
+    if (typeof value === "string") return textProblem(type.k, value);
+    if (value.type === "Lit") return typeof value.value === "string" ? textProblem(type.k, value.value) : "must be a string";
+    if (value.type === "Tmpl" && value.exprs.length === 0) return textProblem(type.k, value.quasis[0]);
+    if (value.type === "Arrow") return "must be a string, not a function";
+    if (value.type === "Arr" || value.type === "Obj") return "must be a string";
+    return null;
+  }
   if (typeof value === "string") {
     switch (type.k) {
       case "string":
@@ -446,6 +559,19 @@ function normalizeColumns(v: unknown): WidgetColumn[] | undefined {
 }
 
 function normalizeOne(type: PropType, v: unknown): unknown {
+  if (type.k === "send" || type.k === "url" || type.k === "image") {
+    // These name an EFFECT (a message to send, a page to open, an image to
+    // load): an empty or invalid one is never defaulted — it is dropped and
+    // reported, so the renderer shows a disabled / broken control instead of
+    // doing something else.
+    const text = typeof v === "string" ? v : type.k === "send" && (typeof v === "number" || typeof v === "boolean") ? String(v) : null;
+    if (text === null) throw new Error(v === undefined || v === null ? textProblem(type.k, "")! : "must be a string");
+    const problem = textProblem(type.k, text);
+    if (problem) throw new Error(problem);
+    if (type.k === "url") return safeLinkUrl(text)!;
+    // send: one clean message — trimmed, no control characters except line breaks and tabs.
+    return type.k === "send" ? cleanSendText(text) : text;
+  }
   if (v === undefined || v === null) return undefined;
   switch (type.k) {
     case "enum":
@@ -491,6 +617,7 @@ function normalizeOne(type: PropType, v: unknown): unknown {
  *   handler  → a no-op                  (the control renders; interacting does nothing)
  *   options / columns / rows → []
  *   object   → {}                       (chart spec, submit values)
+ *   send / url / image → NOT defaulted: dropped and reported (see normalizeOne)
  *
  * A widget binds inputs to state that is legitimately empty at first
  * (`{@state pick = null}`, `done[k]` before the box is ever ticked); that must
@@ -517,6 +644,10 @@ function emptyValue(type: PropType, props: Record<string, unknown>): unknown {
       return {};
     case "enum":
       return type.values[0];
+    case "send":
+    case "url":
+    case "image":
+      return undefined; // never defaulted (normalizeOne reports an empty one instead)
   }
 }
 
@@ -546,12 +677,16 @@ export function normalizeProps(tag: string, raw: Record<string, unknown>): { pro
     try {
       const v = normalizeOne(spec.props[name].type, raw[name]);
       if (v !== undefined) props[name] = v;
-      else if (spec.props[name].required) empty.push(name);
+      // A written action of a `oneOf` group counts like a required prop: `onClick={maybeFn}` that is empty stays a (no-op) button.
+      else if (spec.props[name].required || spec.oneOf?.includes(name)) empty.push(name);
     } catch (err) {
       errors.push(`${name}: ${err instanceof Error ? err.message : "invalid value"}`);
     }
   }
   // After the pass, so a number's fallback can use the component's own `min`.
-  for (const name of empty) props[name] = emptyValue(spec.props[name].type, props);
+  for (const name of empty) {
+    const fallback = emptyValue(spec.props[name].type, props);
+    if (fallback !== undefined) props[name] = fallback;
+  }
   return { props, errors };
 }

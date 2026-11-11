@@ -5,6 +5,7 @@ import type {
   AuditEvent,
   CanvasArtifact,
   CanvasControl,
+  CanvasRenderReport,
   CanvasVersion,
   ConversationSummary,
   MessageAttachment,
@@ -14,6 +15,7 @@ import type {
 } from "../types.js";
 import { type Constructor, type StoreBase, now, parseNameList } from "./internal.js";
 import { allMcpToolGroupsSelected, normalizeMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
+import { CanvasRenderReportQueue } from "../canvasRenderReports.js";
 
 /** Keep at most this many versions per canvas artifact (oldest pruned on overflow). */
 const MAX_CANVAS_VERSIONS = 20;
@@ -749,6 +751,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         .prepare("DELETE FROM canvas_versions WHERE artifact_id IN (SELECT id FROM canvas_artifacts WHERE conversation_id = ?)")
         .run(conversationId);
       this.db.prepare("DELETE FROM canvas_artifacts WHERE conversation_id = ?").run(conversationId);
+      // The canvases are gone: so is everything a browser reported about them.
+      this.canvasRenderReportQueue.forgetConversation(conversationId);
     }
 
     /** Drop the oldest versions beyond MAX_CANVAS_VERSIONS so heavy refinement can't grow unbounded. */
@@ -851,9 +855,86 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           .prepare("UPDATE canvas_artifacts SET title = ?, content_type = ?, current_version = ?, updated_at = ? WHERE id = ?")
           .run(artifact.title, artifact.contentType, nextVersion, ts, artifact.artifactId);
         this.pruneCanvasVersions(artifact.artifactId);
+        // A new version is on screen: a render report of the old one describes
+        // content that is no longer shown (an unchanged re-show keeps it).
+        this.canvasRenderReportQueue.forgetCanvas(conversationId, artifact.artifactId);
       });
       tx();
       return this.getCanvasArtifact(ownerId, artifact.artifactId);
+    }
+
+    /**
+     * Record what the user SUBMITTED on a non-blocking canvas (its controls, or a
+     * widget's `<submit>`) on the canvas's CURRENT version, so the panel's
+     * "응답 완료" survives a reload — the blocking path records through
+     * `upsertCanvasArtifact`, this is the async one (the values arrive as a chat
+     * turn). A re-submission overwrites. Written only to a canvas of THIS owner in
+     * THIS conversation; anything else (unknown id, another conversation's canvas,
+     * someone else's) is skipped and reads false. A rollback copies the chosen
+     * version's values forward, so the version on screen keeps its own answer.
+     */
+    setCanvasSubmittedValues(
+      ownerId: string,
+      conversationId: string,
+      artifactId: string,
+      values: Record<string, unknown>,
+    ): boolean {
+      const row = this.db
+        .prepare("SELECT * FROM canvas_artifacts WHERE id = ? AND owner_user_id = ? AND conversation_id = ?")
+        .get(artifactId, ownerId, conversationId) as CanvasArtifactRow | undefined;
+      if (!row) return false;
+      const updated = this.db
+        .prepare("UPDATE canvas_versions SET submitted_values_json = ? WHERE artifact_id = ? AND version = ?")
+        .run(JSON.stringify(values), artifactId, row.current_version);
+      if (updated.changes === 0) return false;
+      this.db.prepare("UPDATE canvas_artifacts SET updated_at = ? WHERE id = ?").run(now(), artifactId);
+      return true;
+    }
+
+    // ---- Canvas render reports (browser → next turn; process memory) ------
+
+    /**
+     * What viewers' browsers could not draw, waiting for each conversation's next
+     * turn. Instance state of THIS store (it reaches every caller through
+     * `deps.store`), never module state; lost on restart by design.
+     */
+    private readonly canvasRenderReportQueue = new CanvasRenderReportQueue();
+
+    /**
+     * Queue a browser's render report for one canvas of the caller's own
+     * conversation (`errors` already sanitized; empty = it draws fine now, so a
+     * waiting report is dropped). False when the canvas is not this owner's
+     * canvas in this conversation — the route's 404.
+     */
+    reportCanvasRenderErrors(ownerId: string, conversationId: string, artifactId: string, errors: string[]): boolean {
+      const row = this.db
+        .prepare("SELECT current_version FROM canvas_artifacts WHERE id = ? AND owner_user_id = ? AND conversation_id = ?")
+        .get(artifactId, ownerId, conversationId) as { current_version: number } | undefined;
+      if (!row) return false;
+      this.canvasRenderReportQueue.put(conversationId, artifactId, row.current_version, errors);
+      return true;
+    }
+
+    /**
+     * CONSUME the conversation's waiting render reports for the turn that is
+     * starting: each is returned once. A report whose canvas was deleted, moved
+     * on to another version (refined, rolled back) or is not this owner's is
+     * dropped instead — it describes something no longer on screen.
+     */
+    takeCanvasRenderReports(ownerId: string, conversationId: string): CanvasRenderReport[] {
+      const out: CanvasRenderReport[] = [];
+      for (const pending of this.canvasRenderReportQueue.take(conversationId)) {
+        const row = this.db
+          .prepare("SELECT * FROM canvas_artifacts WHERE id = ? AND owner_user_id = ? AND conversation_id = ?")
+          .get(pending.canvasId, ownerId, conversationId) as CanvasArtifactRow | undefined;
+        const version = row && row.current_version === pending.version ? this.currentCanvasVersion(row.id, row.current_version) : undefined;
+        if (!version) {
+          this.canvasRenderReportQueue.forgetCanvas(conversationId, pending.canvasId);
+          continue;
+        }
+        out.push({ canvasId: pending.canvasId, title: version.title ?? "", errors: pending.errors });
+      }
+      return out;
     }
 
     /** The current state of one artifact (owner-gated). */
@@ -933,6 +1014,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           .prepare("UPDATE canvas_artifacts SET title = ?, content_type = ?, current_version = ?, updated_at = ? WHERE id = ?")
           .run(target.title, target.content_type, nextVersion, ts, artifactId);
         this.pruneCanvasVersions(artifactId);
+        this.canvasRenderReportQueue.forgetCanvas(row.conversation_id, artifactId);
       });
       tx();
       return this.getCanvasArtifact(ownerId, artifactId);
@@ -941,8 +1023,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     /** Hard-delete an artifact and all its versions (owner-gated). */
     deleteCanvasArtifact(ownerId: string, artifactId: string): boolean {
       const row = this.db
-        .prepare("SELECT owner_user_id FROM canvas_artifacts WHERE id = ?")
-        .get(artifactId) as { owner_user_id: string } | undefined;
+        .prepare("SELECT owner_user_id, conversation_id FROM canvas_artifacts WHERE id = ?")
+        .get(artifactId) as { owner_user_id: string; conversation_id: string } | undefined;
       if (!row || row.owner_user_id !== ownerId) {
         return false;
       }
@@ -951,6 +1033,7 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         this.db.prepare("DELETE FROM canvas_artifacts WHERE id = ?").run(artifactId);
       });
       tx();
+      this.canvasRenderReportQueue.forgetCanvas(row.conversation_id, artifactId);
       return true;
     }
 

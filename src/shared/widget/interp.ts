@@ -53,6 +53,28 @@ export interface Runtime {
   /** Remaining output budget of the render pass (see beginRender / chargeOutput). */
   outEls: number;
   outChars: number;
+  /**
+   * What the CURRENT block ignored: setter / `copy` calls made while rendering
+   * (see `noteIgnoredCall`). Emptied at the start of every block; a renderer
+   * reads it after the block to say so, since the call itself has no effect.
+   */
+  warnings: string[];
+}
+
+/** Most ignored-call warnings kept per block. */
+export const MAX_RENDER_WARNINGS = 5;
+
+/**
+ * Record a setter or `copy` call made in the render phase. The call is still
+ * IGNORED (rendering must not change state or re-trigger itself) — this only
+ * leaves a trace, because a call inside a function body passes the static check
+ * (`{xs.map((x) => setA(x))}`) and would otherwise do nothing without a word.
+ * One entry per callee per block, at most MAX_RENDER_WARNINGS.
+ */
+export function noteIgnoredCall(rt: Runtime, callee: string): void {
+  const fix = callee === "copy" ? "call copy only from an event handler (onChange/onClick)" : "call a setter only from an event handler (onChange/onClick)";
+  const message = `${callee}(…) was called while rendering and was ignored — ${fix}.`;
+  if (rt.warnings.length < MAX_RENDER_WARNINGS && !rt.warnings.includes(message)) rt.warnings.push(message);
 }
 
 export function createRuntime(): Runtime {
@@ -65,6 +87,7 @@ export function createRuntime(): Runtime {
     renderSteps: MAX_RENDER_STEPS - MAX_STEPS,
     outEls: MAX_OUT_ELEMENTS,
     outChars: MAX_OUT_CHARS,
+    warnings: [],
   };
 }
 
@@ -1474,8 +1497,9 @@ export function beginRender(rt: Runtime): void {
 /**
  * Start of a BLOCK of a render pass: a fresh step window (at most MAX_STEPS,
  * drawn from what the pass has left — the previous window's unused steps go
- * back first), a fresh allocation budget, and back to the render phase. Once
- * the pass is out of steps, every further block fails at its first step.
+ * back first), a fresh allocation budget, an empty `warnings` list, and back to
+ * the render phase. Once the pass is out of steps, every further block fails at
+ * its first step.
  *
  * Never call it (or beginRender) while `invokeHandler` is running on the SAME
  * runtime: the handler would drop back to "render" and its remaining
@@ -1491,6 +1515,7 @@ export function resetBudget(rt: Runtime) {
   rt.depth = 0;
   rt.nest = 0;
   rt.phase = "render";
+  rt.warnings = [];
 }
 
 /**

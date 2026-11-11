@@ -110,10 +110,30 @@ describe("official system manual", () => {
     expect(page).toContain("no `Math.random`");
     // The component list is the shared spec's own text, never a hand copy.
     expect(page).toContain(`## Components\n${widgetComponentReference()}`);
-    // The one way back to the avatar, with its caps.
-    expect(page).toContain("It is the ONLY way anything returns to you");
-    expect(page).toContain("at most 20 keys");
-    expect(page).toContain("8,000 characters in total");
+    // It is drawn INLINE in the answer, not in the side panel — and the avatar is told to write around it.
+    expect(page).toContain("drawn INLINE in your answer, at the point where you call the tool — not in the side panel");
+    expect(page).toContain("do not repeat in prose what it shows");
+    expect(page).toContain("Answer a plain question in plain text; never decorate.");
+    // The TWO ways back to the avatar, with their caps: structured values, or a follow-up chat message.
+    expect(page).toContain("Only two things come back, each as the user's NEXT message");
+    expect(page).toContain("`<submit values={{ months, rate }}>Proceed</submit>` — STRUCTURED values");
+    expect(page).toContain("≤ 20 keys");
+    expect(page).toContain("≤ 8,000 characters");
+    expect(page).toContain('`<button send="Compare the two plans in a table">Compare plans</button>` — a natural FOLLOW-UP');
+    expect(page).toContain("The user sees the text before pressing; 1–2,000 characters");
+    expect(page).toContain("must not start with `/`");
+    // Links open; images are this conversation's own, by the URL a hidden show_file returns.
+    expect(page).toContain("Links open in a new tab and send you nothing: `<button href>`, `<link href>`, `[text](https://…)` in text — absolute http(s) only.");
+    expect(page).toContain("publish the file with `mcp__file_output__show_file` + `hidden:true` and pass the returned URL unchanged");
+    expect(page).toContain("remote and `data:` URLs are refused");
+    // Nothing of the earlier, stricter shape is left to mislead.
+    for (const stale of ["there is no free-text send", "no link opening", "links do not open", "It is the ONLY way anything returns to you", "cannot load remote data or images"]) {
+      expect(page).not.toContain(stale);
+    }
+    // The spec's own reference documents the three revived props (so the prose above is not the only place).
+    expect(widgetComponentReference()).toContain("send: text");
+    expect(widgetComponentReference()).toContain("<image />");
+    expect(widgetComponentReference()).toContain("<link>");
     expect(page).toContain("`controls` and `editable` cannot be combined with a widget");
     expect(page).toContain("kept in THEIR browser only");
     // A manual example the tool would reject teaches a broken grammar: every
@@ -125,8 +145,17 @@ describe("official system manual", () => {
     }
     expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
     expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
-    // The user-facing product page mentions the feature and where it is enabled.
-    expect(readSystemManual("files-canvas").text).toContain("experimental 캔버스 위젯 feature on (설정 → 실험 기능");
+    // One example shows the follow-up button next to the structured submit.
+    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator).toContain('<button send="금리를 더 낮출 방법을 알려줘" variant="ghost">');
+    // The user-facing product page mentions the feature, where it is enabled and where it appears.
+    const product = readSystemManual("files-canvas").text;
+    expect(product).toContain("experimental 캔버스 위젯 feature on (설정 → 실험 기능");
+    expect(product).toContain("appears inside its answer (not in the side panel)");
+    expect(product).toContain("a button that posts a follow-up chat message, whose text is shown before it is pressed");
+    // canvas-operations routes to it with the same placement fact.
+    const operations = readSystemManual("canvas-operations").text;
+    expect(operations).toContain("it is drawn INLINE in your answer, where you call the tool — not in the side panel");
+    expect(operations).toContain("a `<button send>` posts the user's next chat message");
   });
 
   it("offers a compact index and complete individually addressable guides", () => {

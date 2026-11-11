@@ -4,7 +4,7 @@
   import Icon from "./Icon.svelte";
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
-  import { addConversationToSplit, clearChatHistory, newChat, selectConversation, startNewChat } from "../lib/chat";
+  import { addConversationToSplit, clearChatHistory, forgetConversationWidgets, newChat, selectConversation, startNewChat } from "../lib/chat";
   import { timeLabel } from "../lib/format";
   import { loadConversations, stopKnowledgeWatch } from "../lib/loaders";
   import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
@@ -234,6 +234,8 @@
       setConversationBusy(conversation.id, false);
       return;
     }
+    // The widget values this browser kept for the conversation go with it.
+    forgetConversationWidgets(conversation.id);
     const openPane = $appState.chatPanes.find((pane) => pane.conversationId === conversation.id);
     updateState((state) => {
       state.conversations = state.conversations.filter((c) => c.id !== conversation.id);

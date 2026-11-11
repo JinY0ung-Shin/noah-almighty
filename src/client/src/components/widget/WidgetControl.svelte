@@ -10,7 +10,7 @@
   // something else. After every change the control is therefore put back on the
   // state's value (`settle`).
   import { tick } from "svelte";
-  import type { WidgetOption } from "../../../../shared/widget/index";
+  import { MAX_SEND_CHARS, type WidgetOption } from "../../../../shared/widget/index";
   import type { ElVNode } from "../../lib/widgetView";
   import type { WidgetCtx } from "../../lib/widgetCtx";
   import WidgetInline from "./WidgetInline.svelte";
@@ -23,6 +23,19 @@
   $: label = typeof p.label === "string" ? p.label : "";
   $: options = (Array.isArray(p.options) ? p.options : []) as WidgetOption[];
   $: selectedIndex = options.findIndex((opt) => opt.value === p.value);
+
+  // A button does ONE thing: run a handler, send a chat message, or open a link.
+  // The library keeps whichever of onClick | send | href is valid; with none
+  // (an empty send, a URL that is not http/https) the button is drawn disabled
+  // and says why. What a send or a link will do is shown BEFORE it is pressed.
+  $: buttonClass = `btn btn-sm ${BUTTON_CLASS[typeof p.variant === "string" ? p.variant : "secondary"] ?? "secondary"}`;
+  $: sendText = typeof p.send === "string" ? p.send.slice(0, MAX_SEND_CHARS) : "";
+  // A "/…" message would run as a slash command — those are the viewer's to type.
+  $: sendRefused = sendText.startsWith("/");
+  $: sendHint = sendRefused ? "슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다." : `보낼 메시지: ${sendText}`;
+  $: linkHref = typeof p.href === "string" ? p.href : "";
+  $: idle = v.tag === "button" && !sendText && !linkHref && typeof p.onClick !== "function";
+  $: if (sendRefused) ctx.report('<button send>: a message starting with "/" is not sent from a widget (slash commands are typed by the user)');
 
   const BUTTON_CLASS: Record<string, string> = { primary: "btn-primary", secondary: "secondary", ghost: "btn-ghost" };
 
@@ -132,11 +145,28 @@
   }
 </script>
 
-{#if v.tag === "button"}
+{#if v.tag === "button" && linkHref && p.disabled !== true}
+  <a class={`${buttonClass} wg-button-link`} href={linkHref} target="_blank" rel="noopener noreferrer" title={linkHref}
+    >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</a>
+{:else if v.tag === "button" && sendText}
   <button
     type="button"
-    class={`btn btn-sm ${BUTTON_CLASS[typeof p.variant === "string" ? p.variant : "secondary"] ?? "secondary"}`}
-    disabled={p.disabled === true}
+    class={`${buttonClass} wg-button-send`}
+    disabled={p.disabled === true || ctx.locked || sendRefused}
+    title={sendHint}
+    aria-describedby={`${id}-send ${ctx.statusId}`}
+    on:click={() => {
+      if (!sendRefused) ctx.send(sendText);
+    }}
+  >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
+  <!-- The same sentence for a screen reader: what pressing the button will say. -->
+  <span id={`${id}-send`} class="sr-only">{sendHint}</span>
+{:else if v.tag === "button"}
+  <button
+    type="button"
+    class={buttonClass}
+    disabled={p.disabled === true || idle || Boolean(linkHref)}
+    title={idle ? `이 버튼은 동작하지 않습니다${v.flawed ? ` (${v.flawed})` : ""}` : undefined}
     on:click={() => ctx.fire(p.onClick, [])}
   >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
 {:else if v.tag === "checkbox"}

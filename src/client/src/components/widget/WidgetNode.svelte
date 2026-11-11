@@ -33,7 +33,7 @@
   import type { VNode } from "../../lib/widgetView";
   import type { WidgetCtx } from "../../lib/widgetCtx";
   import { cellText } from "../../lib/widgetView";
-  import { colorStyle, containerStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
+  import { colorStyle, containerStyle, imageStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
   import type { WidgetColumn } from "../../../../shared/widget/index";
   import WidgetChart from "./WidgetChart.svelte";
   import WidgetControl from "./WidgetControl.svelte";
@@ -75,6 +75,8 @@
   <p class="wg-inline"><WidgetInline segs={v.segs} /></p>
 {:else if v.k === "error"}
   <p class="wg-error" role="note" title={v.detail}>{v.message}</p>
+{:else if v.k === "warn"}
+  <p class="wg-note wg-warn" role="note" title={v.detail}>{v.message}</p>
 {:else if v.k === "note"}
   <p class="wg-note">{v.message}</p>
 {:else if v.tag === "box" || v.tag === "row" || v.tag === "col" || v.tag === "grid" || v.tag === "grid-item"}
@@ -158,12 +160,17 @@
       </tbody>
     </table>
   </div>
+{:else if v.tag === "image"}
+  <!-- An image of THIS conversation only (lib/widgetView.ts rebuilt the address
+       from its two ids after checking the conversation). -->
+  <img class="wg-image" src={typeof v.props.src === "string" ? v.props.src : ""} alt={typeof v.props.alt === "string" ? v.props.alt : ""} loading="lazy" style={imageStyle(v.props)} />
 {:else if v.tag === "chart"}
   <WidgetChart
     spec={v.props.spec}
     height={typeof v.props.height === "number" ? v.props.height : undefined}
     label={typeof v.props.label === "string" ? v.props.label : ""}
     dark={ctx.dark}
+    onProblem={ctx.report}
   />
 {:else if v.tag === "submit"}
   <button

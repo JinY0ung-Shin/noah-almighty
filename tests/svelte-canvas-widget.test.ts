@@ -9,9 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel.svelte";
 import WidgetView from "../src/client/src/components/widget/WidgetView.svelte";
+import { CANVAS_REPORT_DELAY_MS, resetCanvasRenderReports } from "../src/client/src/lib/canvasReport.js";
 import * as chat from "../src/client/src/lib/chat.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { readState, replaceState } from "../src/client/src/lib/state.js";
+import { setThemePref } from "../src/client/src/lib/theme.js";
 import { WIDGET_STATE_SAVE_DELAY_MS, loadWidgetState, widgetStateKey } from "../src/client/src/lib/widgetState.js";
 import { checkWidget, parseWidget, restoreState } from "../src/shared/widget/index.js";
 
@@ -87,6 +89,7 @@ async function slide(name: string, value: number): Promise<HTMLInputElement> {
 
 beforeEach(() => {
   localStorage.clear();
+  resetCanvasRenderReports();
   vi.mocked(chat.submitCanvas).mockClear();
   replaceState({ chatPanes: [], user: { id: "u1", username: "me", displayName: "나" } } as unknown as Parameters<typeof replaceState>[0]);
 });
@@ -437,12 +440,12 @@ describe("WidgetView <details>", () => {
 });
 
 describe("WidgetView top-level prose", () => {
-  it("keeps Markdown and drops every other element and attribute", () => {
+  it("keeps Markdown, drops every other element and attribute, and links only to http(s)", () => {
     // Mid-line, so it is prose (a `<tag>` at the start of a line is a component).
     const { view } = mount(
       widgetSource(`# 제목
 
-안내 <div class="canvas-fs" id="wg1-status"><button class="btn btn-primary btn-sm wg-submit" onclick="alert(1)">보내기</button><a href="https://example.test/x" class="btn">링크</a><form action="https://example.test/p"><input name="pw" type="password"></form><img src="https://example.test/i.png" alt="그림"><span style="position:fixed;inset:0">덮개</span></div> 그리고 [문서](https://example.test/doc) **굵게** \`코드\`
+안내 <div class="canvas-fs" id="wg1-status"><button class="btn btn-primary btn-sm wg-submit" onclick="alert(1)">보내기</button><a href="https://example.test/x" class="btn">링크</a><form action="https://example.test/p"><input name="pw" type="password"></form><img src="https://example.test/i.png" alt="그림"><span style="position:fixed;inset:0">덮개</span></div> 그리고 [문서](https://example.test/doc) **굵게** \`코드\` [스크립트](javascript:alert(1)) [상대](/api/me) <a href="data:text/html,hi" onclick="x()">데이터</a>
 
 - 하나
 - 둘
@@ -461,15 +464,33 @@ describe("WidgetView top-level prose", () => {
     expect(prose.querySelector("code")?.textContent).toBe("코드");
     expect(prose.querySelectorAll("li")).toHaveLength(2);
     expect(prose.querySelector("td[align='right']")?.textContent).toBe("1");
-    // …nothing else is, and no element carries a class, id, style, href or handler.
-    expect(prose.querySelector("div, button, a, form, input, img, span, script, style, iframe")).toBeNull();
+    // …nothing else is: no element the app styles, no form control, no image.
+    expect(prose.querySelector("div, button, form, input, img, span, script, style, iframe")).toBeNull();
+    // A link is kept ONLY with an absolute http(s) target, and then carries exactly
+    // these four attributes — written by the renderer, not taken from the source.
+    const links = Array.from(prose.querySelectorAll("a[href]"));
+    expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+      ["링크", "https://example.test/x"],
+      ["문서", "https://example.test/doc"],
+    ]);
+    for (const a of links) {
+      expect(a.getAttributeNames().sort()).toEqual(["href", "rel", "target", "title"]);
+      expect(a.getAttribute("target")).toBe("_blank");
+      expect(a.getAttribute("rel")).toBe("noopener noreferrer");
+      expect(a.getAttribute("title")).toBe(a.getAttribute("href"));
+    }
+    // javascript:, a relative path and data: are not links (their text stays).
+    expect(prose.innerHTML).not.toMatch(/javascript:|data:text|href="\/api/);
+    expect(prose.textContent).toContain("스크립트");
+    expect(prose.textContent).toContain("상대");
+    expect(prose.textContent).toContain("데이터");
+    // No class, id, style or handler anywhere.
     const attributes = Array.from(prose.querySelectorAll("*")).flatMap((el) => el.getAttributeNames());
-    expect(new Set(attributes)).toEqual(new Set(["align"]));
-    // A link or a button leaves its TEXT behind; it does not open or act.
+    expect(new Set(attributes)).toEqual(new Set(["align", "href", "target", "rel", "title"]));
+    // A button leaves its TEXT behind; it does not act.
     expect(prose.textContent).toContain("보내기");
-    expect(prose.textContent).toContain("링크");
-    expect(prose.textContent).toContain("문서");
-    expect(prose.innerHTML).not.toContain("example.test");
+    expect(prose.innerHTML).not.toContain("example.test/p");
+    expect(prose.innerHTML).not.toContain("i.png");
     expect(view.container.querySelectorAll(".wg-submit")).toHaveLength(0);
   });
 });
@@ -766,4 +787,166 @@ describe("SidePanel widget canvas", () => {
     await slide("배수", 5);
     await waitFor(() => expect(host.shadowRoot!.innerHTML).not.toBe(before), { timeout: 15000 });
   }, 40000);
+});
+
+describe("SidePanel canvas render report (telling the avatar what failed in the browser)", () => {
+  type Report = { url: string; conversationId: string; errors: string[] };
+
+  /** Every POST to a canvas's render-report route; anything else gets a plain OK. */
+  function captureReports(): Report[] {
+    const reports: Report[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("/render-report")) {
+          expect(init?.method).toBe("POST");
+          reports.push({ url: String(url), ...JSON.parse(String(init?.body)) });
+          return { ok: true, status: 204, json: async () => ({}) };
+        }
+        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+      }),
+    );
+    return reports;
+  }
+  const settle = (ms = CANVAS_REPORT_DELAY_MS + 150) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Statically fine (the calls sit in function bodies / the name resolves), broken at run time.
+  const BROKEN = `{@state n = 2}
+{@state xs = [1, 2]}
+
+<slider label="수량" value={n} onChange={setN} min={0} max={10} />
+<text>합계 {n * 2}</text>
+<text>{xs.map((x) => setN(x)).length}개</text>
+<button onClick={() => setN(null.x)}>깨진 버튼</button>
+`;
+
+  it("reports a widget's ignored calls once, and a failed handler when it happens — not on every re-render", async () => {
+    const reports = captureReports();
+    try {
+      const pdf = { id: "file-1", kind: "file", mediaType: "application/pdf", name: "보고.pdf" };
+      const base = widgetPane({ fileTabs: [{ attachment: pdf, slides: [] }] }, { content: widgetSource(BROKEN), interaction: undefined });
+      replaceState({ chatPanes: [base], user: { id: "u1" } } as unknown as Parameters<typeof replaceState>[0]);
+      const view = render(SidePanel, { props: { pane: base } });
+
+      // The viewer is told in place, in Korean, with the runtime's reason as the tooltip…
+      const warn = await waitFor(() => {
+        const el = view.container.querySelector(".wg-warn");
+        if (!el) throw new Error("no warning yet");
+        return el as HTMLElement;
+      });
+      expect(warn.textContent).toBe("렌더 중에 호출된 상태 변경은 무시됩니다.");
+      expect(warn.getAttribute("title")).toContain("setN(…) was called while rendering and was ignored");
+      expect(reports).toEqual([]); // …and the avatar a moment later, once.
+      await settle();
+      expect(reports).toEqual([
+        {
+          url: "/api/canvases/cv1/render-report",
+          conversationId: "conv-1",
+          errors: ["line 6:1 setN(…) was called while rendering and was ignored — call a setter only from an event handler (onChange/onClick)."],
+        },
+      ]);
+
+      // Re-evaluations (a state change), a tab switch and back, a theme flip: the same failure is not sent again.
+      await slide("수량", 7);
+      await view.rerender({ pane: { ...base, sideTab: { kind: "file", id: "file-1" } } });
+      await view.rerender({ pane: { ...base, sideTab: { kind: "canvas", id: "cv1" } } });
+      setThemePref("dark");
+      await settle();
+      setThemePref("light");
+      expect(reports).toHaveLength(1);
+
+      // A handler that fails is a NEW fact: it goes out when it happens.
+      await fireEvent.click(await screen.findByRole("button", { name: "깨진 버튼" }));
+      expect(view.container.querySelector(".wg-status")?.textContent).toBe("동작을 실행하지 못했습니다.");
+      await settle();
+      expect(reports).toHaveLength(2);
+      expect(reports[1].errors).toHaveLength(1);
+      expect(reports[1].errors[0]).toMatch(/^an event handler failed: /);
+      await fireEvent.click(screen.getByRole("button", { name: "깨진 버튼" }));
+      await settle();
+      expect(reports).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 20000);
+
+  it("does not report an older version a replay draws for a moment, nor a canvas it cannot load", async () => {
+    const reports = captureReports();
+    try {
+      // The run log replays the canvas's previous (broken) version, then the current one.
+      const base = widgetPane({}, { content: BROKEN, interaction: undefined });
+      replaceState({ chatPanes: [base], user: { id: "u1" } } as unknown as Parameters<typeof replaceState>[0]);
+      const view = render(SidePanel, { props: { pane: base } });
+      await waitFor(() => expect(view.container.querySelector(".wg-warn")).toBeTruthy());
+      const fixed = widgetSource(BROKEN.replace("{xs.map((x) => setN(x)).length}개", "{xs.length}개").replace("setN(null.x)", "setN(0)"));
+      await view.rerender({ pane: { ...base, canvases: [{ ...base.canvases[0], content: fixed }] } });
+      await waitFor(() => expect(view.container.querySelector(".wg-warn")).toBeNull());
+      await settle();
+      expect(reports).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 20000);
+
+  it("reports a source it cannot parse, a failed chart and a failed vega canvas — each in English", async () => {
+    const reports = captureReports();
+    try {
+      const chartWidget = widgetSource(`{@state k = 1}
+
+<chart label="차트" spec={{ mark: "bar", data: { url: "https://x.test/d.json" } }} />
+`);
+      const pane = {
+        ...widgetPane(),
+        sideTab: { kind: "canvas", id: "cv-parse" },
+        canvases: [
+          { id: "cv-vega", title: "차트", content: "{ not json", contentType: "vega" },
+          { id: "cv-chart", title: "위젯 차트", content: chartWidget, contentType: "widget" },
+          { id: "cv-parse", title: "깨진 위젯", content: "<box>\n  <text>닫히지 않음\n", contentType: "widget" },
+        ],
+      };
+      replaceState({ chatPanes: [pane], user: { id: "u1" } } as unknown as Parameters<typeof replaceState>[0]);
+      const view = render(SidePanel, { props: { pane } });
+      expect((await screen.findByRole("alert")).textContent).toContain("위젯 소스에 오류가 있어 표시하지 못했습니다.");
+      await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv-chart" } } });
+      await waitFor(() => expect(view.container.querySelector(".wg-chart .canvas-render-error")).toBeTruthy(), { timeout: 15000 });
+      await settle();
+      await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv-vega" } } });
+      await waitFor(() => expect(view.container.querySelector(".canvas-render-error")?.textContent).toContain("Vega 차트 렌더링에 실패했습니다"), {
+        timeout: 15000,
+      });
+      await settle();
+
+      const byCanvas = Object.fromEntries(reports.map((r) => [r.url, r.errors]));
+      // The broken widget was only on screen for an instant before the tab moved on: not reported.
+      expect(Object.keys(byCanvas).sort()).toEqual(["/api/canvases/cv-chart/render-report", "/api/canvases/cv-vega/render-report"]);
+      expect(byCanvas["/api/canvases/cv-chart/render-report"]).toHaveLength(1);
+      expect(byCanvas["/api/canvases/cv-chart/render-report"][0]).toMatch(/^<chart>: .*inline/i);
+      expect(byCanvas["/api/canvases/cv-vega/render-report"][0]).toMatch(/^the vega chart did not render: /);
+
+      // Shown long enough, the parse failure is reported with its line and column.
+      await view.rerender({ pane: { ...pane, sideTab: { kind: "canvas", id: "cv-parse" } } });
+      await settle();
+      const parse = reports.find((r) => r.url === "/api/canvases/cv-parse/render-report");
+      expect(parse?.errors[0]).toMatch(/^widget source error at line \d+:\d+: /);
+      expect(JSON.stringify(reports)).not.toMatch(/[가-힣]{4}/); // agent-facing lines are English
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 40000);
+
+  it("asks for a reload when it does not know the canvas type, and reports nothing", async () => {
+    const reports = captureReports();
+    try {
+      const pane = widgetPane({}, { content: "새 유형의 소스 <b>굵게</b>", contentType: "hologram" });
+      const { container } = render(SidePanel, { props: { pane } });
+      const notice = await screen.findByRole("alert");
+      expect(notice.textContent).toBe("이 캔버스를 표시하려면 페이지를 새로고침해 주세요.");
+      expect(container.querySelector(".canvas-content pre")?.textContent).toBe("새 유형의 소스 <b>굵게</b>");
+      expect(container.querySelector(".canvas-content b")).toBeNull();
+      await settle();
+      expect(reports).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

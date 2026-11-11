@@ -54,6 +54,16 @@ export function spacerStyle(p: Props): string {
   return size ? `flex:0 0 ${size};min-width:${size};min-height:${size}` : "flex:1 1 0";
 }
 
+/** `<image>`: the declared size and fit (numbers the library clamped), nothing free-form. */
+export function imageStyle(p: Props): string {
+  return join([
+    typeof p.width === "number" && `width:${p.width}px`,
+    typeof p.maxHeight === "number" && `max-height:${p.maxHeight}px`,
+    `object-fit:${p.fit === "cover" ? "cover" : "contain"}`,
+    `border-radius:${own(RADIUS, p.radius) ?? RADIUS.sm}`,
+  ]);
+}
+
 /** A text color token → `color:…`, or nothing. */
 export function colorStyle(token: unknown): string {
   const color = textColor(token);

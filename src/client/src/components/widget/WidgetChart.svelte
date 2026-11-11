@@ -14,6 +14,8 @@
   export let height: number | undefined = undefined;
   export let label = "";
   export let dark = false;
+  /** Told when the chart cannot be drawn: one ENGLISH line for the avatar. */
+  export let onProblem: (problem: string) => void = () => {};
 
   const DEFAULT_WIDTH = 420;
   const DEFAULT_HEIGHT = 240;
@@ -52,6 +54,7 @@
     }
     // Measured WITHOUT serializing; only a spec inside the cap is stringified below.
     if (dataSize(raw, MAX_SPEC_CHARS) > MAX_SPEC_CHARS) {
+      if (wantedSig !== "too-big") onProblem(`<chart>: the spec is too large to draw (limit ${MAX_SPEC_CHARS} characters of JSON)`);
       settle("too-big", TOO_BIG, false);
       return;
     }
@@ -96,6 +99,7 @@
       if (destroyed || mine !== token) return;
       const detail = err instanceof Error ? err.message : "";
       error = detail ? `차트를 그리지 못했습니다 (상세: ${detail})` : "차트를 그리지 못했습니다.";
+      onProblem(`<chart>: ${detail || "the Vega-Lite spec could not be rendered"}`);
       // The previous drawing no longer matches the state: an old chart above the
       // error would read as the current one.
       svg = "";

@@ -15,9 +15,11 @@
     dismissCanvas,
     fetchCanvasVersions,
     rollbackCanvas,
+    sendWidgetMessage,
     submitCanvas,
     submitCanvasEdit,
   } from "../lib/chat";
+  import { queueCanvasRenderReport } from "../lib/canvasReport";
   import { renderVegaSvg } from "../lib/vegaCanvas";
   import { shadowSvg } from "../lib/shadowSvg";
   import { copyText } from "../lib/dom";
@@ -35,8 +37,15 @@
   // /api/chat/respond (blocking) or /api/chat/stream (async). The instance
   // stays mounted while another tab shows, so its form/edit state survives a
   // switch; only the card's DOM is dropped while hidden.
+  //
+  // A `widget` canvas is not a panel tab: it is drawn in the chat bubble that
+  // showed it (widget/InlineWidget). That is this same component with `inline`
+  // — one home for a canvas's state, storage, fullscreen, versions, delete,
+  // submit and render report — dressed for a bubble instead of the panel.
   export let pane: ChatPane;
   export let canvas: PaneCanvas;
+  /** Drawn inside a chat bubble (a widget), not as a side-panel tab. */
+  export let inline = false;
   /** This tab is the one the panel shows. */
   export let active = false;
 
@@ -113,11 +122,48 @@
     widgetDoc = surface.widget ?? null;
   }
   let renderError = "";
+  // Not a failure of the content: this build cannot draw the canvas at all (an
+  // unknown type), so the line reads as an instruction, not as "렌더링 실패".
+  let renderNotice = "";
   // The failure was a LOAD (a lazy chunk), not the content: offer to render again.
   let renderRetry = false;
   function retryRender(): void {
     renderedContent = null;
     renderIfChanged(canvas, $theme);
+  }
+  // A render that failed in THIS browser was something only the viewer saw. The
+  // reasons go to the avatar (lib/canvasReport.ts: once per content, only while
+  // that content is still what this tab shows, never for a replayed older
+  // version) so it can fix the canvas on its next turn. `errors` are English.
+  let tabDestroyed = false;
+  onDestroy(() => {
+    tabDestroyed = true;
+  });
+  // What is wrong with the content this tab last rendered. Kept so that a
+  // failure found while the tab was hidden again before it could be sent (the
+  // panel moved on within a moment) is offered once more when the tab shows.
+  let standingProblems: { content: string; errors: string[] } | null = null;
+  function reportRenderProblems(content: string, errors: string[]): void {
+    const known = standingProblems?.content === content ? standingProblems.errors : [];
+    standingProblems = { content, errors: [...new Set([...known, ...errors])].slice(0, 20) };
+    queueRenderReport(content, errors);
+  }
+  $: if (active || fullscreen) requeueStandingProblems();
+  function requeueStandingProblems(): void {
+    if (standingProblems && standingProblems.content === canvas.content) queueRenderReport(standingProblems.content, standingProblems.errors);
+  }
+  function queueRenderReport(content: string, errors: string[]): void {
+    const canvasId = canvas.id;
+    queueCanvasRenderReport({
+      canvasId,
+      conversationId: pane.conversationId,
+      content,
+      errors,
+      stillCurrent: () => !tabDestroyed && (active || fullscreen) && canvas.id === canvasId && canvas.content === content,
+    });
+  }
+  function errorDetail(err: unknown): string {
+    return err instanceof Error && err.message ? err.message : "no detail";
   }
   // Wrap a raw (English) vega/mermaid library message in a Korean sentence,
   // keeping the detail — a bare English message reads as a crash in the KO UI.
@@ -160,7 +206,9 @@
   async function renderCanvas(target: PaneCanvas, resolvedTheme: ResolvedTheme): Promise<void> {
     const token = ++renderToken;
     renderError = "";
+    renderNotice = "";
     renderRetry = false;
+    standingProblems = null;
     if (target.contentType === "markdown") {
       showRendered({ html: renderMarkdown(target.content) });
       return;
@@ -182,6 +230,7 @@
         if (token !== renderToken) return;
         renderError = vegaRenderError(err);
         showRendered({ html: sourceFallback(target.content) });
+        reportRenderProblems(target.content, [`the vega chart did not render: ${errorDetail(err)}`]);
       }
       return;
     }
@@ -215,6 +264,11 @@
       if (!doc || doc.problems.length) {
         renderError = "위젯 소스에 오류가 있어 표시하지 못했습니다.";
         showRendered({ html: sourceFallback(target.content) });
+        const problems = (doc?.problems ?? []).map((problem) => {
+          const { line, col } = lib.lineCol(target.content, problem.pos);
+          return `widget source error at line ${line}:${col}: ${problem.message}`;
+        });
+        reportRenderProblems(target.content, problems.length ? problems : ["the widget source could not be parsed"]);
         return;
       }
       openWidget(target.id, doc);
@@ -240,8 +294,15 @@
         if (token !== renderToken) return;
         renderError = mermaidRenderError(err);
         showRendered({ html: sourceFallback(target.content) });
+        reportRenderProblems(target.content, [`the mermaid diagram did not render: ${errorDetail(err)}`]);
       }
+      return;
     }
+    // A type this build does not know: a tab loaded before a deploy that added
+    // one. Drawing nothing looked like an empty canvas; say what to do and show
+    // the source meanwhile. (Not the avatar's mistake, so nothing is reported.)
+    renderNotice = "이 캔버스를 표시하려면 페이지를 새로고침해 주세요.";
+    showRendered({ html: sourceFallback(target.content) });
   }
 
   // A failed render shows the source instead (escaped, so it is text).
@@ -354,11 +415,22 @@
   // A <submit> rides a NEW chat turn (like an async form), so it waits for the
   // avatar's turn to end; the widget's own inputs keep working meanwhile.
   $: widgetLocked = Boolean(canvas.submitting || pane.streaming);
-  $: widgetLockedReason =
-    canvas.interaction !== "async" ? "" : canvas.submitting ? "응답을 보내는 중입니다." : "아바타 응답이 끝난 뒤 보낼 수 있습니다.";
+  // Shown by the widget only when it has something to send (a <submit>, a send button).
+  $: widgetLockedReason = canvas.submitting ? "응답을 보내는 중입니다." : "아바타 응답이 끝난 뒤 보낼 수 있습니다.";
   function onWidgetSubmit(values: Record<string, unknown>): void {
     if (widgetLocked) return;
     void submitCanvas(pane.id, canvas.id, values);
+  }
+  // A `<button send>`: its text becomes the viewer's next chat message, exactly
+  // as if typed — except that the composer (its draft, its staged images) is
+  // left alone and a slash command is never run from a widget.
+  function onWidgetSend(text: string): void {
+    if (widgetLocked) return;
+    void sendWidgetMessage(pane.id, text);
+  }
+  // Error nodes, ignored calls, a failed handler or chart of the widget on screen.
+  function onWidgetProblems(problems: string[], source: string): void {
+    reportRenderProblems(source, problems);
   }
 
   // ---- form controls ----
@@ -600,7 +672,7 @@
 <svelte:window on:keydown={fullscreen ? onFsKey : undefined} />
 
 {#if active}
-  <div class="canvas-card">
+  <div class="canvas-card" class:canvas-inline={inline}>
     <div class="canvas-card-top">
       <div class="canvas-title">{canvas.title}</div>
       <div class="canvas-toolbar">
@@ -647,8 +719,11 @@
     {/if}
 
     <div class="canvas-content" class:md={!widgetDoc} bind:this={contentEl}>
-      {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} />{:else if svgMarkup}<div class="canvas-svg" data-fit use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+      {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} onProblems={onWidgetProblems} onSend={onWidgetSend} conversationId={pane.conversationId || null} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} />{:else if svgMarkup}<div class="canvas-svg" data-fit use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
     </div>
+    {#if renderNotice}
+      <p class="canvas-render-error" role="alert">{renderNotice}</p>
+    {/if}
     {#if renderError}
       <p class="canvas-render-error" role="alert">
         렌더링 실패: {renderError}
@@ -841,7 +916,7 @@
     <button class="canvas-fs-backdrop" type="button" aria-label="닫기" on:click={() => (fullscreen = false)}></button>
     <div class="canvas-fs-stage">
       <div class="canvas-fs-content" class:md={!widgetDoc} class:is-html={htmlDoc !== ""} class:is-widget={widgetDoc !== null} style={`transform:scale(${zoom})`}>
-        {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} />{:else if svgMarkup}<div class="canvas-svg" use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+        {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} onProblems={onWidgetProblems} onSend={onWidgetSend} conversationId={pane.conversationId || null} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} />{:else if svgMarkup}<div class="canvas-svg" use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
       </div>
     </div>
   </div>

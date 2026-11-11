@@ -504,7 +504,7 @@ function deckPythonInterpreter(t: DeckToolchainState | undefined): string {
  * manual's "describe_system is authoritative" holds on a teammate's run as well.
  */
 export function canvasCapabilityLine(ctx: Pick<SystemToolsContext, "canvasEnabled" | "canvasWidgetEnabled">): string {
-  return `- Visual canvas (mcp__canvas__show): ${ctx.canvasEnabled ? `available — show a visual artifact (chart/diagram/mockup) in the chat side panel; for a plain question or simple choice use AskUserQuestion instead of a canvas; contentType 'widget' (experimental, an interactive canvas that recomputes locally): ${ctx.canvasWidgetEnabled ? "ENABLED for this avatar — read manual topic `canvas-widget` before writing one" : "DISABLED — the avatar owner has not turned on 캔버스 위젯 under Settings → 실험 기능, so `show` refuses it; use 'vega' or 'markdown'"}` : "unavailable in this run — it needs the canvas tool group enabled for this conversation and an interactive chat turn"}`;
+  return `- Visual canvas (mcp__canvas__show): ${ctx.canvasEnabled ? `available — show a visual artifact (chart/diagram/mockup) in the chat side panel; for a plain question or simple choice use AskUserQuestion instead of a canvas; contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): ${ctx.canvasWidgetEnabled ? "ENABLED for this avatar — read manual topic `canvas-widget` before writing one" : "DISABLED — the avatar owner has not turned on 캔버스 위젯 under Settings → 실험 기능, so `show` refuses it; use 'vega' or 'markdown'"}` : "unavailable in this run — it needs the canvas tool group enabled for this conversation and an interactive chat turn"}`;
 }
 
 /**

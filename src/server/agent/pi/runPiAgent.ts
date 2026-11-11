@@ -650,7 +650,8 @@ async function runPiAgentAs(
       input = {
         kind: "prompt",
         text: [
-          buildPiTurnPreamble({ ...promptRequest, rewind: undefined, externalTaskApi: false }, { now: now() }),
+          // The run's first turn already carried the canvas render reports (they are consumed once).
+          buildPiTurnPreamble({ ...promptRequest, rewind: undefined, externalTaskApi: false, canvasRenderReports: undefined }, { now: now() }),
           ...pending.map((steer) => steer.text),
         ].join("\n\n"),
       };

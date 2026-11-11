@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel.svelte";
+import { CANVAS_REPORT_DELAY_MS, resetCanvasRenderReports } from "../src/client/src/lib/canvasReport.js";
 import { replaceState } from "../src/client/src/lib/state.js";
 
 const load = vi.hoisted(() => ({ fail: true, attempts: 0 }));
@@ -28,6 +29,7 @@ function widgetPane(content: string): any {
 }
 
 beforeEach(() => {
+  resetCanvasRenderReports();
   load.fail = true;
   load.attempts = 0;
   replaceState({ chatPanes: [], user: { id: "u1" } } as unknown as Parameters<typeof replaceState>[0]);
@@ -35,6 +37,9 @@ beforeEach(() => {
 
 describe("SidePanel widget canvas — a chunk that does not load", () => {
   it("says the widget could not be loaded (not that its source is wrong) and retries on request", async () => {
+    // A chunk that did not load is not the avatar's mistake: nothing is reported for it.
+    const fetchFn = vi.fn(async () => ({ ok: true, status: 204, json: async () => ({}) }));
+    vi.stubGlobal("fetch", fetchFn);
     const { container } = render(SidePanel, { props: { pane: widgetPane("{@state n = 1}\n\n<text>값 {n}</text>\n") } });
 
     const alert = await screen.findByRole("alert");
@@ -43,6 +48,9 @@ describe("SidePanel widget canvas — a chunk that does not load", () => {
     expect(container.querySelector(".wg-root")).toBeNull();
     expect(container.querySelector(".canvas-content pre")?.textContent).toContain("{@state n = 1}"); // the source, meanwhile
     const before = load.attempts;
+    await new Promise((resolve) => setTimeout(resolve, CANVAS_REPORT_DELAY_MS + 150));
+    expect(fetchFn).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
 
     // Still failing: the message and the retry stay.
     await fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));

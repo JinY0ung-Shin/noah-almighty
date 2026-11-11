@@ -29,7 +29,7 @@ export type WidgetStateRecord = Record<string, StoredState>;
  * loaded widget library in with it.
  */
 export type SizeOf = (value: unknown, limit: number) => number;
-type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem"> & Partial<Pick<Storage, "length" | "key">>;
 
 function defaultStorage(): StorageLike | null {
   try {
@@ -137,6 +137,35 @@ export function removeWidgetState(ref: WidgetStateRef, storage: StorageLike | nu
     storage.removeItem(key);
     const index = readIndex(storage);
     if (index.includes(key)) writeIndex(storage, index.filter((k) => k !== key));
+  } catch {
+    /* nothing to clean up */
+  }
+}
+
+/**
+ * Forget every widget of one conversation (the conversation was deleted): its
+ * keys and their index entries. The index names them; a storage that can be
+ * enumerated is swept as well, so a key the index lost track of goes too.
+ */
+export function removeConversationWidgetState(
+  userId: string | null | undefined,
+  conversationId: string | null | undefined,
+  storage: StorageLike | null = defaultStorage(),
+): void {
+  if (!userId || !conversationId || !storage) return;
+  const prefix = `${WIDGET_STATE_PREFIX}${userId}:${conversationId}:`;
+  try {
+    const index = readIndex(storage);
+    const doomed = new Set(index.filter((key) => key.startsWith(prefix)));
+    if (typeof storage.length === "number" && typeof storage.key === "function") {
+      for (let i = 0; i < storage.length; i++) {
+        const key = storage.key(i);
+        if (key && key.startsWith(prefix)) doomed.add(key);
+      }
+    }
+    if (doomed.size === 0) return;
+    for (const key of doomed) storage.removeItem(key);
+    writeIndex(storage, index.filter((key) => !doomed.has(key)));
   } catch {
     /* nothing to clean up */
   }

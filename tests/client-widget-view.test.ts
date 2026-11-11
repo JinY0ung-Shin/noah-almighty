@@ -3,7 +3,14 @@
 // node per failing node / over-budget block, and keys stable across renders.
 import { describe, expect, it } from "vitest";
 
-import { buildWidgetView, cellText, parseInlineMarkdown, type ElVNode, type VNode } from "../src/client/src/lib/widgetView.js";
+import {
+  buildWidgetView,
+  cellText,
+  collectWidgetProblems,
+  parseInlineMarkdown,
+  type ElVNode,
+  type VNode,
+} from "../src/client/src/lib/widgetView.js";
 import { createRootEnv, createRuntime, parseWidget, restoreState } from "../src/shared/widget/index.js";
 
 function evaluate(source: string, override: Record<string, unknown> = {}): VNode[] {
@@ -56,7 +63,32 @@ describe("parseInlineMarkdown", () => {
 
   it("honours backslash escapes and never produces markup", () => {
     expect(parseInlineMarkdown("\\*별표\\* \\{중괄호\\} \\<꺾쇠\\>")).toEqual([{ text: "*별표* {중괄호} <꺾쇠>" }]);
-    expect(parseInlineMarkdown("<b>x</b> [링크](https://example.com)")).toEqual([{ text: "<b>x</b> [링크](https://example.com)" }]);
+    expect(parseInlineMarkdown("<b>x</b> <a href='https://example.com'>링크</a>")).toEqual([{ text: "<b>x</b> <a href='https://example.com'>링크</a>" }]);
+  });
+
+  it("links only to absolute http(s) addresses, and shows anything else as written", () => {
+    expect(parseInlineMarkdown("자세한 내용은 [**사내** 문서](https://wiki.example.com/a?b=1)를 보세요")).toEqual([
+      { text: "자세한 내용은 " },
+      { text: "사내", b: true, href: "https://wiki.example.com/a?b=1" },
+      { text: " 문서", href: "https://wiki.example.com/a?b=1" },
+      { text: "를 보세요" },
+    ]);
+    // The href is the NORMALIZED one (what the tooltip shows is what opens).
+    expect(parseInlineMarkdown("[x](HTTPS://Example.com)")).toEqual([{ text: "x", href: "https://example.com/" }]);
+    for (const bad of [
+      "[x](javascript:alert(1))",
+      "[x](data:text/html,hi)",
+      "[x](/api/me)",
+      "[x](//evil.example/a)",
+      "[x](mailto:a@b.c)",
+      "[x](https://user:pw@example.com/)",
+      "[x]( java\tscript:alert(1))",
+    ]) {
+      expect(parseInlineMarkdown(bad).every((seg) => seg.href === undefined), bad).toBe(true);
+      expect(parseInlineMarkdown(bad).map((seg) => seg.text).join(""), bad).toContain("[x](");
+    }
+    // Code is literal, and a link never nests in a link.
+    expect(parseInlineMarkdown("`[x](https://a.example)`")).toEqual([{ text: "[x](https://a.example)", code: true }]);
   });
 });
 
@@ -194,6 +226,62 @@ describe("buildWidgetView", () => {
     expect(el(view, "select").props).toMatchObject({ value: "", options: [] });
     expect(el(view, "chart").props.spec).toEqual({});
     expect(el(view, "submit").props.values).toEqual({});
+  });
+
+  it("says so under a block that called a setter or copy while rendering", () => {
+    // Inside a function body, so the static check lets it through; the runtime ignores the call.
+    const source = `{@state a = 0}
+{@state xs = [1, 2, 3]}
+
+<text>깨끗한 블록</text>
+<text>합 {xs.map((x) => setA(x)).length}{copy("x") ?? ""}</text>
+<text>다음 블록</text>
+`;
+    const doc = parseWidget(source);
+    const rt = createRuntime();
+    const values = { ...restoreState(doc, null).values };
+    const view = buildWidgetView(doc, createRootEnv(doc, values, rt, { get: (n) => values[n], set: () => {}, copy: () => {} }), rt);
+    expect(view.map((n) => n.k)).toEqual(["el", "el", "warn", "el"]);
+    expect(view[2]).toMatchObject({
+      k: "warn",
+      message: "렌더 중에 호출된 상태 변경은 무시됩니다.",
+      detail:
+        "setA(…) was called while rendering and was ignored — call a setter only from an event handler (onChange/onClick).\n" +
+        "copy(…) was called while rendering and was ignored — call copy only from an event handler (onChange/onClick).",
+    });
+    expect(values.a).toBe(0);
+    // The block itself still rendered, and the one after it carries no leftover warning.
+    expect((view[1] as ElVNode).segs).toEqual([{ text: "합 " }, { text: "3" }]);
+    expect(collectWidgetProblems(doc, view)).toEqual([
+      "line 5:1 setA(…) was called while rendering and was ignored — call a setter only from an event handler (onChange/onClick).",
+      "line 5:1 copy(…) was called while rendering and was ignored — call copy only from an event handler (onChange/onClick).",
+    ]);
+  });
+
+  it("lists what failed, with the line and column of each node, for the avatar", () => {
+    const doc = parseWidget(`<text>좋음</text>
+<col>
+  <text>{nope(1)}</text>
+  <slider label="x" value={1} />
+  <stat label="a" value={1} hint={nope(2)} />
+</col>
+{#each 1000 as i}
+  {#each 1000 as j}
+    <divider />
+  {/each}
+{/each}
+`);
+    const rt = createRuntime();
+    const view = buildWidgetView(doc, createRootEnv(doc, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt);
+    const problems = collectWidgetProblems(doc, view);
+    expect(problems).toHaveLength(4);
+    expect(problems[0]).toMatch(/^line 3:3 <text>: .*nope/);
+    expect(problems[1]).toMatch(/^line 4:3 <slider>: .*onChange/);
+    expect(problems[2]).toMatch(/^line 5:3 <stat>: a prop was dropped — hint: .*nope/);
+    expect(problems[3]).toBe("widget: the widget renders too much (output budget exceeded)");
+    // A clean view has nothing to report.
+    const clean = parseWidget(`<text>좋음</text>\n`);
+    expect(collectWidgetProblems(clean, buildWidgetView(clean, createRootEnv(clean, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt))).toEqual([]);
   });
 
   it("cuts a long list and says so", () => {

@@ -43,6 +43,12 @@ export interface CanvasRequest {
   interaction?: "blocking" | "async";
   /** The user may edit/annotate the content and send it back as a new turn. */
   editable?: boolean;
+  /**
+   * `widget` only: the answer-text offset at the moment the tool ran
+   * (runCapabilities stamps it, like a team-brain card's), so the host can
+   * attach the widget to the message INLINE at the point the avatar called it.
+   */
+  anchor?: number;
 }
 export type CanvasResult =
   | { behavior: "submitted"; values: Record<string, unknown> }

@@ -667,8 +667,13 @@ export interface MessageAttachment {
   /**
    * `team_brain` = a team-brain confirmation card (id = the proposal id; no file
    * behind it — the card reads its live state from /api/team-brain/cards/:id).
+   * `widget` = a canvas `widget` shown INLINE in the answer (id = the canvas
+   * artifact id; no file behind it either — the bubble draws the canvas's
+   * current content from the canvas tables, `/api/messages` → `canvases`). The
+   * id is whatever `canvasId` the avatar chose, so it is NEVER a file name:
+   * every path that resolves an attachment to bytes must check `kind` first.
    */
-  kind: "image" | "file" | "team_brain";
+  kind: "image" | "file" | "team_brain" | "widget";
   /** MIME type: one of {@link ImageMediaType} for images; document MIME for files. */
   mediaType: string;
   /** Original filename, for the alt text / download name (optional). */
@@ -1005,6 +1010,18 @@ export interface CanvasArtifact {
 export interface CanvasVersion {
   version: number;
   createdAt: string;
+}
+
+/**
+ * What the viewer's BROWSER could not draw of one canvas (its current version),
+ * as the next turn hears it. `errors` are already single-line and bounded
+ * (`canvasRenderReports.ts`); they are browser-reported DATA about avatar-written
+ * content, never instructions.
+ */
+export interface CanvasRenderReport {
+  canvasId: string;
+  title: string;
+  errors: string[];
 }
 
 /**
@@ -1531,6 +1548,22 @@ export interface AgentRequest {
    * turn — colleagues see canvases too; it grants no elevation.
    */
   canvasEnabled?: boolean;
+  /**
+   * The run's canvas accepts the experimental inline `widget` content type (the
+   * canvas is registered AND the avatar owner turned `canvasWidget` on —
+   * runCapabilities' `widgetEnabled`, the boolean the `show` handler refuses
+   * on). Drives ONE standing sentence of the canvas guidance; frozen with the
+   * prompt, so `describe_system` is what says whether it is still on.
+   */
+  canvasWidgetEnabled?: boolean;
+  /**
+   * Canvas render errors the viewer's browser reported since this conversation's
+   * last turn (`POST /api/canvases/:canvasId/render-report`), CONSUMED by the
+   * host when it started this turn — so they ride exactly one turn's input
+   * (`buildPiTurnPreamble`, a per-turn fact; never the frozen prompt), and only
+   * when the run registered the canvas (`canvasEnabled`). Absent = none.
+   */
+  canvasRenderReports?: CanvasRenderReport[];
   /**
    * This interactive turn can drive the VIEWER's own browser through the
    * extension bridge (`mcp__browser__*`). Requires a system admin talking to

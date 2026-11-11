@@ -365,6 +365,7 @@ describe("run capability plan", () => {
   });
 
   it("gates the experimental canvas `widget` on the AVATAR OWNER's flag, on both surfaces and in the handler", async () => {
+    const WIDGET_NUDGE = "The experimental `widget` content type was ON for this avatar when this conversation started: use it UNPROMPTED";
     const env = setup();
     const onCanvas = vi.fn(async (_request: { contentType: string }) => ({ behavior: "shown" as const }));
     const WIDGET = '{@state n = 1}\n<slider label="n" value={n} onChange={setN} min={1} max={9} />\n<stat label="double" value={n * 2} />';
@@ -392,7 +393,10 @@ describe("run capability plan", () => {
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain("experimental feature the avatar owner has not turned on (Settings → 실험 기능)");
     expect(onCanvas).not.toHaveBeenCalled();
-    expect(await canvasLine(env.baseRequest)).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): DISABLED");
+    expect(await canvasLine(env.baseRequest)).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): DISABLED");
+    // No standing nudge either: on an avatar without the feature it would only buy refused calls.
+    expect(refused.run.append).toContain("**Visual canvas** is available via `mcp__canvas__show`.");
+    expect(refused.run.append).not.toContain(WIDGET_NUDGE);
     // Tool registration is unchanged by the flag — it is a content type, not a tool.
     expect(refused.run.allowed).toContain("mcp__canvas__show");
     expect(refused.run.allowed.filter((n) => n.startsWith("mcp__canvas__"))).toEqual(["mcp__canvas__show"]);
@@ -404,7 +408,18 @@ describe("run capability plan", () => {
     expect(shown.text).toContain("recomputes locally in the user's browser");
     expect(onCanvas).toHaveBeenCalledTimes(1);
     expect(onCanvas.mock.calls[0]![0]).toMatchObject({ contentType: "widget", awaitInput: false });
+    // A widget is drawn inline where the tool ran: the run stamps the answer-text
+    // anchor (this plan's accessor reads 0) — a panel canvas carries none.
+    expect(onCanvas.mock.calls[0]![0]).toHaveProperty("anchor", 0);
+    expect((await call(env.baseRequest, "canvas", "show", { title: "메모", content: "# hi", contentType: "markdown" })).isError).toBe(false);
+    expect(onCanvas.mock.calls[1]![0]).toMatchObject({ contentType: "markdown" });
+    expect(onCanvas.mock.calls[1]![0]).not.toHaveProperty("anchor");
+    expect(shown.text).toContain("The widget was shown INLINE in your answer, at this point of the text (not in the side panel)");
     expect(await canvasLine(env.baseRequest)).toContain("ENABLED for this avatar");
+    // The standing guidance now tells the avatar to reach for it unprompted — and where it appears.
+    expect(shown.run.append).toContain(WIDGET_NUDGE);
+    expect(shown.run.append).toContain("It renders INLINE in your answer where you call it (not in the side panel)");
+    expect(shown.run.append).toContain("if `describe_system` says the type is DISABLED, do not use it.");
     // The frozen prompt carries the owner's enabled feature list (owner-driven turns).
     expect(shown.run.append).toContain("Enabled experimental (beta) features for this avatar: `canvasWidget`");
 
@@ -416,6 +431,16 @@ describe("run capability plan", () => {
     expect(mateShown.isError, mateShown.text).toBe(false);
     expect(await canvasLine(mate)).toContain("ENABLED for this avatar");
     expect(mateShown.run.append).not.toContain("Enabled experimental (beta) features");
+    // …but with the same standing nudge: the widget works on their run too.
+    expect(mateShown.run.append).toContain(WIDGET_NUDGE);
+
+    // A run with no canvas sink (a routine, a headless generator) has no canvas at all —
+    // no server, no tool, no widget nudge — whatever the owner's flag says.
+    const routine = await plan(env, { ...env.baseRequest, headless: true, allowHeadlessTools: true }, makeEvents());
+    expect(routine.servers).not.toContain("canvas");
+    expect(routine.allowed).not.toContain("mcp__canvas__show");
+    expect(routine.append).not.toContain(WIDGET_NUDGE);
+    expect(routine.append).not.toContain("**Visual canvas** is available");
   });
 
   it("registers file_output only when an interactive file sink is present", async () => {

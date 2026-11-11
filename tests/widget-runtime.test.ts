@@ -138,6 +138,43 @@ describe("widget runtime", () => {
     expect(w.rt.phase).toBe("render");
   });
 
+  it("a setter or copy call made while rendering is ignored but leaves a warning for that block", () => {
+    // Inside a function body, so the static check lets it through.
+    const w = mount("{@state a = 0}\n{@state xs = [1, 2, 3]}\n<text>{xs.map((x) => setA(x)).length}{copy('x') ?? ''}</text>\n<button onClick={() => setA(9)}>go</button>");
+    expect(w.render()).toContain("<text>3</text>");
+    expect(w.values.a).toBe(0);
+    expect(w.copied).toEqual([]);
+    // One line per callee, however often it was called.
+    expect(w.rt.warnings).toEqual([
+      "setA(…) was called while rendering and was ignored — call a setter only from an event handler (onChange/onClick).",
+      "copy(…) was called while rendering and was ignored — call copy only from an event handler (onChange/onClick).",
+    ]);
+    // An event neither adds to the list nor is affected by it; phase and budgets are as before.
+    const steps = w.rt.steps;
+    expect(invokeHandler(w.rt, w.props("button").onClick, []).ok).toBe(true);
+    expect(w.values.a).toBe(9);
+    expect(w.rt.warnings).toHaveLength(2);
+    expect(w.rt.phase).toBe("render");
+    expect(w.rt.steps).toBe(steps);
+    // The next block starts with an empty list.
+    resetBudget(w.rt);
+    expect(w.rt.warnings).toEqual([]);
+  });
+
+  it("keeps at most five ignored-call warnings per block", () => {
+    const names = ["a", "b", "c", "d", "e", "f", "g"];
+    const w = mount(
+      names.map((n) => `{@state ${n} = 0}`).join("\n") +
+        "\n<text>{[1].map(() => { " +
+        names.map((n) => `set${n.toUpperCase()}(1);`).join(" ") +
+        " return 1 }).length}</text>",
+    );
+    w.render();
+    expect(w.rt.warnings).toHaveLength(5);
+    expect(w.rt.warnings[0]).toContain("setA(…)");
+    expect(Object.values(w.values)).toEqual(names.map(() => 0));
+  });
+
   it("an updater sees the latest value, so chained calls in one handler compose", () => {
     const w = mount("{@state n = 0}\n<button onClick={() => { setN((p) => p + 1); setN((p) => p + 1); setN((p) => p * 10) }}>go</button>");
     w.render();

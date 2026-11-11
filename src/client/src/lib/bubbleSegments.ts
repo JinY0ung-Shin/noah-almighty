@@ -44,7 +44,19 @@ export function segmentAttachments(
   text: string,
   attachments: MessageAttachment[] | undefined,
 ): BubbleSegment[] {
-  const visible = (attachments ?? []).filter((att) => !att.hidden);
+  // One widget, one place per message: a canvas shown twice in the same turn has
+  // ONE card there, at its latest spot (and the cards are keyed by id).
+  const widgetSeen = new Set<string>();
+  const visible = (attachments ?? [])
+    .filter((att) => !att.hidden)
+    .reverse()
+    .filter((att) => {
+      if ((att.kind as string) !== "widget") return true;
+      if (widgetSeen.has(att.id)) return false;
+      widgetSeen.add(att.id);
+      return true;
+    })
+    .reverse();
   const isAnchored = (att: MessageAttachment) =>
     typeof att.anchor === "number" && Number.isFinite(att.anchor);
   const anchored = visible.filter(isAnchored).sort((a, b) => a.anchor! - b.anchor!);

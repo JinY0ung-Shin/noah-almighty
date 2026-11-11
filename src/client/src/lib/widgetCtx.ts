@@ -6,6 +6,10 @@ export interface WidgetCtx {
   fire(handler: unknown, args: unknown[]): void;
   /** Send a `<submit>`'s values to the avatar. */
   submit(values: unknown): void;
+  /** Send a `<button send>`'s text as the viewer's next chat message. */
+  send(text: string): void;
+  /** Something failed to draw: one short ENGLISH line for the avatar (the canvas render report). */
+  report(problem: string): void;
   /** A submit cannot go out right now (the avatar is answering, or one is in flight). */
   locked: boolean;
   /** The id of the status line that says why, for `aria-describedby`. */

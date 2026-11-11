@@ -8,6 +8,7 @@
   import SidePanel from "../components/SidePanel.svelte";
   import TodoOverlay from "../components/TodoOverlay.svelte";
   import TeamBrainCard from "../components/TeamBrainCard.svelte";
+  import InlineWidget from "../components/widget/InlineWidget.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -51,7 +52,7 @@
   import { formatFileSize, formatUsageLabel, renderMarkdown, renderMarkdownCached, timeLabel } from "../lib/format";
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
-  import { hasSideTabs } from "../lib/sidePanel";
+  import { hasSideTabs, isWidgetAttachment, widgetHome } from "../lib/sidePanel";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
@@ -1232,6 +1233,11 @@
         {/if}
       {:else if att.kind === "team_brain"}
         <TeamBrainCard proposalId={att.id} />
+      {:else if isWidgetAttachment(att)}
+        <!-- A widget canvas lives HERE, in the answer that showed it — only its
+             newest attachment draws it (`widgetHome`, read from `item` so the
+             slot re-evaluates when a later answer takes the widget over). -->
+        <InlineWidget pane={item} attachment={att} home={widgetHome(item, att.id) === source} live={source === item.liveAttachments} />
       {:else}
         <figure class="msg-image-item">
           <a class="msg-image-link" href={`/api/conversations/${encodeURIComponent(item.conversationId)}/images/${encodeURIComponent(att.id)}`} target="_blank" rel="noopener noreferrer">
@@ -1455,6 +1461,14 @@
                 {#if seg.atts.length}
                   {@render attachmentCards(item, seg.atts, item.liveAttachments)}
                 {/if}
+              {/each}
+              <!-- A canvas the avatar is building right now: a widget lands in
+                   this very spot (the bubble's tail), so the place is held for it. -->
+              {#each item.liveCanvasTools ?? [] as tool (tool.id)}
+                <div class="widget-slot-pending" role="status">
+                  <span class="widget-slot-bar" aria-hidden="true"></span>
+                  <span>{tool.widget ? "위젯을 만드는 중…" : "캔버스를 준비하는 중…"}</span>
+                </div>
               {/each}
               <!-- BELOW the streamed text, at the reading edge, for two reasons
                    that are both about motion: the card GROWS as tools run, and at

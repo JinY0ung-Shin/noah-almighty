@@ -109,3 +109,60 @@ export function str(v: unknown): string | undefined {
   if (typeof v === "number" && Number.isFinite(v)) return String(v);
   return undefined;
 }
+
+/* ───────────────────────── URLs a widget may name ───────────────────────── */
+
+/** Longest link target accepted. */
+export const MAX_URL_CHARS = 2000;
+
+/** C0/C1 controls, spaces of any kind and line separators: none may appear inside a URL or a path. */
+const URL_FORBIDDEN = /[\u0000-\u0020\u007f-\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff\\]/;
+
+/**
+ * A link target a widget may open: an ABSOLUTE `http:` / `https:` URL, written
+ * with its scheme and `//`, without credentials, at most MAX_URL_CHARS long and
+ * free of control characters, whitespace and backslashes. Returns the
+ * NORMALIZED href (what a renderer should both show and open — an
+ * internationalized host comes back as punycode), or null.
+ *
+ * Everything else is null: `javascript:` / `data:` / `vbscript:` (however the
+ * scheme is cased or split by a tab or newline, which URL parsers silently
+ * drop), relative paths, protocol-relative `//host`, `https:\\host`.
+ */
+export function safeLinkUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (text.length === 0 || text.length > MAX_URL_CHARS) return null;
+  if (URL_FORBIDDEN.test(text)) return null;
+  if (!/^https?:\/\/[^/?#]/i.test(text)) return null;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  if (url.username !== "" || url.password !== "" || url.hostname === "") return null;
+  return url.href.length <= MAX_URL_CHARS ? url.href : null;
+}
+
+const IMAGE_REF = /^\/api\/conversations\/([A-Za-z0-9_.-]+)\/images\/([A-Za-z0-9_.-]+)$/;
+
+/**
+ * The parts of a CONVERSATION IMAGE address — the only kind of `src` a widget
+ * image accepts: `/api/conversations/<conversationId>/images/<imageId>`, a
+ * same-origin path with no query, no fragment, no `..` and nothing encoded.
+ * An absolute URL, a `data:` URL, `//host/…` or any other path is null.
+ *
+ * This checks the SHAPE only. Whether `conversationId` is the conversation the
+ * widget is shown in is the renderer's check — it must refuse any other id.
+ */
+export function conversationImageRef(value: unknown): { conversationId: string; imageId: string } | null {
+  if (typeof value !== "string" || value.length > 300) return null;
+  const m = IMAGE_REF.exec(value);
+  if (!m) return null;
+  const [, conversationId, imageId] = m;
+  // A segment made only of dots is a path step, not an id.
+  if (/^\.+$/.test(conversationId) || /^\.+$/.test(imageId)) return null;
+  return { conversationId, imageId };
+}

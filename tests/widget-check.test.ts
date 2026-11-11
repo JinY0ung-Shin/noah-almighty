@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MAX_WIDGET_NODES, MAX_WIDGET_STATES, checkWidget } from "../src/shared/widget/check.js";
-import { WIDGET_COMPONENTS, WIDGET_TAGS, widgetComponentReference } from "../src/shared/widget/spec.js";
+import { NOOP_HANDLER } from "../src/shared/widget/interp.js";
+import { MAX_SEND_CHARS, WIDGET_COMPONENTS, WIDGET_TAGS, normalizeProps, widgetComponentReference } from "../src/shared/widget/spec.js";
+import { MAX_URL_CHARS, conversationImageRef, safeLinkUrl } from "../src/shared/widget/style.js";
 
 // The static check `mcp__canvas__show` runs before a widget is shown. Its
 // error text is read by the avatar, so every case pins WHAT it says to do.
@@ -140,8 +142,9 @@ describe("checkWidget", () => {
     expect(checkWidget('{@state a = 1}\n<button onClick={() => setA(2)} label="go" />').ok).toBe(true);
     expect(checkWidget("{@state a = 1}\n<button onClick={() => setA(2)}>{a}</button>").ok).toBe(true);
     expect(errorOf('<row><stat label="a" value={1}>child</stat></row>')).toMatch(/Unexpected closing tag <\/stat>/); // a void tag never opens
-    expect(errorOf("<text>hello <badge>new</badge></text>")).toMatch(/<text> takes text and \{expr\} only, but contains <badge>\. Put <badge> next to it/);
-    expect(errorOf("<title>{#if true}<badge>x</badge>{/if}</title>")).toMatch(/<title> takes text and \{expr\} only/);
+    expect(errorOf("<text>hello <badge>new</badge></text>")).toMatch(/<text> takes text, \{expr\} and <link> only, but contains <badge>\. Put <badge> next to it/);
+    expect(errorOf("<title>{#if true}<badge>x</badge>{/if}</title>")).toMatch(/<title> takes text, \{expr\} and <link> only/);
+    expect(errorOf("{@state a = 1}\n<checkbox checked={a} onChange={setA}>on <badge>x</badge></checkbox>")).toMatch(/<checkbox> takes text and \{expr\} only, but contains <badge>/);
   });
 
   it("names: undefined identifiers get a near-miss suggestion and the list of built-ins", () => {
@@ -282,9 +285,10 @@ describe("widget component spec", () => {
   it("covers the v1 components", () => {
     expect(WIDGET_TAGS).toEqual([
       "box", "row", "col", "grid", "grid-item", "divider", "spacer",
-      "title", "text", "badge", "callout",
+      "title", "text", "badge", "link", "callout",
       "button", "segmented-control", "checkbox", "switch", "slider", "select", "input", "tabs",
       "stat", "progress", "table", "chart", "details",
+      "image",
       "submit",
     ]);
     // not reachable through Object.prototype
@@ -294,9 +298,14 @@ describe("widget component spec", () => {
       expect(WIDGET_COMPONENTS[tag].props.label.required, tag).toBe(true);
     }
     for (const tag of ["button", "checkbox", "switch", "submit"]) expect(WIDGET_COMPONENTS[tag].labelFromChildren, tag).toBe(true);
-    // there is no way to style or link out
+    // there is no way to style; a URL is accepted only through the two validated prop types
     for (const c of Object.values(WIDGET_COMPONENTS)) {
-      for (const name of Object.keys(c.props)) expect(["style", "class", "href", "src", "url"], `${c.tag}.${name}`).not.toContain(name);
+      for (const [name, p] of Object.entries(c.props)) {
+        expect(["style", "class", "url"], `${c.tag}.${name}`).not.toContain(name);
+        if (name === "href") expect(p.type.k, `${c.tag}.href`).toBe("url");
+        if (name === "src") expect(p.type.k, `${c.tag}.src`).toBe("image");
+        if (p.type.k === "url" || p.type.k === "image" || p.type.k === "send") expect(`${c.tag}.${name}`).toMatch(/^(button\.(href|send)|link\.href|image\.src)$/);
+      }
     }
   });
 
@@ -306,10 +315,17 @@ describe("widget component spec", () => {
     expect(ref).toMatch(/^Layout\n- <box>…components…<\/box> — /);
     expect(ref).toContain("- <slider /> — A numeric range.");
     expect(ref).toContain("value*: number; onChange*: function (called with the new number); label*: string (visible label (required: every input is labelled))");
-    expect(ref).toContain("- <submit>text and {expr}</submit> — The ONLY way back to you");
+    expect(ref).toContain("- <submit>text and {expr}</submit> — Sends `values` to you as STRUCTURED data in the user's next message");
+    expect(ref).toContain("- <text>text, {expr}, <link></text> — ");
+    expect(ref).toContain("- <button>text and {expr}</button> — Does ONE thing, shown to the user before they press: give exactly one of onClick | send | href.");
+    expect(ref).toContain("send: text (the text becomes the user's NEXT chat message when pressed (1–2000 chars; may be computed from state))");
+    expect(ref).toContain("href: http(s) URL (opens this absolute http(s) URL in a new tab)");
+    expect(ref).toContain("- <link>text and {expr}</link> — A link that opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.");
+    expect(ref).toContain("- <image /> — An image of THIS conversation only (the URL a file-output tool returned); no remote or data URLs.");
+    expect(ref).toContain("src*: conversation image URL (/api/conversations/<conversationId>/images/<imageId>); alt*: string (what the image shows (required))");
     expect(ref).toContain("Its text children are its label (or pass `label`).");
     expect(ref).toContain("background: none|surface|subtle|accent|success|warning|danger|info");
-    expect(ref.length).toBeLessThan(6000);
+    expect(ref.length).toBeLessThan(6500);
   });
 });
 
@@ -410,5 +426,236 @@ describe("checkWidget: agrees with the runtime", () => {
     // long backtick runs in prose that mentions a state name
     const ticks = timed("{@state n = 1}\n" + "` {n} ".repeat(3000) + "\n<divider />");
     expect(ticks.ms).toBeLessThan(400);
+  });
+});
+
+// 2026-11-11 (user decision): a widget may send a chat message, open a link and
+// show an image of its conversation — each as a DECLARED prop whose value is
+// fixed at render time, so the renderer can show it before it happens.
+describe("widget effects are declared props: button send / href, <link>, <image>", () => {
+  const ok = (src: string) => {
+    const r = checkWidget(src);
+    expect(r.ok ? "" : r.error).toBe("");
+  };
+  const IMG = "/api/conversations/c_1/images/img-2.png";
+
+  it("a send text may never be a chat command (a leading slash)", () => {
+    // A `send` arrives exactly like a typed message, and a typed "/…" runs a
+    // command (/compact, /routine, /todo …) — a widget button must not.
+    for (const text of ["/compact", "  /routine add x", "\n/todo done 1", "\u0000/compact", "\u007f /new"]) {
+      // An expression literal, so the escapes are real characters (an attribute string takes them literally).
+      expect(errorOf(`<button send={${JSON.stringify(text)}}>x</button>`), JSON.stringify(text)).toMatch(/must not start with "\/"/);
+    }
+    ok('<button send="1/2 지점부터 다시 설명해 줘">x</button>');
+    // A computed text is judged when it renders: dropped and reported, never sent.
+    const computed = normalizeProps("button", { send: "/compact" });
+    expect(computed.props).not.toHaveProperty("send");
+    expect(computed.errors.join(" ")).toMatch(/must not start with "\/"/);
+    expect(normalizeProps("button", { send: "\u0001/compact" }).props).not.toHaveProperty("send");
+    expect(normalizeProps("button", { send: " 다음 단계로 " }).props.send).toBe("다음 단계로");
+  });
+
+  it("a button does exactly one thing: onClick | send | href", () => {
+    ok('{@state n = 0}\n<button onClick={() => setN(n + 1)}>+1</button>\n<button send="요약해 줘">요약</button>\n<button href="https://example.com/docs">문서</button>');
+    ok('{@state picked = "B"}\n<button send={`정답은 ${picked}`}>제출</button>\n<button href={`https://example.com/q?a=${picked}`} label="열기" />');
+    const none = errorOf("<button>nothing</button>");
+    expect(none).toMatch(
+      /<button> needs EXACTLY ONE of onClick \| send \| href — onClick \(runs a function: changes state locally, sends nothing to you\); send \(the text becomes the user's NEXT chat message when pressed \(1–2000 chars; may be computed from state\)\); href \(opens this absolute http\(s\) URL in a new tab\)\. It has none\./,
+    );
+    expect(errorOf('{@state n = 0}\n<button onClick={() => setN(1)} send="go">x</button>')).toMatch(/It has onClick and send: keep one \(use separate <button>s for separate actions\)\./);
+    expect(errorOf('<button send="a" href="https://example.com">x</button>')).toMatch(/It has send and href: keep one/);
+    expect(errorOf('{@state n = 0}\n<button onClick={() => setN(1)} send="a" href="https://example.com">x</button>')).toMatch(/It has onClick and send and href: keep one/);
+    // a prop that failed to parse still counts as written: one problem, not two
+    const broken = errorOf("<button send={`a${}>x</button>");
+    expect(broken).not.toMatch(/EXACTLY ONE/);
+  });
+
+  it("send / href / src are ordinary render-time values, not handlers", () => {
+    // a setter cannot hide in them (they are evaluated while rendering)
+    expect(errorOf("{@state n = 0}\n<button send={setN}>x</button>")).toMatch(/setN is used while rendering/);
+    expect(errorOf("{@state n = 0}\n<button href={setN(1)}>x</button>")).toMatch(/setN\(…\) is called while rendering/);
+    expect(errorOf(`{@state n = 0}\n<image src={copy("x")} alt="a" />`)).toMatch(/copy\(…\) is called while rendering/);
+    expect(errorOf('<button send={() => "hi"}>x</button>')).toMatch(/Prop "send" of <button> must be a string, not a function/);
+    expect(errorOf("<button href={[1]}>x</button>")).toMatch(/Prop "href" of <button> must be a string/);
+    expect(errorOf("<button send={5}>x</button>")).toMatch(/Prop "send" of <button> must be a string/);
+    expect(errorOf("<button send>x</button>")).toMatch(/Prop "send" of <button> needs a value/);
+  });
+
+  it("a literal that can never be valid is refused before anything is shown", () => {
+    expect(errorOf('<button send="   ">x</button>')).toMatch(/Prop "send" of <button> is empty — nothing would be sent/);
+    expect(errorOf(`<button send="${"가".repeat(MAX_SEND_CHARS + 1)}">x</button>`)).toMatch(/Prop "send" of <button> is too long \(limit 2000 chars\)/);
+    ok(`<button send="${"가".repeat(MAX_SEND_CHARS)}">x</button>`);
+    const url = /must be an absolute http\(s\) URL, e\.g\. "https:\/\/example\.com\/page" \(no javascript:, data:, relative or \/\/host URLs\)/;
+    for (const bad of ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x", "/docs", "docs/page", "//evil.example", "example.com", "ftp://example.com", "https://user:pw@example.com"]) {
+      expect(errorOf(`<button href="${bad}">x</button>`), bad).toMatch(url);
+      expect(errorOf(`<link href={"${bad}"}>x</link>`), bad).toMatch(url);
+    }
+    expect(errorOf("<link href={`javascript:alert(1)`}>x</link>")).toMatch(url);
+    expect(errorOf('<link href="">x</link>')).toMatch(/Prop "href" of <link> is empty — there is no link to open/);
+    const img = /Prop "src" of <image> must be an image of THIS conversation, "\/api\/conversations\/<conversationId>\/images\/<imageId>" \(the URL a file-output tool returned\); remote, data: and other URLs are not allowed/;
+    for (const bad of ["https://example.com/a.png", "data:image/png;base64,AAAA", "//cdn.example/a.png", "/api/files/1", "a.png", IMG + "?x=1", IMG + "#f", "/api/conversations/../images/x", "/api/conversations/c/images/a%2fb"]) {
+      expect(errorOf(`<image src="${bad}" alt="a" />`), bad).toMatch(img);
+    }
+    ok(`<image src="${IMG}" alt="차트 캡처" width={320} maxHeight={200} radius="md" fit="contain" />`);
+    // a computed value is left to the renderer
+    ok(`{@state id = "x"}\n<image src={\`/api/conversations/c_1/images/\${id}\`} alt="a" />\n<link href={"https://example.com/" + id}>go</link>`);
+  });
+
+  it("<link>: required href, text between the tags, allowed inside running text only", () => {
+    ok('<link href="https://example.com">문서 보기</link>');
+    ok('{@state n = 1}\n<text>자세한 내용은 <link href="https://example.com/a">여기</link>와 <link href={`https://example.com/${n}`}>{n}번</link>을 보세요.</text>');
+    ok('<title>제목 <link href="https://example.com">↗</link></title>\n<badge tone="info"><link href="https://example.com">new</link></badge>\n<callout tone="info">참고: <link href="https://example.com">링크</link></callout>');
+    ok('<text>{#if true}<link href="https://example.com">a</link>{/if}</text>');
+    expect(errorOf("<link>문서</link>")).toMatch(/<link> is missing the required prop "href" \(absolute http\(s\) URL\)/);
+    expect(errorOf('<link href="https://example.com"></link>')).toMatch(/<link> needs its text between the tags: <link …>text<\/link>\./);
+    expect(errorOf('<link href="https://example.com" />')).toMatch(/<link> needs its text between the tags/);
+    // nothing nests inside a link, and a link does not go inside a control's label
+    expect(errorOf('<link href="https://example.com">a <badge>b</badge></link>')).toMatch(/<link> takes text and \{expr\} only, but contains <badge>/);
+    expect(errorOf('<link href="https://example.com">a <link href="https://example.org">b</link></link>')).toMatch(/<link> takes text and \{expr\} only, but contains <link>/);
+    expect(errorOf('<button send="x">go <link href="https://example.com">a</link></button>')).toMatch(/<button> takes text and \{expr\} only, but contains <link>/);
+    expect(errorOf('<submit values={{}}>go <link href="https://example.com">a</link></submit>')).toMatch(/<submit> takes text and \{expr\} only, but contains <link>/);
+    expect(errorOf('<link href="https://example.com" onClick={() => 1}>a</link>')).toMatch(/<link> has no prop "onClick"/);
+  });
+
+  it("<image>: src and alt are required, and it takes no children", () => {
+    expect(errorOf('<image alt="a" />')).toMatch(/<image> is missing the required prop "src" \(\/api\/conversations\/<conversationId>\/images\/<imageId>\)/);
+    expect(errorOf(`<image src="${IMG}" />`)).toMatch(/<image> is missing the required prop "alt" \(what the image shows \(required\)\)/);
+    expect(errorOf(`<row><image src="${IMG}" alt="a">caption</image></row>`)).toMatch(/Unexpected closing tag <\/image>/);
+    expect(errorOf(`<image src="${IMG}" alt="a" fit="fill" />`)).toMatch(/Prop "fit" of <image> must be one of cover, contain/);
+    expect(errorOf(`<image src="${IMG}" alt="a" href="https://example.com" />`)).toMatch(/<image> has no prop "href"/);
+  });
+
+  it("safeLinkUrl: only a clean absolute http(s) URL, returned normalized", () => {
+    expect(safeLinkUrl("https://example.com/a?b=1#c")).toBe("https://example.com/a?b=1#c");
+    expect(safeLinkUrl("  HTTP://Example.COM  ")).toBe("http://example.com/");
+    expect(safeLinkUrl("https://example.com:8443/경로?q=한글")).toBe("https://example.com:8443/%EA%B2%BD%EB%A1%9C?q=%ED%95%9C%EA%B8%80");
+    expect(safeLinkUrl("https://192.168.0.10/x")).toBe("https://192.168.0.10/x");
+    // an internationalized host comes back as punycode, so a look-alike is visible in the preview
+    expect(safeLinkUrl("https://пример.рф/")).toBe("https://xn--e1afmkfd.xn--p1ai/");
+    expect(safeLinkUrl("https://аpple.com/")).toMatch(/^https:\/\/xn--/);
+    const refused: unknown[] = [
+      "javascript:alert(1)",
+      "JAVASCRIPT:alert(1)",
+      "JaVa\tScRiPt:alert(1)", // parsers drop tabs and newlines inside a URL
+      "java\nscript:alert(1)",
+      "\u0001javascript:alert(1)",
+      " javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "vbscript:msgbox(1)",
+      "file:///etc/passwd",
+      "blob:https://example.com/x",
+      "ht\ttps://example.com",
+      "https://exa\nmple.com",
+      "https://example.com/a b",
+      "https://example.com/\u2028x",
+      "https://example.com/\u200bx",
+      "/relative",
+      "relative/path",
+      "?q=1",
+      "#frag",
+      "//example.com/x",
+      "\\\\example.com\\x",
+      "https:\\\\example.com",
+      "https:/example.com",
+      "https:example.com",
+      "https://",
+      "https:///x",
+      "https://user:pass@example.com/",
+      "https://user@example.com/",
+      "https://example.com\\@evil.example/",
+      "https://" + "a".repeat(MAX_URL_CHARS) + ".com/",
+      "https://example.com/" + "a".repeat(MAX_URL_CHARS),
+      "",
+      "   ",
+      null,
+      undefined,
+      42,
+      ["https://example.com"],
+      { href: "https://example.com" },
+      { toString: () => "https://example.com" },
+    ];
+    for (const v of refused) expect(safeLinkUrl(v), JSON.stringify(v)).toBe(null);
+    expect(safeLinkUrl("https://example.com/" + "a".repeat(MAX_URL_CHARS - 20))).not.toBe(null);
+  });
+
+  it("conversationImageRef: the conversation-image path and nothing else", () => {
+    expect(conversationImageRef(IMG)).toEqual({ conversationId: "c_1", imageId: "img-2.png" });
+    expect(conversationImageRef("/api/conversations/0b1c2d3e-4f5a/images/a.b_c-d")).toEqual({ conversationId: "0b1c2d3e-4f5a", imageId: "a.b_c-d" });
+    const refused: unknown[] = [
+      "https://example.com" + IMG,
+      "//example.com" + IMG,
+      "http://localhost" + IMG,
+      "data:image/png;base64,AAAA",
+      IMG + "?download=1",
+      IMG + "#x",
+      IMG + "/",
+      IMG + "/extra",
+      " " + IMG,
+      IMG + "\n",
+      "/api/conversations/../images/x",
+      "/api/conversations/c/images/..",
+      "/api/conversations/./images/x",
+      "/api/conversations/c/images/...",
+      "/api/conversations/c/../../secrets/images/x",
+      "/api/conversations/c/images/a%2fb",
+      "/api/conversations/c/images/a%2e%2e",
+      "/api/conversations/c/images/a/b",
+      "/api/conversations/c/images/a\\b",
+      "/api/conversations//images/x",
+      "/api/conversations/c/images/",
+      "/API/conversations/c/images/x",
+      "api/conversations/c/images/x",
+      "/api/conversations/c/files/x",
+      "/api/conversations/c/images/한글",
+      "/api/conversations/c/images/" + "a".repeat(400),
+      "",
+      null,
+      undefined,
+      7,
+      [IMG],
+    ];
+    for (const v of refused) expect(conversationImageRef(v), JSON.stringify(v)).toBe(null);
+  });
+
+  it("at render time: a valid value comes back normalized; an empty or invalid one is dropped and reported", () => {
+    // button: the declared effect, or nothing plus the reason (the renderer draws it disabled)
+    expect({ ...normalizeProps("button", { send: "  정답은 B\n둘째 줄\u0000  ", label: "제출" }).props }).toEqual({ send: "정답은 B\n둘째 줄", label: "제출" });
+    expect({ ...normalizeProps("button", { send: 42 }).props }).toEqual({ send: "42" });
+    expect({ ...normalizeProps("button", { href: " HTTPS://Example.com/a " }).props }).toEqual({ href: "https://example.com/a" });
+    for (const [raw, reason] of [
+      [{ send: "" }, "send: is empty — nothing would be sent"],
+      [{ send: "   " }, "send: is empty — nothing would be sent"],
+      [{ send: null }, "send: is empty — nothing would be sent"],
+      [{ send: undefined }, "send: is empty — nothing would be sent"],
+      [{ send: "x".repeat(MAX_SEND_CHARS + 1) }, "send: is too long (limit 2000 chars)"],
+      [{ send: ["a"] }, "send: must be a string"],
+      [{ send: { toString: () => "x" } }, "send: must be a string"],
+      [{ href: null }, "href: is empty — there is no link to open"],
+      [{ href: "" }, "href: is empty — there is no link to open"],
+      [{ href: 5 }, "href: must be a string"],
+    ] as [Record<string, unknown>, string][]) {
+      const r = normalizeProps("button", raw);
+      expect({ ...r.props }, reason).toEqual({});
+      expect(r.errors, reason).toEqual([reason]);
+    }
+    const js = normalizeProps("button", { href: "javascript:alert(1)", label: "x" });
+    expect({ ...js.props }).toEqual({ label: "x" });
+    expect(js.errors[0]).toMatch(/^href: must be an absolute http\(s\) URL/);
+    // an onClick that is written but empty stays a button that does nothing (as before)
+    expect(normalizeProps("button", { onClick: null }).props.onClick).toBe(NOOP_HANDLER);
+    expect("onClick" in normalizeProps("button", { send: "hi" }).props).toBe(false);
+    // link / image: required, and never defaulted
+    expect({ ...normalizeProps("link", { href: "https://example.com" }).props }).toEqual({ href: "https://example.com/" });
+    const badLink = normalizeProps("link", { href: "/internal" });
+    expect("href" in badLink.props).toBe(false);
+    expect(badLink.errors[0]).toMatch(/^href: must be an absolute http\(s\) URL/);
+    expect({ ...normalizeProps("image", { src: IMG, alt: null, width: 5000, maxHeight: 1, radius: "xl", fit: "cover" }).props }).toEqual({ src: IMG, alt: "", width: 800, maxHeight: 40, fit: "cover" });
+    for (const src of ["https://example.com/a.png", "data:image/png;base64,AAAA", IMG + "?x", null, 5]) {
+      const r = normalizeProps("image", { src, alt: "a" });
+      expect("src" in r.props, String(src)).toBe(false);
+      expect(r.errors.length, String(src)).toBe(1);
+    }
+    // nothing written, nothing reported
+    expect(normalizeProps("button", { label: "x" })).toEqual({ props: Object.assign(Object.create(null), { label: "x" }), errors: [] });
   });
 });

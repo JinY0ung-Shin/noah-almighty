@@ -8,6 +8,7 @@ import {
   canRegenerate,
   cancelRewindEdit,
   clearChatHistory,
+  forgetConversationWidgets,
   closeFileTab,
   closePane,
   deleteCanvas,
@@ -25,6 +26,7 @@ import {
   selectConversation,
   sendMessage,
   selectSideTab,
+  sendWidgetMessage,
   sendSteer,
   setRewindEditDraft,
   startChatWith,
@@ -712,6 +714,33 @@ describe("pane lifecycle", () => {
     expect(replaced.messages).toEqual([]);
   });
 
+  it("deleting conversations forgets the widget values this browser kept for them", async () => {
+    // The signed-in user is "owner" (beforeEach). c1 has two widgets, c2 one, another account one.
+    const key = (user: string, conversation: string, canvas: string) => `noah:canvas-widget:${user}:${conversation}:${canvas}`;
+    const stored = JSON.stringify({ n: { sig: "n = 2", value: 5 } });
+    const keys = [key("owner", "c1", "cv1"), key("owner", "c1", "cv2"), key("owner", "c2", "cv1"), key("other", "c1", "cv1"), key("owner", "c3", "cv1")];
+    localStorage.clear();
+    for (const k of keys) localStorage.setItem(k, stored);
+    localStorage.setItem("noah:canvas-widget-index", JSON.stringify(keys));
+
+    seedPane({ conversationId: "c1" });
+    replaceState({ conversations: [{ id: "c1" } as any, { id: "c2" } as any, { id: "c3" } as any] });
+    useFetch((url, init) =>
+      url === "/api/conversations" && (init as any).method === "DELETE" ? jsonRes({ deleted: 1, conversationIds: ["c1"] }) : undefined,
+    );
+    // 비우기: every conversation the server says it deleted.
+    await clearChatHistory();
+    expect(localStorage.getItem(keys[0])).toBeNull();
+    expect(localStorage.getItem(keys[1])).toBeNull();
+    expect(localStorage.getItem(keys[2])).toBe(stored);
+    expect(localStorage.getItem(keys[3])).toBe(stored); // another account's values are not ours to remove
+    // A single delete (the conversation list's trash) goes through the same helper.
+    forgetConversationWidgets("c3");
+    expect(localStorage.getItem(keys[4])).toBeNull();
+    expect(JSON.parse(localStorage.getItem("noah:canvas-widget-index")!)).toEqual([keys[2], keys[3]]);
+    localStorage.clear();
+  });
+
   it("clearChatHistory returns 0 when nothing was deleted", async () => {
     seedPane({ conversationId: "c1" });
     useFetch(() => jsonRes({ deleted: 0, conversationIds: [] }));
@@ -875,6 +904,97 @@ describe("canvas flows", () => {
     const again = seedPane({ canvases: [{ id: "cv1", pending: false, interaction: "async", submittedValues: { pick: "A" } } as any] });
     await submitCanvas(again, "cv1", { pick: "B" });
     expect(pane(again).canvases[0].submittedValues).toEqual({ pick: "A" });
+  });
+
+  it("a reloaded conversation keeps what was submitted on a widget, and a replayed frame does not lose it", async () => {
+    // The server records an async submission on the canvas; /api/messages returns it.
+    const widget = { id: "cv1", title: "계산기", content: "{@state n = 1}", contentType: "widget", interaction: "async", submittedValues: { n: 3 } };
+    replaceState({ conversations: [{ id: "c1", avatarUserId: "av1", isRoutine: false } as any] });
+    useFetch((url) => {
+      if (url.startsWith("/api/messages")) return jsonRes({ messages: [], canvases: [widget] });
+      if (url === "/api/avatars/av1") return jsonRes({ avatar: { id: "av1", alias: "노아", isOwn: true } });
+      if (url.startsWith("/api/chat/runs")) return jsonRes({ run: null });
+      return undefined;
+    });
+    await selectConversation("c1");
+    const id = readState().chatPanes[0].id;
+    expect(pane(id).canvases[0]).toMatchObject({ id: "cv1", contentType: "widget", submittedValues: { n: 3 } });
+
+    // A reattach replays the run's log: the frame that showed this canvas arrives
+    // again (its id is at or below what the pane had seen). The canvas is rebuilt,
+    // and "응답 완료" must still be there.
+    const canvasFrame = (frameId: number, content: string) =>
+      `id: ${frameId}\nevent: canvas\ndata: ${JSON.stringify({ runId: "run-r", artifactId: "cv1", title: "계산기", content, contentType: "widget", interaction: "async" })}\n\n`;
+    const replay = (chunks: string[], seenThrough: number) => {
+      useFetch((url) =>
+        url.includes("/api/chat/runs/run-r/events")
+          ? { ok: true, status: 200, json: async () => ({}), body: streamFrom(chunks, () => pane(id).abortController?.abort()) }
+          : jsonRes({ ok: true }),
+      );
+      return attachRun(id, "run-r", { seenThrough });
+    };
+    await replay([canvasFrame(4, "{@state n = 1}")], 10);
+    expect(pane(id).canvases[0].submittedValues).toEqual({ n: 3 });
+
+    // A NEW frame is a new version of the canvas: nothing was submitted on that yet.
+    await replay([canvasFrame(4, "{@state n = 1}"), canvasFrame(11, "{@state n = 2}")], 10);
+    expect(pane(id).canvases[0].content).toBe("{@state n = 2}");
+    expect(pane(id).canvases[0].submittedValues).toBeUndefined();
+  });
+
+  it("sendWidgetMessage sends a widget button's text as an ordinary user message, leaving the composer alone", async () => {
+    const staged = { id: "img-1", dataUrl: "data:image/png;base64,AAAA", mediaType: "image/png", name: "a.png" };
+    const id = seedPane({ draft: "쓰던 글", pendingImages: [staged] as any });
+    const bodies: any[] = [];
+    useFetch((url, init) => {
+      if (url === "/api/chat/stream") {
+        bodies.push(body(init));
+        return sseRes([["done", { message: { id: "m", role: "assistant", content: "ok", response: { kind: "text", runtime: "pi", text: "ok" }, conversationId: "c", createdAt: "t" } }]]);
+      }
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    expect(await sendWidgetMessage(id, "  매출 요약해 줘  ")).toBe(true);
+    // An ordinary message: the text itself, no canvas submission, no image taken from the composer.
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].message).toBe("매출 요약해 줘");
+    expect(bodies[0].canvasSubmission).toBeUndefined();
+    expect(bodies[0].images).toBeUndefined();
+    // It shows as the viewer's own bubble…
+    expect(pane(id).messages.find((m) => m.role === "user")?.content).toBe("매출 요약해 줘");
+    // …and what the viewer was composing is untouched.
+    expect(pane(id).draft).toBe("쓰던 글");
+    expect(pane(id).pendingImages).toEqual([staged]);
+  });
+
+  it("sendWidgetMessage never runs a slash command, and does nothing while the avatar is answering", async () => {
+    const id = seedPane({ draft: "쓰던 글", messages: [{ id: "m0", role: "user", content: "안녕", conversationId: "c", response: null, createdAt: "t" } as any] });
+    const fetchFn = noFetch();
+    // "/new" typed in the composer starts a new chat; from a widget it is refused outright.
+    expect(await sendWidgetMessage(id, "/new")).toBe(false);
+    expect(await sendWidgetMessage(id, "   /compact 지금")).toBe(false);
+    expect(await sendWidgetMessage(id, "   ")).toBe(false);
+    expect(pane(id).messages).toHaveLength(1);
+    expect(pane(id).draft).toBe("쓰던 글");
+    expect(get(toasts).some((t) => t.message.includes("슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다."))).toBe(true);
+    updateState((state) => {
+      state.chatPanes[0].streaming = true;
+    });
+    expect(await sendWidgetMessage(id, "지금 보내면 안 됨")).toBe(false);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("a widget message that fails to send is undone without landing in the composer", async () => {
+    const id = seedPane({ draft: "쓰던 글" });
+    useFetch((url) => {
+      if (url === "/api/chat/stream") return jsonRes({ error: "서버 오류" }, 500);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    expect(await sendWidgetMessage(id, "보내질 뻔한 글")).toBe(true);
+    expect(pane(id).messages).toEqual([]);
+    expect(pane(id).draft).toBe("쓰던 글");
+    expect(get(toasts).some((t) => t.message.includes("메시지를 보내지 못했습니다"))).toBe(true);
   });
 
   it("submitCanvasEdit sends the edited content as a new turn", async () => {

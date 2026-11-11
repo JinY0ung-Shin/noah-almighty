@@ -2,7 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 
-// A `widget` canvas recomputes in the browser. What jsdom cannot show is checked
+// A `widget` canvas is drawn IN the chat bubble of the answer that showed it (its
+// `kind: "widget"` attachment places it), not in the side panel — and it
+// recomputes in the browser. What jsdom cannot show is checked
 // here in a real one: Svelte legacy mode leaving a stale value on screen (jsdom
 // masks it), the app's CSP (no eval / Function anywhere in the render path), the
 // widget's prose not restyling the app, Hangul staying on the web font, the
@@ -64,7 +66,32 @@ const CALC_WIDGET = `{@state n = 2}
 <submit values={{ n, note }}>이 수량으로 진행</submit>
 `;
 
-type CanvasFixture = { id: string; title: string; content: string; contentType: string; interaction?: string };
+/** `legacy`: a widget from before widgets moved into the chat — no attachment in any message. */
+type CanvasFixture = { id: string; title: string; content: string; contentType: string; interaction?: string; legacy?: boolean };
+
+// Where an inline widget lives: the card inside an assistant bubble.
+const INLINE = ".message.assistant .bubble .canvas-inline";
+const ANSWER_HEAD = "만들었어요.";
+const ANSWER_TAIL = "값을 바꿔 보세요.";
+
+/** One answer per inline widget: text, the widget's attachment anchored after the first paragraph, more text. */
+function widgetAnswers(canvases: CanvasFixture[]) {
+  return canvases
+    .filter((canvas) => canvas.contentType === "widget" && !canvas.legacy)
+    .map((canvas, index) => {
+      const head = `${canvas.title} ${ANSWER_HEAD}`;
+      const text = `${head}\n\n${ANSWER_TAIL}`;
+      return {
+        id: `m-a${index}`,
+        conversationId: "c-widget",
+        role: "assistant",
+        content: text,
+        createdAt: "2026-11-10T03:00:01.000Z",
+        attachments: [{ id: canvas.id, kind: "widget", mediaType: "application/vnd.noah.canvas-widget+json", name: canvas.title, anchor: head.length }],
+        response: { kind: "text", runtime: "pi", summary: "완료", text },
+      };
+    });
+}
 
 async function mockApp(page: Page, canvases: CanvasFixture[]): Promise<void> {
   await page.addInitScript(() => {
@@ -124,8 +151,9 @@ async function mockApp(page: Page, canvases: CanvasFixture[]): Promise<void> {
       body = {
         messages: [
           { id: "m-1", conversationId: "c-widget", role: "user", content: "계산기 보여줘", response: null, createdAt: "2026-11-10T03:00:00.000Z" },
+          ...widgetAnswers(canvases),
         ],
-        canvases,
+        canvases: canvases.map(({ legacy: _legacy, ...canvas }) => canvas),
       };
     } else if (path === "/api/chat/runs") {
       body = { run: null };
@@ -175,12 +203,34 @@ const HEAVY_WIDGET = `<text>머리말</text>
 <text>꼬리말</text>
 `;
 
+// Passes the static check (the calls sit inside function bodies) and misbehaves
+// in the browser: a setter called while rendering, and a handler that throws.
+const LEAKY_WIDGET = `{@state n = 2}
+{@state xs = [1, 2]}
+
+<slider label="수량" value={n} onChange={setN} min={0} max={10} />
+<text>합계 {n * 2}</text>
+<text>{xs.map((x) => setN(x)).length}개</text>
+<button onClick={() => setN(null.x)}>깨진 버튼</button>
+`;
+
+// What a widget may do to the conversation: say something as the viewer, open a link.
+const ACTION_WIDGET = `{@state topic = "매출"}
+
+<input label="주제" value={topic} onChange={setTopic} />
+<row>
+  <button send={topic + " 요약해 줘"}>요약 요청</button>
+  <button href="https://wiki.example.com/guide">가이드 열기</button>
+</row>
+<text>자세한 내용은 <link href="https://wiki.example.com/a">위키</link>와 [문서](https://docs.example.com/b)를 보세요.</text>
+`;
+
 const WIDGET: CanvasFixture = { id: "cv-calc", title: "계산기", content: CALC_WIDGET, contentType: "widget", interaction: "async" };
 
 async function openWidget(page: Page): Promise<void> {
   await page.goto(`${process.env.REPRO_BASE_URL || ""}/`);
   await page.getByRole("button", { name: "대화 열기: 계산기 대화" }).click();
-  await expect(page.locator(".canvas-panel .wg-root")).toBeVisible();
+  await expect(page.locator(`${INLINE} .wg-root`).first()).toBeVisible();
 }
 
 async function waitForKoreanFont(page: Page): Promise<void> {
@@ -246,66 +296,95 @@ async function assertNoFallbackHangul(page: Page, scope: string): Promise<void> 
 const cspViolations = (page: Page) => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
 const bodyBackground = (page: Page) => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
-test("a widget recomputes in the browser: no stale value, no CSP violation, nothing leaks into the app", async ({ page }) => {
-  await mockApp(page, [WIDGET]);
+const BAR_VEGA = JSON.stringify({
+  data: { values: [{ k: "A", v: 3 }, { k: "B", v: 5 }] },
+  mark: "bar",
+  encoding: { x: { field: "k", type: "nominal" }, y: { field: "v", type: "quantitative" } },
+});
+
+test("a widget is drawn in the chat bubble and recomputes there: no stale value, no CSP violation, nothing leaks into the app", async ({ page }) => {
+  await mockApp(page, [{ id: "cv-bar", title: "막대", content: BAR_VEGA, contentType: "vega" }, WIDGET]);
   await openWidget(page);
-  const panel = page.locator(".canvas-panel");
+
+  // 0. The widget sits INSIDE the answer, between the text before and after its
+  //    anchor — and every other canvas type is still a side-panel tab.
+  const flow = page.locator(".message.assistant .bubble > .md, .message.assistant .bubble > .msg-images");
+  await expect(flow).toHaveCount(3);
+  await expect(flow.nth(0)).toContainText(ANSWER_HEAD);
+  await expect(flow.nth(1).locator(".canvas-inline .wg-root")).toBeVisible();
+  await expect(flow.nth(2)).toHaveText(ANSWER_TAIL);
+  const order = await page.evaluate((selector) => {
+    const widget = document.querySelector(selector)!.getBoundingClientRect();
+    const blocks = [...document.querySelectorAll(".message.assistant .bubble > .md")].map((el) => el.getBoundingClientRect());
+    return blocks[0].bottom <= widget.top && widget.bottom <= blocks[1].top;
+  }, INLINE);
+  expect(order).toBe(true);
+  const sidePanel = page.locator(".canvas-panel");
+  await expect(sidePanel.getByRole("tab")).toHaveText(["막대"]);
+  await expect(sidePanel.locator(".canvas-svg .mark-rect path")).toHaveCount(2);
+  await expect(sidePanel.locator(".wg-root")).toHaveCount(0);
+  await expect(page.locator(".wg-root")).toHaveCount(1);
+  const card = page.locator(INLINE);
   const before = await bodyBackground(page);
 
   // 1. First render: derived text, the table and the chart all come from the state.
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("4개");
-  await expect(panel.locator(".wg-table tbody tr")).toHaveCount(2);
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(2);
-  await expect(panel.locator(".wg-chart .canvas-svg")).toHaveAttribute("aria-label", "항목 차트");
-  await expect(panel.locator(".wg-badge")).toHaveCount(0);
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("4개");
+  await expect(card.locator(".wg-table tbody tr")).toHaveCount(2);
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(2);
+  await expect(card.locator(".wg-chart .canvas-svg")).toHaveAttribute("aria-label", "항목 차트");
+  await expect(card.locator(".wg-badge")).toHaveCount(0);
 
   // 2. The prose's <style> and inline style were dropped: the app looks as it did,
   //    and nothing in the widget sits over it.
-  await expect(panel).toBeVisible();
+  await expect(card).toBeVisible();
   expect(await bodyBackground(page)).toBe(before);
   expect(before).not.toBe("rgb(9, 9, 9)");
-  expect(await panel.locator(".wg-md style").count()).toBe(0);
-  expect(await panel.locator(".wg-md [style]").count()).toBe(0);
-  await expect(panel.locator(".wg-md strong")).toHaveText("바꿔");
+  expect(await card.locator(".wg-md style").count()).toBe(0);
+  expect(await card.locator(".wg-md [style]").count()).toBe(0);
+  await expect(card.locator(".wg-md strong")).toHaveText("바꿔");
   //    Nor can the prose borrow the app's own classes: no fake overlay, no
   //    look-alike submit button, no link — only their text is left.
   expect(await page.locator(".canvas-fs").count()).toBe(0);
-  expect(await panel.locator(".wg-md [class], .wg-md [id], .wg-md a, .wg-md button, .wg-md div").count()).toBe(0);
-  await expect(panel.locator(".wg-submit")).toHaveCount(1);
-  await expect(panel.locator(".wg-md")).toContainText("가짜 보내기");
+  expect(await card.locator(".wg-md [class], .wg-md [id], .wg-md button, .wg-md div").count()).toBe(0);
+  //    A link in the prose IS a link — an http(s) one, opened in a new tab.
+  await expect(card.locator(".wg-md a")).toHaveAttribute("href", "https://example.test/x");
+  await expect(card.locator(".wg-md a")).toHaveAttribute("target", "_blank");
+  await expect(card.locator(".wg-md a")).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(card.locator(".wg-submit")).toHaveCount(1);
+  await expect(card.locator(".wg-md")).toContainText("가짜 보내기");
 
   // 3. Moving the slider updates every dependent — in a real browser, where a
   //    stale legacy-mode read would show.
-  const slider = panel.getByRole("slider", { name: "수량" });
+  const slider = card.getByRole("slider", { name: "수량" });
   await slider.fill("7");
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("14개");
-  await expect(panel.locator(".canvas-slider-val")).toHaveText("7");
-  await expect(panel.locator(".wg-badge")).toHaveText("많음");
-  await expect(panel.locator(".wg-table tbody tr")).toHaveCount(7);
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(7);
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("14개");
+  await expect(card.locator(".canvas-slider-val")).toHaveText("7");
+  await expect(card.locator(".wg-badge")).toHaveText("많음");
+  await expect(card.locator(".wg-table tbody tr")).toHaveCount(7);
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(7);
   // Stepping with the keyboard keeps the same control focused across re-renders.
   await slider.focus();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowLeft");
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("10개");
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("10개");
   await expect(slider).toBeFocused();
-  await expect(panel.locator(".wg-badge")).toHaveCount(0);
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(5);
+  await expect(card.locator(".wg-badge")).toHaveCount(0);
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(5);
 
   // 4. Typing keeps the caret in the field while the text it feeds follows.
-  const memo = panel.getByRole("textbox", { name: "메모" });
+  const memo = card.getByRole("textbox", { name: "메모" });
   await memo.pressSequentially("한글 <b>메모</b>");
   await expect(memo).toHaveValue("한글 <b>메모</b>");
   await expect(memo).toBeFocused();
-  await expect(panel.locator(".wg-box > .wg-text")).toHaveText("메모: 한글 <b>메모</b>");
-  expect(await panel.locator(".wg-root b").count()).toBe(0);
+  await expect(card.locator(".wg-box > .wg-text")).toHaveText("메모: 한글 <b>메모</b>");
+  expect(await card.locator(".wg-root b").count()).toBe(0);
 
   // 5. Hangul stays on the web font (no forced layout during the widget's mount).
   await waitForKoreanFont(page);
-  await assertNoFallbackHangul(page, ".canvas-panel .wg-root");
+  await assertNoFallbackHangul(page, `${INLINE} .wg-root`);
 
-  // 6. Fullscreen shows the SAME widget state, and a change there reaches the panel.
-  await page.getByRole("button", { name: "전체화면" }).click();
+  // 6. Fullscreen (the card's own ⤢) shows the SAME widget state, and a change there reaches the bubble.
+  await card.getByRole("button", { name: "전체화면" }).click();
   const stage = page.locator(".canvas-fs");
   await expect(stage.locator(".wg-stat .stat-value")).toHaveText("10개");
   await expect(stage.getByRole("textbox", { name: "메모" })).toHaveValue("한글 <b>메모</b>");
@@ -314,13 +393,13 @@ test("a widget recomputes in the browser: no stale value, no CSP violation, noth
   await expect(stage.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(3);
   await page.keyboard.press("Escape");
   await expect(stage).toHaveCount(0);
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("6개");
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(3);
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("6개");
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(3);
 
   // 7. <submit> sends the widget's values through the canvas submission path.
   const [request] = await Promise.all([
     page.waitForRequest((req) => new URL(req.url()).pathname === "/api/chat/stream" && req.method() === "POST"),
-    panel.getByRole("button", { name: "이 수량으로 진행" }).click(),
+    card.getByRole("button", { name: "이 수량으로 진행" }).click(),
   ]);
   expect(request.postDataJSON().canvasSubmission).toEqual({ canvasId: "cv-calc", values: { n: 3, note: "한글 <b>메모</b>" } });
 
@@ -353,7 +432,9 @@ test("a widget follows the dark theme and comes back with its values after a rel
   await page.emulateMedia({ colorScheme: "dark" });
   await mockApp(page, [WIDGET]);
   await openWidget(page);
-  const panel = page.locator(".canvas-panel");
+  const card = page.locator(INLINE);
+  // A conversation whose only canvas is an inline widget has no side panel at all.
+  await expect(page.locator(".canvas-panel")).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   // Token colors resolve against the dark palette, in the widget and in its chart.
@@ -366,47 +447,47 @@ test("a widget follows the dark theme and comes back with its values after a rel
       probe.remove();
       return color;
     }, name);
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveCSS("color", await token("--text"));
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(2);
-  const axisLabel = panel.locator(".wg-chart .canvas-svg .role-axis-label text").first();
+  await expect(card.locator(".wg-stat .stat-value")).toHaveCSS("color", await token("--text"));
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(2);
+  const axisLabel = card.locator(".wg-chart .canvas-svg .role-axis-label text").first();
   await expect(axisLabel).toBeVisible();
   expect(await axisLabel.evaluate((el) => getComputedStyle(el).fill)).toBe(await token("--muted"));
 
   // What the viewer changed is kept in this browser and restored on the next visit.
-  await panel.getByRole("slider", { name: "수량" }).fill("6");
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("12개");
+  await card.getByRole("slider", { name: "수량" }).fill("6");
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("12개");
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("noah:canvas-widget:user-1:c-widget:cv-calc")))
     .toBe(JSON.stringify({ n: { sig: "n = 2", value: 6 } }));
   await page.reload();
   await page.getByRole("button", { name: "대화 열기: 계산기 대화" }).click();
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("12개");
-  await expect(panel.getByRole("slider", { name: "수량" })).toHaveValue("6");
-  await expect(panel.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(6);
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("12개");
+  await expect(card.getByRole("slider", { name: "수량" })).toHaveValue("6");
+  await expect(card.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(6);
 
   // A change made just before leaving is not lost to the save debounce.
-  await panel.getByRole("slider", { name: "수량" }).fill("8");
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("16개");
+  await card.getByRole("slider", { name: "수량" }).fill("8");
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("16개");
   await page.reload();
   await page.getByRole("button", { name: "대화 열기: 계산기 대화" }).click();
-  await expect(panel.locator(".wg-stat .stat-value")).toHaveText("16개");
+  await expect(card.locator(".wg-stat .stat-value")).toHaveText("16개");
   expect(await cspViolations(page)).toEqual([]);
 });
 
 test("a control shows the state's value even when its handler refuses the change, and a section stays open", async ({ page }) => {
   await mockApp(page, [{ id: "cv-guard", title: "제한", content: GUARDED_WIDGET, contentType: "widget" }]);
   await openWidget(page);
-  const panel = page.locator(".canvas-panel");
-  const summary = panel.locator(".wg-root > .wg-text");
+  const card = page.locator(INLINE);
+  const summary = card.locator(".wg-root > .wg-text");
   await expect(summary).toHaveText("n=3 / 고른 수 0");
 
   // The person opens the section and drags the slider inside it: the section
   // must not snap shut when the state it changes re-renders the widget.
-  const section = panel.locator("details.wg-details");
+  const section = card.locator("details.wg-details");
   await expect(section).not.toHaveAttribute("open", "");
   await section.locator("summary").click();
   await expect(section).toHaveAttribute("open", "");
-  const slider = panel.getByRole("slider", { name: "상한 5" });
+  const slider = card.getByRole("slider", { name: "상한 5" });
   await slider.fill("4");
   await expect(summary).toHaveText("n=4 / 고른 수 0");
   await expect(section).toHaveAttribute("open", "");
@@ -416,18 +497,18 @@ test("a control shows the state's value even when its handler refuses the change
   await slider.fill("9");
   await expect(summary).toHaveText("n=5 / 고른 수 0");
   await expect(slider).toHaveValue("5");
-  await expect(panel.locator(".canvas-slider-val")).toHaveText("5");
+  await expect(card.locator(".canvas-slider-val")).toHaveText("5");
   await expect(section).toHaveAttribute("open", "");
 
   // "At most one": the second box is refused and does not stay ticked.
-  await panel.getByRole("checkbox", { name: "가" }).click();
-  await expect(panel.getByRole("checkbox", { name: "가" })).toBeChecked();
-  await panel.getByRole("checkbox", { name: "나" }).click();
-  await expect(panel.getByRole("checkbox", { name: "나" })).not.toBeChecked();
+  await card.getByRole("checkbox", { name: "가" }).click();
+  await expect(card.getByRole("checkbox", { name: "가" })).toBeChecked();
+  await card.getByRole("checkbox", { name: "나" }).click();
+  await expect(card.getByRole("checkbox", { name: "나" })).not.toBeChecked();
   await expect(summary).toHaveText("n=5 / 고른 수 1");
 
   // A select whose handler ignores the pick keeps showing the state's option.
-  const select = panel.getByRole("combobox", { name: "지역" });
+  const select = card.getByRole("combobox", { name: "지역" });
   await select.selectOption({ label: "jp" });
   await expect(select).toHaveValue("0");
 
@@ -439,34 +520,124 @@ test("a widget that renders too much ends in one notice without freezing the tab
     { id: "cv-heavy", title: "과다", content: HEAVY_WIDGET, contentType: "widget" },
     { id: "cv-list", title: "준비물", content: CHECKLIST_WIDGET, contentType: "widget" },
   ]);
+  const started = Date.now();
   await openWidget(page);
-  const panel = page.locator(".canvas-panel");
-
-  // The checklist draws three real, unchecked boxes and counts as they are ticked.
-  const count = panel.locator(".wg-root > .wg-text");
-  await expect(panel.getByRole("checkbox")).toHaveCount(3);
-  await expect(panel.locator(".wg-error")).toHaveCount(0);
-  await expect(count).toHaveText("0 / 3");
-  await panel.getByRole("checkbox", { name: "환전" }).click();
-  await expect(count).toHaveText("1 / 3");
-  await expect(panel.getByRole("checkbox", { name: "환전" })).toBeChecked();
-  await expect(panel.getByRole("checkbox", { name: "여권" })).not.toBeChecked();
+  // Two widgets, each in the bubble of its own answer.
+  const heavy = page.locator(INLINE, { hasText: "과다" });
+  const list = page.locator(INLINE, { hasText: "준비물" });
+  await expect(page.locator(INLINE)).toHaveCount(2);
 
   // The heavy widget: what came before the oversized block is shown, the block
   // and everything after it are not, and ONE notice says so — promptly.
-  const started = Date.now();
-  await page.getByRole("tab", { name: "과다" }).click();
-  await expect(panel.locator(".wg-error")).toHaveText("위젯이 그리는 내용이 너무 많아 일부를 표시하지 못했습니다.");
-  expect(Date.now() - started).toBeLessThan(5000);
-  await expect(panel.locator(".wg-error")).toHaveCount(1);
-  await expect(panel.locator(".wg-error")).toHaveAttribute("title", /output budget/);
-  await expect(panel.locator(".wg-root > .wg-text")).toHaveText("머리말");
-  expect(await panel.locator(".wg-divider").count()).toBe(0);
+  await expect(heavy.locator(".wg-error")).toHaveText("위젯이 그리는 내용이 너무 많아 일부를 표시하지 못했습니다.");
+  expect(Date.now() - started).toBeLessThan(8000);
+  await expect(heavy.locator(".wg-error")).toHaveCount(1);
+  await expect(heavy.locator(".wg-error")).toHaveAttribute("title", /output budget/);
+  await expect(heavy.locator(".wg-root > .wg-text")).toHaveText("머리말");
+  expect(await heavy.locator(".wg-divider").count()).toBe(0);
 
-  // The tab is still responsive, and the other widget kept its state meanwhile.
-  await page.getByRole("tab", { name: "준비물" }).click();
+  // The page is responsive, and the checklist next to it works: three real,
+  // unchecked boxes that count as they are ticked.
+  const count = list.locator(".wg-root > .wg-text");
+  await expect(list.getByRole("checkbox")).toHaveCount(3);
+  await expect(list.locator(".wg-error")).toHaveCount(0);
+  await expect(count).toHaveText("0 / 3");
+  await list.getByRole("checkbox", { name: "환전" }).click();
   await expect(count).toHaveText("1 / 3");
-  await panel.getByRole("checkbox", { name: "여권" }).click();
+  await expect(list.getByRole("checkbox", { name: "환전" })).toBeChecked();
+  await expect(list.getByRole("checkbox", { name: "여권" })).not.toBeChecked();
+  await list.getByRole("checkbox", { name: "여권" }).click();
   await expect(count).toHaveText("2 / 3");
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+test("what goes wrong in the browser is said in place and reported to the avatar once", async ({ page }) => {
+  await mockApp(page, [{ id: "cv-leaky", title: "새는 위젯", content: LEAKY_WIDGET, contentType: "widget" }]);
+  const reports: { conversationId: string; errors: string[] }[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/canvases/cv-leaky/render-report" && request.method() === "POST") {
+      reports.push(request.postDataJSON());
+    }
+  });
+  await openWidget(page);
+  const card = page.locator(INLINE);
+
+  // The setter called while rendering did nothing — the state is what it was —
+  // and the viewer is told so under that block, with the reason as a tooltip.
+  await expect(card.locator(".wg-root > .wg-text").first()).toHaveText("합계 4");
+  const warn = card.locator(".wg-warn");
+  await expect(warn).toHaveText("렌더 중에 호출된 상태 변경은 무시됩니다.");
+  await expect(warn).toHaveAttribute("title", /setN\(…\) was called while rendering and was ignored/);
+
+  // The avatar hears about it a moment later: one report, in English, with the line.
+  await expect.poll(() => reports.length, { timeout: 5000 }).toBe(1);
+  expect(reports[0]).toEqual({
+    conversationId: "c-widget",
+    errors: ["line 6:1 setN(…) was called while rendering and was ignored — call a setter only from an event handler (onChange/onClick)."],
+  });
+
+  // Using the widget re-evaluates it over and over; the same failure is not sent again.
+  await card.getByRole("slider", { name: "수량" }).fill("7");
+  await expect(card.locator(".wg-root > .wg-text").first()).toHaveText("합계 14");
+  await card.getByRole("button", { name: "전체화면" }).click();
+  await expect(page.locator(".canvas-fs .wg-warn")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(1800);
+  expect(reports).toHaveLength(1);
+
+  // A handler that fails is said in the status line and reported when it happens.
+  await card.getByRole("button", { name: "깨진 버튼" }).click();
+  await expect(card.locator(".wg-status")).toHaveText("동작을 실행하지 못했습니다.");
+  await expect.poll(() => reports.length, { timeout: 5000 }).toBe(2);
+  expect(reports[1].errors).toHaveLength(1);
+  expect(reports[1].errors[0]).toMatch(/^an event handler failed: /);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+test("a send button speaks as the viewer, links open in a new tab, and a widget without an attachment stays in the panel", async ({ page }) => {
+  await mockApp(page, [
+    { id: "cv-old", title: "예전 위젯", content: CHECKLIST_WIDGET, contentType: "widget", legacy: true },
+    { id: "cv-act", title: "요약 도우미", content: ACTION_WIDGET, contentType: "widget" },
+  ]);
+  await openWidget(page);
+
+  // The widget made before widgets moved into the chat has no attachment: it is
+  // still reachable, as a side-panel tab — never drawn twice, never lost.
+  const sidePanel = page.locator(".canvas-panel");
+  await expect(sidePanel.getByRole("tab")).toHaveText(["예전 위젯"]);
+  await expect(sidePanel.locator(".wg-root").getByRole("checkbox")).toHaveCount(3);
+  const card = page.locator(INLINE);
+  await expect(card).toHaveCount(1);
+  await expect(card.locator(".canvas-title")).toHaveText("요약 도우미");
+
+  // Links: a new tab, no opener, and the address as the tooltip.
+  const links = card.locator("a");
+  await expect(links).toHaveText(["가이드 열기", "위키", "문서"]);
+  for (const [index, href] of ["https://wiki.example.com/guide", "https://wiki.example.com/a", "https://docs.example.com/b"].entries()) {
+    await expect(links.nth(index)).toHaveAttribute("href", href);
+    await expect(links.nth(index)).toHaveAttribute("target", "_blank");
+    await expect(links.nth(index)).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(links.nth(index)).toHaveAttribute("title", href);
+  }
+
+  // The send button shows what it will say before it is pressed, follows the
+  // widget's state, and sends that sentence as an ordinary message of the viewer.
+  const send = card.getByRole("button", { name: "요약 요청" });
+  await expect(send).toHaveAttribute("title", "보낼 메시지: 매출 요약해 줘");
+  await card.getByRole("textbox", { name: "주제" }).fill("재고");
+  await expect(send).toHaveAttribute("title", "보낼 메시지: 재고 요약해 줘");
+  // Something the viewer is typing in the composer must survive the widget's send.
+  const composer = page.locator(".composer textarea").first();
+  await composer.fill("쓰던 글");
+  const [request] = await Promise.all([
+    page.waitForRequest((req) => new URL(req.url()).pathname === "/api/chat/stream" && req.method() === "POST"),
+    send.click(),
+  ]);
+  const body = request.postDataJSON();
+  expect(body.message).toBe("재고 요약해 줘");
+  expect(body.canvasSubmission).toBeUndefined();
+  expect(body.conversationId).toBe("c-widget");
+  await expect(page.locator(".message.user .bubble").last()).toHaveText("재고 요약해 줘");
+  await expect(composer).toHaveValue("쓰던 글");
   expect(await cspViolations(page)).toEqual([]);
 });

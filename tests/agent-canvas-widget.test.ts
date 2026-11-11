@@ -56,6 +56,11 @@ describe("canvas `widget` content type (experimental canvasWidget)", () => {
     expect(contentType.options).toEqual(["markdown", "vega", "mermaid", "svg", "html", "widget"]);
     expect(show.description).toContain("'widget' (EXPERIMENTAL");
     expect(show.description).toContain("you are NOT called again on each change");
+    // Placement: the one type that is NOT a side-panel artifact.
+    expect(show.description).toContain("it renders INLINE in your answer, at the point where you call this tool, not in the side panel");
+    expect(show.description).toContain("do not repeat in prose what the widget shows");
+    expect(show.description).toContain("a `<button send>` posts the user's next chat message");
+    expect(show.description).toContain("Show a visual canvas to the user in the chat side panel."); // the other types, unchanged
     expect(show.description).toContain("topic `canvas-widget`");
     // The standing rules of the tool are untouched by the new type.
     expect(show.description).toContain("it is sanitized away");
@@ -72,9 +77,11 @@ describe("canvas `widget` content type (experimental canvasWidget)", () => {
     expect(shown[0]!.interaction).toBeUndefined();
     expect(shown[0]!.controls).toBeUndefined();
     const body = res.content[0].text;
+    expect(body).toContain("The widget was shown INLINE in your answer, at this point of the text (not in the side panel)");
+    expect(body).toContain("continue the answer after it and do not repeat in prose what it shows");
     expect(body).toContain("recomputes locally in the user's browser");
     expect(body).toContain("you are NOT called on those changes");
-    expect(body).toContain("It has no `<submit>`");
+    expect(body).toContain("It has no `<submit>`, so no structured values come back from it (a `<button send>` in it posts the user's next chat message when pressed)");
     expect(body).toContain(`canvas id: ${shown[0]!.artifactId}`);
   });
 

@@ -7,8 +7,8 @@ import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
 import { newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
-import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
-import { removeWidgetState } from "./widgetState";
+import { isWidgetAttachment, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
+import { removeConversationWidgetState, removeWidgetState } from "./widgetState";
 import { formatTokenCount } from "./format";
 import {
   extensionSupportsSecretInput,
@@ -491,6 +491,15 @@ export async function startNewChat(): Promise<void> {
   void loadConversations();
 }
 
+/**
+ * A deleted conversation takes the widget values this browser kept for it with
+ * it (lib/widgetState.ts) — call it from EVERY path that deletes a conversation,
+ * once the server confirmed the delete.
+ */
+export function forgetConversationWidgets(conversationId: string): void {
+  removeConversationWidgetState(readState().user?.id, conversationId);
+}
+
 export async function clearChatHistory(): Promise<number> {
   const result = await api<{ deleted: number; conversationIds: string[] }>(
     "/api/conversations",
@@ -500,6 +509,7 @@ export async function clearChatHistory(): Promise<number> {
   if (!ids.size) {
     return 0;
   }
+  for (const id of ids) forgetConversationWidgets(id);
   for (const pane of readState().chatPanes) {
     if (ids.has(pane.conversationId)) {
       pane.abortController?.abort();
@@ -935,6 +945,12 @@ export async function sendMessage(
      * server answered — what a caller recorded optimistically must be undone.
      */
     onAccepted?: () => void;
+    /**
+     * The text of a widget's `<button send>` (see sendWidgetMessage): an ordinary
+     * user message, but not a COMPOSER send — whatever is typed or staged in the
+     * composer stays there, and the text is never read as a slash command.
+     */
+    widgetSend?: boolean;
   } = {},
 ): Promise<void> {
   let pane = readState().chatPanes.find((item) => item.id === paneId);
@@ -963,13 +979,13 @@ export async function sendMessage(
   // Regenerates and rewinds carry no freshly staged images: they re-send a
   // stored turn (its own images are re-read server-side), and whatever sits in
   // the composer belongs to the NEXT message.
-  const pendingImages = rewinding ? [] : [...(pane.pendingImages || [])];
+  const pendingImages = rewinding || opts.widgetSend ? [] : [...(pane.pendingImages || [])];
   // An image-only row is still a message: going back to it needs no text.
   const anchorImages = rewinding && hasVisibleImages(anchor);
   if (!message && pendingImages.length === 0 && !anchorImages) return;
 
   const slash =
-    message && !opts.canvasSubmission
+    message && !opts.canvasSubmission && !opts.widgetSend
       ? resolveTypedSlashCommand(pane, message)
       : null;
   if (slash) {
@@ -1077,7 +1093,7 @@ export async function sendMessage(
       target.localImages = { ...(target.localImages || {}) };
       for (const img of pendingImages) target.localImages[img.id] = img.dataUrl;
     }
-    if (!rewinding) {
+    if (!rewinding && !opts.widgetSend) {
       target.pendingImages = [];
       target.draft = "";
     }
@@ -1174,7 +1190,8 @@ export async function sendMessage(
         updatePane(paneId, (target) => {
           const last = target.messages[target.messages.length - 1];
           if (last?.id === userMessage.id) target.messages.pop();
-          target.draft = rawMessage;
+          // A widget's text was never in the composer: it does not land there on failure.
+          if (!opts.widgetSend) target.draft = rawMessage;
           if (pendingImages.length) {
             target.pendingImages = pendingImages;
             for (const img of pendingImages)
@@ -1747,6 +1764,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         detail,
         status: "running",
       });
+      noteCanvasToolStart(paneId, data);
       setStatus(paneId, `${label}${detail ? ` · ${detail}` : ""}`, true, data.toolUseId);
       return;
     }
@@ -1754,6 +1772,8 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       if (data?.toolUseId) {
         noteTodoToolEnd(data.toolUseId, data.ok !== false);
         updatePane(paneId, (pane) => {
+          if (pane.liveCanvasTools?.some((tool) => tool.id === data.toolUseId))
+            pane.liveCanvasTools = pane.liveCanvasTools.filter((tool) => tool.id !== data.toolUseId);
           const row = pane.liveTools.find((t) => t.id === data.toolUseId);
           if (!row || row.status === "blocked") return;
           row.status = data.ok === false ? "failed" : "done";
@@ -1831,6 +1851,8 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             // (it's stamped after the emit), so this never overwrites one.
             pane.liveAttachments.push({ ...data.attachment, anchor: pane.liveText.length });
           }
+          // The widget is here: its "being made" placeholder gives way to it.
+          if (isWidgetAttachment(data.attachment) && pane.liveCanvasTools?.length) pane.liveCanvasTools = [];
           // A live .drawio share opens as a side-panel tab by itself, ONCE: a
           // replayed frame (reconnect, return to the running conversation)
           // never re-opens a tab the viewer closed. Single-pane layout only —
@@ -2280,6 +2302,7 @@ function resetLive(pane: ChatPane): void {
   pane.turnFinalized = false;
   pane.liveText = "";
   pane.liveAttachments = [];
+  pane.liveCanvasTools = [];
   pane.liveTextBreakPending = false;
   pane.liveThinking = "";
   pane.thinkingActive = false;
@@ -2731,6 +2754,9 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
       : undefined;
   const pending = Boolean(controls && controls.length && interaction !== "async");
   updatePane(paneId, (pane) => {
+    // A canvas for the panel landed: nothing is "being prepared" any more. (A
+    // widget's placeholder stays until its attachment puts it in the bubble.)
+    if (data.contentType !== "widget" && pane.liveCanvasTools?.length) pane.liveCanvasTools = [];
     const fresh = freshSideFrame(pane, pane.liveRunId ?? data.runId, frameId);
     // What showed BEFORE this canvas joined: a new last canvas would otherwise
     // become the default tab and take the panel over from the viewer.
@@ -2763,10 +2789,27 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
           ? (prev.versionCount || 1) + 1
           : prev.versionCount
         : 1,
+      // A REPLAYED frame rebuilds a canvas the pane already has: what the viewer
+      // submitted on it (loaded from the server, or sent a moment ago) must
+      // survive the rebuild, or "응답 완료" vanished on every reattach. A NEW
+      // frame is a new version — nothing has been submitted on that yet.
+      ...(!fresh && prev?.submittedValues !== undefined ? { submittedValues: prev.submittedValues } : {}),
     };
+    // A widget is drawn in the chat bubble, where its attachment places it. The
+    // attachment rides its own frame, so until this run ends the canvas is
+    // marked as on its way there — the panel must not open for it meanwhile.
+    const widget = entry.contentType === "widget";
+    if (widget) {
+      const runId = entry.runId;
+      if (fresh && runId) entry.inlineRunId = runId;
+      else if (prev?.inlineRunId) entry.inlineRunId = prev.inlineRunId;
+    }
     const idx = pane.canvases.findIndex((c) => c.id === entry.id);
     if (idx >= 0) pane.canvases[idx] = entry;
     else pane.canvases.push(entry);
+    // Nothing to reveal: a widget is not a panel tab. (Without an attachment —
+    // an older server — it becomes one when the run ends; see isInlineCanvas.)
+    if (widget) return;
     // A canvas that ASKS for input must be seen, whatever tab the viewer is
     // on: an owner reading the new deck card's preview would otherwise never
     // see the next review round's form (the deck-review loop would stall
@@ -2782,6 +2825,23 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
   // A blocking canvas parks the run on the USER's answer — say so instead of
   // leaving the last "실행 중: …" tool label implying avatar work.
   if (pending) setStatus(paneId, "캔버스 응답을 기다리는 중…", true);
+}
+
+/**
+ * A `mcp__canvas__show` call started: the live bubble shows a placeholder where
+ * the canvas is about to appear (a widget lands right there, in the bubble).
+ * The call's input says whether it is a widget when the frame carries it; a
+ * canvas of another type goes to the side panel, so it gets no placeholder.
+ */
+function noteCanvasToolStart(paneId: string, data: any): void {
+  if (data?.name !== "mcp__canvas__show") return;
+  const type = data.input && typeof data.input === "object" ? (data.input as { contentType?: unknown }).contentType : undefined;
+  if (typeof type === "string" && type !== "widget") return;
+  updatePane(paneId, (pane) => {
+    const tools = pane.liveCanvasTools ?? [];
+    if (tools.some((tool) => tool.id === data.toolUseId)) return;
+    pane.liveCanvasTools = [...tools, { id: data.toolUseId, widget: type === "widget" }];
+  });
 }
 
 /* ---------- side panel: canvases + open files as one tab strip ---------- */
@@ -2896,6 +2956,27 @@ export function openFileTab(
 /** Close a file's side-panel tab (its card reopens it); the tab beside it shows instead. */
 export function closeFileTab(paneId: string, attachmentId: string): void {
   updatePane(paneId, (pane) => removeFileTab(pane, attachmentId));
+}
+
+/**
+ * A widget's `<button send="…">` was pressed: the text goes out as the viewer's
+ * next chat message, shown in their bubble like anything they typed. It is the
+ * AVATAR's text, though, so two things a typed message can do are off:
+ * a text starting with "/" is not sent at all (it would run as a slash command,
+ * here or on the server — those are the viewer's to type), and the composer is
+ * not touched (no draft cleared, no staged image taken along).
+ * Returns whether the message was handed to the send path.
+ */
+export async function sendWidgetMessage(paneId: string, text: string): Promise<boolean> {
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  const message = text.trim().slice(0, 2000);
+  if (!pane || pane.streaming || !message) return false;
+  if (message.startsWith("/")) {
+    notify("슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다.", "warn");
+    return false;
+  }
+  await sendMessage(paneId, message, { widgetSend: true });
+  return true;
 }
 
 // Submit the user's response to a canvas's controls. Two paths:

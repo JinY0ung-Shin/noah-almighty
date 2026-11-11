@@ -523,7 +523,9 @@
         body: JSON.stringify({ experimentalFeatures: [...current] }),
       });
       replaceState({ user: next });
-      notify(`실험 기능을 ${on ? "켰습니다" : "껐습니다"}. 다음 대화부터 적용됩니다.`, "ok");
+      // The tool gate reads the owner's flag on every run, so the change holds from
+      // the next message — in a conversation already open too.
+      notify(`실험 기능을 ${on ? "켰습니다" : "껐습니다"}. 다음 메시지부터 적용됩니다.`, "ok");
     } catch (err) {
       notify(`저장 실패: ${(err as Error).message}`, "warn");
     } finally {

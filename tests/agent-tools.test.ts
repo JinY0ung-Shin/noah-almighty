@@ -1385,15 +1385,18 @@ describe("git repo tools (general git repository management)", () => {
       pi: { gatewayUrl: "http://pi.invalid", apiKey: "k", deckSandbox: false, workspacesDir: path.join(tempDir, dir, "ws") },
     });
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
-    const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
-    const seed = path.join(tempDir, dir, "seed");
+    // The remote lives OUTSIDE the data root: a registered repo may not be sourced
+    // from a path inside Noah's own directories (gitSourcePolicy.ts).
+    const outside = path.join(tempDir, `${dir}-outside`);
+    const remote = makeBareRemote(path.join(outside, "remote.git"));
+    const seed = path.join(outside, "seed");
     gitInit(seed);
     const g = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
     g("branch", "-M", "main");
     g("remote", "add", "origin", remote);
     g("push", "-q", "origin", "main");
     const ownerShape = { id: owner.id, username: "owner", displayName: "Owner" };
-    return { store, config, ownerId: owner.id, owner: ownerShape, remote };
+    return { store, config, ownerId: owner.id, owner: ownerShape, remote, outside };
   }
 
   function tools(
@@ -1659,7 +1662,7 @@ describe("git repo tools (general git repository management)", () => {
 
     // A repo that cannot be cloned (path does not exist) → the registration row is
     // rolled back rather than left dangling in list_repos.
-    const bogus = path.join(tempDir, "gr-rollback", "nope.git");
+    const bogus = path.join(s.outside, "nope.git");
     const failed = await callTool(ownerTools, "register_repo", { repo: bogus, name: "bad" });
     expect(failed.isError).toBe(true);
     expect(s.store.getGitRepo(s.ownerId, "bad")).toBeNull();
@@ -2141,7 +2144,7 @@ describe("system tools (avatar system management)", () => {
     // The experimental `widget` type is reported with the SAME boolean the
     // `show` handler refuses on (runCapabilities' widgetEnabled): off unless
     // the avatar owner turned 캔버스 위젯 on.
-    expect(on).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): DISABLED");
+    expect(on).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): DISABLED");
     expect(on).toContain("Settings → 실험 기능, so `show` refuses it; use 'vega' or 'markdown'");
     const widgetOn = (
       await callTool(
@@ -2150,7 +2153,7 @@ describe("system tools (avatar system management)", () => {
         {},
       )
     ).content[0].text ?? "";
-    expect(widgetOn).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): ENABLED for this avatar");
+    expect(widgetOn).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): ENABLED for this avatar");
     expect(widgetOn).toContain("read manual topic `canvas-widget` before writing one");
 
     const off = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";

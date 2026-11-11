@@ -15,6 +15,13 @@ export const CANVAS_SERVER_NAME = "canvas";
 export const CANVAS_TOOL_NAMES = ["mcp__canvas__show"] as const;
 
 /**
+ * `mediaType` of the message attachment a shown `widget` rides (kind `widget`,
+ * id = the canvas artifact id, no file behind it): the chat route attaches one
+ * so the bubble draws the widget inline. Hand-mirrored by the client.
+ */
+export const CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE = "application/vnd.noah.canvas-widget+json";
+
+/**
  * Caps on a single canvas artifact. The content rides the pi session's history,
  * which every continued turn carries as context, AND the chat SSE/persistence payload —
  * so an oversized artifact silently inflates the token cost of EVERY later turn.
@@ -173,7 +180,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
       "show",
       "Show a visual canvas to the user in the chat side panel. Use it to share a diagram, mockup, layout, chart, or option comparison and refine it together — not to repeat text the chat could already render. " +
         "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; PREFER this for any data chart over hand-drawn SVG, it is far cheaper in tokens — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open), " +
-        "or 'widget' (EXPERIMENTAL — something the user changes values in and watches update: a calculator, a what-if comparison, a filterable table, a slider-driven chart; it recomputes locally in the user's browser and you are NOT called again on each change — for a chart that is only looked at, use 'vega'. Content is a declarative tag + expression source, never HTML/JS: read mcp__system__read_manual topic `canvas-widget` BEFORE writing one; the source is checked before display and an error comes back to you to fix; `controls`/`editable` do not combine with it — it sends values back with its own `<submit>`). " +
+        "or 'widget' (EXPERIMENTAL — unlike every other type it renders INLINE in your answer, at the point where you call this tool, not in the side panel: something the user operates — a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable table, a slider-driven chart. Write the text before and after it as ONE answer and do not repeat in prose what the widget shows. It recomputes locally in the user's browser and you are NOT called again on each change — for a chart that is only looked at, use 'vega'. Content is a declarative tag + expression source, never HTML/JS: read mcp__system__read_manual topic `canvas-widget` BEFORE writing one; the source is checked before display and an error comes back to you to fix; `controls`/`editable` do not combine with it — it returns structured values with its own `<submit>`, and a `<button send>` posts the user's next chat message). " +
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
         "For a plain question or a simple choice with no visual content to show, use the built-in AskUserQuestion tool instead — never open a canvas just to ask something. " +
@@ -186,7 +193,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         content: z.string().describe("The artifact body, interpreted per contentType."),
         contentType: z
           .enum(["markdown", "vega", "mermaid", "svg", "html", "widget"])
-          .describe("How to render content. Prefer 'vega' (Vega-Lite spec) for charts and 'mermaid' for diagrams — both render rich visuals from a tiny token-cheap source. 'widget' (experimental) is for something the user manipulates and that recomputes locally; see manual topic `canvas-widget`."),
+          .describe("How to render content. Prefer 'vega' (Vega-Lite spec) for charts and 'mermaid' for diagrams — both render rich visuals from a tiny token-cheap source. 'widget' (experimental) is for something the user operates: it renders inline in the answer and recomputes locally; see manual topic `canvas-widget`."),
         controls: z.array(controlSchema).optional().describe("Optional interactive controls to collect a response."),
         canvasId: z
           .string()
@@ -299,10 +306,11 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         }
         if (isWidget) {
           return text(
-            "The widget was shown. It recomputes locally in the user's browser as they change its inputs — you are NOT called on those changes and cannot see the values they set. " +
+            "The widget was shown INLINE in your answer, at this point of the text (not in the side panel): continue the answer after it and do not repeat in prose what it shows. " +
+              "It recomputes locally in the user's browser as they change its inputs — you are NOT called on those changes and cannot see the values they set. " +
               (widgetSubmits
                 ? "It has a `<submit>`: when the user presses it, the submitted values arrive as their NEXT message referencing this canvas, so finish your answer now (say what the widget does and what pressing submit sends) instead of waiting."
-                : "It has no `<submit>`, so nothing comes back to you from it; if you need the user's result, ask them or refine the widget with a `<submit values={{ … }}>`.") +
+                : "It has no `<submit>`, so no structured values come back from it (a `<button send>` in it posts the user's next chat message when pressed); if you need the user's result as data, refine the widget with a `<submit values={{ … }}>`.") +
               idNote,
           );
         }

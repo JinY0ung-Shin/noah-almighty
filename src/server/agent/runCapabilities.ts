@@ -991,7 +991,15 @@ export async function buildRunCapabilities(
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
   const canvasServer = canvasActive
-    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, widgetEnabled })
+    ? buildCanvasServer({
+        // A widget renders INLINE in the answer, where the avatar called the
+        // tool: stamp the same text anchor the team-brain card and the file
+        // cards carry. Every other content type opens in the side panel and
+        // needs none.
+        emitCanvas: (canvas) =>
+          events!.onCanvas!(canvas.contentType === "widget" ? { ...canvas, anchor: currentTextAnchor() } : canvas),
+        widgetEnabled,
+      })
     : null;
   // The handler self-gates on `allowed` in addition to `browserActive`:
   // registration is not the only gate (pi's catalog is static), and a
@@ -1285,6 +1293,7 @@ export async function buildRunCapabilities(
     adminBlockedMcpToolGroups,
     browserActive,
     canvasActive,
+    widgetEnabled,
     fileOutputActive,
     shareLinkToolActive,
     // The admins' POLICY.md guidelines ride the propose-capable prompt (frozen with it).
@@ -1362,6 +1371,7 @@ export function stampPromptRequest(
     adminBlockedMcpToolGroups,
     browserActive,
     canvasActive,
+    widgetEnabled,
     fileOutputActive,
     shareLinkToolActive,
     teamBrainState,
@@ -1442,6 +1452,11 @@ export function stampPromptRequest(
     // turn (colleagues see canvases too). Experimental-feature self-state is
     // owner-driven only (META-COGNITION), matching describe_system's gating.
     canvasEnabled: canvasActive,
+    // The experimental inline `widget` type, as of THIS prompt's rendering (the
+    // append is frozen per conversation): the standing nudge to use widgets
+    // unprompted is given only where `show` would accept one. For every viewer
+    // class — it is the avatar owner's flag. describe_system stays authoritative.
+    canvasWidgetEnabled: widgetEnabled,
     browserEnabled: browserActive,
     fileOutputEnabled: fileOutputActive,
     // Share links: rides ONLY runs that registered create_share_link (the

@@ -32,6 +32,7 @@ import {
   guarded,
   isPlainData,
   markSafe,
+  noteIgnoredCall,
   patternNames,
   resetBudget,
   sanitizeData,
@@ -170,7 +171,9 @@ function bindConst(node: ConstNode, env: Env, rt: Runtime): void {
  * calls `beginRender(rt)`, which refills the pass-wide step and output budgets.
  *
  * Setters and `copy` do nothing unless the runtime is in the "event" phase, so
- * rendering can never change state or re-trigger itself.
+ * rendering can never change state or re-trigger itself. A call made while
+ * rendering is ignored but leaves a line in `rt.warnings` (the current block's),
+ * which a renderer shows under that block.
  */
 export function createRootEnv(doc: WidgetDoc, values: Record<string, unknown>, rt: Runtime, host: WidgetHost): Env {
   beginRender(rt);
@@ -181,7 +184,10 @@ export function createRootEnv(doc: WidgetDoc, values: Record<string, unknown>, r
     env.set(
       st.setter,
       markSafe((next: unknown) => {
-        if (rt.phase !== "event") return undefined;
+        if (rt.phase !== "event") {
+          noteIgnoredCall(rt, st.setter);
+          return undefined;
+        }
         spendSteps(rt, SETTER_STEPS);
         const value = typeof next === "function" ? callValue(next, [host.get(name)], rt) : next;
         host.set(name, sanitizeData(value, MAX_STATE_NODES));
@@ -192,7 +198,10 @@ export function createRootEnv(doc: WidgetDoc, values: Record<string, unknown>, r
   env.set(
     "copy",
     markSafe((text: unknown) => {
-      if (rt.phase !== "event") return undefined;
+      if (rt.phase !== "event") {
+        noteIgnoredCall(rt, "copy");
+        return undefined;
+      }
       spendSteps(rt, COPY_STEPS);
       host.copy(toStr(text).slice(0, MAX_COPY_CHARS));
       return undefined;

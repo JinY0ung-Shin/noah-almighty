@@ -129,8 +129,9 @@
   $: tabs = sideTabs(pane);
   $: current = resolveSideTab(pane);
   $: unseen = new Set(pane.sideUnseen ?? []);
+  // Counted from the TABS: a widget drawn in the chat bubble is a canvas of the pane but not of this panel.
   $: stripLabel = pane.fileTabs?.length
-    ? pane.canvases?.length
+    ? tabs.some((tab) => tab.kind === "canvas")
       ? "캔버스·파일 보기"
       : "파일 보기"
     : "캔버스 보기";

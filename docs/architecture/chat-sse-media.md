@@ -473,11 +473,43 @@
     the client renderer and the manual's component list (`widgetComponentReference()`) all read it — add a
     component or prop THERE, never in one of the three. Colours/backgrounds are token names only; nothing a
     model writes becomes a `style`, `class`, `href` or `src`.
-  - **`<submit values={...}>` is the ONLY way back to the avatar**, and it rides the existing
-    `canvasSubmission.values` turn (so a widget with a submit is `interaction: "async"`). Deliberately absent:
-    a free-text `send`, `open(url)`, links that open, `<image>`, `<svg>`, `Math.random`. `controls` and
-    `editable` are refused with a widget. `parseCanvasSubmission` now caps every canvas submission
-    (`MAX_CANVAS_SUBMISSION_KEYS`/`_CHARS`); the widget's own client cap is lower (`MAX_SUBMIT_*`).
+  - **A widget renders INLINE in the answer bubble, not in the side panel (2026-11-11, the user's call —
+    the inline generative-UI behaviour).** `show` still records the canvas and emits the `canvas` frame, and
+    for a widget the route ALSO publishes a message attachment the way a team-brain card does:
+    `{ id: <canvasId>, kind: "widget", mediaType: CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE, name, anchor }` on the
+    `file` frame and on the stored message (`runCapabilities` stamps `CanvasRequest.anchor` for a widget
+    only). One attachment per message per canvas (a re-show in the same message keeps the first anchor); a
+    re-show in a LATER turn attaches again there. The client (`widget/InlineWidget.svelte` → `CanvasTab`
+    with `inline`) draws the widget at the LAST attachment of that id in the conversation and a one-line
+    note at the earlier ones or for a deleted canvas; an inline widget is left out of the side-panel tabs,
+    default, auto-reveal and unseen dot. **Safety net:** a widget canvas with NO attachment in the loaded
+    messages stays a panel tab, so a widget never vanishes. While `mcp__canvas__show` runs, the live bubble
+    shows a placeholder (it reads `contentType` from the tool frame's input). Every other content type is
+    still a panel tab. A rewind follows the canvas rule (`rewindCanvasArtifacts`): a widget first shown in a
+    removed message is deleted, a refined one falls back to its last surviving version.
+  - **What a button will do is DECLARED as a prop, so the user sees it before pressing** — there is no free
+    `send()`/`open()` action. `<button>` takes EXACTLY ONE of `onClick` (local state), `send` (the text
+    becomes the user's next chat message through the pane's ordinary send — tooltip "보낼 메시지: …", locked
+    while the avatar answers, ≤ `MAX_SEND_CHARS`, the composer's draft and staged images untouched) or
+    `href`; `<link href>` and inline `[text](https://…)` open http(s) only (`safeLinkUrl`) in a new tab;
+    `<image src alt>` takes only an image of THIS conversation (`conversationImageRef` shape-checks
+    `/api/conversations/<id>/images/<id>` in the library, the client checks the conversation id — the avatar
+    gets such a URL from `show_file` with `hidden:true`). **A `send` text may never start with `/`**: it
+    arrives exactly like a typed message, where a leading slash is a chat command (`/compact`, `/routine`,
+    `/todo` …) the server cannot tell apart — the library refuses it (statically for a literal, at render
+    for a computed text, judged AFTER control characters are stripped) and the client refuses again.
+    `<submit values={...}>` remains the STRUCTURED way back and rides the existing `canvasSubmission.values`
+    turn (so a widget with a submit is `interaction: "async"`); the route now writes an accepted async
+    submission into `canvas_versions.submitted_values_json`, so "응답 완료" survives a reload. Still absent
+    on purpose: remote or `data:` images, `<svg>`, `Math.random`. `controls` and `editable` are refused with
+    a widget. `parseCanvasSubmission` caps every canvas submission (`MAX_CANVAS_SUBMISSION_KEYS`/`_CHARS`,
+    its own 400 text); the widget's own client cap is lower (`MAX_SUBMIT_*`).
+  - **A render failure in the browser reaches the avatar on the NEXT turn** (`lib/canvasReport.ts` →
+    `POST /api/canvases/:canvasId/render-report` → `CanvasRenderReportQueue`, in memory on the store →
+    `buildPiTurnPreamble`, once): widget parse/eval errors, an exceeded output budget, a failed handler, a
+    setter called while rendering (ignored, but recorded in `rt.warnings`), and vega/mermaid render errors.
+    Reports are tied to the canvas version, merged per version, dropped when a new version is shown or the
+    canvas/conversation is deleted, kept for a turn whose canvas is off; every miss is ONE 404.
   - **Gate: the experimental flag `canvasWidget` of the AVATAR OWNER** (`CANVAS_WIDGET_FEATURE_KEY`).
     tools/list is static, so the enum always shows `widget` and the HANDLER refuses it when the flag is off
     (`CanvasToolsContext.widgetEnabled`, from runCapabilities). `describe_system`'s canvas line reports
@@ -498,15 +530,14 @@
     empty, not as an error; `<chart>` goes
     through the SAME Vega-Lite path as a `vega` canvas (`renderVegaSvg`: inline data only, AST evaluator,
     sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard.
-  - **State lives in `CanvasTab`'s script** (both surfaces — panel and fullscreen — and a hidden tab share
+  - **State lives in `CanvasTab`'s script** (both surfaces — the inline card and fullscreen — share
     it) and is mirrored to `localStorage` under `noah:canvas-widget:<userId>:<conversationId>:<canvasId>`
     (`lib/widgetState.ts`: only setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a
     200 000-char cap measured with `dataSize` BEFORE serializing, the 50 most recent canvases, removed with
     the canvas, every access guarded). The conversation id is in the key because an avatar may reuse a
     `canvasId` it named itself. A value is restored or carried across a refinement in place ONLY while
     its declaration text (`sig`) is unchanged. Per browser, never sent to the server — the avatar cannot
-    read it. Known gap, older than widgets: an ASYNC submission's values are not written back to the canvas
-    tables, so "응답 완료" is client-side until reload.
+    read it.
 - **Questions default to AskUserQuestion, not canvas controls** — controls are for decisions ANCHORED to
   the artifact on screen (stated in the standing canvas guidance + the `show` description). `describe_system`
   reports canvas availability via runCapabilities' `canvasActive` → `ctx.canvasEnabled`, carrying the same redirect.

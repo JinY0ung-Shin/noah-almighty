@@ -276,8 +276,11 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   its DOM (the draw.io viewer has no `destroy()`): it paints only into a body that has a width (hidden tab
   or collapsed panel = 0) and its ResizeObserver repaints (debounced) when the width changes —
   `.canvas-body` reserves its scrollbar gutter, so a tall diagram's scrollbar cannot flip that width.
-- **A `widget` canvas keeps its state in `CanvasTab`'s script, next to `ctrlVals`** — the panel card and the
-  fullscreen stage are two `WidgetView`s over the same values, and a hidden tab keeps them. The view model is
+- **A `widget` canvas is drawn INLINE in the bubble by the same `CanvasTab`** (`inline` prop, mounted by
+  `widget/InlineWidget.svelte` from `attachmentCards` at the attachment's anchor; `lib/sidePanel.ts` leaves an
+  inline widget out of the tab strip). Its state stays in `CanvasTab`'s script, next to `ctrlVals` — the inline
+  card and the fullscreen stage are two `WidgetView`s over the same values. The card re-mounts when the live
+  bubble becomes the stored one at turn end (values come back from localStorage; focus inside it is lost). The view model is
   rebuilt by `lib/widgetView.ts` on every state change and the widget components only draw it; the library
   and components are lazy-loaded with the first widget (like mermaid/Vega). `.canvas-content` drops its `.md`
   class for a widget so prose rules (`.md p`) do not style widget elements; `.wg-*` lives in

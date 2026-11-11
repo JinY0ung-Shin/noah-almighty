@@ -554,6 +554,10 @@ export function readChatImages(
   }
   const out: AgentImageInput[] = [];
   for (const att of attachments) {
+    // Only an IMAGE attachment names a file here: a card's id (team_brain, an
+    // inline widget — whose id the avatar chooses) must never be matched against
+    // the image folder.
+    if (att.kind !== "image") continue;
     const file = byId.get(att.id);
     if (!file) continue;
     const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
