@@ -298,6 +298,61 @@ describe("buildWidgetView", () => {
   });
 });
 
+describe("an <svg> in the view model", () => {
+  const two = `{@state r = 4}\n<svg viewBox="0 0 10 10" label="원"><linearGradient id="g" /><circle r={r} fill="url(#g)" /></svg>\n<col>\n  <svg viewBox="0 0 10 10" width={64}><linearGradient id="g" /><text>{r}</text></svg>\n</col>\n`;
+
+  it("carries the drawing as a plain tree of rebuilt values, with ids namespaced per view and per node", () => {
+    const doc = parseWidget(two);
+    const values = restoreState(doc, null).values;
+    const rt = createRuntime();
+    const host = { get: (name: string) => values[name], set: () => {}, copy: () => {} };
+    const view = buildWidgetView(doc, createRootEnv(doc, values, rt, host), rt, { svgNs: "wg7" });
+    const first = el(view, "svg");
+    const second = el(el(view, "col").children, "svg");
+    expect(first.props).toEqual(Object.assign(Object.create(null), { viewBox: "0 0 10 10", label: "원" }));
+    expect(first.flawed).toBe("");
+    expect(first.svg).toEqual({
+      tag: "svg",
+      attrs: [["viewBox", "0 0 10 10"], ["width", "16"], ["fill", "currentColor"]],
+      children: [
+        { tag: "linearGradient", attrs: [["id", "wg7_15-g"]], children: [] },
+        { tag: "circle", attrs: [["r", "4"], ["fill", "url(#wg7_15-g)"]], children: [] },
+      ],
+    });
+    // the second drawing of the same widget has its own namespace (its node key), and its own width
+    expect(second.svg?.attrs).toEqual([["viewBox", "0 0 10 10"], ["width", "64"], ["fill", "currentColor"]]);
+    const secondId = (second.svg!.children[0] as { attrs: [string, string][] }).attrs[0][1];
+    expect(secondId).toMatch(/^wg7_\d+_\d+-g$/);
+    expect(secondId).not.toBe("wg7_15-g");
+    expect(second.svg!.children[1]).toEqual({ tag: "text", attrs: [], children: ["4"] });
+    // another view (the fullscreen copy) of the same document: other ids; no namespace given: "wg"
+    const other = buildWidgetView(doc, createRootEnv(doc, values, rt, host), rt, { svgNs: "wg8" });
+    expect((el(other, "svg").svg!.children[0] as { attrs: [string, string][] }).attrs[0][1]).toBe("wg8_15-g");
+    const bare = buildWidgetView(doc, createRootEnv(doc, values, rt, host), rt);
+    expect((el(bare, "svg").svg!.children[0] as { attrs: [string, string][] }).attrs[0][1]).toBe("wg_15-g");
+  });
+
+  it("reports what it left out, and turns a drawing over its limits into one error node", () => {
+    const doc = parseWidget(`{@state evil = "javascript:alert(1)"}\n<svg viewBox="0 0 10 10"><rect fill={evil} x="1" /><use href="#a" /></svg>\n<svg viewBox="0 0 10 10">{#each 501 as i}<rect />{/each}</svg>\n<svg viewBox={"nope"}></svg>\n<text>뒤</text>\n`);
+    expect(doc.problems).toEqual([]);
+    const values = restoreState(doc, null).values;
+    const rt = createRuntime();
+    const view = buildWidgetView(doc, createRootEnv(doc, values, rt, { get: (name: string) => values[name], set: () => {}, copy: () => {} }), rt);
+    const drawn = el(view, "svg");
+    expect(drawn.svg?.children).toEqual([{ tag: "rect", attrs: [["x", "1"]], children: [] }]);
+    expect(drawn.flawed).toContain("<rect> fill must be a token");
+    expect(drawn.flawed).toContain("<use> is not allowed inside <svg>");
+    expect(view.filter((n) => n.k === "error").map((n) => (n.k === "error" ? n.detail : ""))).toEqual([
+      "the <svg> draws too many elements (limit 500) — draw fewer shapes, e.g. one <path> or <polyline> instead of many <line>s",
+      'viewBox: must be four numbers "minX minY width height" with a positive width and height, e.g. "0 0 200 120"',
+    ]);
+    expect(el(view, "text").segs).toEqual([{ text: "뒤" }]);
+    const problems = collectWidgetProblems(doc, view);
+    expect(problems[0]).toMatch(/^line 2:1 <svg>: a prop was dropped — <rect> fill must be a token/);
+    expect(problems[1]).toBe("line 3:1 <svg>: the <svg> draws too many elements (limit 500) — draw fewer shapes, e.g. one <path> or <polyline> instead of many <line>s");
+  });
+});
+
 describe("cellText", () => {
   it("shows primitives as text and data as JSON", () => {
     expect([cellText("a"), cellText(1.5), cellText(true), cellText(null), cellText(undefined), cellText({ a: 1 }), cellText([1, 2])]).toEqual([

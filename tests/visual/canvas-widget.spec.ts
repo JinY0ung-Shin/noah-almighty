@@ -641,3 +641,170 @@ test("a send button speaks as the viewer, links open in a new tab, and a widget 
   await expect(composer).toHaveValue("쓰던 글");
   expect(await cspViolations(page)).toEqual([]);
 });
+
+// A sortable table, icons and a drawing bound to state (the 2026-11-11 additions).
+const MORE_WIDGET = `{@state pct = 60}
+{@state extra = 0}
+{@const a = Math.PI * (1 - pct / 100)}
+{@const rows = [{ name: "다람쥐", score: 9 + extra }, { name: "가방", score: 100 }, { name: "나비", score: 10 }, { name: "하늘", score: null }]}
+
+<slider label="진행률" value={pct} onChange={setPct} suffix="%" />
+<svg viewBox="0 0 200 110" label="진행률 게이지">
+  <defs>
+    <linearGradient id="arc" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="success" /><stop offset="1" stop-color="danger" /></linearGradient>
+    <clipPath id="top"><rect x="0" y="0" width="200" height="101" /></clipPath>
+  </defs>
+  <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="url(#arc)" stroke-width="14" clip-path="url(#top)" />
+  <line x1="100" y1="100" x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)} stroke={pct > 80 ? "danger" : "accent"} stroke-width="4" stroke-linecap="round" />
+  <text x="100" y="90" text-anchor="middle" font-size="20" font-weight="bold">{pct}%</text>
+</svg>
+<row gap={1}><icon name="clock" color="muted" /><text color="muted">남은 시간</text><icon name="check" size="lg" color="success" label="완료됨" /></row>
+<callout tone="warning" icon="clock" title="마감">내일까지입니다.</callout>
+<button onClick={() => setExtra(extra + 200)} icon="plus">점수 올리기</button>
+<table sortable caption="점수표" columns={[{ key: "name", label: "이름" }, { key: "score", label: "점수", align: "end" }]} rows={rows} />
+`;
+
+test("a sortable table keeps focus, icons draw, and an svg follows a slider without re-mounting or leaving the widget", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockApp(page, [{ id: "cv-more", title: "게이지", content: MORE_WIDGET, contentType: "widget" }]);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await openWidget(page);
+  await waitForKoreanFont(page);
+  const widget = page.locator(INLINE);
+  const background = await bodyBackground(page);
+
+  // ── sortable table ──
+  const names = () => widget.locator("tbody tr td:first-child").allTextContents();
+  const scoreHeader = widget.getByRole("columnheader", { name: /^점수/ });
+  const score = widget.getByRole("button", { name: "점수", exact: true });
+  await expect.poll(names).toEqual(["다람쥐", "가방", "나비", "하늘"]);
+  await expect(scoreHeader).toHaveAttribute("aria-sort", "none");
+  await score.click();
+  await expect.poll(names).toEqual(["다람쥐", "나비", "가방", "하늘"]); // 9, 10, 100, empty last
+  await expect(scoreHeader).toHaveAttribute("aria-sort", "ascending");
+  await expect(score).toBeFocused();
+  // The keyboard works the same button, and focus never leaves it.
+  await page.keyboard.press("Enter");
+  await expect.poll(names).toEqual(["가방", "나비", "다람쥐", "하늘"]);
+  await expect(scoreHeader).toHaveAttribute("aria-sort", "descending");
+  await expect(score).toBeFocused();
+  // A re-evaluation (new rows from new state) keeps the sort and applies it to the new values.
+  await widget.getByRole("button", { name: "점수 올리기" }).click();
+  await expect.poll(names).toEqual(["다람쥐", "가방", "나비", "하늘"]); // 209, 100, 10, empty
+  await expect(scoreHeader).toHaveAttribute("aria-sort", "descending");
+  await score.click();
+  await expect.poll(names).toEqual(["다람쥐", "가방", "나비", "하늘"]); // the document's own order
+  await expect(scoreHeader).toHaveAttribute("aria-sort", "none");
+  await expect(score).toBeFocused();
+  await widget.getByRole("button", { name: "이름", exact: true }).click();
+  await expect.poll(names).toEqual(["가방", "나비", "다람쥐", "하늘"]);
+  // The header is a real, visible target as wide as its cell.
+  const headerBox = await score.boundingBox();
+  const cellBox = await scoreHeader.boundingBox();
+  expect(Math.round(headerBox!.width)).toBe(Math.round(cellBox!.width));
+  expect(headerBox!.height).toBeGreaterThan(20);
+
+  // ── icons ──
+  const icons = await widget.locator(".wg-icon").evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const svg = node.querySelector("svg")!;
+      const box = svg.getBoundingClientRect();
+      return { w: Math.round(box.width), h: Math.round(box.height), shapes: svg.children.length, color: getComputedStyle(svg).color, hidden: node.getAttribute("aria-hidden"), role: node.getAttribute("role"), label: node.getAttribute("aria-label") };
+    }),
+  );
+  const token = (name: string) => page.evaluate((v) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${v})`;
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  }, name);
+  expect(icons).toEqual([
+    { w: 18, h: 18, shapes: 2, color: await token("--muted"), hidden: "true", role: null, label: null },
+    { w: 24, h: 24, shapes: 1, color: await token("--ok"), hidden: null, role: "img", label: "완료됨" },
+  ]);
+  await expect(widget.getByRole("img", { name: "완료됨" })).toBeVisible();
+  await expect(widget.locator(".wg-callout-mark svg")).toBeVisible();
+  const withIcon = widget.getByRole("button", { name: "점수 올리기" });
+  expect(await withIcon.evaluate((button) => [button.firstElementChild?.tagName.toLowerCase(), Math.round(button.firstElementChild!.getBoundingClientRect().width)])).toEqual(["svg", 14]);
+
+  // ── svg bound to the slider ──
+  const host = widget.locator(".wg-svg");
+  await expect(host).toHaveAttribute("role", "img");
+  await expect(host).toHaveAttribute("aria-label", "진행률 게이지");
+  const drawing = () =>
+    host.evaluate((node) => {
+      const root = node.shadowRoot!;
+      const line = root.querySelector("line")!;
+      const path = root.querySelector("path")!;
+      const svg = root.querySelector("svg")!;
+      const stroke = getComputedStyle(path).stroke;
+      const id = /#([A-Za-z0-9_-]+)/.exec(stroke)?.[1] ?? "";
+      return {
+        x2: line.getAttribute("x2"),
+        needle: getComputedStyle(line).stroke,
+        text: root.querySelector("text")!.textContent,
+        textFill: getComputedStyle(root.querySelector("text")!).fill,
+        gradientFound: Boolean(id && root.getElementById(id)?.tagName === "linearGradient"),
+        gradientInPage: Boolean(id && document.getElementById(id)),
+        clipped: /^url\(/.test(getComputedStyle(path).clipPath),
+        width: Math.round(svg.getBoundingClientRect().width),
+        height: Math.round(svg.getBoundingClientRect().height),
+        marked: (node as unknown as { __mark?: number }).__mark ?? null,
+        sameRoot: (window as unknown as { __root?: ShadowRoot }).__root === root,
+        animations: root.getAnimations().length,
+        // Nothing of the drawing is in the app's own DOM (the icons' paths are — they are the app's).
+        inAppDom: document.querySelectorAll(".wg-svg *, .wg-root linearGradient, .wg-root clipPath, .wg-root text").length,
+      };
+    });
+  const before = await drawing();
+  expect(before).toMatchObject({ x2: "121.6312", text: "60%", gradientFound: true, gradientInPage: false, clipped: true, width: 200, height: 110, animations: 0, inAppDom: 0 });
+  expect(before.needle).toBe(await token("--accent"));
+  expect(before.textFill).toBe(await token("--text"));
+  // Mark the host and its shadow root, and watch every frame of the drag for an empty drawing.
+  await host.evaluate((node) => {
+    (node as unknown as { __mark: number }).__mark = 1;
+    const w = window as unknown as { __root: ShadowRoot; __empty: number; __frames: number; __watch: boolean };
+    w.__root = node.shadowRoot!;
+    w.__empty = 0;
+    w.__frames = 0;
+    w.__watch = true;
+    const tick = () => {
+      if (!w.__watch) return;
+      w.__frames++;
+      if (!node.shadowRoot!.querySelector("svg line")) w.__empty++;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const slider = widget.getByRole("slider", { name: "진행률" });
+  for (const value of ["65", "70", "75", "80", "85", "90"]) {
+    await slider.fill(value);
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  }
+  const after = await drawing();
+  expect(after).toMatchObject({ x2: "166.574", text: "90%", gradientFound: true, marked: 1, sameRoot: true, animations: 0, inAppDom: 0, width: 200 });
+  expect(after.needle).toBe(await token("--danger"));
+  const frames = await page.evaluate(() => {
+    const w = window as unknown as { __empty: number; __frames: number; __watch: boolean };
+    w.__watch = false;
+    return { empty: w.__empty, frames: w.__frames };
+  });
+  expect(frames.frames).toBeGreaterThan(5);
+  expect(frames.empty).toBe(0);
+
+  // The dark theme reaches the drawing through the tokens (it lives in a shadow root).
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+  await expect.poll(async () => (await drawing()).textFill).toBe(await token("--text"));
+  expect((await drawing()).textFill).not.toBe(before.textFill);
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+
+  // Nothing leaked into the app, and nothing needed a CSP exception.
+  expect(await bodyBackground(page)).toBe(background);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  expect(await cspViolations(page)).toEqual([]);
+  expect(errors).toEqual([]);
+  if (process.env.WIDGET_SHOT_DIR) await widget.screenshot({ path: `${process.env.WIDGET_SHOT_DIR}/more-light.png` });
+});

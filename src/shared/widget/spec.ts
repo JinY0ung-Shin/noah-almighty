@@ -5,8 +5,11 @@
  * HERE and all three follow.
  */
 import type { Expr } from "./expr.js";
+import { WIDGET_ICON_NAMES, WIDGET_ICON_SIZES } from "./icons.js";
 import { NOOP_HANDLER, sanitizeData, toStr } from "./interp.js";
+import { nearestFew } from "./names.js";
 import { ALIGN, BACKGROUND_TOKENS, COLOR_TOKENS, JUSTIFY, MAX_SPACING_UNITS, TONE_TOKENS, clamp, conversationImageRef, safeLinkUrl } from "./style.js";
+import { svgAttrValue, svgReference } from "./svg.js";
 
 export type PropType =
   | { k: "enum"; values: readonly string[] }
@@ -19,7 +22,7 @@ export type PropType =
   | { k: "value" }
   /** `["A", "B"]` or `[{ label, value }]`. */
   | { k: "options" }
-  /** Table columns: `[{ key, label?, align? }]` (a bare string is a key). */
+  /** Table columns: `[{ key, label?, align?, sortable? }]` (a bare string is a key). */
   | { k: "columns" }
   /** Table rows: an array of plain objects. */
   | { k: "rows" }
@@ -30,19 +33,25 @@ export type PropType =
   /** An absolute http(s) URL (`safeLinkUrl`). The normalized href is what the renderer gets. */
   | { k: "url" }
   /** The address of an image of a conversation (`conversationImageRef`): `/api/conversations/<id>/images/<id>`. */
-  | { k: "image" };
+  | { k: "image" }
+  /** An `<svg>`'s `viewBox`: four numbers, width and height positive. The rebuilt text is what the renderer gets. */
+  | { k: "viewBox" };
 
 export interface PropSpec {
   type: PropType;
   required?: boolean;
+  /** What the prop is, in the checker's errors ("missing the required prop …") and in the manual. */
   doc?: string;
+  /** The manual's wording when it differs from `doc`: shorter, or "" where the reference's legend already says it. */
+  ref?: string;
 }
 
 /**
  * What a component may contain. `inline`: text and `{expr}` (plus the few tags
- * its `inlineTags` names). `block`: other components too.
+ * its `inlineTags` names). `block`: other components too. `svg`: SVG elements
+ * only — checked and drawn by the allowlist in `svg.ts`, never as components.
  */
-export type ChildKind = "block" | "inline" | "none";
+export type ChildKind = "block" | "inline" | "none" | "svg";
 
 export type ComponentGroup = "Layout" | "Text" | "Inputs" | "Data" | "Media" | "Submit";
 
@@ -62,6 +71,7 @@ export interface ComponentSpec {
   oneOf?: readonly string[];
   /** The component is its text: it needs non-empty children. */
   textRequired?: boolean;
+  /** What it is, for the manual. Empty when the tag says it all (`<divider>`, `<slider>`). */
   doc: string;
 }
 
@@ -74,9 +84,11 @@ const ALIGNS: PropType = { k: "enum", values: Object.keys(ALIGN) };
 const JUSTIFIES: PropType = { k: "enum", values: Object.keys(JUSTIFY) };
 const COLOR: PropType = { k: "enum", values: COLOR_TOKENS };
 const TONE: PropType = { k: "enum", values: TONE_TOKENS };
+/** One of the app's own icons (`icons.ts`). */
+const ICON: PropType = { k: "enum", values: WIDGET_ICON_NAMES };
 const BOOL: PropType = { k: "boolean" };
 const HANDLER: PropType = { k: "handler" };
-const LABEL: PropSpec = { type: { k: "string", max: 200 }, required: true, doc: "visible label (required: every input is labelled)" };
+const LABEL: PropSpec = { type: { k: "string", max: 200 }, required: true, doc: "visible label (required: every input is labelled)", ref: "" };
 const SHORT: PropType = { k: "string", max: 200 };
 /** Tags that may sit inside running text. */
 const IN_TEXT: readonly string[] = ["link"];
@@ -94,8 +106,8 @@ function component(
 
 const LIST: ComponentSpec[] = [
   component("box", "Layout", "block", "A container; with `border`/`background` it reads as a card.", {
-    gap: { type: SPACING, doc: "space between children, 0–8 (1 = 4px)" },
-    padding: { type: SPACING, doc: "inner padding, 0–8" },
+    gap: { type: SPACING, doc: "space between children; 1 = 4px" },
+    padding: { type: SPACING },
     border: { type: BOOL },
     background: { type: { k: "enum", values: BACKGROUND_TOKENS } },
     radius: { type: { k: "enum", values: ["none", "sm", "md", "lg"] } },
@@ -103,27 +115,27 @@ const LIST: ComponentSpec[] = [
     align: { type: ALIGNS },
     justify: { type: JUSTIFIES },
   }),
-  component("row", "Layout", "block", "Children side by side.", {
+  component("row", "Layout", "block", "", {
     gap: { type: SPACING },
     align: { type: ALIGNS },
     justify: { type: JUSTIFIES },
     wrap: { type: BOOL },
   }),
-  component("col", "Layout", "block", "Children stacked.", {
+  component("col", "Layout", "block", "", {
     gap: { type: SPACING },
     align: { type: ALIGNS },
     justify: { type: JUSTIFIES },
   }),
   component("grid", "Layout", "block", "A grid of `<grid-item>` children.", {
-    columns: { type: { k: "number", min: 1, max: 6, int: true }, doc: "number of columns (default 2)" },
+    columns: { type: { k: "number", min: 1, max: 6, int: true }, doc: "default 2" },
     gap: { type: SPACING },
   }),
-  component("grid-item", "Layout", "block", "One cell of a `<grid>`.", {
-    span: { type: { k: "number", min: 1, max: 6, int: true }, doc: "columns this cell spans" },
+  component("grid-item", "Layout", "block", "", {
+    span: { type: { k: "number", min: 1, max: 6, int: true }, doc: "columns it spans" },
     gap: { type: SPACING },
   }),
-  component("divider", "Layout", "none", "A horizontal rule.", {}),
-  component("spacer", "Layout", "none", "Pushes siblings apart in a row/col, or a fixed gap with `size`.", {
+  component("divider", "Layout", "none", "", {}),
+  component("spacer", "Layout", "none", "Pushes siblings apart, or a fixed gap with `size`.", {
     size: { type: SPACING },
   }),
 
@@ -131,7 +143,7 @@ const LIST: ComponentSpec[] = [
     "title",
     "Text",
     "inline",
-    "A heading.",
+    "",
     {
       size: { type: { k: "enum", values: ["sm", "md", "lg", "xl"] } },
       color: { type: COLOR },
@@ -142,13 +154,13 @@ const LIST: ComponentSpec[] = [
     "text",
     "Text",
     "inline",
-    "A paragraph of text with `{expr}` interpolation.",
+    "",
     {
       size: { type: { k: "enum", values: ["xs", "sm", "md", "lg"] } },
       color: { type: COLOR },
       weight: { type: { k: "enum", values: ["normal", "medium", "bold"] } },
       align: { type: { k: "enum", values: ["start", "center", "end"] } },
-      tabular: { type: BOOL, doc: "tabular digits, for numbers that change in place" },
+      tabular: { type: BOOL, doc: "fixed-width digits" },
     },
     { inlineTags: IN_TEXT },
   ),
@@ -156,7 +168,7 @@ const LIST: ComponentSpec[] = [
     "badge",
     "Text",
     "inline",
-    "A small status label.",
+    "",
     {
       tone: { type: TONE },
     },
@@ -166,15 +178,16 @@ const LIST: ComponentSpec[] = [
     "link",
     "Text",
     "inline",
-    "A link that opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.",
+    "Opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.",
     {
-      href: { type: { k: "url" }, required: true, doc: "absolute http(s) URL" },
+      href: { type: { k: "url" }, required: true, doc: "absolute http(s) URL", ref: "" },
     },
     { textRequired: true },
   ),
-  component("callout", "Text", "block", "A highlighted note.", {
+  component("callout", "Text", "block", "", {
     tone: { type: { k: "enum", values: ["info", "success", "warning", "danger"] } },
     title: { type: SHORT },
+    icon: { type: ICON },
   }),
 
   component(
@@ -183,18 +196,23 @@ const LIST: ComponentSpec[] = [
     "inline",
     "Does ONE thing, shown to the user before they press: give exactly one of onClick | send | href.",
     {
-      onClick: { type: HANDLER, doc: "runs a function: changes state locally, sends nothing to you" },
-      send: { type: { k: "send" }, doc: `the text becomes the user's NEXT chat message when pressed (1–${MAX_SEND_CHARS} chars; may be computed from state)` },
-      href: { type: { k: "url" }, doc: "opens this absolute http(s) URL in a new tab" },
+      onClick: { type: HANDLER, doc: "runs a function: changes state locally, sends nothing to you", ref: "changes state locally; sends you nothing" },
+      send: {
+        type: { k: "send" },
+        doc: `the text becomes the user's NEXT chat message when pressed (1–${MAX_SEND_CHARS} chars; may be computed from state)`,
+        ref: `posted as the user's NEXT chat message (1–${MAX_SEND_CHARS} chars)`,
+      },
+      href: { type: { k: "url" }, doc: "opens this absolute http(s) URL in a new tab", ref: "opens in a new tab" },
       label: { type: SHORT },
       variant: { type: { k: "enum", values: ["primary", "secondary", "ghost"] } },
+      icon: { type: ICON, doc: "drawn before the label" },
       disabled: { type: BOOL },
     },
     { labelFromChildren: true, oneOf: ["onClick", "send", "href"] },
   ),
   component("segmented-control", "Inputs", "none", "One choice out of a few, shown side by side.", {
     value: { type: { k: "value" }, required: true },
-    onChange: { type: HANDLER, required: true, doc: "called with the chosen option's value" },
+    onChange: { type: HANDLER, required: true, doc: "called with the chosen option's value", ref: "" },
     options: { type: { k: "options" }, required: true },
     label: LABEL,
   }),
@@ -202,10 +220,10 @@ const LIST: ComponentSpec[] = [
     "checkbox",
     "Inputs",
     "inline",
-    "A checkbox.",
+    "",
     {
       checked: { type: BOOL, required: true },
-      onChange: { type: HANDLER, required: true, doc: "called with the new boolean" },
+      onChange: { type: HANDLER, required: true, doc: "called with the new boolean", ref: "" },
       label: { type: SHORT },
       disabled: { type: BOOL },
     },
@@ -215,35 +233,35 @@ const LIST: ComponentSpec[] = [
     "switch",
     "Inputs",
     "inline",
-    "An on/off switch.",
+    "",
     {
       checked: { type: BOOL, required: true },
-      onChange: { type: HANDLER, required: true, doc: "called with the new boolean" },
+      onChange: { type: HANDLER, required: true, doc: "called with the new boolean", ref: "" },
       label: { type: SHORT },
       disabled: { type: BOOL },
     },
     { labelFromChildren: true },
   ),
-  component("slider", "Inputs", "none", "A numeric range.", {
+  component("slider", "Inputs", "none", "", {
     value: { type: { k: "number", min: -1e12, max: 1e12 }, required: true },
-    onChange: { type: HANDLER, required: true, doc: "called with the new number" },
+    onChange: { type: HANDLER, required: true, doc: "called with the new number", ref: "" },
     label: LABEL,
     min: { type: { k: "number", min: -1e12, max: 1e12 }, doc: "default 0" },
     max: { type: { k: "number", min: -1e12, max: 1e12 }, doc: "default 100" },
     step: { type: { k: "number", min: 1e-6, max: 1e12 }, doc: "default 1" },
-    suffix: { type: { k: "string", max: 20 }, doc: "unit shown after the value" },
-    showValue: { type: BOOL, doc: "show the current value (default true)" },
+    suffix: { type: { k: "string", max: 20 }, doc: "unit after the value" },
+    showValue: { type: BOOL, doc: "default true" },
   }),
   component("select", "Inputs", "none", "A dropdown, for many options.", {
     value: { type: { k: "value" }, required: true },
-    onChange: { type: HANDLER, required: true, doc: "called with the chosen option's value" },
+    onChange: { type: HANDLER, required: true, doc: "called with the chosen option's value", ref: "" },
     options: { type: { k: "options" }, required: true },
     label: LABEL,
     placeholder: { type: SHORT },
   }),
   component("input", "Inputs", "none", "A one-line text or number field.", {
     value: { type: { k: "value" }, required: true },
-    onChange: { type: HANDLER, required: true, doc: 'called with the text, or with a number (or "" when empty) for type="number"' },
+    onChange: { type: HANDLER, required: true, doc: 'called with the text; for type="number" with a number, or "" when empty' },
     label: LABEL,
     type: { type: { k: "enum", values: ["text", "number"] } },
     placeholder: { type: SHORT },
@@ -254,34 +272,35 @@ const LIST: ComponentSpec[] = [
   }),
   component("tabs", "Inputs", "none", "A tab strip; show the panel yourself with {#if tab === …}.", {
     value: { type: { k: "value" }, required: true },
-    onChange: { type: HANDLER, required: true, doc: "called with the chosen tab's value" },
+    onChange: { type: HANDLER, required: true, doc: "called with the chosen tab's value", ref: "" },
     options: { type: { k: "options" }, required: true },
     label: LABEL,
   }),
 
-  component("stat", "Data", "none", "One headline number.", {
+  component("stat", "Data", "none", "", {
     label: { type: SHORT, required: true },
     value: { type: { k: "value" }, required: true },
-    delta: { type: { k: "string", max: 60 }, doc: 'change text, e.g. "+3.8%"' },
+    delta: { type: { k: "string", max: 60 }, doc: 'e.g. "+3.8%"' },
     trend: { type: { k: "enum", values: ["up", "down", "flat"] } },
     hint: { type: SHORT },
   }),
-  component("progress", "Data", "none", "A progress bar.", {
-    value: { type: { k: "number", min: 0, max: 1 }, required: true, doc: "0–1" },
+  component("progress", "Data", "none", "", {
+    value: { type: { k: "number", min: 0, max: 1 }, required: true },
     label: LABEL,
     tone: { type: TONE },
   }),
   component("table", "Data", "none", "A data table (use this, not a Markdown table, for computed rows).", {
-    columns: { type: { k: "columns" }, required: true, doc: "[{ key, label?, align? }] — align: start|center|end" },
-    rows: { type: { k: "rows" }, required: true, doc: "array of objects keyed by column key" },
+    columns: { type: { k: "columns" }, required: true, doc: "align: start|center|end; sortable: false opts a column out" },
+    rows: { type: { k: "rows" }, required: true, doc: "objects keyed by column key" },
+    sortable: { type: BOOL, doc: "headers sort on click — the viewer's own view; your rows and state are untouched" },
     caption: { type: SHORT },
   }),
-  component("chart", "Data", "none", "A chart from a Vega-Lite spec OBJECT with inline data only.", {
-    spec: { type: { k: "object" }, required: true, doc: "Vega-Lite spec; data.values inline, no url" },
-    height: { type: { k: "number", min: 120, max: 600 }, doc: "px (default 240)" },
-    label: { type: SHORT, doc: "accessible name of the chart" },
+  component("chart", "Data", "none", "A Vega-Lite chart.", {
+    spec: { type: { k: "object" }, required: true, doc: "inline data.values only, no url" },
+    height: { type: { k: "number", min: 120, max: 600 }, doc: "px, default 240" },
+    label: { type: SHORT, doc: "accessible name" },
   }),
-  component("details", "Data", "block", "A collapsible section.", {
+  component("details", "Data", "block", "", {
     title: { type: SHORT, required: true },
     open: { type: BOOL },
   }),
@@ -290,24 +309,35 @@ const LIST: ComponentSpec[] = [
     "image",
     "Media",
     "none",
-    "An image of THIS conversation only (the URL a file-output tool returned); no remote or data URLs.",
+    "An image of THIS conversation only.",
     {
       src: { type: { k: "image" }, required: true, doc: "/api/conversations/<conversationId>/images/<imageId>" },
-      alt: { type: { k: "string", max: 300 }, required: true, doc: "what the image shows (required)" },
+      alt: { type: { k: "string", max: 300 }, required: true, doc: "what the image shows (required)", ref: "what it shows" },
       width: { type: { k: "number", min: 16, max: 800 }, doc: "px" },
       maxHeight: { type: { k: "number", min: 40, max: 800 }, doc: "px" },
       radius: { type: { k: "enum", values: ["none", "sm", "md", "lg"] } },
       fit: { type: { k: "enum", values: ["cover", "contain"] } },
     },
   ),
+  component("icon", "Media", "none", "One of the app's line icons.", {
+    name: { type: ICON, required: true },
+    size: { type: { k: "enum", values: Object.keys(WIDGET_ICON_SIZES) }, doc: `${Object.values(WIDGET_ICON_SIZES).join("/")} px, default md` },
+    color: { type: COLOR },
+    label: { type: SHORT, doc: "accessible name; without it the icon is decoration" },
+  }),
+  component("svg", "Media", "svg", "A drawing that follows state (a gauge, a diagram).", {
+    viewBox: { type: { k: "viewBox" }, required: true, doc: '"minX minY width height"' },
+    width: { type: { k: "number", min: 16, max: 800 }, doc: "px, default the viewBox width; shrinks to fit" },
+    label: { type: SHORT, doc: "accessible name: makes it one image" },
+  }),
 
   component(
     "submit",
     "Submit",
     "inline",
-    "Sends `values` to you as STRUCTURED data in the user's next message (shown with a fixed send-to-avatar look).",
+    "Sends `values` to you as STRUCTURED data in the user's next message.",
     {
-      values: { type: { k: "object" }, required: true, doc: "object of string/number/boolean (or arrays of them); up to 20 keys" },
+      values: { type: { k: "object" }, required: true, doc: "a plain object, ≤ 20 keys" },
       label: { type: SHORT },
       disabled: { type: BOOL },
     },
@@ -337,24 +367,34 @@ export function componentSpec(tag: string): ComponentSpec | undefined {
   return WIDGET_COMPONENTS[tag];
 }
 
+/** Enums the reference names once in its legend instead of spelling out at every prop. */
+const NAMED_ENUMS: readonly { values: readonly string[]; name: string }[] = [
+  { values: (ALIGNS as { values: readonly string[] }).values, name: "align" },
+  { values: (JUSTIFIES as { values: readonly string[] }).values, name: "justify" },
+  { values: COLOR_TOKENS, name: "color" },
+  { values: TONE_TOKENS, name: "tone" },
+  { values: WIDGET_ICON_NAMES, name: "icon" },
+];
+
 function typeLabel(t: PropType): string {
   switch (t.k) {
     case "enum":
-      return t.values.join("|");
+      return NAMED_ENUMS.find((e) => e.values === t.values)?.name ?? t.values.join("|");
     case "number":
-      return t.min <= -1e12 || t.max >= 1e12 ? "number" : `number ${t.min}–${t.max}`;
+      return t.min <= -1e12 || t.max >= 1e12 ? "num" : `${t.min}–${t.max}`;
     case "string":
-      return "string";
+    case "viewBox":
+      return "str";
     case "boolean":
-      return "boolean";
+      return "bool";
     case "handler":
-      return "function";
+      return "fn";
     case "value":
-      return "string|number|boolean";
+      return "any";
     case "options":
-      return '["A","B"] or [{label, value}]';
+      return "options";
     case "columns":
-      return "[{key, label?, align?}]";
+      return "[{key, label?, align?, sortable?}]";
     case "rows":
       return "[object]";
     case "object":
@@ -370,25 +410,33 @@ function typeLabel(t: PropType): string {
 
 /**
  * English component/prop reference for the manual, generated from the spec
- * table. `*` marks a required prop; `…` after a tag means it takes children.
+ * table. It rides the manual page's size cap, so it is terse: a legend first,
+ * then one line per component (`- <tag…> — what it is`) and one with its props
+ * (`name*: type (note)`; a prop whose type has its own name is just the name).
  */
 export function widgetComponentReference(): string {
-  const lines: string[] = [];
+  const named = (name: string) => NAMED_ENUMS.find((e) => e.name === name)!.values.join("|");
+  const lines: string[] = [
+    "`*` = required; a bool prop written bare is true. `…` = components; `text` = text, {expr}, {#if}, {#each}, no tags — on button, checkbox, switch and submit that text is the label, or pass `label`. Every input needs `label`; its onChange gets the new value.",
+    `Types — fn: {() => …} or a setter name; any: string|number|boolean; options: ["A","B"] or [{label, value}]; align: ${named("align")}; justify: ${named("justify")}; color: ${named("color")}; tone: ${named("tone")}; icon: a name from the list below.`,
+  ];
   let group = "";
   for (const c of LIST) {
     if (c.group !== group) {
       group = c.group;
       lines.push(group);
     }
-    const inner = c.inlineTags?.length ? `text, {expr}, ${c.inlineTags.map((t) => `<${t}>`).join(", ")}` : "text and {expr}";
-    const shape = c.child === "none" ? `<${c.tag} />` : c.child === "inline" ? `<${c.tag}>${inner}</${c.tag}>` : `<${c.tag}>…components…</${c.tag}>`;
-    const label = c.labelFromChildren ? " Its text children are its label (or pass `label`)." : "";
-    lines.push(`- ${shape} — ${c.doc}${label}`);
-    const props = Object.entries(c.props).map(
-      ([name, p]) => `${name}${p.required ? "*" : ""}: ${typeLabel(p.type)}${p.doc ? ` (${p.doc})` : ""}`,
-    );
-    if (props.length) lines.push(`  props: ${props.join("; ")}`);
+    const shape = c.child === "none" ? `<${c.tag} />` : `<${c.tag}>${c.child === "inline" ? "text" : c.child === "svg" ? "SVG elements" : "…"}</${c.tag}>`;
+    lines.push(`- ${shape}${c.doc ? ` — ${c.doc}` : ""}`);
+    const props = Object.entries(c.props).map(([name, p]) => {
+      const type = typeLabel(p.type);
+      const note = p.ref ?? p.doc;
+      return `${name}${p.required ? "*" : ""}${type === name ? "" : `: ${type}`}${note ? ` (${note})` : ""}`;
+    });
+    if (props.length) lines.push(`  ${props.join("; ")}`);
+    if (c.child === "svg") lines.push(svgReference());
   }
+  lines.push(`Icons: ${WIDGET_ICON_NAMES.join(" ")}`);
   return lines.join("\n");
 }
 
@@ -405,8 +453,20 @@ function cleanSendText(text: string): string {
   return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "").trim();
 }
 
-function textProblem(kind: "send" | "url" | "image", text: string): string | null {
+/** Why a text is not one of an enum's values. A long list (icons) leads with the nearest names. */
+function enumProblem(values: readonly string[], given: unknown): string {
+  if (values.length <= 12) return `must be one of ${values.join(", ")}`;
+  const text = typeof given === "string" ? given : String(given);
+  const near = nearestFew(text, values);
+  return `must be an existing name: ${JSON.stringify(text.slice(0, 40))} is not one${near.length ? ` — nearest: ${near.join(", ")}` : ""}. All ${values.length}: ${values.join(", ")}`;
+}
+
+function textProblem(kind: "send" | "url" | "image" | "viewBox", text: string): string | null {
   switch (kind) {
+    case "viewBox": {
+      const box = svgAttrValue("viewBox", text);
+      return box.ok ? null : box.error;
+    }
     case "send": {
       // Judged on the text that would actually be SENT (control characters gone,
       // trimmed), so a slash hidden behind one cannot slip through.
@@ -430,7 +490,7 @@ function textProblem(kind: "send" | "url" | "image", text: string): string | nul
 
 export function literalProblem(type: PropType, value: Expr | string | true): string | null {
   if (value === true) return type.k === "boolean" ? null : `needs a value (it is not a boolean prop)`;
-  if (type.k === "send" || type.k === "url" || type.k === "image") {
+  if (type.k === "send" || type.k === "url" || type.k === "image" || type.k === "viewBox") {
     // Only a text KNOWN at check time is judged; a computed one is validated when it renders.
     if (typeof value === "string") return textProblem(type.k, value);
     if (value.type === "Lit") return typeof value.value === "string" ? textProblem(type.k, value.value) : "must be a string";
@@ -445,7 +505,7 @@ export function literalProblem(type: PropType, value: Expr | string | true): str
       case "value":
         return null;
       case "enum":
-        return type.values.includes(value) ? null : `must be one of ${type.values.join(", ")}`;
+        return type.values.includes(value) ? null : enumProblem(type.values, value);
       case "number":
         return /^-?\d+(\.\d+)?$/.test(value.trim()) ? null : `must be a number — write it in braces, e.g. {12}`;
       case "boolean":
@@ -460,7 +520,7 @@ export function literalProblem(type: PropType, value: Expr | string | true): str
     const v = value.value;
     switch (type.k) {
       case "enum":
-        return typeof v === "string" && type.values.includes(v) ? null : `must be one of ${type.values.join(", ")}`;
+        return typeof v === "string" && type.values.includes(v) ? null : enumProblem(type.values, v);
       case "number":
         return typeof v === "number" ? null : `must be a number`;
       case "boolean":
@@ -512,6 +572,8 @@ export interface WidgetColumn {
   key: string;
   label: string;
   align: "start" | "center" | "end";
+  /** The viewer may sort by this column when the table is `sortable` (false only when the column says `sortable: false`). */
+  sortable: boolean;
 }
 
 function normalizeOptions(v: unknown): WidgetOption[] | undefined {
@@ -540,7 +602,7 @@ function normalizeColumns(v: unknown): WidgetColumn[] | undefined {
   for (const item of v.slice(0, MAX_TABLE_COLUMNS)) {
     if (typeof item === "string") {
       const key = item.slice(0, MAX_LABEL_CHARS);
-      out.push({ key, label: key, align: "start" });
+      out.push({ key, label: key, align: "start", sortable: true });
       continue;
     }
     if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
@@ -553,12 +615,19 @@ function normalizeColumns(v: unknown): WidgetColumn[] | undefined {
       key,
       label: String(label ?? key).slice(0, MAX_LABEL_CHARS),
       align: align === "center" || align === "end" ? align : "start",
+      sortable: !(Object.prototype.hasOwnProperty.call(rec, "sortable") && rec.sortable === false),
     });
   }
   return out;
 }
 
 function normalizeOne(type: PropType, v: unknown): unknown {
+  if (type.k === "viewBox") {
+    // Not defaulted either: a drawing without a valid coordinate system is not drawn.
+    const box = svgAttrValue("viewBox", v);
+    if (!box.ok) throw new Error(box.error);
+    return box.value;
+  }
   if (type.k === "send" || type.k === "url" || type.k === "image") {
     // These name an EFFECT (a message to send, a page to open, an image to
     // load): an empty or invalid one is never defaulted — it is dropped and
@@ -617,7 +686,8 @@ function normalizeOne(type: PropType, v: unknown): unknown {
  *   handler  → a no-op                  (the control renders; interacting does nothing)
  *   options / columns / rows → []
  *   object   → {}                       (chart spec, submit values)
- *   send / url / image → NOT defaulted: dropped and reported (see normalizeOne)
+ *   send / url / image / viewBox → NOT defaulted: dropped and reported (see normalizeOne)
+ *   enum     → NOT defaulted: there is no "empty" icon or variant to fall back to
  *
  * A widget binds inputs to state that is legitimately empty at first
  * (`{@state pick = null}`, `done[k]` before the box is ever ticked); that must
@@ -643,10 +713,11 @@ function emptyValue(type: PropType, props: Record<string, unknown>): unknown {
     case "object":
       return {};
     case "enum":
-      return type.values[0];
+      return undefined; // a required name (an icon) that is not one draws nothing — never some other icon
     case "send":
     case "url":
     case "image":
+    case "viewBox":
       return undefined; // never defaulted (normalizeOne reports an empty one instead)
   }
 }
@@ -685,8 +756,14 @@ export function normalizeProps(tag: string, raw: Record<string, unknown>): { pro
   }
   // After the pass, so a number's fallback can use the component's own `min`.
   for (const name of empty) {
-    const fallback = emptyValue(spec.props[name].type, props);
+    const type = spec.props[name].type;
+    const fallback = emptyValue(type, props);
     if (fallback !== undefined) props[name] = fallback;
+    else if (type.k === "enum") {
+      const given = typeof raw[name] === "string" ? (raw[name] as string).slice(0, 40) : "";
+      const near = given ? nearestFew(given, type.values) : [];
+      errors.push(`${name}: ${given ? JSON.stringify(given) : "the value"} is not one of its names${near.length ? ` (nearest: ${near.join(", ")})` : ""}`);
+    }
   }
   return { props, errors };
 }

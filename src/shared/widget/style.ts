@@ -50,6 +50,30 @@ function own(table: Record<string, string>, v: unknown): string | undefined {
   return typeof v === "string" && Object.prototype.hasOwnProperty.call(table, v) ? table[v] : undefined;
 }
 
+/**
+ * What an `<svg>` drawing may name as a paint besides a literal colour: the
+ * text colour tokens, three surfaces and the soft tint of each tone. Each maps
+ * to one of Noah's CSS variables, so a drawing follows the light/dark theme.
+ */
+const SVG_PAINT_CSS: Record<string, string> = {
+  ...TEXT_CSS,
+  surface: "var(--panel)",
+  subtle: "var(--bg-subtle)",
+  line: "var(--line)",
+  "accent-soft": "var(--accent-soft)",
+  "success-soft": "var(--ok-soft)",
+  "warning-soft": "var(--warn-soft)",
+  "danger-soft": "var(--danger-soft)",
+  "info-soft": "var(--info-soft)",
+};
+
+export const SVG_PAINT_TOKENS: readonly string[] = Object.freeze(Object.keys(SVG_PAINT_CSS));
+
+/** CSS colour for an svg paint token, or undefined for anything else. */
+export function svgPaintToken(v: unknown): string | undefined {
+  return own(SVG_PAINT_CSS, v);
+}
+
 /** CSS color for a text color token, or undefined for anything else. */
 export function textColor(v: unknown): string | undefined {
   return own(TEXT_CSS, v);

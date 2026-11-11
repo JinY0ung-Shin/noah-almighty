@@ -10,7 +10,7 @@
  *   or unclosed block is recorded in `problems`, so the avatar can fix it.
  * - `{@state}` exists only at the top level; a duplicate name is a problem.
  * - Any `<name …>` is an element (the static checker rejects unknown names).
- *   There is no generic-HTML pass-through and no `<svg>` mode.
+ *   There is no generic-HTML pass-through.
  * - Nesting is capped, and every scan is charged to a work budget, so a parse
  *   of a size-capped source is bounded in time.
  *
@@ -19,6 +19,12 @@
  *         the start of a line (indent ≤ 3); everything else is static Markdown
  *         (no `{expr}` interpolation). Fenced code and code spans are text.
  * - comp: inside a tag or a block. Tags anywhere, `{expr}` interpolation.
+ * - svg : inside an `<svg>` (at any depth, blocks included). As `comp`, except
+ *         that text is LITERAL (a backtick is a character, not a code span) and
+ *         an element is never implicitly self-closing — SVG names like `<text>`
+ *         or `<title>` are not the widget components of the same name. Every
+ *         element parsed here carries `svg: true`; the same nesting cap and
+ *         work budget apply.
  */
 import {
   Parser,
@@ -67,7 +73,8 @@ export type TNode =
   /** `block`: top-level static Markdown. Otherwise an inline text run inside a tag or block. */
   | (Base & { t: "text"; value: string; block: boolean })
   | (Base & { t: "expr"; expr: Expr })
-  | (Base & { t: "el"; name: string; attrs: Attr[]; children: TNode[] })
+  /** `svg`: the element is an `<svg>` or sits inside one (it is checked and drawn by the SVG allowlist, not as a component). */
+  | (Base & { t: "el"; name: string; attrs: Attr[]; children: TNode[]; svg?: true })
   | (Base & {
       t: "each";
       list: Expr;
@@ -108,7 +115,7 @@ export interface WidgetDoc {
   problems: WidgetProblem[];
 }
 
-type Mode = "top" | "comp";
+type Mode = "top" | "comp" | "svg";
 type Frame = { k: "el"; name: string } | { k: "each" } | { k: "if" };
 type CtlTok = { kind: "else" } | { kind: "elseif"; test: Expr } | { kind: "end"; which: "each" | "if" };
 type Stop = { kind: "eof" } | { kind: "close"; consumed: boolean } | { kind: "ctl"; tok: CtlTok; consumed: boolean };
@@ -197,7 +204,7 @@ class TemplateParser {
         i += 2;
         continue;
       }
-      if (c === "`") {
+      if (c === "`" && mode !== "svg") {
         i = this.skipCodeSpan(i);
         continue;
       }
@@ -240,7 +247,7 @@ class TemplateParser {
           i = textStart = afterNode = e + 3;
           continue;
         }
-        const r = this.tryElement(i, stack);
+        const r = this.tryElement(i, stack, mode === "svg");
         if (r === null) {
           i++;
           continue;
@@ -276,7 +283,7 @@ class TemplateParser {
           const r =
             kw[1][0] === "@"
               ? this.parseDirective(i, j + kw[1].length, kw[1] as "@state" | "@const", mode, stack)
-              : this.parseControl(i, j + kw[1].length, kw[1] as "#each" | "#if", stack);
+              : this.parseControl(i, j + kw[1].length, kw[1] as "#each" | "#if", stack, mode === "svg" ? "svg" : "comp");
           for (const nd of r.nodes) nodes.push(nd);
           i = textStart = afterNode = r.end;
           continue;
@@ -301,7 +308,7 @@ class TemplateParser {
             continue;
           }
         }
-        if (mode === "comp") {
+        if (mode !== "top") {
           const r = this.parseBraceExpr(i);
           flush(i);
           if ("error" in r) {
@@ -388,8 +395,8 @@ class TemplateParser {
     return { name: m[0], end: p + 1 };
   }
 
-  /** An element starting at `<` (position i), or null when this `<` is plain text. */
-  tryElement(i: number, stack: Frame[]): { node: TNode; end: number } | null {
+  /** An element starting at `<` (position i), or null when this `<` is plain text. `inSvg`: it sits inside an `<svg>`. */
+  tryElement(i: number, stack: Frame[], inSvg = false): { node: TNode; end: number } | null {
     const src = this.src;
     const n = src.length;
     let p = i + 1;
@@ -401,9 +408,12 @@ class TemplateParser {
     if (p < n && !isWs(src[p]) && src[p] !== ">" && src[p] !== "/") return null;
 
     const attrs: Attr[] = [];
+    // The element is an <svg>, or anything inside one.
+    const svg = inSvg || name === "svg";
+    const el = (e: number, children: TNode[]): TNode => (svg ? { t: "el", s: i, e, name, attrs, children, svg: true } : { t: "el", s: i, e, name, attrs, children });
     const unfinished = (): { node: TNode; end: number } => {
       this.problem(`The <${name}> tag is never finished. End it with "/>" (no children) or ">".`, i);
-      return { node: { t: "el", s: i, e: n, name, attrs, children: [] }, end: n };
+      return { node: el(n, []), end: n };
     };
 
     let selfClose = false;
@@ -457,7 +467,7 @@ class TemplateParser {
         const e = src.indexOf(quote, p + 1);
         if (e < 0) {
           this.problem(`The string for prop "${an}" of <${name}> is never closed.`, p);
-          return { node: { t: "el", s: i, e: n, name, attrs, children: [] }, end: n };
+          return { node: el(n, []), end: n };
         }
         spend(this.budget, e - p);
         attrs.push({ name: an, value: decodeEntities(src.slice(p + 1, e)), s: at });
@@ -470,7 +480,7 @@ class TemplateParser {
           attrs.push({ name: an, value: true, s: at, bad: true });
           this.exprProblem(`Prop "${an}" of <${name}>: ${r.error}.`, r);
           const e = matchBracket(src, p, this.budget);
-          if (e < 0) return { node: { t: "el", s: i, e: n, name, attrs, children: [] }, end: n };
+          if (e < 0) return { node: el(n, []), end: n };
           p = e + 1;
           continue;
         }
@@ -500,27 +510,29 @@ class TemplateParser {
     }
 
     // A component that takes no children is self-closing even when written `<slider …>`.
-    const isVoid = selfClose || (hasOwn(WIDGET_COMPONENTS, name) && WIDGET_COMPONENTS[name].child === "none");
+    // Not inside an <svg>: there `<image>` or `<link>` is not that component, and an element closes only as written.
+    const isVoid = selfClose || (!inSvg && hasOwn(WIDGET_COMPONENTS, name) && WIDGET_COMPONENTS[name].child === "none");
     if (isVoid) {
       let end = p;
       if (!selfClose) {
         const m2 = /^\s*<\/\s*([A-Za-z][\w-]*)\s*>/.exec(src.slice(p, p + 80));
         if (m2 && m2[1] === name) end = p + m2[0].length;
       }
-      return { node: { t: "el", s: i, e: end, name, attrs, children: [] }, end };
+      return { node: el(end, []), end };
     }
 
     this.guardDepth(stack, i);
-    const res = this.parseChildren(p, "comp", [...stack, { k: "el", name }]);
+    const res = this.parseChildren(p, svg ? "svg" : "comp", [...stack, { k: "el", name }]);
     if (!(res.stop.kind === "close" && res.stop.consumed)) {
+      const fix = inSvg ? `End the tag with "/>" (no children) or add </${name}>` : `Add </${name}>`;
       this.problem(
         res.stop.kind === "eof"
-          ? `<${name}> is never closed. Add </${name}>.`
-          : `<${name}> is not closed before ${JSON.stringify(src.slice(res.pos, Math.min(n, res.pos + 12)))}. Add </${name}> first.`,
+          ? `<${name}> is never closed. ${fix}.`
+          : `<${name}> is not closed before ${JSON.stringify(src.slice(res.pos, Math.min(n, res.pos + 12)))}. ${fix} first.`,
         i,
       );
     }
-    return { node: { t: "el", s: i, e: res.pos, name, attrs, children: res.nodes }, end: res.pos };
+    return { node: el(res.pos, res.nodes), end: res.pos };
   }
 
   guardDepth(stack: Frame[], pos: number) {
@@ -641,7 +653,7 @@ class TemplateParser {
     }
   }
 
-  parseControl(i: number, after: number, kw: "#each" | "#if", stack: Frame[]): { nodes: TNode[]; end: number } {
+  parseControl(i: number, after: number, kw: "#each" | "#if", stack: Frame[], inner: Mode = "comp"): { nodes: TNode[]; end: number } {
     const src = this.src;
     this.guardDepth(stack, i);
     let headerEnd: number;
@@ -687,11 +699,11 @@ class TemplateParser {
 
     if (kw === "#each") {
       const frames: Frame[] = [...stack, { k: "each" }];
-      const body = this.parseChildren(headerEnd, "comp", frames);
+      const body = this.parseChildren(headerEnd, inner, frames);
       let empty: TNode[] | null = null;
       let res = body;
       if (body.stop.kind === "ctl" && body.stop.consumed && body.stop.tok.kind === "else") {
-        res = this.parseChildren(body.pos, "comp", frames);
+        res = this.parseChildren(body.pos, inner, frames);
         empty = res.nodes;
       }
       if (!(res.stop.kind === "ctl" && res.stop.consumed)) unclosed(res);
@@ -705,7 +717,7 @@ class TemplateParser {
     let pos = headerEnd;
     let sawElse = false;
     for (;;) {
-      const res = this.parseChildren(pos, "comp", frames);
+      const res = this.parseChildren(pos, inner, frames);
       branches.push({ test: curTest, children: res.nodes });
       pos = res.pos;
       if (!(res.stop.kind === "ctl" && res.stop.consumed)) {

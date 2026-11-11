@@ -13,6 +13,7 @@
   import { MAX_SEND_CHARS, type WidgetOption } from "../../../../shared/widget/index";
   import type { ElVNode } from "../../lib/widgetView";
   import type { WidgetCtx } from "../../lib/widgetCtx";
+  import Icon from "../Icon.svelte";
   import WidgetInline from "./WidgetInline.svelte";
 
   export let v: ElVNode;
@@ -28,7 +29,9 @@
   // The library keeps whichever of onClick | send | href is valid; with none
   // (an empty send, a URL that is not http/https) the button is drawn disabled
   // and says why. What a send or a link will do is shown BEFORE it is pressed.
-  $: buttonClass = `btn btn-sm ${BUTTON_CLASS[typeof p.variant === "string" ? p.variant : "secondary"] ?? "secondary"}`;
+  // An icon before the label: one of the app's own, by a name the library checked against its list.
+  $: icon = typeof p.icon === "string" ? p.icon : "";
+  $: buttonClass = `btn btn-sm ${BUTTON_CLASS[typeof p.variant === "string" ? p.variant : "secondary"] ?? "secondary"}${icon ? " wg-has-icon" : ""}`;
   $: sendText = typeof p.send === "string" ? p.send.slice(0, MAX_SEND_CHARS) : "";
   // A "/…" message would run as a slash command — those are the viewer's to type.
   $: sendRefused = sendText.startsWith("/");
@@ -147,7 +150,7 @@
 
 {#if v.tag === "button" && linkHref && p.disabled !== true}
   <a class={`${buttonClass} wg-button-link`} href={linkHref} target="_blank" rel="noopener noreferrer" title={linkHref}
-    >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</a>
+    >{#if icon}<Icon name={icon} size={14} />{/if}{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</a>
 {:else if v.tag === "button" && sendText}
   <button
     type="button"
@@ -158,7 +161,7 @@
     on:click={() => {
       if (!sendRefused) ctx.send(sendText);
     }}
-  >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
+  >{#if icon}<Icon name={icon} size={14} />{/if}{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
   <!-- The same sentence for a screen reader: what pressing the button will say. -->
   <span id={`${id}-send`} class="sr-only">{sendHint}</span>
 {:else if v.tag === "button"}
@@ -168,7 +171,7 @@
     disabled={p.disabled === true || idle || Boolean(linkHref)}
     title={idle ? `이 버튼은 동작하지 않습니다${v.flawed ? ` (${v.flawed})` : ""}` : undefined}
     on:click={() => ctx.fire(p.onClick, [])}
-  >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
+  >{#if icon}<Icon name={icon} size={14} />{/if}{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
 {:else if v.tag === "checkbox"}
   <label class="wg-check">
     <input

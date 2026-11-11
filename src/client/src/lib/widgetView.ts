@@ -27,12 +27,14 @@ import {
   jsxWhitespace,
   lineCol,
   pickBranch,
+  renderSvg,
   resetBudget,
   resolveProps,
   safeLinkUrl,
   type ElNode,
   type Env,
   type Runtime,
+  type SvgTree,
   type TNode,
   type WidgetDoc,
 } from "../../../shared/widget/index";
@@ -66,6 +68,8 @@ export type VNode =
       segs: Seg[];
       /** A prop expression failed and was dropped: the component drew with defaults. */
       flawed: string;
+      /** An `<svg>`: the drawing as allowlisted elements with rebuilt attribute values (still sanitized where it is drawn). */
+      svg?: SvgTree;
       /** Source offset of the tag. */
       at: number;
     }
@@ -255,6 +259,8 @@ function inlineSegs(children: TNode[], env: Env, rt: Runtime, out: Seg[] = []): 
 // an <image> may only show an image of THIS conversation. Evaluation is
 // synchronous, so one module variable serves the whole walk.
 let viewConversationId: string | null = null;
+// The id namespace of this view's drawings (see buildWidgetView).
+let viewSvgNs = "wg";
 
 function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
   const spec = componentSpec(node.name);
@@ -278,6 +284,13 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
       return errorNode(key, node, NODE_ERROR, "src: the image belongs to another conversation — a widget can only show images of the conversation it is in");
     }
     props.src = `/api/conversations/${encodeURIComponent(ref.conversationId)}/images/${encodeURIComponent(ref.imageId)}`;
+  }
+  if (spec.child === "svg") {
+    // Ids are namespaced per view AND per node, so two drawings — of one widget,
+    // of two widgets, of a card and its fullscreen copy — never meet.
+    const drawn = renderSvg(node, { viewBox: String(props.viewBox), width: typeof props.width === "number" ? props.width : undefined }, env, rt, `${viewSvgNs}${key}`);
+    const flawed = errors.concat(drawn.errors).join("; ");
+    return { k: "el", key, tag: node.name, props, children, segs, flawed, at: node.s, svg: drawn.tree };
   }
   return { k: "el", key, tag: node.name, props, children, segs, flawed: errors.join("; "), at: node.s };
 }
@@ -367,12 +380,16 @@ function passExhausted(rt: Runtime): boolean {
  * rendered so far stays, and ONE notice at the end says the rest is missing
  * (not one error per remaining block). Never throws.
  */
-export function buildWidgetView(doc: WidgetDoc, root: Env, rt: Runtime, options: { conversationId?: string | null } = {}): VNode[] {
+export function buildWidgetView(doc: WidgetDoc, root: Env, rt: Runtime, options: { conversationId?: string | null; svgNs?: string } = {}): VNode[] {
   viewConversationId = options.conversationId || null;
+  // `svgNs`: a prefix unique to the drawn copy (the card and its fullscreen
+  // copy are two), for the ids inside its `<svg>`s.
+  viewSvgNs = options.svgNs || "wg";
   try {
     return walkDocument(doc, root, rt);
   } finally {
     viewConversationId = null;
+    viewSvgNs = "wg";
   }
 }
 

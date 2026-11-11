@@ -501,9 +501,22 @@
     `<submit values={...}>` remains the STRUCTURED way back and rides the existing `canvasSubmission.values`
     turn (so a widget with a submit is `interaction: "async"`); the route now writes an accepted async
     submission into `canvas_versions.submitted_values_json`, so "응답 완료" survives a reload. Still absent
-    on purpose: remote or `data:` images, `<svg>`, `Math.random`. `controls` and `editable` are refused with
+    on purpose: remote or `data:` images and `Math.random`. `controls` and `editable` are refused with
     a widget. `parseCanvasSubmission` caps every canvas submission (`MAX_CANVAS_SUBMISSION_KEYS`/`_CHARS`,
     its own 400 text); the widget's own client cap is lower (`MAX_SUBMIT_*`).
+  - **`<svg>` is a drawing bound to state, checked THREE times.** `src/shared/widget/svg.ts` is its grammar:
+    an allowlist of 20 elements and of attributes per element, and every VALUE validated by SHAPE and
+    re-emitted from the parsed form (numbers/lengths, token or `#hex`/`rgb()`/`hsl()` colours, a path
+    charset with a length cap, `url(#id)` only, numeric `transform` functions) — never a blocklist.
+    (1) `check.ts` refuses statically, (2) `svgRender.ts` re-validates the EVALUATED values and builds the
+    markup, (3) the client still runs DOMPurify's svg profile and draws into a shadow root that is updated
+    in place (`lib/widgetSvg.ts`, `shadowSvg`). Ids are namespaced per view and node so two widgets — or the
+    inline card and its fullscreen copy — cannot collide. ≤ 500 elements and 60 000 characters per `<svg>`,
+    charged to the render's output budget. Left out on purpose because they multiply what is drawn or load
+    something: `use`, `marker-mid`, filters, animation, `image`, `a`, `style`/`class`/`href`/`on*`, nested
+    `svg`, `font-family`. Icons are an enum of the names `Icon.svelte` draws (`src/shared/widget/icons.ts`;
+    a test fails when it drifts from `lib/icons.ts`). The manual page sits ~100 characters under its
+    16 000 cap — the next component means splitting the topic, not squeezing prose.
   - **A render failure in the browser reaches the avatar on the NEXT turn** (`lib/canvasReport.ts` →
     `POST /api/canvases/:canvasId/render-report` → `CanvasRenderReportQueue`, in memory on the store →
     `buildPiTurnPreamble`, once): widget parse/eval errors, an exceeded output budget, a failed handler, a

@@ -12,7 +12,7 @@ import { TEAM_POLICY_KEYS } from "../teamBrainPolicy.js";
 import { widgetComponentReference } from "../../shared/widget/spec.js";
 
 /**
- * The two worked examples of the `canvas-widget` topic. Exported so a test can
+ * The worked examples of the `canvas-widget` topic. Exported so a test can
  * run each through the SAME static checker `mcp__canvas__show` uses — a manual
  * example the tool would reject teaches the avatar a broken grammar.
  */
@@ -39,21 +39,30 @@ Change the inputs — the numbers update at once.
   <submit values={{ amount, months, rate }}>Proceed with these terms</submit>
   <button send="금리를 더 낮출 방법을 알려줘" variant="ghost">How can I lower the rate?</button>
 </row>`,
-  filteredTable: `{@state team = "all"}
-{@state view = "table"}
-{@const rows = [{ team: "A", month: "1월", sales: 120 }, { team: "A", month: "2월", sales: 150 }, { team: "B", month: "1월", sales: 90 }, { team: "B", month: "2월", sales: 130 }]}
-{@const shown = rows.filter((r) => team === "all" || r.team === team)}
+  filteredTable: `{@state team = "All"}
+{@state view = "Table"}
+{@const rows = [{ team: "A", month: "1월", sales: 120 }, { team: "A", month: "2월", sales: 150 }, { team: "B", month: "1월", sales: 90 }]}
+{@const shown = rows.filter((r) => team === "All" || r.team === team)}
 
 <row gap={2}>
-  <select label="Team" value={team} onChange={setTeam} options={[{ label: "All", value: "all" }, { label: "A", value: "A" }, { label: "B", value: "B" }]} />
-  <tabs label="View" value={view} onChange={setView} options={[{ label: "Table", value: "table" }, { label: "Chart", value: "chart" }]} />
+  <select label="Team" value={team} onChange={setTeam} options={["All", "A", "B"]} />
+  <tabs label="View" value={view} onChange={setView} options={["Table", "Chart"]} />
 </row>
-{#if view === "table"}
-  <table columns={[{ key: "team", label: "Team" }, { key: "month", label: "Month" }, { key: "sales", label: "Sales" }]} rows={shown} />
+{#if view === "Table"}
+  <table sortable columns={[{ key: "team", label: "Team" }, { key: "month", label: "Month" }, { key: "sales", label: "Sales" }]} rows={shown} />
 {:else}
   <chart height={240} spec={{ mark: "bar", data: { values: shown }, encoding: { x: { field: "month", type: "nominal" }, y: { field: "sales", type: "quantitative", aggregate: "sum" }, color: { field: "team", type: "nominal" } } }} />
 {/if}
-<text>{shown.length} rows, total {shown.reduce((sum, r) => sum + r.sales, 0)}</text>`,
+<row gap={1}><icon name="activity" color="muted" /><text color="muted">{shown.length} rows, total {shown.reduce((sum, r) => sum + r.sales, 0)}</text></row>`,
+  gauge: `{@state pct = 60}
+{@const a = Math.PI * (1 - pct / 100)}
+
+<slider label="Progress" value={pct} onChange={setPct} suffix="%" />
+<svg viewBox="0 0 200 110" label="Progress">
+  <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="line" stroke-width="14" />
+  <line x1="100" y1="100" x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)} stroke={pct > 80 ? "danger" : "accent"} stroke-width="4" stroke-linecap="round" />
+  <text x="100" y="90" text-anchor="middle" font-size="20" font-weight="bold">{pct}%</text>
+</svg>`,
 } as const;
 
 export const SYSTEM_MANUAL_TOPICS = [
@@ -517,7 +526,7 @@ The client renders real, sanitized form controls — put NO scripts/JS in the co
     summary: "Grammar, expressions, components, submit/send and limits of the inline interactive `widget` canvas type.",
     body: `**Canvas widget** (\`mcp__canvas__show\` with \`contentType: "widget"\`, EXPERIMENTAL): an interactive piece of UI drawn INLINE in your answer, at the point where you call the tool — not in the side panel. Write the text before and after it as one answer, and do not repeat in prose what it shows. You declare state, inputs and derived values once; the user's browser recomputes and redraws on every change. You are NOT called on those changes and never see the values the user sets — only a \`<submit>\` or a \`<button send>\` reaches you, as the user's next message.
 Availability is per avatar: the owner turns it on under Settings → 실험 기능 (캔버스 위젯). describe_system is authoritative (its canvas line says whether \`widget\` is ENABLED or DISABLED); while it is off, \`show\` refuses the type — use \`vega\` or \`markdown\`.
-Use it — unprompted — when operating something serves the user better than reading: a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable or tabbed table, a chart driven by sliders. Answer a plain question in plain text; never decorate. For a chart or diagram that is only looked at, use \`vega\`/\`mermaid\`; for a decision about a side-panel artifact, use \`controls\` on that content type. \`controls\` and \`editable\` cannot be combined with a widget.
+Use it — unprompted — when operating something serves the user better than reading: a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable or sortable table, a gauge or chart driven by sliders. Answer a plain question in plain text; never decorate. For a chart or diagram that is only looked at, use \`vega\`/\`mermaid\`; for a decision about a side-panel artifact, use \`controls\` on that content type. \`controls\` and \`editable\` cannot be combined with a widget.
 
 ## Document
 The content is a small declarative source — not HTML, not JS:
@@ -527,7 +536,7 @@ The content is a small declarative source — not HTML, not JS:
 - \`{#each list as item, index} … {:else} … {/each}\` and \`{#if cond} … {:else if cond} … {:else} … {/if}\`.
 - \`{expr}\` interpolates a value inside a component's text.
 - Plain text at the top level is STATIC Markdown (no \`{expr}\` there). A top-level line that STARTS with \`<\` is read as a component tag, so never start a prose line with \`<\`. Text inside a component is inline Markdown only (bold, italic, code, strikethrough, and \`[text](https://…)\` links, which open in a new tab).
-Declare \`{@state}\`/\`{@const}\` before the tags that use them. A state's initial expression may use only globals and the states declared BEFORE it (not consts). Spread props (\`{...obj}\`) are not supported. Text components (\`title\`, \`text\`, \`badge\`, \`button\`, \`checkbox\`, \`switch\`, \`submit\`) take text, \`{expr}\`, \`{#if}\` and \`{#each}\` only — no nested tags.
+Declare \`{@state}\`/\`{@const}\` before the tags that use them. A state's initial expression may use only globals and the states declared BEFORE it (not consts). Spread props (\`{...obj}\`) are not supported.
 
 ## Expressions
 A safe JavaScript subset run by an interpreter (never \`eval\`):
@@ -548,20 +557,25 @@ Links open in a new tab and send you nothing: \`<button href>\`, \`<link href>\`
 The tool never waits: finish your answer and say what the widget's buttons send.
 
 ## Limits
-Content ≤ 20,000 characters (it rides every later turn's context — inline only the rows you need). The source needs at least one component (text alone is \`markdown\`; a source indented 4+ spaces is read as a code block — do not indent it). ≤ 50 state variables; tags nest ≤ 32 deep, expressions ≤ 64, one chain of operators or \`.\` accesses ≤ 200 long (split a long sum into \`{@const}\` steps or use \`reduce\`). At run time each block and each handler has a budget (50,000 evaluation steps, native searching/sorting included; strings ≤ 100,000 characters; arrays ≤ 10,000 items), an \`{#each}\` draws ≤ 1,000 items and one render ≤ 20,000 elements and 2,000,000 characters; a block over budget shows an error in its place. A required prop that evaluates to null/undefined is drawn as empty, not as an error. The values the user sets are kept in THEIR browser only (they survive a reload on that device, not another one); you cannot read them.
+Content ≤ 20,000 characters (it rides every later turn's context — inline only the rows you need). It needs at least one component (text alone is \`markdown\`); do not indent the source 4+ spaces (that reads as a code block). ≤ 50 state variables; tags nest ≤ 32 deep, expressions ≤ 64, one chain of operators or \`.\` accesses ≤ 200 (split a long sum into \`{@const}\` steps or use \`reduce\`). At run time each block and each handler gets 50,000 evaluation steps (native searching/sorting included), strings ≤ 100,000 characters and arrays ≤ 10,000 items; an \`{#each}\` draws ≤ 1,000 items, a table ≤ 500 rows, one render ≤ 20,000 elements and 2,000,000 characters; a block over budget shows an error in its place. A required prop that evaluates to null/undefined is drawn as empty, not as an error. The values the user sets are kept in THEIR browser only (they survive a reload there, not on another device); you cannot read them.
 
 ## Example: calculator, submit, follow-up button
 \`\`\`
 ${CANVAS_WIDGET_MANUAL_EXAMPLES.calculator}
 \`\`\`
 
-## Example: filtered table and chart
+## Example: filtered sortable table, chart, icon
 \`\`\`
 ${CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable}
 \`\`\`
 
+## Example: svg gauge bound to a slider
+\`\`\`
+${CANVAS_WIDGET_MANUAL_EXAMPLES.gauge}
+\`\`\`
+
 ## Errors you get back
-The source is parsed and checked before display; on an error NOTHING is shown and the message names the line and column. Common causes: an unknown tag or prop (only the components above exist — no \`<div>\`, no \`style\`); an identifier that is neither a state/const, a loop variable, a parameter nor a global; \`{@state}\` inside a tag or block, or declared twice; a setter called outside a handler (\`value={setX(1)}\` instead of \`onChange={setX}\`); an input without its \`label\`; a button with none or several of \`onClick\`/\`send\`/\`href\`; \`controls\`/\`editable\` passed with a widget. Fix the source and call show again — with the SAME \`canvasId\` when refining, which keeps the user's value for every state whose declaration is unchanged. A part the user's browser cannot draw is reported at the start of your next turn ("Canvas render report").`,
+The source is parsed and checked before display; on an error NOTHING is shown and the message names the line and column, what is wrong and the fix. Fix the source and call show again — with the SAME \`canvasId\` when refining, which keeps the user's value for every state whose declaration is unchanged. A part the user's browser cannot draw is reported at the start of your next turn ("Canvas render report").`,
   },
 ] as const;
 

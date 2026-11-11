@@ -74,7 +74,7 @@
     builtDoc = nextDoc;
     builtValues = nextValues;
     builtConversation = nextConversation;
-    view = buildWidgetView(nextDoc, createRootEnv(nextDoc, nextValues, rt, host), rt, { conversationId: nextConversation });
+    view = buildWidgetView(nextDoc, createRootEnv(nextDoc, nextValues, rt, host), rt, { conversationId: nextConversation, svgNs: viewId });
     sends = hasSender(view);
     const problems = collectWidgetProblems(nextDoc, view);
     if (problems.length) onProblems(problems, nextDoc.src);

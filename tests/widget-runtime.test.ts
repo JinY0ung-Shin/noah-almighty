@@ -333,9 +333,15 @@ describe("widget props normalization", () => {
       rows: [{ id: 1, v: fn }, "junk", [1], { id: 2, nested: { deep: [1, fn] } }],
     }).props;
     expect(table.columns).toEqual([
-      { key: "id", label: "id", align: "start" },
-      { key: "v", label: "값", align: "end" },
-      { key: "w", label: "w", align: "start" },
+      { key: "id", label: "id", align: "start", sortable: true },
+      { key: "v", label: "값", align: "end", sortable: true },
+      { key: "w", label: "w", align: "start", sortable: true },
+    ]);
+    // A column opts out of a sortable table with `sortable: false` — and only with that.
+    expect(normalizeProps("table", { columns: [{ key: "a", sortable: false }, { key: "b", sortable: 0 }, { key: "c", sortable: "no" }] }).props.columns).toEqual([
+      { key: "a", label: "a", align: "start", sortable: false },
+      { key: "b", label: "b", align: "start", sortable: true },
+      { key: "c", label: "c", align: "start", sortable: true },
     ]);
     expect(table.rows).toEqual([{ id: 1, v: undefined }, { id: 2, nested: { deep: [1, undefined] } }]);
     const spec = { mark: "bar", data: { values: [{ a: 1 }] }, fn };

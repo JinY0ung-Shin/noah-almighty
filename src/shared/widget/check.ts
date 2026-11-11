@@ -7,7 +7,9 @@
  */
 import type { Expr, Param, Pattern, Stmt } from "./expr.js";
 import { GLOBAL_NAMES } from "./interp.js";
+import { nearest } from "./names.js";
 import { WIDGET_COMPONENTS, WIDGET_TAGS, literalProblem, type ComponentSpec } from "./spec.js";
+import { MAX_SVG_NODES, svgAttrKind, svgAttrValue, svgElementProblem, svgElementSpec, svgIsResource, svgRefProblem, svgTakesText } from "./svg.js";
 import { lineCol, parseWidget, type Attr, type ElNode, type TNode, type WidgetDoc, type WidgetProblem } from "./template.js";
 
 export type WidgetCheck = { ok: true; submits: boolean } | { ok: false; error: string };
@@ -21,36 +23,6 @@ const ACTION_NAMES = ["copy"];
 
 function hasOwn(obj: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(obj, key);
-}
-
-/** Edit distance, capped: enough to suggest a near-miss name. */
-function distance(a: string, b: string): number {
-  if (Math.abs(a.length - b.length) > 3) return 99;
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const cur = [i];
-    for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    prev = cur;
-  }
-  return prev[b.length];
-}
-
-function nearest(name: string, candidates: Iterable<string>): string | null {
-  const lower = name.toLowerCase().replace(/[-_]/g, "");
-  let best: string | null = null;
-  let bestD = 3;
-  for (const c of candidates) {
-    const cl = c.toLowerCase().replace(/[-_]/g, "");
-    if (cl === lower) return c;
-    const d = distance(lower, cl);
-    if (d < bestD) {
-      bestD = d;
-      best = c;
-    }
-  }
-  return best;
 }
 
 class Scope {
@@ -105,6 +77,17 @@ type Phase = "render" | "handler" | "deferred";
 /** A problem whose text may be completed lazily (the "did you mean" of an undefined name is costly to compute). */
 interface Finding extends WidgetProblem {
   full?: () => string;
+}
+
+/** What is known about one `<svg>` while it is checked. */
+interface SvgCheck {
+  /** Elements written in the source (an `{#each}` body counts once). */
+  elements: number;
+  /** Literal id → the element that declares it. */
+  ids: Map<string, string>;
+  /** Some id is an `{expr}`: a reference without a literal target may still resolve. */
+  computedIds: boolean;
+  refs: { attr: string; id: string; inResource: boolean; pos: number }[];
 }
 
 /** Problems recorded per check (the report shows the first few; the rest are only counted). */
@@ -258,7 +241,9 @@ class Checker {
     if (!spec) {
       const hint = nearest(node.name, WIDGET_TAGS);
       this.problem(
-        `Unknown component <${node.name}>.${hint ? ` Did you mean <${hint}>?` : ""} HTML tags are not supported in a widget. Components: ${WIDGET_TAGS.join(", ")}. If this "<" was meant as text, write \\< or &lt;.`,
+        svgElementSpec(node.name)
+          ? `<${node.name}> is an SVG element: it exists only inside <svg viewBox="…">…</svg>. Wrap the drawing in an <svg>.`
+          : `Unknown component <${node.name}>.${hint ? ` Did you mean <${hint}>?` : ""} HTML tags are not supported in a widget. Components: ${WIDGET_TAGS.join(", ")}. If this "<" was meant as text, write \\< or &lt;.`,
         node.s,
       );
       // Still check what is inside, so its expressions are reported in the same round.
@@ -306,6 +291,10 @@ class Checker {
       if (this.hasContent(node.children)) this.problem(`<${spec.tag}> takes no children. Write it as <${spec.tag} … />.`, node.s);
       return;
     }
+    if (spec.child === "svg") {
+      this.svgRoot(node, scope);
+      return;
+    }
     if (spec.child === "inline") {
       const allowed = spec.inlineTags ?? [];
       const bad = this.firstElement(node.children, allowed);
@@ -327,7 +316,11 @@ class Checker {
           ? " Styling props are not supported; use the component's own props."
           : /^on[A-Z]/.test(attr.name)
             ? " This component has no such event."
-            : "";
+            : spec.child === "svg" && attr.name === "xmlns"
+              ? " It is not needed — remove it."
+              : spec.child === "svg" && attr.name === "height"
+                ? " The height follows the viewBox's aspect ratio."
+                : "";
       this.problem(
         `<${spec.tag}> has no prop "${attr.name}".${hint ? ` Did you mean "${hint}"?` : ""}${note} Props: ${names.length ? names.join(", ") : "(none)"}.`,
         attr.s,
@@ -339,6 +332,138 @@ class Checker {
     if (fix) this.problem(`Prop "${attr.name}" of <${spec.tag}> ${fix}.`, attr.s);
     if (attr.value === true || typeof attr.value === "string") return;
     this.expr(attr.value, scope, p.type.k === "handler" ? "handler" : "render", attr.s);
+  }
+
+  /* ─────────── <svg> ─────────── */
+
+  /**
+   * The inside of an `<svg>`: every element and attribute against the SVG
+   * allowlist (`svg.ts`), every LITERAL value against its shape (a computed one
+   * is judged when it renders), and the references between its elements.
+   */
+  svgRoot(root: ElNode, scope: Scope): void {
+    const svg: SvgCheck = { elements: 0, ids: new Map(), computedIds: false, refs: [] };
+    this.svgChildren(root.children, scope, "svg", false, svg);
+    if (svg.elements > MAX_SVG_NODES) {
+      this.problem(`This <svg> has too many elements (${svg.elements}; limit ${MAX_SVG_NODES}). Draw fewer shapes — one <path> or <polyline> instead of many <line>s.`, root.s);
+    }
+    for (const ref of svg.refs) {
+      const target = svg.ids.get(ref.id);
+      // An id that is computed somewhere may be the one meant: only a render can tell.
+      if (target === undefined && svg.computedIds) continue;
+      const problem = svgRefProblem(ref.attr, ref.id, target, ref.inResource);
+      if (problem) this.problem(problem, ref.pos);
+    }
+  }
+
+  svgChildren(nodes: TNode[], scope: Scope, parent: string, inResource: boolean, svg: SvgCheck): void {
+    let inner = scope;
+    if (nodes.some((n) => n.t === "const")) {
+      inner = new Scope(scope);
+      for (const n of nodes) if (n.t === "const") for (const name of patternNames(n.pattern)) inner.names.add(name);
+    }
+    for (const node of nodes) this.svgNode(node, inner, parent, inResource, svg);
+  }
+
+  svgNode(node: TNode, scope: Scope, parent: string, inResource: boolean, svg: SvgCheck): void {
+    if (++this.nodeCount === MAX_WIDGET_NODES + 1) {
+      this.problem(`The widget has too many nodes (limit ${MAX_WIDGET_NODES}). Render long lists from data with {#each} instead of writing each row.`, node.s);
+    }
+    switch (node.t) {
+      case "text":
+        if (node.value.trim() !== "" && !svgTakesText(parent)) {
+          this.problem(`Text directly inside <${parent}> is not drawn. Put it in a <text x="…" y="…"> element.`, node.s + (node.value.length - node.value.trimStart().length));
+        }
+        return;
+      case "expr":
+        if (!svgTakesText(parent)) this.problem(`{…} directly inside <${parent}> is not drawn. Put it in a <text> element, or bind it to an attribute (r={…}).`, node.s);
+        this.expr(node.expr, scope, "render", node.s);
+        return;
+      case "const":
+        this.expr(node.expr, scope, "render", node.s);
+        this.pattern(node.pattern, scope, node.s, null);
+        return;
+      case "each": {
+        this.expr(node.list, scope, "render", node.s);
+        const inner = new Scope(scope);
+        if (node.item) this.pattern(node.item, inner, node.s, inner);
+        if (node.index) inner.names.add(node.index);
+        this.svgChildren(node.children, inner, parent, inResource, svg);
+        if (node.empty) this.svgChildren(node.empty, scope, parent, inResource, svg);
+        return;
+      }
+      case "if":
+        for (const b of node.branches) {
+          if (b.test) this.expr(b.test, scope, "render", node.s);
+          this.svgChildren(b.children, scope, parent, inResource, svg);
+        }
+        return;
+      case "el":
+        this.svgElement(node, scope, parent, inResource, svg);
+        return;
+    }
+  }
+
+  svgElement(node: ElNode, scope: Scope, parent: string, inResource: boolean, svg: SvgCheck): void {
+    svg.elements++;
+    const tag = node.name;
+    // Every expression is still checked, so its own mistakes are reported in the same round.
+    const exprs = () => {
+      for (const a of node.attrs) if (!a.bad && a.value !== true && typeof a.value !== "string") this.expr(a.value, scope, "render", a.s);
+    };
+    // Past the cap nothing more is recorded: do not compute messages (a "did you mean") for it.
+    const full = this.problems.length >= MAX_FINDINGS;
+    const refused = full ? (svgElementSpec(tag) ? null : "") : svgElementProblem(tag, parent, inResource);
+    if (refused !== null) {
+      if (refused) this.problem(refused, node.s);
+      exprs();
+      // Look inside as if it were allowed there, so one misplaced element is one problem.
+      this.svgChildren(node.children, scope, svgElementSpec(tag) ? tag : parent, inResource, svg);
+      return;
+    }
+    const seen = new Set<string>();
+    for (const attr of node.attrs) {
+      if (seen.has(attr.name)) {
+        this.problem(`Attribute "${attr.name}" is given twice on <${tag}>.`, attr.s);
+        continue;
+      }
+      seen.add(attr.name);
+      if (attr.bad) continue;
+      const computed = attr.value !== true && typeof attr.value !== "string";
+      if (computed) this.expr(attr.value as Expr, scope, "render", attr.s);
+      if (this.problems.length >= MAX_FINDINGS) continue;
+      const slot = svgAttrKind(tag, attr.name, inResource);
+      if ("problem" in slot) {
+        this.problem(slot.problem, attr.s);
+        continue;
+      }
+      // Only a value KNOWN now is judged: a quoted string, or a literal in braces.
+      const value = attr.value;
+      let literal: string | number | true | undefined;
+      if (value === true || typeof value === "string") literal = value;
+      else if (value.type === "Lit") literal = typeof value.value === "string" || typeof value.value === "number" ? value.value : undefined;
+      else if (value.type === "Tmpl" && value.exprs.length === 0) literal = value.quasis[0];
+      else if (value.type === "Arrow" || value.type === "Arr" || value.type === "Obj") {
+        this.problem(`Attribute "${attr.name}" of <${tag}> must be a string or a number, not ${value.type === "Arrow" ? "a function" : value.type === "Arr" ? "an array" : "an object"}.`, attr.s);
+        continue;
+      }
+      if (literal === undefined) {
+        if (slot.kind === "id") svg.computedIds = true;
+        continue;
+      }
+      const checked = svgAttrValue(slot.kind, literal);
+      if (!checked.ok) {
+        this.problem(`Attribute "${attr.name}" of <${tag}> ${checked.error}.`, attr.s);
+        continue;
+      }
+      if (checked.id !== undefined) {
+        if (svg.ids.has(checked.id)) this.problem(`id="${checked.id}" is used more than once in this <svg>. Ids must be unique.`, attr.s);
+        else svg.ids.set(checked.id, tag);
+      } else if (checked.ref !== undefined) {
+        svg.refs.push({ attr: attr.name, id: checked.ref, inResource, pos: attr.s });
+      }
+    }
+    this.svgChildren(node.children, scope, tag, inResource || svgIsResource(tag), svg);
   }
 
   hasText(nodes: TNode[]): boolean {

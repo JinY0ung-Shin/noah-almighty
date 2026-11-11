@@ -6,7 +6,9 @@ import {
   systemManualIndex,
 } from "../src/server/agent/systemManual.js";
 import { checkWidget } from "../src/shared/widget/check.js";
+import { WIDGET_ICON_NAMES } from "../src/shared/widget/icons.js";
 import { widgetComponentReference } from "../src/shared/widget/spec.js";
+import { svgReference } from "../src/shared/widget/svg.js";
 import { buildSystemTools, SYSTEM_TOOL_NAMES, type SystemToolsContext } from "../src/server/agent/systemTools.js";
 import type { Store } from "../src/server/store.js";
 import { callTool } from "./helpers.js";
@@ -145,6 +147,22 @@ describe("official system manual", () => {
     }
     expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
     expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
+    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge)).toEqual({ ok: true, submits: false });
+    // The sortable table, the icons and the state-bound <svg>: each is in the generated reference
+    // (the spec's own text) and shown once in an example — and the page still fits its cap.
+    expect(page).toContain("sortable: bool (headers sort on click — the viewer's own view; your rows and state are untouched)");
+    expect(page).toContain(`Icons: ${WIDGET_ICON_NAMES.join(" ")}`);
+    expect(page).toContain(svgReference());
+    expect(page).toContain("NOT available: style class href events font-family, <style> <script> <use> <image> <a> <foreignObject>, filters, animation");
+    expect(page).toContain("colours are default muted accent success warning danger info surface subtle line");
+    expect(page).toContain("## Example: filtered sortable table, chart, icon");
+    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable).toContain("<table sortable columns=");
+    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable).toContain('<icon name="activity" color="muted" />');
+    expect(page).toContain("## Example: svg gauge bound to a slider");
+    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge).toContain('<svg viewBox="0 0 200 110" label="Progress">');
+    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge).toContain("x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)}");
+    expect(page).toContain("a filterable or sortable table, a gauge or chart driven by sliders");
+    expect(page.length).toBeLessThan(16000);
     // One example shows the follow-up button next to the structured submit.
     expect(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator).toContain('<button send="금리를 더 낮출 방법을 알려줘" variant="ghost">');
     // The user-facing product page mentions the feature, where it is enabled and where it appears.

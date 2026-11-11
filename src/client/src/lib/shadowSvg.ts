@@ -9,9 +9,15 @@ const SVG_HOST_SHEET =
 /** Svelte action: draw already-SANITIZED svg markup in the node's shadow root. */
 export function shadowSvg(node: HTMLElement, markup = "") {
   const root = node.shadowRoot ?? node.attachShadow({ mode: "open" });
+  let drawn = markup;
   root.innerHTML = SVG_HOST_SHEET + markup;
   return {
     update(next = "") {
+      // The root stays; only its content is replaced, in one synchronous write
+      // (a drawing bound to a slider redraws without an empty frame). The same
+      // markup again writes nothing.
+      if (next === drawn) return;
+      drawn = next;
       root.innerHTML = SVG_HOST_SHEET + next;
     },
   };

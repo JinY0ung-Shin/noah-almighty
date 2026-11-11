@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MAX_WIDGET_NODES, MAX_WIDGET_STATES, checkWidget } from "../src/shared/widget/check.js";
 import { NOOP_HANDLER } from "../src/shared/widget/interp.js";
+import { WIDGET_ICON_NAMES } from "../src/shared/widget/icons.js";
 import { MAX_SEND_CHARS, WIDGET_COMPONENTS, WIDGET_TAGS, normalizeProps, widgetComponentReference } from "../src/shared/widget/spec.js";
+import { svgReference } from "../src/shared/widget/svg.js";
 import { MAX_URL_CHARS, conversationImageRef, safeLinkUrl } from "../src/shared/widget/style.js";
 
 // The static check `mcp__canvas__show` runs before a widget is shown. Its
@@ -105,7 +107,9 @@ describe("checkWidget", () => {
   it("unknown components: HTML and case mistakes get a pointed fix", () => {
     expect(errorOf("<div>hi</div>")).toMatch(/Unknown component <div>\. HTML tags are not supported in a widget\./);
     expect(errorOf("<Slider />")).toMatch(/Did you mean <slider>\?/);
-    expect(errorOf("<svg viewBox=\"0 0 1 1\"></svg>")).toMatch(/Unknown component <svg>/);
+    // <svg> is a component now (tests/widget-svg.test.ts); an SVG element outside one says where it belongs
+    expect(errorOf("<span>hi</span>")).toMatch(/Unknown component <span>/);
+    expect(errorOf('<circle r="3" />')).toMatch(/<circle> is an SVG element: it exists only inside <svg viewBox="…">…<\/svg>\. Wrap the drawing in an <svg>\./);
     expect(errorOf("<row>\n  <text>a<b and c>d</text>\n</row>")).toMatch(/If this "<" was meant as text, write \\< or &lt;/);
     // a tag named like an Object member is just unknown
     expect(errorOf("<constructor />")).toMatch(/Unknown component <constructor>/);
@@ -288,7 +292,7 @@ describe("widget component spec", () => {
       "title", "text", "badge", "link", "callout",
       "button", "segmented-control", "checkbox", "switch", "slider", "select", "input", "tabs",
       "stat", "progress", "table", "chart", "details",
-      "image",
+      "image", "icon", "svg",
       "submit",
     ]);
     // not reachable through Object.prototype
@@ -312,19 +316,34 @@ describe("widget component spec", () => {
   it("generates the manual reference from the table", () => {
     const ref = widgetComponentReference();
     for (const tag of WIDGET_TAGS) expect(ref, tag).toContain(`<${tag}`);
-    expect(ref).toMatch(/^Layout\n- <box>…components…<\/box> — /);
-    expect(ref).toContain("- <slider /> — A numeric range.");
-    expect(ref).toContain("value*: number; onChange*: function (called with the new number); label*: string (visible label (required: every input is labelled))");
-    expect(ref).toContain("- <submit>text and {expr}</submit> — Sends `values` to you as STRUCTURED data in the user's next message");
-    expect(ref).toContain("- <text>text, {expr}, <link></text> — ");
-    expect(ref).toContain("- <button>text and {expr}</button> — Does ONE thing, shown to the user before they press: give exactly one of onClick | send | href.");
-    expect(ref).toContain("send: text (the text becomes the user's NEXT chat message when pressed (1–2000 chars; may be computed from state))");
-    expect(ref).toContain("href: http(s) URL (opens this absolute http(s) URL in a new tab)");
-    expect(ref).toContain("- <link>text and {expr}</link> — A link that opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.");
-    expect(ref).toContain("- <image /> — An image of THIS conversation only (the URL a file-output tool returned); no remote or data URLs.");
-    expect(ref).toContain("src*: conversation image URL (/api/conversations/<conversationId>/images/<imageId>); alt*: string (what the image shows (required))");
-    expect(ref).toContain("Its text children are its label (or pass `label`).");
+    // A legend first: the page it rides has a size cap, so what repeats is said once.
+    const [legend, types, first, second] = ref.split("\n");
+    expect(legend).toContain("`*` = required; a bool prop written bare is true.");
+    expect(legend).toContain("`text` = text, {expr}, {#if}, {#each}, no tags — on button, checkbox, switch and submit that text is the label, or pass `label`.");
+    expect(legend).toContain("Every input needs `label`; its onChange gets the new value.");
+    expect(types).toContain("fn: {() => …} or a setter name; any: string|number|boolean; options: [\"A\",\"B\"] or [{label, value}]");
+    expect(types).toContain("align: start|center|end|stretch|baseline; justify: start|center|end|between|around; color: default|muted|accent|success|warning|danger|info; tone: default|accent|success|warning|danger|info");
+    expect([first, second]).toEqual(["Layout", "- <box>…</box> — A container; with `border`/`background` it reads as a card."]);
+    // A prop whose type has its own name is just the name; a self-evident component has no description.
+    expect(ref).toContain("\n- <row>…</row>\n  gap: 0–8; align; justify; wrap: bool\n");
+    expect(ref).toContain("\n- <slider />\n  value*: num; onChange*: fn; label*: str; min: num (default 0); max: num (default 100); step: num (default 1); suffix: str (unit after the value); showValue: bool (default true)\n");
+    expect(ref).toContain("- <submit>text</submit> — Sends `values` to you as STRUCTURED data in the user's next message.");
+    expect(ref).toContain("- <button>text</button> — Does ONE thing, shown to the user before they press: give exactly one of onClick | send | href.");
+    expect(ref).toContain("send: text (posted as the user's NEXT chat message (1–2000 chars)); href: http(s) URL (opens in a new tab)");
+    expect(ref).toContain("- <link>text</link> — Opens in a new tab. Works on its own and inside <text>, <title>, <badge> and <callout>.\n  href*: http(s) URL\n");
+    expect(ref).toContain("- <image /> — An image of THIS conversation only.");
+    expect(ref).toContain("src*: conversation image URL (/api/conversations/<conversationId>/images/<imageId>); alt*: str (what it shows)");
     expect(ref).toContain("background: none|surface|subtle|accent|success|warning|danger|info");
+    expect(ref).toContain('onChange*: fn (called with the text; for type="number" with a number, or "" when empty)');
+    // The three additions: a sortable table, icons (the names once, at the end), and an <svg>.
+    expect(ref).toContain("columns*: [{key, label?, align?, sortable?}] (align: start|center|end; sortable: false opts a column out)");
+    expect(ref).toContain("sortable: bool (headers sort on click — the viewer's own view; your rows and state are untouched)");
+    expect(ref).toContain("- <icon /> — One of the app's line icons.\n  name*: icon; size: sm|md|lg|xl (14/18/24/32 px, default md); color; label: str (accessible name; without it the icon is decoration)");
+    expect(ref).toContain("tone: info|success|warning|danger; title: str; icon\n");
+    expect(ref).toContain("icon (drawn before the label)");
+    expect(ref.endsWith(`\nIcons: ${WIDGET_ICON_NAMES.join(" ")}`)).toBe(true);
+    expect(ref).toContain("- <svg>SVG elements</svg> — A drawing that follows state (a gauge, a diagram).");
+    expect(ref).toContain(svgReference());
     expect(ref.length).toBeLessThan(6500);
   });
 });

@@ -101,6 +101,7 @@ export {
   JUSTIFY,
   MAX_SPACING_UNITS,
   MAX_URL_CHARS,
+  SVG_PAINT_TOKENS,
   TONE_TOKENS,
   UNIT_PX,
   background,
@@ -110,7 +111,28 @@ export {
   lineColor,
   safeLinkUrl,
   spacing,
+  svgPaintToken,
   textColor,
 } from "./style.js";
 export { dedent, displayText, jsxWhitespace, unescapeText } from "./text.js";
+export { WIDGET_ICON_NAMES, WIDGET_ICON_SIZES } from "./icons.js";
+export {
+  MAX_SVG_CHARS,
+  MAX_SVG_COORD,
+  MAX_SVG_NODES,
+  MAX_SVG_PATH_CHARS,
+  SVG_ELEMENTS,
+  SVG_REF_TARGETS,
+  SVG_TAGS,
+  svgAttrKind,
+  svgAttrValue,
+  svgElementProblem,
+  svgElementSpec,
+  svgReference,
+  svgRefProblem,
+  type SvgElementSpec,
+  type SvgKind,
+  type SvgValue,
+} from "./svg.js";
+export { renderSvg, svgMarkup, type SvgTree } from "./svgRender.js";
 export { MAX_AST_DEPTH, MAX_EXPR_CHAIN, MAX_EXPR_NESTING, parseExpression, type Expr, type Pattern } from "./expr.js";

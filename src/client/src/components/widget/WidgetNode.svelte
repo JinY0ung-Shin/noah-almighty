@@ -34,11 +34,14 @@
   import type { WidgetCtx } from "../../lib/widgetCtx";
   import { cellText } from "../../lib/widgetView";
   import { colorStyle, containerStyle, imageStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
-  import type { WidgetColumn } from "../../../../shared/widget/index";
+  import { WIDGET_ICON_SIZES, type WidgetColumn } from "../../../../shared/widget/index";
+  import Icon from "../Icon.svelte";
   import WidgetChart from "./WidgetChart.svelte";
   import WidgetControl from "./WidgetControl.svelte";
   import WidgetInline from "./WidgetInline.svelte";
   import WidgetNode from "./WidgetNode.svelte";
+  import WidgetSvg from "./WidgetSvg.svelte";
+  import WidgetTable from "./WidgetTable.svelte";
 
   export let v: VNode;
   export let ctx: WidgetCtx;
@@ -52,8 +55,12 @@
   function rowsOf(value: unknown): Record<string, unknown>[] {
     return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
   }
-  function cell(row: Record<string, unknown>, key: string): string {
-    return Object.prototype.hasOwnProperty.call(row, key) ? cellText(row[key]) : "";
+  /** An icon name the library validated against the app's own icon list ("" draws nothing). */
+  function iconName(value: unknown): string {
+    return typeof value === "string" ? value : "";
+  }
+  function iconSize(value: unknown): number {
+    return (typeof value === "string" && Object.prototype.hasOwnProperty.call(WIDGET_ICON_SIZES, value) ? WIDGET_ICON_SIZES[value] : undefined) ?? WIDGET_ICON_SIZES.md;
   }
   /**
    * `open` is the section's INITIAL state. Written once at mount and never
@@ -102,10 +109,20 @@
 {:else if v.tag === "badge"}
   <span class="wg-badge" style={toneStyle(v.props.tone)}><WidgetInline segs={v.segs} /></span>
 {:else if v.tag === "callout"}
-  <div class="wg-callout" role="note" style={toneStyle(v.props.tone ?? "info")}>
-    {#if typeof v.props.title === "string" && v.props.title}<div class="wg-callout-title">{v.props.title}</div>{/if}
-    {#each v.children as child (child.key)}<WidgetNode v={child} {ctx} />{/each}
-  </div>
+  {#if iconName(v.props.icon)}
+    <div class="wg-callout wg-callout-row" role="note" style={toneStyle(v.props.tone ?? "info")}>
+      <span class="wg-callout-mark"><Icon name={iconName(v.props.icon)} size={16} /></span>
+      <div class="wg-callout-body">
+        {#if typeof v.props.title === "string" && v.props.title}<div class="wg-callout-title">{v.props.title}</div>{/if}
+        {#each v.children as child (child.key)}<WidgetNode v={child} {ctx} />{/each}
+      </div>
+    </div>
+  {:else}
+    <div class="wg-callout" role="note" style={toneStyle(v.props.tone ?? "info")}>
+      {#if typeof v.props.title === "string" && v.props.title}<div class="wg-callout-title">{v.props.title}</div>{/if}
+      {#each v.children as child (child.key)}<WidgetNode v={child} {ctx} />{/each}
+    </div>
+  {/if}
 {:else if v.tag === "details"}
   <details class="wg-details" use:initialOpen={v.props.open === true}>
     <summary>{typeof v.props.title === "string" ? v.props.title : ""}</summary>
@@ -143,27 +160,26 @@
     </div>
   </div>
 {:else if v.tag === "table"}
-  <div class="wg-table-wrap">
-    <table class="wg-table">
-      {#if typeof v.props.caption === "string" && v.props.caption}<caption>{v.props.caption}</caption>{/if}
-      <thead>
-        <tr>
-          {#each columnsOf(v.props.columns) as col}<th scope="col" class={`wg-align-${col.align}`}>{col.label}</th>{/each}
-        </tr>
-      </thead>
-      <tbody>
-        {#each rowsOf(v.props.rows) as row}
-          <tr>
-            {#each columnsOf(v.props.columns) as col}<td class={`wg-align-${col.align}`}>{cell(row, col.key)}</td>{/each}
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
+  <WidgetTable
+    columns={columnsOf(v.props.columns)}
+    rows={rowsOf(v.props.rows)}
+    sortable={v.props.sortable === true}
+    caption={typeof v.props.caption === "string" ? v.props.caption : ""}
+  />
 {:else if v.tag === "image"}
   <!-- An image of THIS conversation only (lib/widgetView.ts rebuilt the address
        from its two ids after checking the conversation). -->
   <img class="wg-image" src={typeof v.props.src === "string" ? v.props.src : ""} alt={typeof v.props.alt === "string" ? v.props.alt : ""} loading="lazy" style={imageStyle(v.props)} />
+{:else if v.tag === "icon"}
+  <!-- One of the app's own icons, by a name the library checked against its list.
+       Decoration unless it is given a name. -->
+  {#if typeof v.props.label === "string" && v.props.label}
+    <span class="wg-icon" role="img" aria-label={v.props.label} style={colorStyle(v.props.color)}><Icon name={iconName(v.props.name)} size={iconSize(v.props.size)} /></span>
+  {:else}
+    <span class="wg-icon" aria-hidden="true" style={colorStyle(v.props.color)}><Icon name={iconName(v.props.name)} size={iconSize(v.props.size)} /></span>
+  {/if}
+{:else if v.tag === "svg"}
+  <WidgetSvg tree={v.svg} label={typeof v.props.label === "string" ? v.props.label : ""} />
 {:else if v.tag === "chart"}
   <WidgetChart
     spec={v.props.spec}
