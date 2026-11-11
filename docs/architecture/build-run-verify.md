@@ -236,6 +236,15 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   growth under real load were not measured). Finding a conversation's trace: pi's session id is not Noah's
   conversation id — `messages.sdk_session_id` holds `resp_<pi session uuid>_<turn>`, and
   `GET /admin/api/history?user=<Noah user id>` lists that user's pi sessions.
+  **pi `939f064` (2026-11-11, admin UI restyle + the Pretendard font — a UI-only bump):** `run-all.sh` all
+  PASS (`~/.noah-work/boot-test-2026-11-11d/`; the tracing scripts `70-`…`74-` were not re-run). pi's commit
+  had only been looked at with mock data, so `25-admin-ui-real-gateway.mjs` there looks at it against the
+  real gateway THROUGH Noah's `/admin` proxy (38/38): the three Pretendard woff2 (2.23 MiB; the "latin"
+  files carry the whole Korean set) arrive as `font/woff2` for an admin and are a 302 for anyone else, pi's
+  CSP (`default-src 'self'`) covers them, and all 12 pages render in headless Chromium, light and dark, with
+  no page error, CSP violation or failed request, the font actually loaded, and no sideways page scroll at
+  400px. Worth repeating whenever pi's UI changes. The admin-ui build now pulls `@fontsource/pretendard`
+  from the npm registry — a deployment that builds behind an npm mirror needs that package there.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
