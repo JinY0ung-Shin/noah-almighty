@@ -886,13 +886,18 @@
   border-radius: var(--r-xs);
   padding: 1px var(--s-1-5);
 }
-/* Code blocks: the copy button anchors to a non-scrolling wrapper so it stays
-   pinned to the corner even when the <pre> scrolls horizontally. */
+/* Code blocks: a header (language · 줄바꿈 · copy) on a non-scrolling wrapper, so
+   the controls stay put while the <pre> scrolls horizontally and never sit ON
+   the code. The wrapper owns the surface and the radius; the <pre> inside is
+   flat. Colours are the fixed --code-* set in BOTH themes. */
 .code-block {
   position: relative;
   margin: 0.8em 0;
   min-width: 0;
   max-width: 100%;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  overflow: hidden;
 }
 .md pre {
   margin: 0;
@@ -906,36 +911,82 @@
   overflow-x: auto;
   line-height: 1.5;
 }
+.md .code-block > pre,
+.code-block > pre {
+  border-radius: 0;
+  padding-top: var(--s-2);
+}
+/* 줄바꿈 on: long lines fold at the block's width instead of scrolling. */
+.md .code-block.code-wrapped > pre,
+.code-block.code-wrapped > pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
+}
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-height: 32px;
+  padding: var(--s-1) var(--s-1-5) 0 var(--s-4);
+  color: var(--code-fg-muted);
+  font-size: var(--t-xs);
+  user-select: none;
+}
+.code-lang {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+.code-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-1);
+}
+.code-block .code-wrap,
 .code-block .code-copy {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 28px;
   height: 28px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--code-overlay-strong);
-  background: var(--code-overlay);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--code-fg-muted);
   border-radius: var(--r-xs);
-  opacity: 0;
-  transition: opacity 0.15s var(--ease-out), background 0.15s var(--ease-out);
+  font-size: var(--t-xs);
+  transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
 }
-.code-block:hover .code-copy,
-.code-block .code-copy:focus-visible {
-  opacity: 1;
+.code-block .code-wrap {
+  padding: 0 var(--s-2);
+  white-space: nowrap;
 }
+.code-block .code-copy {
+  width: 28px;
+}
+.code-block .code-wrap:hover,
 .code-block .code-copy:hover {
   background: var(--code-overlay-strong);
   color: var(--code-fg);
 }
+.code-block .code-wrap:focus-visible,
+.code-block .code-copy:focus-visible {
+  outline: 2px solid var(--code-fg);
+  outline-offset: 1px;
+}
+.code-block .code-wrap[aria-pressed="true"] {
+  background: var(--code-overlay);
+  border-color: var(--code-overlay-strong);
+  color: var(--code-fg);
+}
 .code-block .code-copy.copied {
   color: var(--code-ok);
-  opacity: 1;
 }
 .code-block .code-copy.copy-failed {
   color: var(--code-danger);
-  opacity: 1;
 }
 .code-block .code-copy svg {
   width: 15px;
@@ -1643,10 +1694,10 @@ button.composer-bridge:focus-visible {
 .msg-actions:focus-within {
   opacity: 1;
 }
-/* Touch devices have no hover — keep message/code actions visible. */
+/* Touch devices have no hover — keep message actions visible. (Code-block
+   controls live in the block's header and are always visible.) */
 @media (hover: none) {
-  .msg-actions,
-  .code-block .code-copy {
+  .msg-actions {
     opacity: 1;
   }
 }
@@ -1656,6 +1707,10 @@ button.composer-bridge:focus-visible {
   .conv-act,
   .code-block .code-copy {
     width: 44px;
+    height: 44px;
+  }
+  .code-block .code-wrap {
+    min-width: 44px;
     height: 44px;
   }
   .split-btn,

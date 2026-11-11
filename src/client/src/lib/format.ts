@@ -35,15 +35,31 @@ export function renderMarkdown(text: string | null | undefined, options: { forbi
   // shadow root instead (CanvasTab).
   // `forbidInlineStyle`: content another person wrote (team-brain notes) must not
   // position itself over the app (`position:fixed; inset:0` fake UI).
-  const html = DOMPurify.sanitize(marked.parse(source) as string, {
-    FORBID_TAGS: ["style"],
-    ...(options.forbidInlineStyle ? { FORBID_ATTR: ["style"] } : {}),
-  });
+  const html = sanitizeMarkdownHtml(marked.parse(source) as string, options);
   if (source.trim() && !html.trim()) {
     const escaped = source.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c] || c);
     return DOMPurify.sanitize(`<pre>${escaped}</pre>`);
   }
   return html;
+}
+
+/**
+ * The ONE sanitizer pass for markdown output — `renderMarkdown` and the live
+ * block renderer (`lib/streamMarkdown.ts`) both go through it, so a block
+ * rendered on its own is cleaned by exactly the rules the whole text is.
+ */
+export function sanitizeMarkdownHtml(
+  html: string,
+  options: { forbidInlineStyle?: boolean; forceBody?: boolean } = {},
+): string {
+  return DOMPurify.sanitize(html, {
+    FORBID_TAGS: ["style"],
+    ...(options.forbidInlineStyle ? { FORBID_ATTR: ["style"] } : {}),
+    // `forceBody`: parse as content that FOLLOWS other content. A fragment that
+    // starts with a comment, a stray end tag or whitespace is otherwise parsed
+    // as the start of a document, which drops what the same text keeps mid-page.
+    ...(options.forceBody ? { FORCE_BODY: true } : {}),
+  });
 }
 
 // Rendered-markdown cache for PERSISTED message bodies.
@@ -56,8 +72,10 @@ export function renderMarkdown(text: string | null | undefined, options: { forbi
 // html was identical. renderMarkdown is pure in its source text, so caching on
 // that text makes the parse cost O(new text) instead of O(transcript × tokens).
 //
-// Streaming text (liveText / liveThinking) must keep using the plain
-// renderMarkdown: it changes every token, so caching it only churns the map.
+// Streaming text (liveText / liveThinking) never goes through this cache: it
+// changes every token, so caching it only churns the map. It is rendered as
+// top-level blocks instead (lib/streamMarkdown.ts) — finished blocks once, the
+// open tail per token.
 const MARKDOWN_CACHE_LIMIT = 500;
 const markdownCache = new Map<string, string>();
 

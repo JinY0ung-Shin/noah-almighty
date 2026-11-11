@@ -1103,6 +1103,13 @@ export interface AgentResponse {
    * Only captured on the streaming chat path (no viewer → not persisted).
    */
   thinking?: string;
+  /**
+   * How long the model spent reasoning this turn, in ms — the "N초 동안 생각함"
+   * on the reasoning card. An ESTIMATE (the time between consecutive reasoning
+   * chunks), set only on a completed turn that reasoned for a second or more;
+   * absent = the card shows no duration.
+   */
+  thinkingMs?: number;
   /** Activity-tree snapshot so the completed bubble keeps showing tool/agent runs. */
   activity?: AgentActivity;
   raw?: unknown;

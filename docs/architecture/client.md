@@ -101,8 +101,9 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   the CONFLUENCE_PAT 저장 button stayed disabled while typing (`SettingsAccessTab`). Fix pattern: derive
   per-item state in a `$:` map (`presetFilled`/`presetStatusText`) and have the template read the map
   DIRECTLY. Functions that read only their ARGUMENTS (e.g. `canSendMessage(item)`) are fine — the arg is
-  the tracked dep. Known latent same-class instances (masked by coincident list refreshes, unverified):
-  `Shell.isConversationBusy`/`isConversationStreaming`, `ChatView.canPickModel` — see REFACTORING-BACKLOG.
+  the tracked dep. `Shell.isConversationBusy`/`isConversationStreaming` WERE this bug (a row stayed locked
+  after its conversation opened; reproduced and fixed 2026-11-11 with `{@const rowBusy}`/`{@const
+  rowStreaming}` in the markup). Still unverified: `ChatView.canPickModel` — see REFACTORING-BACKLOG.
 - **One `updateState` re-evaluates EVERY each-block item's template expressions — and streaming calls it
   once per SSE token.** `$: panes = $appState.chatPanes` re-emits the same array, but `safe_not_equal` is
   always true for objects, so the dirt propagates down to each keyed item. Measured with a probe component
@@ -110,11 +111,48 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   tokens). In the transcript that expression is `renderMarkdown(...)` — 57 ms of `marked` + `DOMPurify` per
   token, all thrown away because the html was identical. Two mitigations are in place, keep them:
   `renderMarkdownCached` (`lib/format.ts`) memoizes PERSISTED message bodies on their source text — live
-  streaming text must keep the plain `renderMarkdown` or it just churns the map; and `enhanceMarkdown`
+  streaming text must never go through that map (it would churn it); it has its own path, below; and `enhanceMarkdown`
   (`lib/dom.ts`) skips its two `querySelectorAll` sweeps when the param is identity-equal, which is why
   every call site MUST pass the same source string its sibling `{@html}` renders. The real fix is runes
   for this subtree (REFACTORING-BACKLOG T3.10); until then, assume anything in a chat `{#each}` runs at
   token rate and keep it cheap or memoized.
+- **The LIVE answer renders by BLOCK, paced, and never re-parses what is settled (2026-11-11).**
+  `lib/streamMarkdown.ts` (`createStreamMarkdown`) splits the live text at marked's top-level tokens; a block
+  is settled only when a BLANK line precedes the cut and the first line after it is complete (marked's block
+  lexer decides line by line, so nothing before that can still change — a list absorbing the next line, a
+  setext heading, an open fence). Settled blocks are parsed + sanitized once; only the open tail re-renders.
+  **The bar is equality with `renderMarkdown(wholeText)` at every prefix** (`tests/client-stream-markdown.test.ts`
+  checks every prefix and a seeded fuzz), so it falls back to a whole render where a split would differ:
+  reference-style link definitions (one definition rewrites earlier blocks) and, from the first raw-HTML token
+  to the end, one block (tags can span blocks). `dom.ts`'s `markdownBlocks` action swaps only the nodes of a
+  block whose html changed — no wrapper element per block, so the DOM is the whole-render tree and `.md`
+  CSS applies unchanged. `lib/streamHeal.ts` closes the open tail FOR DISPLAY ONLY (`**`, backticks, a
+  half-typed link, a table still arriving, a marker line with no meaning yet); stored text, copied text and
+  attachment anchors (`bubbleSegments.ts`, raw length) never see it.
+  `lib/streamReveal.ts` paces what is shown (EMA arrival rate, ~0.25 s behind, ≤ 3× catch-up, word
+  boundaries, injectable clock): `pane.liveText` is ALWAYS the full text and the reveal store only says how
+  many characters show, so 중지 / an error / a text fold / a delivered steer / the finalizer cannot lose or
+  duplicate text — they read the pane. It is off under `prefers-reduced-motion` (read when a reveal STARTS),
+  flushes on `visibilitychange` and when frames stall, flushes everything when a card (`file` frame) arrives so
+  a card never precedes its text, and drains the rest inside ~0.3 s on the stored bubble at turn end.
+  The thinking card shows elapsed seconds and the current sub-heading in its collapsed header and renders
+  its body only when OPEN; a stored message carries `AgentResponse.thinkingMs` (the server's estimate: the
+  sum of gaps between consecutive thinking chunks, gaps over 5 s dropped, `done` turns only).
+- **A code block has a header bar** (`wrapCodeBlock` in `dom.ts`): language label · 줄바꿈 toggle · 복사,
+  always visible (it replaced the hover-only copy overlay everywhere `enhanceMarkdown` runs). A fence still
+  streaming gets text appended, never rebuilt, so the toggle, focus and scroll survive. `copyText` returns
+  `Promise<boolean>`, falls back to a selection copy when `clipboard.writeText` THROWS (not only when it is
+  missing), and puts its temporary textarea inside the open dialog (a focus trap blocks one on `<body>`).
+- **The conversation list is grouped by day and prefetches on intent.** `lib/conversationGroups.ts`
+  (`groupConversationsByDate(conversations, now)`, pure, local-midnight boundaries) → 오늘 / 어제 / 지난 7일 /
+  지난 30일 / 그 이전; `Shell` re-groups at local midnight and on tab return. `lib/conversationPrefetch.ts`
+  starts the messages + avatar load on hover (120 ms dwell), `pointerdown` or keyboard focus and hands the
+  click the SAME request (`takeConversationLoad` inside `loadPaneForConversation` — one applier, no second
+  path); never for the open conversation or one with an active run. ONE store subscription drops the cache:
+  the user changing → all; `state.conversations` being REPLACED (list reload after every turn, delete, 비우기,
+  rename) → all; a conversation open in a pane → that one; TTL 15 s. **So a list row must be changed by
+  replacing the array, never mutated in place** (the memo and the invalidation both key on its identity).
+  Trade-off: a conversation changed elsewhere can open up to 15 s stale.
 - **`<details>` hides its children, it does not skip rendering them.** A body left in the template costs a
   full markdown parse / component mount for every message on load, on a card most users never open. The
   transcript's "생각 과정" and "작업 내역" cards therefore render on first open, driven by an
@@ -278,7 +316,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `.canvas-body` reserves its scrollbar gutter, so a tall diagram's scrollbar cannot flip that width.
 - **A `widget` canvas is drawn INLINE in the bubble by the same `CanvasTab`** (`inline` prop, mounted by
   `widget/InlineWidget.svelte` from `attachmentCards` at the attachment's anchor; `lib/sidePanel.ts` leaves an
-  inline widget out of the tab strip). Its state stays in `CanvasTab`'s script, next to `ctrlVals` — the inline
+  inline widget out of the tab strip). A sortable `<table>` keeps its sort in `WidgetTable`'s own state (view
+  state — not widget state, not persisted, not submitted) and `<svg>` is drawn by `WidgetSvg` through
+  `lib/widgetSvg.ts` into a shadow root that is updated in place. Its state stays in `CanvasTab`'s script, next to `ctrlVals` — the inline
   card and the fullscreen stage are two `WidgetView`s over the same values. The card re-mounts when the live
   bubble becomes the stored one at turn end (values come back from localStorage; focus inside it is lost). The view model is
   rebuilt by `lib/widgetView.ts` on every state change and the widget components only draw it; the library

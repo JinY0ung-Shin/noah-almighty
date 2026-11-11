@@ -1364,6 +1364,10 @@ export async function executeChatTurn(
     // Accumulate the main-agent reasoning (extended-thinking) text as it streams,
     // so it can be persisted on the response (success) and the cancel/error paths.
     let streamedThinking = "";
+    // How long the model reasoned (`response.thinkingMs`): the time between
+    // consecutive reasoning chunks. A longer pause is a tool or the answer.
+    let thinkingMs = 0;
+    let thinkingChunkAt = 0;
     // Images published by `show_file` during this run. They render live over
     // SSE and are attached to the terminal assistant message on every exit
     // path so a reload matches what the user already saw.
@@ -1727,12 +1731,17 @@ export async function executeChatTurn(
             emitRunEvent(runId, "delta", { text });
           },
           onThinking: (text) => {
+            const now = Date.now();
+            if (thinkingChunkAt && now - thinkingChunkAt < 5_000) thinkingMs += now - thinkingChunkAt;
+            thinkingChunkAt = now;
             streamedThinking += text;
             emitRunEvent(runId, "thinking", { text });
           },
           // Empty-turn retry: drop the discarded attempt's reasoning so the kept
           // turn's thinking isn't shown/persisted glued onto the throwaway one.
           onThinkingReset: () => {
+            thinkingMs = 0;
+            thinkingChunkAt = 0;
             streamedThinking = "";
             emitRunEvent(runId, "thinking_reset", {});
           },
@@ -1822,6 +1831,7 @@ export async function executeChatTurn(
             persistedTextOffset = streamedText.length;
             persistedThinkingOffset = streamedThinking.length;
             persistedAttachmentsOffset = shownAttachments.length;
+            thinkingMs = 0; // the next segment's reasoning time is its own
           },
           // A team-brain card (the avatar drafted a proposal / note / review). It
           // rides the message's attachments like a file card; NOTHING happens until
@@ -2728,6 +2738,7 @@ export async function executeChatTurn(
       const thinkingTail = streamedThinking.slice(persistedThinkingOffset);
       if (thinkingTail) {
         response.thinking = thinkingTail;
+        if (thinkingMs >= 1_000) response.thinkingMs = thinkingMs;
       }
 
       // /compact: no text streams, so the bubble is composed from its compact

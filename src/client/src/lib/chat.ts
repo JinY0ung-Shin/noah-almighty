@@ -11,6 +11,8 @@ import { isDrawioAttachment } from "./drawioViewer";
 import { isWidgetAttachment, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState, removeWidgetState } from "./widgetState";
 import { formatTokenCount } from "./format";
+import { flushReveal, handoffReveal, noteLiveText, resetReveal } from "./streamReveal";
+import { noteThinking, resetThinkingClock, thinkingElapsedMs } from "./streamThinking";
 import {
   extensionSupportsSecretInput,
   readAllowedOrigins,
@@ -1622,6 +1624,11 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
           pane.liveText += text;
           // Answer text means the reasoning phase has handed off; stop the pulse.
           pane.thinkingActive = false;
+          noteThinking(paneId, false);
+          // The bubble shows this text PACED (lib/streamReveal.ts): the pane
+          // keeps all of it, the reveal only decides how much is on screen yet.
+          // Told here, before the store emits, so the two never disagree for a frame.
+          noteLiveText(paneId, pane.liveText);
         });
       }
       return;
@@ -1632,6 +1639,7 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         updatePane(paneId, (pane) => {
           pane.liveThinking = (pane.liveThinking || "") + text;
           pane.thinkingActive = true;
+          noteThinking(paneId, true);
         });
       }
       return;
@@ -1654,6 +1662,9 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             (pane.liveThinking ? pane.liveThinking + "\n\n" : "") + pane.liveText;
           pane.liveText = "";
         }
+        // The bubble restarts: whatever was still being revealed went into the
+        // reasoning view with the rest, and the new block is paced from nothing.
+        resetReveal(paneId);
         pane.liveTextBreakPending = false;
         for (const att of pane.liveAttachments) {
           if (typeof att.anchor === "number") att.anchor = 0;
@@ -1832,6 +1843,9 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
           const pane = state.chatPanes.find((item) => item.id === paneId);
           if (!pane) return;
           if (!pane.liveAttachments.some((item) => item.id === data.attachment.id)) {
+            // A card is never held back, and never shown above text that is
+            // not on screen yet: everything that arrived shows now.
+            flushReveal(paneId);
             // Anchor the card at the CURRENT text length so it stays put while
             // later text streams in below it (the persisted message carries the
             // server-stamped equivalent). The event payload never has an anchor
@@ -1976,6 +1990,9 @@ function handleSteer(
       return;
     case "delivered":
       settleSteer(steer.id);
+      // The model has the message now: what it wrote before it is all shown,
+      // so the delivered row never sits above text still being revealed.
+      flushReveal(paneId);
       updatePane(paneId, (pane) => {
         dropPendingSteer(pane, steer.id);
         // The persisted user row when the server has one; otherwise a local
@@ -2220,6 +2237,7 @@ function markTextBreak(paneId: string): void {
       pane.liveTextBreakPending = true;
     // Tool / agent / task activity interrupts reasoning: stop the pulse.
     pane.thinkingActive = false;
+    noteThinking(paneId, false);
   });
 }
 
@@ -2293,6 +2311,11 @@ function resetLive(pane: ChatPane): void {
   pane.liveTextBreakPending = false;
   pane.liveThinking = "";
   pane.thinkingActive = false;
+  // The view-layer companions of the live text (paced reveal, reasoning
+  // clock) end with it: a stop, an error, a finished turn and a new send all
+  // come through here, and none of them may leave text half revealed.
+  resetReveal(pane.id);
+  resetThinkingClock(pane.id);
   pane.liveStatus = "";
   pane.liveAgents = [];
   pane.liveTools = [];
@@ -2343,8 +2366,26 @@ function attachActivity(
 function attachThinking(
   response: AgentResponse | null,
   thinking: string | undefined,
+  paneId?: string,
 ): void {
   if (response && thinking && !response.thinking) response.thinking = thinking;
+  // How long the reasoning took, when the server did not say: this session
+  // watched it, so the finished card can read "N초 동안 생각함" until a reload.
+  if (response?.thinking && response.thinkingMs === undefined && paneId) {
+    const elapsed = thinkingElapsedMs(paneId);
+    if (elapsed >= 1000) response.thinkingMs = elapsed;
+  }
+}
+
+/**
+ * The live bubble becomes this stored message. Text the paced reveal had not
+ * shown yet is carried over, so the answer's end drains onto the message
+ * (lib/streamReveal.ts) instead of jumping in. Call BEFORE the live state is
+ * reset.
+ */
+function handoffLiveReveal(pane: ChatPane, message: StoredMessage): void {
+  const text = message.response?.text || message.response?.summary || message.content || "";
+  handoffReveal(pane.id, message.id, text);
 }
 
 function finalizeDone(paneId: string, data: any): void {
@@ -2397,8 +2438,9 @@ function finalizeVisibleTurn(
     }
     if (message?.role === "assistant") {
       attachActivity(message.response, activity);
-      attachThinking(message.response, pane.liveThinking);
+      attachThinking(message.response, pane.liveThinking, pane.id);
       pane.messages.push(message);
+      handoffLiveReveal(pane, message);
       appended = true;
       pane.usage = message.response?.usage ?? pane.usage;
       if (message.id && activity) {
@@ -2408,8 +2450,8 @@ function finalizeVisibleTurn(
     } else if (pane.liveText || data?.response) {
       const response = data?.response as AgentResponse | undefined;
       attachActivity(response ?? null, activity);
-      attachThinking(response ?? null, pane.liveThinking);
-      pane.messages.push({
+      attachThinking(response ?? null, pane.liveThinking, pane.id);
+      const sealed: StoredMessage = {
         id: newId(),
         conversationId: pane.conversationId,
         role: "assistant",
@@ -2417,7 +2459,9 @@ function finalizeVisibleTurn(
         attachments: pane.liveAttachments.length ? [...pane.liveAttachments] : undefined,
         response: response || null,
         createdAt: new Date().toISOString(),
-      });
+      };
+      pane.messages.push(sealed);
+      handoffLiveReveal(pane, sealed);
       appended = true;
       pane.usage = response?.usage ?? pane.usage;
     }
@@ -2507,7 +2551,7 @@ function pushTerminalMessage(
     text,
   };
   attachActivity(response, snapshotActivity(pane));
-  attachThinking(response, pane.liveThinking);
+  attachThinking(response, pane.liveThinking, pane.id);
   const id = newId();
   terminalMessageIds.set(pane.id, id);
   pane.messages.push({

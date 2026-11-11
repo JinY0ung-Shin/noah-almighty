@@ -77,8 +77,8 @@ Each item lists: files · why · risk · effort · breaking.
 - **risk:** med · **effort:** M · **breaking:** (b) yes
 
 ### T3.10 — audit remaining untracked template function calls (Svelte 5 legacy)
-- **Files:** `src/client/src/components/Shell.svelte` (`isConversationBusy`/`isConversationStreaming`),
-  `src/client/src/views/ChatView.svelte` (`canPickModel`)
+- **Files:** `src/client/src/views/ChatView.svelte` (`canPickModel`). (`Shell.isConversationBusy`/
+  `isConversationStreaming` were confirmed and fixed 2026-11-11 — named in the markup with `{@const}`.)
 - Same class as the fixed CONFLUENCE_PAT save-button bug ([`architecture/client.md`](architecture/client.md) §Svelte 5 runtime gotchas):
   the template calls a helper whose BODY reads reactive state → compiled with `$.untrack` → the attribute
   goes stale until an unrelated invalidation. These are currently masked by coincident list/store

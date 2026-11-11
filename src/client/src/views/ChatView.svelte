@@ -46,10 +46,13 @@
     writeAllowedOrigins,
     type BridgeVersionVerdict,
   } from "../lib/browserBridge";
-  import { autosize, clickOutside, copyText, downscaleImageToDataUrl, enhanceMarkdown, readFileAsDataUrl } from "../lib/dom";
+  import { autosize, clickOutside, copyText, downscaleImageToDataUrl, enhanceMarkdown, markdownBlocks, readFileAsDataUrl } from "../lib/dom";
   import { loadAvatars, loadConversations } from "../lib/loaders";
   import { goView, routeFromHash } from "../lib/nav";
-  import { formatFileSize, formatUsageLabel, renderMarkdown, renderMarkdownCached, timeLabel } from "../lib/format";
+  import { formatFileSize, formatUsageLabel, renderMarkdownCached, timeLabel } from "../lib/format";
+  import { createStreamMarkdown, type StreamBlock, type StreamMarkdown } from "../lib/streamMarkdown";
+  import { liveReveal, messageRevealKey, revealedAttachments, revealedText } from "../lib/streamReveal";
+  import { formatThinkingDuration, thinkingClocks, thinkingElapsed, thinkingNow, thinkingTopic } from "../lib/streamThinking";
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
   import { hasSideTabs, isWidgetAttachment, widgetHome } from "../lib/sidePanel";
@@ -1194,6 +1197,53 @@
     else expandedCards.delete(key);
     expandedCards = expandedCards;
   }
+
+  // A LIVE answer is drawn as top-level markdown blocks (lib/streamMarkdown.ts):
+  // a block that can no longer change is parsed once and keeps its DOM, and only
+  // the open tail is rendered again per token — instead of one {@html} of the
+  // whole text, which replaced every node (and every code block's buttons) each
+  // time. One renderer per (scope, segment): the scope is the pane for its live
+  // bubble, or a stored message while the end of its answer is still draining
+  // in (lib/streamReveal.ts). The helper reads only its arguments, and the
+  // markup names the array it returns ({@const blocks}) — legacy-mode tracking.
+  const streamRenderers = new Map<string, StreamMarkdown>();
+  function streamBlocks(scope: string, segment: number | string, text: string, heal: boolean): StreamBlock[] {
+    const key = `${scope}\u0000${segment}`;
+    let renderer = streamRenderers.get(key);
+    if (!renderer) {
+      renderer = createStreamMarkdown();
+      streamRenderers.set(key, renderer);
+    }
+    return renderer.render(text, { heal });
+  }
+
+  // The live "생각 과정" card renders its body only while open (as the stored
+  // cards do): closed, it parsed the whole reasoning text on every token.
+  let openLiveThinking = new Set<string>();
+  function toggleLiveThinking(paneId: string, event: Event): void {
+    const open = (event.currentTarget as HTMLDetailsElement).open;
+    if (open === openLiveThinking.has(paneId)) return;
+    if (open) openLiveThinking.add(paneId);
+    else openLiveThinking.delete(paneId);
+    openLiveThinking = openLiveThinking;
+  }
+
+  /** Drop the renderers and open-card marks of bubbles that are gone (a turn ended, a drain finished). */
+  function pruneLiveRenderState(list: ChatPane[], reveal: Record<string, number>): void {
+    for (const key of streamRenderers.keys()) {
+      const scope = key.slice(0, key.indexOf("\u0000"));
+      const alive = scope.startsWith("m:") ? scope in reveal : list.some((p) => p.id === scope && p.streaming);
+      if (!alive) streamRenderers.delete(key);
+    }
+    let closed = false;
+    for (const paneId of openLiveThinking) {
+      if (list.some((p) => p.id === paneId && p.streaming && p.liveThinking)) continue;
+      openLiveThinking.delete(paneId);
+      closed = true;
+    }
+    if (closed) openLiveThinking = openLiveThinking;
+  }
+  $: if (streamRenderers.size || openLiveThinking.size) pruneLiveRenderState(panes, $liveReveal);
 </script>
 
 
@@ -1248,6 +1298,22 @@
       {/if}
     {/each}
   </div>
+{/snippet}
+
+<!-- An answer drawn as live blocks: the streaming bubble, and for a moment the
+     stored message it became. `text`/`atts` are what is revealed so far;
+     `source` stays the full attachment list the cards compare against. -->
+{#snippet streamedAnswer(item: ChatPane, scope: string, text: string, atts: MessageAttachment[] | undefined, source: MessageAttachment[] | undefined, caret: boolean)}
+  {#each segmentAttachments(text, atts) as seg, segIndex (segIndex)}
+    {#if seg.text || (seg.tail && text)}
+      <!-- Only the tail segment is still being written, so only it is healed. -->
+      {@const blocks = streamBlocks(scope, segIndex, seg.text, seg.tail === true)}
+      <div class="md" use:markdownBlocks={blocks}>{#if caret && seg.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
+    {/if}
+    {#if seg.atts.length}
+      {@render attachmentCards(item, seg.atts, source)}
+    {/if}
+  {/each}
 {/snippet}
 
 {#snippet transcript(item: ChatPane)}
@@ -1322,13 +1388,19 @@
             <div class={`bubble ${message.response?.summary === "오류" ? "errored" : ""}`} class:rewind-editing={editing}>
               {#if message.role === "assistant"}
                 {@const activity = completedActivity(message)}
+                <!-- Named in the markup: how much of this answer the paced
+                     reveal still holds back (undefined = none, the usual case). -->
+                {@const draining = $liveReveal[messageRevealKey(message.id)]}
                 {#if runtimeBadge(message)}
                   <div class="response-meta"><span class="meta-badge">{runtimeBadge(message)}</span></div>
                 {/if}
                 {#if message.response?.thinking}
                   {@const thinkingKey = cardKey(message, "thinking")}
                   <details class="thinking-card" on:toggle={(event) => toggleCard(thinkingKey, event)}>
-                    <summary class="thinking-card-head"><span class="tag thinking-card-badge">생각 과정</span></summary>
+                    <summary class="thinking-card-head">
+                      <span class="tag thinking-card-badge">생각 과정</span>
+                      {#if formatThinkingDuration(message.response.thinkingMs)}<span class="thinking-card-hint">{formatThinkingDuration(message.response.thinkingMs)} 동안 생각함</span>{/if}
+                    </summary>
                     {#if expandedCards.has(thinkingKey)}
                       <div class="md thinking-card-body" use:enhanceMarkdown={message.response.thinking}>{@html renderMarkdownCached(message.response.thinking)}</div>
                     {/if}
@@ -1341,14 +1413,22 @@
                     <div class="md plan-card-body" use:enhanceMarkdown={message.response.plan}>{@html renderMarkdownCached(message.response.plan)}</div>
                   </details>
                 {/if}
-                {#each segmentAttachments(messageText(message), message.attachments) as seg, segIndex (segIndex)}
-                  {#if seg.text}
-                    <div class="md" use:enhanceMarkdown={seg.text}>{@html renderMarkdownCached(seg.text)}</div>
-                  {/if}
-                  {#if seg.atts.length}
-                    {@render attachmentCards(item, seg.atts, message.attachments)}
-                  {/if}
-                {/each}
+                {#if draining !== undefined}
+                  <!-- The turn just ended and the paced reveal had not shown
+                       all of it: the remainder drains in here (≤ 0.3 s), drawn
+                       like the live bubble. Then the entry goes and the cached
+                       whole render below takes over — the same html. -->
+                  {@render streamedAnswer(item, messageRevealKey(message.id), revealedText(messageText(message), draining), revealedAttachments(message.attachments, messageText(message).length, draining), message.attachments, false)}
+                {:else}
+                  {#each segmentAttachments(messageText(message), message.attachments) as seg, segIndex (segIndex)}
+                    {#if seg.text}
+                      <div class="md" use:enhanceMarkdown={seg.text}>{@html renderMarkdownCached(seg.text)}</div>
+                    {/if}
+                    {#if seg.atts.length}
+                      {@render attachmentCards(item, seg.atts, message.attachments)}
+                    {/if}
+                  {/each}
+                {/if}
                 <!-- BELOW the answer, mirroring the live bubble: the card is a
                      footnote about how the answer was made, and keeping the two
                      positions identical means nothing teleports when a stream
@@ -1436,6 +1516,13 @@
               <div class="bubble">{steer.text}</div>
             </div>
           {/each}
+          <!-- What the live bubble shows: the text arrives in bursts and is
+               revealed evenly (lib/streamReveal.ts). `item.liveText` is always
+               all of it; `$liveReveal` — named here, so it is tracked — says how
+               much is on screen yet, and a card waits for the text before it. -->
+          {@const liveShown = $liveReveal[item.id]}
+          {@const liveShownText = revealedText(item.liveText, liveShown)}
+          {@const liveShownAtts = revealedAttachments(item.liveAttachments, item.liveText.length, liveShown)}
           <div class="message assistant" aria-live="off">
             <div class="msg-role">
               <span class="role-dot"></span>
@@ -1443,25 +1530,31 @@
             </div>
             <div class="bubble">
               {#if item.liveThinking}
-                <details class="thinking-card" class:thinking-card-active={item.thinkingActive}>
+                <!-- The header says what the reasoning is doing without opening
+                     it: the elapsed time (a view-layer clock, ticking once a
+                     second) and the sub-heading it is on, both read from the
+                     raw text. The body is parsed only while the card is open. -->
+                {@const thinkingOpen = openLiveThinking.has(item.id)}
+                {@const thinkingFor = formatThinkingDuration(thinkingElapsed($thinkingClocks[item.id], $thinkingNow))}
+                {@const thinkingOn = item.thinkingActive ? thinkingTopic(item.liveThinking) : null}
+                <details class="thinking-card" class:thinking-card-active={item.thinkingActive} on:toggle={(event) => toggleLiveThinking(item.id, event)}>
                   <summary class="thinking-card-head">
                     <span class="tag thinking-card-badge">생각 과정</span>
                     {#if item.thinkingActive}
-                      <span class="thinking-card-hint">생각 중…</span>
+                      <span class="thinking-card-hint">{thinkingOn ? `생각 중 · ${thinkingOn}` : "생각 중…"}</span>
+                      {#if thinkingFor}<span class="thinking-card-time">{thinkingFor}</span>{/if}
                       <span class="thinking-card-spin" aria-hidden="true"></span>
+                    {:else if thinkingFor}
+                      <span class="thinking-card-hint">{thinkingFor} 동안 생각함</span>
                     {/if}
                   </summary>
-                  <div class="md thinking-card-body" use:enhanceMarkdown={item.liveThinking}>{@html renderMarkdown(item.liveThinking)}</div>
+                  {#if thinkingOpen}
+                    {@const thinkingBlocks = streamBlocks(item.id, "thinking", item.liveThinking, item.thinkingActive === true)}
+                    <div class="md thinking-card-body" use:markdownBlocks={thinkingBlocks}></div>
+                  {/if}
                 </details>
               {/if}
-              {#each segmentAttachments(item.liveText, item.liveAttachments) as seg, segIndex (segIndex)}
-                {#if seg.text || (seg.tail && item.liveText)}
-                  <div class="md" use:enhanceMarkdown={seg.text}>{@html renderMarkdown(seg.text)}{#if seg.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
-                {/if}
-                {#if seg.atts.length}
-                  {@render attachmentCards(item, seg.atts, item.liveAttachments)}
-                {/if}
-              {/each}
+              {@render streamedAnswer(item, item.id, liveShownText, liveShownAtts, item.liveAttachments, true)}
               <!-- A canvas the avatar is building right now: a widget lands in
                    this very spot (the bubble's tail), so the place is held for it. -->
               {#each item.liveCanvasTools ?? [] as tool (tool.id)}
@@ -2136,6 +2229,14 @@
   }
   /* Dim the card while reasoning is active so a collapsed card reads as
      "working in the background" rather than as finished content. */
+  /* Elapsed reasoning time: fixed-width digits so the header does not shift
+     every second. */
+  .thinking-card-time {
+    flex: none;
+    color: var(--muted);
+    font-size: var(--t-xs);
+    font-variant-numeric: tabular-nums;
+  }
   .thinking-card-active {
     opacity: 0.78;
   }

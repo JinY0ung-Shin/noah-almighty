@@ -349,11 +349,13 @@ describe("dom.copyText", () => {
     expect(btn.getAttribute("aria-label")).toBe("복사 실패");
   });
 
-  it("does not throw when no button is supplied", async () => {
+  it("does not throw when no button is supplied, and resolves to the outcome", async () => {
+    // copyText reports success/failure to the caller (it used to resolve to
+    // undefined either way); the fallback paths are in client-stream-dom.test.ts.
     defineClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
-    await expect(copyText("x")).resolves.toBeUndefined();
+    await expect(copyText("x")).resolves.toBe(true);
     defineClipboard({ writeText: vi.fn().mockRejectedValue(new Error("nope")) });
-    await expect(copyText("x")).resolves.toBeUndefined();
+    await expect(copyText("x")).resolves.toBe(false);
   });
 
   it("restores a button named only by its text EXACTLY: no leftover aria-label or title", async () => {
