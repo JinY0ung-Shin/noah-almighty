@@ -1,0 +1,112 @@
+/**
+ * Canvas `widget` — the shared library (server static check + client runtime).
+ *
+ * Server:  `checkWidget(source)` and `widgetComponentReference()`.
+ * Client:  `parseWidget` → `restoreState`/`initialState` → `createRootEnv` →
+ *          walk `doc.nodes` with `resolveProps` / `childScope` / `eachScopes` /
+ *          `pickBranch` / `interpolate`, and `invokeHandler` for events.
+ *
+ * The parser and interpreter are ported from mireiffe/mirineereum
+ * (src/lib/genui @ 0e469c4) with the owner's permission; see each file's header.
+ */
+export { checkWidget, MAX_WIDGET_NODES, MAX_WIDGET_STATES, type WidgetCheck } from "./check.js";
+export {
+  WIDGET_COMPONENTS,
+  WIDGET_TAGS,
+  componentSpec,
+  normalizeProps,
+  widgetComponentReference,
+  MAX_OPTIONS,
+  MAX_TABLE_COLUMNS,
+  MAX_TABLE_ROWS,
+  type ChildKind,
+  type ComponentGroup,
+  type ComponentSpec,
+  type PropSpec,
+  type PropType,
+  type WidgetColumn,
+  type WidgetOption,
+} from "./spec.js";
+export {
+  parseWidget,
+  lineCol,
+  setterName,
+  MAX_TEMPLATE_NESTING,
+  MAX_WIDGET_SOURCE_CHARS,
+  type Attr,
+  type ConstNode,
+  type EachNode,
+  type ElNode,
+  type ExprNode,
+  type IfNode,
+  type StateDecl,
+  type TextNode,
+  type TNode,
+  type WidgetDoc,
+  type WidgetProblem,
+} from "./template.js";
+export {
+  Env,
+  GLOBAL_NAMES,
+  MAX_ALLOC,
+  MAX_ARR,
+  MAX_DEPTH,
+  MAX_EVAL_NESTING,
+  MAX_OUT_CHARS,
+  MAX_OUT_ELEMENTS,
+  MAX_RENDER_STEPS,
+  MAX_STEPS,
+  MAX_STR,
+  NOOP_HANDLER,
+  WidgetBudgetError,
+  WidgetRuntimeError,
+  beginRender,
+  chargeOutput,
+  createRuntime,
+  dataSize,
+  evaluate,
+  invokeHandler,
+  isPlainData,
+  resetBudget,
+  sanitizeData,
+  toStr,
+  type HandlerResult,
+  type Runtime,
+} from "./interp.js";
+export {
+  MAX_COPY_CHARS,
+  MAX_EACH_ITEMS,
+  MAX_SUBMIT_CHARS,
+  MAX_SUBMIT_KEYS,
+  childScope,
+  createRootEnv,
+  eachScopes,
+  initialState,
+  interpolate,
+  normalizeSubmitValues,
+  pickBranch,
+  resolveProps,
+  restoreState,
+  snapshotState,
+  type StoredState,
+  type SubmitValue,
+  type SubmitValues,
+  type WidgetHost,
+} from "./runtime.js";
+export {
+  ALIGN,
+  BACKGROUND_TOKENS,
+  COLOR_TOKENS,
+  JUSTIFY,
+  MAX_SPACING_UNITS,
+  TONE_TOKENS,
+  UNIT_PX,
+  background,
+  bool,
+  clamp,
+  lineColor,
+  spacing,
+  textColor,
+} from "./style.js";
+export { dedent, displayText, jsxWhitespace, unescapeText } from "./text.js";
+export { MAX_AST_DEPTH, MAX_EXPR_CHAIN, MAX_EXPR_NESTING, parseExpression, type Expr, type Pattern } from "./expr.js";

@@ -8,6 +8,7 @@ import { ensureNotificationPermission, osNotify } from "./notifications";
 import { newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
 import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
+import { removeWidgetState } from "./widgetState";
 import { formatTokenCount } from "./format";
 import {
   extensionSupportsSecretInput,
@@ -928,6 +929,12 @@ export async function sendMessage(
       values?: Record<string, unknown>;
       editedContent?: string;
     };
+    /**
+     * Called once the server ACCEPTED this send (the stream opened). A send that
+     * returns without it never went out: refused, offline, or stopped before the
+     * server answered — what a caller recorded optimistically must be undone.
+     */
+    onAccepted?: () => void;
   } = {},
 ): Promise<void> {
   let pane = readState().chatPanes.find((item) => item.id === paneId);
@@ -1132,6 +1139,7 @@ export async function sendMessage(
       const body = await response.json().catch(() => ({}));
       throw new Error(body.error || `HTTP ${response.status}`);
     }
+    opts.onAccepted?.();
     // The POST body IS the run's first connection. `consumeSse` resolves the same
     // way whether the server finished the run or the socket died, so only a
     // terminal frame ends the turn here — otherwise the run is still going and we
@@ -2956,11 +2964,28 @@ export async function submitCanvas(
   // Async / re-submit: a new turn. Record the answer optimistically so the panel
   // shows "응답 완료"; sendMessage manages the streaming lifecycle.
   if (pane?.streaming) return;
+  const previous = canvas.submittedValues;
   updatePane(paneId, (p) => {
     const c = p.canvases.find((x) => x.id === canvasId);
     if (c) c.submittedValues = values;
   });
-  await sendMessage(paneId, "", { canvasSubmission: { canvasId, values } });
+  let accepted = false;
+  await sendMessage(paneId, "", {
+    canvasSubmission: { canvasId, values },
+    onAccepted: () => {
+      accepted = true;
+    },
+  });
+  if (accepted) return;
+  // The submission never reached the avatar (refused, offline, stopped before
+  // the server answered): "응답 완료" would claim values it does not have.
+  updatePane(paneId, (p) => {
+    const c = p.canvases.find((x) => x.id === canvasId);
+    // Only if it is still OUR optimistic record.
+    if (!c || JSON.stringify(c.submittedValues) !== JSON.stringify(values)) return;
+    if (previous === undefined) delete c.submittedValues;
+    else c.submittedValues = previous;
+  });
 }
 
 // Send the user's edited canvas content back to the avatar as a new turn (#50).
@@ -3047,6 +3072,8 @@ export async function deleteCanvas(
       return;
     }
   }
+  // A widget's values kept in this browser die with the canvas.
+  removeWidgetState({ userId: readState().user?.id, conversationId: pane?.conversationId, canvasId });
   updatePane(paneId, (p) => {
     const idx = p.canvases.findIndex((c) => c.id === canvasId);
     if (idx < 0) return;

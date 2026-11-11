@@ -66,6 +66,7 @@ import { effortForModel, isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
 import { readTeamPolicySync } from "../teamBrain.js";
 import { summarizeOwnerState } from "./ownerState.js";
+import { CANVAS_WIDGET_FEATURE_KEY } from "../experimentalFeatures.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
   DEFAULT_MCP_TOOL_GROUPS,
@@ -616,6 +617,13 @@ export async function buildRunCapabilities(
   // self-gates nothing because showing UI is harmless). Computed here, before
   // buildSystemServer, so describe_system reports it.
   const canvasActive = canvasToolsEnabled && Boolean(events?.onCanvas);
+  // The canvas `widget` content type is EXPERIMENTAL: on only when the AVATAR
+  // OWNER enabled `canvasWidget` (the owner's flag for every viewer class — a
+  // colleague's canvas turn gets widgets when the avatar they talk to has them).
+  // pi's catalog is static, so `show`'s handler refuses 'widget' on this boolean;
+  // describe_system reports the same value.
+  const widgetEnabled =
+    canvasActive && ownerState.experimentalFeatures.includes(CANVAS_WIDGET_FEATURE_KEY);
   // 할 일 (the owner's persistent work to-do list, `mcp__todo__*`): OWNER-DRIVEN
   // runs only — an interactive own-avatar chat, an owner routine, an
   // external-task-API turn. Never a teammate's chat or a consultation
@@ -834,6 +842,7 @@ export async function buildRunCapabilities(
     todoDeleteEnabled: todoDeleteActive,
     browserEnabled: browserActive,
     canvasEnabled: canvasActive,
+    canvasWidgetEnabled: widgetEnabled,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -981,7 +990,9 @@ export async function buildRunCapabilities(
     : null;
   // Visual canvas server for this run; `canvasActive` is computed further up
   // (before buildSystemServer) so describe_system reports the same capability.
-  const canvasServer = canvasActive ? buildCanvasServer({ emitCanvas: events!.onCanvas! }) : null;
+  const canvasServer = canvasActive
+    ? buildCanvasServer({ emitCanvas: events!.onCanvas!, widgetEnabled })
+    : null;
   // The handler self-gates on `allowed` in addition to `browserActive`:
   // registration is not the only gate (pi's catalog is static), and a
   // colleague must never drive their own logged-in session through someone

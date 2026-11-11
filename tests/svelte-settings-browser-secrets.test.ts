@@ -308,13 +308,24 @@ describe("시크릿 카드: 브라우저 입력", () => {
 });
 
 describe("실험 기능 카드", () => {
-  it("is hidden while no feature is in beta (the canvas graduated)", () => {
-    // Even a stale stored "canvas" key must not resurrect the card or its toggle.
+  it("lists the registry's beta features (캔버스 위젯) and never the graduated canvas", () => {
+    // A stale stored "canvas" key (the canvas graduated) must not resurrect its
+    // toggle; the card itself is back because `canvasWidget` is in beta.
     replaceState({ user: { ...userWith([]), experimentalFeatures: ["canvas"] } });
     stubFetch(() => json({ user: readState().user }));
 
     render(SettingsAccessTab, { props: { active: true } });
-    expect(screen.queryByRole("heading", { name: "실험 기능" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "실험 기능" })).toBeTruthy();
     expect(screen.queryByText("비주얼 캔버스")).toBeNull();
+    const toggle = screen.getByRole("checkbox", { name: /캔버스 위젯/ }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false); // off until the owner turns it on
+  });
+
+  it("shows 캔버스 위젯 as on when the owner enabled it", () => {
+    replaceState({ user: { ...userWith([]), experimentalFeatures: ["canvasWidget"] } });
+    stubFetch(() => json({ user: readState().user }));
+
+    render(SettingsAccessTab, { props: { active: true } });
+    expect((screen.getByRole("checkbox", { name: /캔버스 위젯/ }) as HTMLInputElement).checked).toBe(true);
   });
 });

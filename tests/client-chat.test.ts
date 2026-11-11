@@ -858,6 +858,25 @@ describe("canvas flows", () => {
     expect(pane(id).canvases[0].submittedValues).toMatchObject({ pick: "A" });
   });
 
+  it("submitCanvas takes back '응답 완료' when the submission never reached the avatar", async () => {
+    // First submission ever: refused by the server (e.g. values over the size cap).
+    const id = seedPane({ canvases: [{ id: "cv1", pending: false, interaction: "async" } as any] });
+    useFetch((url) => {
+      if (url === "/api/chat/stream") return jsonRes({ error: "캔버스 응답이 너무 깁니다." }, 400);
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await submitCanvas(id, "cv1", { pick: "A" });
+    expect(pane(id).canvases[0].submittedValues).toBeUndefined();
+    expect(get(toasts).some((t) => t.message.includes("캔버스 응답이 너무 깁니다."))).toBe(true);
+    expect(pane(id).streaming).toBe(false);
+
+    // A re-submission that fails keeps what the avatar actually has.
+    const again = seedPane({ canvases: [{ id: "cv1", pending: false, interaction: "async", submittedValues: { pick: "A" } } as any] });
+    await submitCanvas(again, "cv1", { pick: "B" });
+    expect(pane(again).canvases[0].submittedValues).toEqual({ pick: "A" });
+  });
+
   it("submitCanvasEdit sends the edited content as a new turn", async () => {
     const id = seedPane({ canvases: [{ id: "cv1" } as any] });
     const bodies: any[] = [];

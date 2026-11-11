@@ -1,6 +1,7 @@
 @import "../styles/00-tokens.css";
 @import "../styles/10-base.css";
 @import "../styles/20-shell-chat.css";
+@import "../styles/25-canvas-widget.css";
 @import "../styles/30-agent-md-composer.css";
 @import "../styles/40-responsive-core.css";
 @import "../styles/50-platform-views.css";

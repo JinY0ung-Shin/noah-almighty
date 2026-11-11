@@ -965,7 +965,11 @@ export type CanvasContentType =
   | "svg"
   | "html"
   | "mermaid"
-  | "vega";
+  | "vega"
+  // An interactive widget (declarative tags + a sandboxed expression language,
+  // `src/shared/widget`): recomputes in the client as the user changes inputs,
+  // without a model round trip. Experimental (`canvasWidget`).
+  | "widget";
 
 /**
  * A visual-canvas artifact the avatar showed in the side panel during a turn,

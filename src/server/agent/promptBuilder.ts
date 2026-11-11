@@ -717,7 +717,8 @@ function experimentalFeaturesSection(request: AgentRequest): string | null {
   }
   return (
     `Enabled experimental (beta) features for this avatar: ${features.map((f) => `\`${f}\``).join(", ")}. ` +
-    "These are experimental — their behavior and availability may change. The owner toggles them in Settings."
+    "These are experimental — their behavior and availability may change. The owner toggles them in Settings, " +
+    "so this list is only what was on when this conversation started: `mcp__system__describe_system` is authoritative if a tool refuses one."
   );
 }
 

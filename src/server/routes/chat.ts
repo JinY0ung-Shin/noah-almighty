@@ -440,6 +440,33 @@ interface CanvasSubmissionInput {
   editedContent?: string;
 }
 
+/** Caps on a canvas submission's `values` (control answers or a widget `<submit>`). */
+export const MAX_CANVAS_SUBMISSION_KEYS = 50;
+export const MAX_CANVAS_SUBMISSION_CHARS = MAX_CANVAS_CONTENT_CHARS;
+
+function canvasSubmissionValuesWithinLimits(values: Record<string, unknown>): boolean {
+  if (Object.keys(values).length > MAX_CANVAS_SUBMISSION_KEYS) {
+    return false;
+  }
+  try {
+    // undefined = nothing serializable (e.g. a lone function) — within limits.
+    return (JSON.stringify(values) ?? "").length <= MAX_CANVAS_SUBMISSION_CHARS;
+  } catch {
+    return false; // not serializable (cannot happen for a parsed JSON body)
+  }
+}
+
+/** True when the body carries canvas `values` that parseCanvasSubmission drops for their size. */
+function canvasSubmissionOverLimit(raw: unknown): boolean {
+  const values = raw && typeof raw === "object" ? (raw as Record<string, unknown>).values : null;
+  return (
+    Boolean(values) &&
+    typeof values === "object" &&
+    !Array.isArray(values) &&
+    !canvasSubmissionValuesWithinLimits(values as Record<string, unknown>)
+  );
+}
+
 /** Parse + validate the optional `canvasSubmission` body field (#50). Null when absent/invalid. */
 function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
   if (!raw || typeof raw !== "object") {
@@ -456,6 +483,14 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
     typeof obj.values === "object" &&
     !Array.isArray(obj.values)
   ) {
+    // Bounded: the values become the agent's turn text (formatSubmission) and
+    // ride the session's context from then on. A canvas's own controls stay far
+    // below this; a widget's `<submit>` caps itself lower on the client. An
+    // over-limit submission is INVALID (ignored like a malformed one) — never
+    // truncated into something the user did not send.
+    if (!canvasSubmissionValuesWithinLimits(obj.values as Record<string, unknown>)) {
+      return null;
+    }
     out.values = obj.values as Record<string, unknown>;
   }
   if (typeof obj.editedContent === "string" && obj.editedContent.trim()) {
@@ -3276,7 +3311,15 @@ export function createChatRouter({
         rewindFromMessageId === undefined &&
         !regenerate
       ) {
-        apiError(res, 400, "메시지를 입력해 주세요.");
+        // An over-limit canvas submission is dropped by parseCanvasSubmission, and
+        // the client sends one with no typed message — say what was actually wrong.
+        apiError(
+          res,
+          400,
+          canvasSubmissionOverLimit(req.body?.canvasSubmission)
+            ? "캔버스 응답이 너무 깁니다. 내용을 줄여 다시 보내 주세요."
+            : "메시지를 입력해 주세요.",
+        );
         return;
       }
       if (!avatarId) {

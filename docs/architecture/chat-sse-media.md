@@ -364,7 +364,8 @@
 
 ## Visual canvas (`mcp__canvas__show`)
 - CSP-SAFE port of Superpowers' visual companion: the avatar DECLARES content
-  (`markdown`/`vega`/`mermaid`/`svg`/`html`) + optional `controls` (buttons/text); the CLIENT renders
+  (`markdown`/`vega`/`mermaid`/`svg`/`html`, and the experimental `widget` — its own bullet below) + optional
+  `controls` (buttons/text); the CLIENT renders
   sanitized content (DOMPurify; mermaid `securityLevel: strict`; **`vega` = a compact Vega-Lite spec
   compiled+rendered to an SVG STRING via the CSP-safe `vega-interpreter` AST evaluator — no `Function`
   ctor, so `script-src` needs no widening**; all lazy-loaded with a source-`<pre>` fallback) + real form
@@ -446,6 +447,66 @@
   `seenThrough`): it selects nothing, and with no tab picked the panel's default prefers the latest canvas
   still pending — so the parked ask shows, a refinement in place included, and the default moves on once
   the replayed `prompt_resolved` clears it. E2E pin: `tests/visual/canvas-park-return.spec.ts`.
+- **`widget` is a DECLARED interactive canvas, never executed code (2026-11-10, experimental).** The avatar
+  sends a small source (`{@state}`/`{@const}`/`{#each}`/`{#if}`, JSX-like tags, a JavaScript-subset expression
+  language); the viewer's browser evaluates it with an AST interpreter (`src/shared/widget/` — no `eval`/
+  `Function`, so `script-src` is unchanged) and redraws on every input change WITHOUT calling the avatar.
+  The parser and interpreter are ported from `mireiffe/mirineereum` (`src/lib/genui` @ `0e469c4`, with the
+  owner's permission; each file's header says so) and hardened: sizes are rejected BEFORE the result is
+  allocated, a per-window allocation budget, explicit nesting caps, a work budget in the parser.
+  **Every native call is CHARGED** — the 2026-11-10 red-team review escaped nothing but ran 10^9 native
+  calls on 20 steps (a native function passed as a callback), allocated 1 GB through an uncharged default
+  `sort()`/`String()`, and drew 10^6 elements from 61 characters. So: a callback wrapper ticks per call,
+  array/string methods spend steps proportional to the receiver (searches `n × m`), every string a coercion
+  builds is charged, `JSON.stringify` serializes a sanitized copy (no `toJSON`), and one render has an OUTPUT
+  budget (`beginRender`: 20 000 elements / 2 000 000 characters / 1 000 000 steps in total) on top of the
+  per-block window. **A new method or global in `interp.ts` charges its work before it runs** — the probes
+  that found these live in the review notes, the regressions in `tests/widget-runtime.test.ts`.
+  - **The server only PARSES and statically CHECKS (`checkWidget`, in-process), it never evaluates** — the
+    agent's code does not run in Noah's container. The parser counts its own work and gives up with "too
+    complex", so any ≤ `MAX_CANVAS_CONTENT_CHARS` input returns in bounded time; a verdict rejects and
+    NOTHING is shown (the mermaid #69 rule, but fail-CLOSED on a verdict because the same parser runs in the
+    user's tab), while an exception inside the checker itself is logged and let through. Checked: syntax
+    (line:col), unknown tag/prop/missing required prop, undefined identifiers, `{@state}` placement and
+    duplicates, setter/`copy` calls outside a handler, node/nesting/state caps.
+  - **ONE table is the grammar's home: `src/shared/widget/spec.ts`** (`WIDGET_COMPONENTS`). The server check,
+    the client renderer and the manual's component list (`widgetComponentReference()`) all read it — add a
+    component or prop THERE, never in one of the three. Colours/backgrounds are token names only; nothing a
+    model writes becomes a `style`, `class`, `href` or `src`.
+  - **`<submit values={...}>` is the ONLY way back to the avatar**, and it rides the existing
+    `canvasSubmission.values` turn (so a widget with a submit is `interaction: "async"`). Deliberately absent:
+    a free-text `send`, `open(url)`, links that open, `<image>`, `<svg>`, `Math.random`. `controls` and
+    `editable` are refused with a widget. `parseCanvasSubmission` now caps every canvas submission
+    (`MAX_CANVAS_SUBMISSION_KEYS`/`_CHARS`); the widget's own client cap is lower (`MAX_SUBMIT_*`).
+  - **Gate: the experimental flag `canvasWidget` of the AVATAR OWNER** (`CANVAS_WIDGET_FEATURE_KEY`).
+    tools/list is static, so the enum always shows `widget` and the HANDLER refuses it when the flag is off
+    (`CanvasToolsContext.widgetEnabled`, from runCapabilities). `describe_system`'s canvas line reports
+    ENABLED/DISABLED — for non-owner viewers too, since a colleague's run needs the same answer. The frozen
+    prompt's enabled-features line (`experimentalFeaturesSection`, owner turns) is a START-OF-CONVERSATION
+    snapshot and says so; it and the manual topic `canvas-widget` both name describe_system as authoritative.
+    Graduating = deleting the registry entry and the gate.
+  - **Client:** `lib/widgetView.ts` evaluates the WHOLE document into a plain view model per state change
+    (budget refilled per top-level block; a failing node becomes an error node, the rest still draws) and the
+    `components/widget/*` components only draw that model — no component reads state inside a helper, which
+    is what keeps Svelte's legacy-mode stale reads out. Re-evaluation is deferred until a running handler
+    returns (`resetBudget` puts the runtime back in the render phase). Model text reaches the DOM as text
+    nodes only; the top-level prose goes through `renderWidgetProse` (`lib/widgetProse.ts`: ONLY the tags
+    Markdown itself produces, no `class`/`id`/`style`/`href` — a plain `renderMarkdown` let raw HTML wear
+    the app's own classes as a fake submit button). A control whose handler refuses or clamps the value is
+    written back to the STATE value after the handler (Svelte skips a write equal to its own last one), so
+    what the user sees is what `<submit>` sends; a required prop that evaluates to null/undefined draws as
+    empty, not as an error; `<chart>` goes
+    through the SAME Vega-Lite path as a `vega` canvas (`renderVegaSvg`: inline data only, AST evaluator,
+    sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard.
+  - **State lives in `CanvasTab`'s script** (both surfaces — panel and fullscreen — and a hidden tab share
+    it) and is mirrored to `localStorage` under `noah:canvas-widget:<userId>:<conversationId>:<canvasId>`
+    (`lib/widgetState.ts`: only setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a
+    200 000-char cap measured with `dataSize` BEFORE serializing, the 50 most recent canvases, removed with
+    the canvas, every access guarded). The conversation id is in the key because an avatar may reuse a
+    `canvasId` it named itself. A value is restored or carried across a refinement in place ONLY while
+    its declaration text (`sig`) is unchanged. Per browser, never sent to the server — the avatar cannot
+    read it. Known gap, older than widgets: an ASYNC submission's values are not written back to the canvas
+    tables, so "응답 완료" is client-side until reload.
 - **Questions default to AskUserQuestion, not canvas controls** — controls are for decisions ANCHORED to
   the artifact on screen (stated in the standing canvas guidance + the `show` description). `describe_system`
   reports canvas availability via runCapabilities' `canvasActive` → `ctx.canvasEnabled`, carrying the same redirect.

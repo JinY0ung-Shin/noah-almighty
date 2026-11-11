@@ -34,6 +34,8 @@ import {
   formatDurationKo,
   MAX_STEER_LENGTH,
   resolveChatTarget,
+  MAX_CANVAS_SUBMISSION_CHARS,
+  MAX_CANVAS_SUBMISSION_KEYS,
 } from "../src/server/routes/chat.js";
 import {
   newShareTokenSalt,
@@ -1005,6 +1007,58 @@ describe("canvas submission turns (#50)", () => {
       .send({ avatarId: ownerId, conversationId: "conv-noop3", message: "세번째 메시지", canvasSubmission: { values: { x: 1 } } })
       .expect(200);
     expect(H.requests[2].message).toBe("세번째 메시지");
+  });
+
+  it("bounds canvas submission values: an over-limit one is invalid, never truncated", async () => {
+    // The values become the agent's turn text and ride the session from then
+    // on — a control answer or a widget <submit> stays far below these caps.
+    const { app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "cvcap").expect(201)).body.user.id as string;
+
+    // Just under the serialized limit goes through (a long widget/text answer).
+    const fits = "가".repeat(MAX_CANVAS_SUBMISSION_CHARS - 20);
+    expect(JSON.stringify({ note: fits }).length).toBeLessThanOrEqual(MAX_CANVAS_SUBMISSION_CHARS);
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-cap", canvasSubmission: { canvasId: "cv", values: { note: fits } } })
+      .expect(200);
+    expect(H.requests[0].message).toContain(`- note: ${fits}`);
+
+    // Over the serialized limit: ignored like a malformed submission, so the
+    // typed message alone is the turn (and nothing oversized reaches the agent).
+    const tooLong = "가".repeat(MAX_CANVAS_SUBMISSION_CHARS);
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-cap2", message: "직접 쓴 메시지", canvasSubmission: { canvasId: "cv", values: { note: tooLong } } })
+      .expect(200);
+    expect(H.requests[1].message).toBe("직접 쓴 메시지");
+
+    // The client sends a submission with NO typed message: an over-limit one is
+    // then an empty turn, refused before any run starts (never a silent success).
+    const empty = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-cap-empty", canvasSubmission: { canvasId: "cv", values: { note: tooLong } } });
+    expect(empty.status).toBe(400);
+    // …and the refusal names the real cause, not "메시지를 입력해 주세요.".
+    expect(JSON.stringify(empty.body)).toContain("캔버스 응답이 너무 깁니다");
+    expect(H.requests).toHaveLength(2);
+
+    // Too many keys: likewise invalid.
+    const manyKeys = Object.fromEntries(Array.from({ length: MAX_CANVAS_SUBMISSION_KEYS + 1 }, (_, i) => [`k${i}`, i]));
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-cap3", message: "또 직접 쓴 메시지", canvasSubmission: { canvasId: "cv", values: manyKeys } })
+      .expect(200);
+    expect(H.requests[2].message).toBe("또 직접 쓴 메시지");
+
+    // The key cap itself is allowed.
+    const maxKeys = Object.fromEntries(Array.from({ length: MAX_CANVAS_SUBMISSION_KEYS }, (_, i) => [`k${i}`, i]));
+    await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-cap4", canvasSubmission: { canvasId: "cv", values: maxKeys } })
+      .expect(200);
+    expect(H.requests[3].message).toContain(`- k${MAX_CANVAS_SUBMISSION_KEYS - 1}: ${MAX_CANVAS_SUBMISSION_KEYS - 1}`);
   });
 });
 

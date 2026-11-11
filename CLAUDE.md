@@ -135,6 +135,11 @@ These are the invariants the project is built around. New work should reinforce 
   attachments land in the conversation's sandbox folder; host-side writes go through `PinnedDir`). Text
   stays a legitimate slide choice: **never add a check that fires because a slide has no image.**
   → `chat-sse-media.md`, `pptx-converter.md`.
+- **A canvas `widget` is DECLARED, never executed code** (experimental `canvasWidget`, the owner's flag). The
+  server only parses and statically checks it; evaluation happens in the viewer's browser, in an AST
+  interpreter. ONE table is the grammar (`src/shared/widget/spec.ts`); `<submit>` on the existing canvas
+  submission is the only way back to the avatar — **never add a free-text send, a link/URL or a remote
+  load.** → `chat-sse-media.md` ("Visual canvas").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

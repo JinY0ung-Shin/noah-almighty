@@ -54,6 +54,7 @@ import {
 import { gitRepoClonePath, gitRepoContextFromRecord } from "../src/server/gitRepos.js";
 import { getWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildCanvasTools, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES, MAX_CANVAS_CONTENT_CHARS } from "../src/server/agent/canvasTools.js";
+import { CANVAS_WIDGET_MANUAL_EXAMPLES } from "../src/server/agent/systemManual.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, CanvasRequest, CanvasResult } from "../src/server/agent/events.js";
 import {
@@ -2137,9 +2138,25 @@ describe("system tools (avatar system management)", () => {
     ).content[0].text ?? "";
     expect(on).toContain("Visual canvas (mcp__canvas__show): available");
     expect(on).toContain("use AskUserQuestion instead of a canvas");
+    // The experimental `widget` type is reported with the SAME boolean the
+    // `show` handler refuses on (runCapabilities' widgetEnabled): off unless
+    // the avatar owner turned 캔버스 위젯 on.
+    expect(on).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): DISABLED");
+    expect(on).toContain("Settings → 실험 기능, so `show` refuses it; use 'vega' or 'markdown'");
+    const widgetOn = (
+      await callTool(
+        buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, canvasEnabled: true, canvasWidgetEnabled: true }),
+        "describe_system",
+        {},
+      )
+    ).content[0].text ?? "";
+    expect(widgetOn).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): ENABLED for this avatar");
+    expect(widgetOn).toContain("read manual topic `canvas-widget` before writing one");
 
     const off = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
     expect(off).toContain("Visual canvas (mcp__canvas__show): unavailable in this run");
+    // No canvas this run → no widget line either (nothing to offer or refuse).
+    expect(off).not.toContain("contentType 'widget'");
   });
 
   it("describe_system reports deck-generation availability honestly", async () => {
@@ -3913,6 +3930,38 @@ describe("canvas tools (#50)", () => {
     });
     expect(fixed.isError).toBeFalsy();
     expect(called).toBe(true);
+  });
+
+  it("canvas widget, real checker: a manual example is shown, a broken source comes back as an error (nothing shown)", async () => {
+    // tests/agent-canvas-widget.test.ts scripts the checker; this one runs the
+    // real src/shared/widget/check.ts through the handler.
+    const shown: CanvasRequest[] = [];
+    const tools = buildCanvasTools({
+      emitCanvas: async (req): Promise<CanvasResult> => {
+        shown.push(req);
+        return { behavior: "shown" };
+      },
+      widgetEnabled: true,
+    });
+    const ok = await callTool(tools, "show", {
+      title: "대출 계산기",
+      content: CANVAS_WIDGET_MANUAL_EXAMPLES.calculator,
+      contentType: "widget",
+    });
+    expect(ok.isError, ok.content[0].text).toBeFalsy();
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.interaction).toBe("async"); // the example ends with a <submit>
+
+    for (const broken of [
+      '{@state n = 1}\n<slider label="n" value={n onChange={setN} />', // unterminated expression
+      "{@state n = 1}\n<div>{n}</div>", // not a widget component
+      '<stat label="x" value={missing * 2} />', // undefined identifier
+    ]) {
+      const res = await callTool(tools, "show", { title: "t", content: broken, contentType: "widget" });
+      expect(res.isError, broken).toBe(true);
+      expect(res.content[0].text).toContain("Widget source error — the canvas was NOT shown");
+    }
+    expect(shown).toHaveLength(1);
   });
 
   it("never awaits input: declared controls render async and the submission is the next message", async () => {

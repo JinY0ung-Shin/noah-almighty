@@ -138,7 +138,7 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
         config,
       },
     }),
-    canvas: buildCanvasServer({ emitCanvas: refuse }),
+    canvas: buildCanvasServer({ emitCanvas: refuse, widgetEnabled: true }),
     browser: buildBrowserServer({
       execute: refuse,
       allowed: false,

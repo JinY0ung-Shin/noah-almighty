@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { SYSTEM_MANUAL_TOPICS, readSystemManual, systemManualIndex } from "../src/server/agent/systemManual.js";
+import {
+  CANVAS_WIDGET_MANUAL_EXAMPLES,
+  SYSTEM_MANUAL_TOPICS,
+  readSystemManual,
+  systemManualIndex,
+} from "../src/server/agent/systemManual.js";
+import { checkWidget } from "../src/shared/widget/check.js";
+import { widgetComponentReference } from "../src/shared/widget/spec.js";
 import { buildSystemTools, SYSTEM_TOOL_NAMES, type SystemToolsContext } from "../src/server/agent/systemTools.js";
 import type { Store } from "../src/server/store.js";
 import { callTool } from "./helpers.js";
@@ -68,11 +75,58 @@ describe("official system manual", () => {
     expect(prompt).toContain("No stored secret is enabled for browser input");
     expect(prompt).toContain("Never paste on anything but COPIED");
     expect(prompt).not.toContain("CLOSES the staging tab for you");
-    expect(prompt).not.toContain("pass `wait:false`");
+    expect(prompt).not.toContain("Reserve `svg`/`html` for bespoke visuals");
     expect(readSystemManual("browser-operations").text).toContain("CLOSES the staging tab for you");
     expect(readSystemManual("browser-operations").text).not.toContain("No stored secret is enabled");
-    expect(readSystemManual("canvas-operations").text).toContain("pass `wait:false`");
+    expect(readSystemManual("canvas-operations").text).toContain("Reserve `svg`/`html` for bespoke visuals");
     expect(readSystemManual("canvas-operations").text).toContain("Double-quote every node/edge label");
+  });
+
+  it("canvas-operations states the never-wait behavior of this runtime (the old blocking sentence is gone)", () => {
+    // The tool has no blocking mode on pi (design D8); the manual used to say it
+    // BLOCKS by default and offered `wait:false`, contradicting the tool text.
+    const page = readSystemManual("canvas-operations").text;
+    expect(page).toContain("The tool NEVER waits on this runtime");
+    expect(page).toContain("arrives as their NEXT message referencing the canvas");
+    expect(page).toContain("(`wait` is ignored)");
+    expect(page).not.toContain("BLOCKS until the user submits");
+    expect(page).not.toContain("pass `wait:false`");
+    // …and it routes to the widget reference instead of restating the grammar.
+    expect(page).toContain("`markdown` | `vega` | `mermaid` | `svg` | `html` | `widget`");
+    expect(page).toContain("read topic `canvas-widget` BEFORE writing one");
+  });
+
+  it("documents the experimental canvas widget: grammar, submit, limits, and examples the checker accepts", () => {
+    expect(readSystemManual().text).toContain("- canvas-widget: Canvas widget reference (experimental)");
+    const page = readSystemManual("canvas-widget").text;
+    // Availability is a runtime fact — the manual defers to describe_system.
+    expect(page).toContain("describe_system is authoritative");
+    expect(page).toContain("Settings → 실험 기능 (캔버스 위젯)");
+    // Document structure + the two things that only work in a handler.
+    for (const piece of ["{@state name = expr}", "{@const name = expr}", "{#each list as item, index}", "{#if cond}", "TOP LEVEL only"]) {
+      expect(page).toContain(piece);
+    }
+    expect(page).toContain("work ONLY inside an event handler");
+    expect(page).toContain("no `Math.random`");
+    // The component list is the shared spec's own text, never a hand copy.
+    expect(page).toContain(`## Components\n${widgetComponentReference()}`);
+    // The one way back to the avatar, with its caps.
+    expect(page).toContain("It is the ONLY way anything returns to you");
+    expect(page).toContain("at most 20 keys");
+    expect(page).toContain("8,000 characters in total");
+    expect(page).toContain("`controls` and `editable` cannot be combined with a widget");
+    expect(page).toContain("kept in THEIR browser only");
+    // A manual example the tool would reject teaches a broken grammar: every
+    // example goes through the SAME checker `mcp__canvas__show` runs.
+    for (const [name, source] of Object.entries(CANVAS_WIDGET_MANUAL_EXAMPLES)) {
+      expect(page).toContain(source);
+      const verdict = checkWidget(source);
+      expect(verdict, `${name}: ${verdict.ok ? "" : verdict.error}`).toMatchObject({ ok: true });
+    }
+    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
+    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
+    // The user-facing product page mentions the feature and where it is enabled.
+    expect(readSystemManual("files-canvas").text).toContain("experimental 캔버스 위젯 feature on (설정 → 실험 기능");
   });
 
   it("offers a compact index and complete individually addressable guides", () => {

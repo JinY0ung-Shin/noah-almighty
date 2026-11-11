@@ -364,6 +364,60 @@ describe("run capability plan", () => {
     expect(run.allowed).toContain("mcp__canvas__show");
   });
 
+  it("gates the experimental canvas `widget` on the AVATAR OWNER's flag, on both surfaces and in the handler", async () => {
+    const env = setup();
+    const onCanvas = vi.fn(async (_request: { contentType: string }) => ({ behavior: "shown" as const }));
+    const WIDGET = '{@state n = 1}\n<slider label="n" value={n} onChange={setN} min={1} max={9} />\n<stat label="double" value={n * 2} />';
+    // One call per server of a planned run, through real MCP (zod included).
+    const call = async (request: AgentRequest, server: "canvas" | "system", name: string, args: Record<string, unknown>) => {
+      const run = await plan(env, request, makeEvents({ onCanvas }));
+      const built = run.caps.inProcessMcpServers[server] as unknown as { instance: McpServer };
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "t", version: "1" });
+      await built.instance.connect(b);
+      await client.connect(a);
+      try {
+        const result = (await client.callTool({ name, arguments: args })) as { isError?: boolean; content: { text: string }[] };
+        return { run, isError: Boolean(result.isError), text: result.content[0]!.text };
+      } finally {
+        await client.close();
+      }
+    };
+    const showWidget = (request: AgentRequest) => call(request, "canvas", "show", { title: "배수", content: WIDGET, contentType: "widget" });
+    const canvasLine = async (request: AgentRequest) =>
+      (await call(request, "system", "describe_system", {})).text.split("\n").find((l) => l.startsWith("- Visual canvas")) ?? "";
+
+    // Off by default: the static catalog still lists the type, the handler refuses it.
+    const refused = await showWidget(env.baseRequest);
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("experimental feature the avatar owner has not turned on (Settings → 실험 기능)");
+    expect(onCanvas).not.toHaveBeenCalled();
+    expect(await canvasLine(env.baseRequest)).toContain("contentType 'widget' (experimental, an interactive canvas that recomputes locally): DISABLED");
+    // Tool registration is unchanged by the flag — it is a content type, not a tool.
+    expect(refused.run.allowed).toContain("mcp__canvas__show");
+    expect(refused.run.allowed.filter((n) => n.startsWith("mcp__canvas__"))).toEqual(["mcp__canvas__show"]);
+
+    // The owner turns it on: the SAME call goes through and both surfaces say so.
+    env.store.updateProfile(env.owner.id, { experimentalFeatures: ["canvasWidget"] });
+    const shown = await showWidget(env.baseRequest);
+    expect(shown.isError, shown.text).toBe(false);
+    expect(shown.text).toContain("recomputes locally in the user's browser");
+    expect(onCanvas).toHaveBeenCalledTimes(1);
+    expect(onCanvas.mock.calls[0]![0]).toMatchObject({ contentType: "widget", awaitInput: false });
+    expect(await canvasLine(env.baseRequest)).toContain("ENABLED for this avatar");
+    // The frozen prompt carries the owner's enabled feature list (owner-driven turns).
+    expect(shown.run.append).toContain("Enabled experimental (beta) features for this avatar: `canvasWidget`");
+
+    // It is the avatar OWNER's flag: a teammate chatting with this avatar gets
+    // widgets too (canvases reach every viewer class), without the owner-only
+    // feature list in their prompt.
+    const mate: AgentRequest = { ...env.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true };
+    const mateShown = await showWidget(mate);
+    expect(mateShown.isError, mateShown.text).toBe(false);
+    expect(await canvasLine(mate)).toContain("ENABLED for this avatar");
+    expect(mateShown.run.append).not.toContain("Enabled experimental (beta) features");
+  });
+
   it("registers file_output only when an interactive file sink is present", async () => {
     const env = setup();
     const onFile = vi.fn(async () => ({

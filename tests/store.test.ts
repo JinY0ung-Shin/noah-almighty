@@ -1346,6 +1346,8 @@ describe("team trust & visibility (single team)", () => {
     ]);
     expect(normalizeExperimentalFeatures({ beta: true }, ["beta"])).toEqual([]);
     expect(normalizeExperimentalFeatures(["canvas"])).toEqual([]);
+    // The canvas `widget` type is the one registered beta feature (2026-11).
+    expect(normalizeExperimentalFeatures(["canvas", "canvasWidget", "canvasWidget"])).toEqual(["canvasWidget"]);
   });
 
   // ---- per-secret shell exposure ----

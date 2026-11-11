@@ -13,7 +13,8 @@
  * GRADUATING a feature = deleting its entry and its key gate: the stored key then
  * normalizes away on the next read, so nothing else has to migrate. The visual
  * canvas (`canvas`) graduated to an always-on feature in 2026-10; the registry may
- * be empty, and the settings card hides itself then.
+ * be empty, and the settings card hides itself then. Its `widget` content type
+ * started here as `canvasWidget` (2026-11).
  */
 export interface ExperimentalFeature {
   /** Stable key stored in `users.experimental_features` and checked in gating. */
@@ -24,7 +25,21 @@ export interface ExperimentalFeature {
   description: string;
 }
 
-export const EXPERIMENTAL_FEATURES: ExperimentalFeature[] = [];
+/**
+ * Key of the canvas `widget` content type (an interactive, locally recomputed
+ * canvas). Checked against the AVATAR OWNER's features in runCapabilities, and
+ * self-gated in the `mcp__canvas__show` handler (pi's catalog is static).
+ */
+export const CANVAS_WIDGET_FEATURE_KEY = "canvasWidget";
+
+export const EXPERIMENTAL_FEATURES: ExperimentalFeature[] = [
+  {
+    key: CANVAS_WIDGET_FEATURE_KEY,
+    name: "캔버스 위젯",
+    description:
+      "아바타가 캔버스에 값을 바꿔 가며 볼 수 있는 계산기·비교표 같은 위젯을 띄웁니다. 입력을 바꾸면 아바타를 다시 부르지 않고 화면에서 바로 다시 계산됩니다.",
+  },
+];
 
 /** All registered feature keys, for validation + membership checks. */
 export const EXPERIMENTAL_FEATURE_KEYS: string[] = EXPERIMENTAL_FEATURES.map((f) => f.key);
