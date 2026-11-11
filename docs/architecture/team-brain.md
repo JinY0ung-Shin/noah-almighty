@@ -252,6 +252,44 @@
   approved + commit of target raw + changeset; reject → rejected; ask → target `needs_info` with the
   questions). Apply claims first, writes, and RELEASES the claim on a failed write (409 stale/invalid with a
   Korean message / 500). Each press is audited (`team_brain_submit|withdraw|direct|approve|reject|ask`).
+- **A press is TOLD to the avatar at once (user decision 2026-11-11)** — `submit` and `apply`, done or refused;
+  취소 / 제안 철회 never. A card tool returns at once, so the drafting turn is usually over when the button is
+  pressed and the avatar would learn of it only by looking. `pressTeamBrainCard` (`teamBrainActions.ts`, what
+  both routes call) runs the action and RECORDS a report in `store.noteTeamBrainCardPress`
+  (`teamBrainCardPress.ts`: `TeamBrainCardPressLog`, process memory, one report per (presser, card), the
+  latest press wins, TTL 10 min, 200 at once; a report lost to a restart only costs a look). Recorded for the
+  presser's OWN card only (a 404 names nothing). The report is `composeTeamBrainCardPress`: an English text
+  starting with `TEAM_BRAIN_CARD_PRESS_MARK` ("[Team-brain card press" — Noah's report, not typed by the
+  user; the button pressed, the card by title + draft id, DONE with the committed paths / linked personal
+  notes → PROMOTED NOTES, or FAILED with the action's own reason, then what to do now) and a Korean bubble
+  (`teamBrainCardPressBubble`, shared: the client draws the same line before the server answers). A failed
+  action carries its agent-facing reason in `TeamBrainActionResult.agent` (stale → which path and "draft a new
+  card"; invalid → the schema's own English errors, ≤ 10; provenance → the missing slots, "the user fills it
+  on the card"; not a draft any more → its status now; 500 → "not the card's fault, press again") — never shown
+  in the UI. A REVIEW card is named by ids only: its title is the submission's, a teammate's text.
+  **Delivery is the presser's chat, and the text is the SERVER's:** both chat routes take ONLY
+  `teamBrainCardPress: {proposalId}` and look the report up (no recorded press → 409 "전달할 카드 처리 결과가
+  없습니다", so a browser can neither invent a press nor change its outcome) and refuse a chat that is not
+  with the presser's own avatar. **Told at most once:** the route TAKES the report in the same tick it looked
+  (`takeTeamBrainCardPress` — the turn route has no `await` between its peek and the take just before
+  `executeChatTurn`; keep it so), so two requests never both carry it, and gives it back
+  (`restoreTeamBrainCardPress`; a newer press of the same card wins) only when it did not reach the avatar:
+  the turn was refused before its run opened, the steer was refused, or the steer was `dropped` (stop / error
+  before the model took it — `pushRunSteer`'s `onDropped`). Idle pane → `POST /api/chat/stream` (a turn of its
+  own: `agentMessage` = the report, `displayMessage` = the bubble; no rewind / regenerate / attachment /
+  canvas submission rides it). Answer still streaming → `POST /api/chat/runs/:runId/message` (a steer with
+  `displayText` + `cardPress`; see `chat-sse-media.md`). Client: `TeamBrainCard.act` → `reportTeamBrainCardPress`
+  (`lib/chat.ts`) for 200 and for the action's own refusals (403 / 409 / 500), its pane read by
+  `closest("[data-pane]")` AT THE PRESS (a card in the live bubble is unmounted when its turn ends, maybe
+  before the server answers). A steer the run refuses (wrapping up, no channel) and a `dropped` press steer go
+  out as a turn once the pane's turn is OVER — `whenPaneIdle` waits for `!streaming && !abortController`
+  (≤ 10 min, same conversation): `streaming` drops at the `done` frame, but the send/attach loop's `finally`
+  runs later and would wipe the live state of a turn started in between. A press turn that cannot be sent is
+  undone without a toast (the card already shows the outcome). `pressTeamBrainCard` also records a failed
+  report when the action THROWS. Standing guidance: `TEAM_CARD_PRESS_NOTE` closes both `TEAM_MEMBER_FLOW` and
+  `TEAM_ADMIN_FLOW`, every "card shown" tool result ends "Then stop: Noah tells you what the press did…", the
+  `describe_system` team-brain line and `read_manual` say the same. A conversation whose prompt was frozen
+  before this still understands the report (it explains itself).
 - Reads: `GET /api/team-brain/status` (badge; needs_info counts as a result), `/proposals/mine` (marks seen),
   `/proposals/pending` (admin, read-only), `/graph` (`{graph}`), `/note?path=` (`readTeamVaultFile`).
 

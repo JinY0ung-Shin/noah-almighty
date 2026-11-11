@@ -811,6 +811,13 @@ export interface SteerPublic {
    */
   source?: MessageConsultationSource;
   /**
+   * Noah wrote it for something the viewer DID — the report of a team-brain
+   * card press, naming the card: the viewer's own bubble, but never composer
+   * text. A dropped one is not handed back to the composer; its report waits
+   * on the server again and the client sends it as a turn of its own.
+   */
+  cardPress?: { proposalId: string };
+  /**
    * The persisted user row (`kind: "steer"`, or `kind: "consultation"` with a
    * `source`). Only on the `delivered` frame.
    */
@@ -835,7 +842,44 @@ function publicSteer(record: SteerRecord): SteerPublic {
     createdAt: record.createdAt,
     followUp: record.followUp,
     ...(source ? { source } : {}),
+    ...(record.cardPress ? { cardPress: record.cardPress } : {}),
   };
+}
+
+/** A refused mid-turn message as the route answers it (each `pushRunSteer` reason has its own status). */
+function steerRefusal(
+  res: Response,
+  reason: "not_found" | "unsupported" | "closed" | "too_many",
+): void {
+  if (reason === "unsupported") {
+    apiError(res, 409, "이 대화에서는 응답 중에 메시지를 보낼 수 없습니다.");
+  } else if (reason === "closed") {
+    apiError(
+      res,
+      410,
+      "응답이 마무리되는 중이라 전달할 수 없습니다. 응답이 끝난 뒤 다시 보내 주세요.",
+    );
+  } else if (reason === "too_many") {
+    apiError(res, 409, "전달 대기 중인 메시지가 너무 많습니다.");
+  } else {
+    apiError(res, 404, "진행 중인 실행을 찾을 수 없습니다.");
+  }
+}
+
+/** Why a card-press report could not be handed over (no press recorded, or already told). */
+const TEAM_BRAIN_CARD_PRESS_GONE = "아바타에게 전달할 카드 처리 결과가 없습니다.";
+
+/**
+ * The optional `teamBrainCardPress` body field of a chat turn or a mid-turn
+ * message: ONLY the id of the card whose press is to be told to the avatar.
+ * The text comes from the report the press route recorded
+ * (`teamBrainCardPress.ts`), never from the client. `undefined` = not sent;
+ * `null` = sent but unusable.
+ */
+function parseTeamBrainCardPress(raw: unknown): { proposalId: string } | null | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const proposalId = safeString((raw as { proposalId?: unknown })?.proposalId);
+  return proposalId && isSafePathId(proposalId) ? { proposalId } : null;
 }
 
 export interface ChatTurnContext {
@@ -3390,6 +3434,26 @@ export function createChatRouter({
           ? "캔버스를 수정해 보냈습니다."
           : "캔버스 응답을 보냈습니다.";
       }
+      // A team-brain card press told to the avatar as a turn of its own: the
+      // body names ONLY the card, and both texts are the report the press route
+      // recorded (English for the model, a Korean bubble) — whatever `message`
+      // the client sent is ignored. Looked up here, claimed just before the turn runs.
+      const cardPressRef = parseTeamBrainCardPress(req.body?.teamBrainCardPress);
+      const cardPress = cardPressRef
+        ? store.peekTeamBrainCardPress(req.user!.id, cardPressRef.proposalId)
+        : null;
+      if (cardPressRef !== undefined) {
+        if (cardPressRef === null || canvasSubmission) {
+          apiError(res, 400, "요청이 올바르지 않습니다.");
+          return;
+        }
+        if (!cardPress) {
+          apiError(res, 409, TEAM_BRAIN_CARD_PRESS_GONE);
+          return;
+        }
+        agentMessage = cardPress.agentText;
+        displayMessage = cardPress.displayText;
+      }
       const avatarId = safeString(req.body?.avatarId);
 
       // Image attachments on this turn (data URLs from the composer). Validate +
@@ -3451,7 +3515,16 @@ export function createChatRouter({
       // /compact (see ChatSlashExpansion.compact). A regenerate never is one —
       // its text is re-derived from the stored row, which refuses it — and a
       // canvas interaction is not typed text.
-      const compact = regenerate || canvasSubmission ? undefined : slashExpansion.compact;
+      const compact = regenerate || canvasSubmission || cardPress ? undefined : slashExpansion.compact;
+      // A card-press turn is the report and nothing else: no rewind, no
+      // regenerate, no attachment rides it.
+      if (
+        cardPress &&
+        (regenerate || rewindFromMessageId !== undefined || decodedImages.length > 0 || decodedDocuments.length > 0)
+      ) {
+        apiError(res, 400, "요청이 올바르지 않습니다.");
+        return;
+      }
       if (compact) {
         if (decodedImages.length > 0) {
           apiError(res, 400, "/compact에는 이미지를 첨부할 수 없습니다.");
@@ -3504,6 +3577,12 @@ export function createChatRouter({
         return;
       }
       const { avatar, viewerIsOwner } = resolved.target;
+      // Cards are drafted only in the owner's own chat, so a press is only ever
+      // told to the presser's OWN avatar — never carried into a colleague chat.
+      if (cardPress && !viewerIsOwner) {
+        apiError(res, 400, "요청이 올바르지 않습니다.");
+        return;
+      }
       // Per-conversation pi model id chosen in the composer (all viewers, not just
       // the owner). A sent id is stored as is — NOT checked against pi's list here,
       // so a pick survives pi being briefly unreachable; the run applies it only
@@ -3571,6 +3650,14 @@ export function createChatRouter({
         apiError(res, 409, "이 대화는 다른 아바타의 대화입니다.");
         return;
       }
+      // The press report is CLAIMED here, in the same tick it was looked up (no
+      // await since), so no second request — another turn, a mid-turn message —
+      // can carry it too. It is handed back unless this turn's run really opens.
+      let cardPressTold = false;
+      if (cardPress) store.takeTeamBrainCardPress(req.user!.id, cardPress.proposalId);
+      const releaseCardPress = () => {
+        if (cardPress && !cardPressTold) store.restoreTeamBrainCardPress(cardPress);
+      };
       const outcome = await executeChatTurn(
         { config, store, observedModel },
         {
@@ -3620,6 +3707,8 @@ export function createChatRouter({
                 canvasSubmission.values,
               );
             }
+            // The press report is on its way to the avatar now: it stays taken.
+            cardPressTold = true;
             emitRunEvent(runId, "open", {
               conversationId,
               avatarId: avatar.id,
@@ -3631,7 +3720,7 @@ export function createChatRouter({
             return true;
           },
         },
-      );
+      ).finally(releaseCardPress);
       if (!outcome.ok) {
         apiError(res, outcome.refusal.status, outcome.refusal.message);
       }
@@ -3711,6 +3800,44 @@ export function createChatRouter({
         apiError(res, 400, "응답 중에 보내는 메시지에는 문서를 첨부할 수 없습니다. 응답이 끝난 뒤 보내 주세요.");
         return;
       }
+      // A team-brain card pressed WHILE the avatar is still answering: its
+      // report joins the running turn like a typed message would. As on the
+      // turn route the body names only the card; the texts are the recorded
+      // report's, and only the presser's own-avatar run takes it.
+      const cardPressRef = parseTeamBrainCardPress(req.body?.teamBrainCardPress);
+      if (cardPressRef !== undefined) {
+        if (cardPressRef === null) {
+          apiError(res, 400, "요청이 올바르지 않습니다.");
+          return;
+        }
+        const run = getActiveRun(runId, req.user!.id);
+        if (!run) {
+          apiError(res, 404, "진행 중인 실행을 찾을 수 없습니다.");
+          return;
+        }
+        // Taken here (nothing else can carry it meanwhile) and given back if
+        // the run refuses it now, or ends before the model takes it.
+        const cardPress =
+          run.avatarId === req.user!.id
+            ? store.takeTeamBrainCardPress(req.user!.id, cardPressRef.proposalId)
+            : null;
+        if (!cardPress) {
+          apiError(res, 409, TEAM_BRAIN_CARD_PRESS_GONE);
+          return;
+        }
+        const pushed = pushRunSteer(runId, req.user!.id, cardPress.agentText, {
+          displayText: cardPress.displayText,
+          cardPress: { proposalId: cardPress.proposalId },
+          onDropped: () => store.restoreTeamBrainCardPress(cardPress),
+        });
+        if (!pushed.ok) {
+          store.restoreTeamBrainCardPress(cardPress);
+          steerRefusal(res, pushed.reason);
+          return;
+        }
+        res.json({ ok: true, steer: publicSteer(pushed.steer) });
+        return;
+      }
       const message = safeString(req.body?.message).trim();
       if (!message) {
         apiError(res, 400, "메시지를 입력해 주세요.");
@@ -3728,19 +3855,7 @@ export function createChatRouter({
       }
       const pushed = pushRunSteer(runId, req.user!.id, message);
       if (!pushed.ok) {
-        if (pushed.reason === "unsupported") {
-          apiError(res, 409, "이 대화에서는 응답 중에 메시지를 보낼 수 없습니다.");
-        } else if (pushed.reason === "closed") {
-          apiError(
-            res,
-            410,
-            "응답이 마무리되는 중이라 전달할 수 없습니다. 응답이 끝난 뒤 다시 보내 주세요.",
-          );
-        } else if (pushed.reason === "too_many") {
-          apiError(res, 409, "전달 대기 중인 메시지가 너무 많습니다.");
-        } else {
-          apiError(res, 404, "진행 중인 실행을 찾을 수 없습니다.");
-        }
+        steerRefusal(res, pushed.reason);
         return;
       }
       res.json({ ok: true, steer: publicSteer(pushed.steer) });

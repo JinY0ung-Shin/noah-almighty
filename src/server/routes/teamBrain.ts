@@ -2,9 +2,8 @@ import { Router } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { apiError, type RouterDeps } from "./_shared.js";
 import {
-  applyTeamBrainCard,
   editTeamBrainProvenance,
-  submitTeamBrainProposal,
+  pressTeamBrainCard,
   teamBrainCardView,
   withdrawTeamBrainProposal,
   type TeamBrainActionDeps,
@@ -89,8 +88,11 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
     res.json(view);
   });
 
+  // 관리자에게 제출 and the admin's confirm button go through pressTeamBrainCard:
+  // the action, plus the report the presser's chat hands to the avatar at once
+  // (teamBrainCardPress.ts). 취소 / 제안 철회 below is not reported.
   router.post("/api/team-brain/cards/:id/submit", async (req: AuthenticatedRequest, res) => {
-    respond(res, await submitTeamBrainProposal(actionDeps(req), actor(req), String(req.params.id)));
+    respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "submit"));
   });
 
   // The drafter's 출처 정보 edit on their own draft card (body: TeamProvenanceInput).
@@ -103,7 +105,7 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
   });
 
   router.post("/api/team-brain/cards/:id/apply", async (req: AuthenticatedRequest, res) => {
-    respond(res, await applyTeamBrainCard(actionDeps(req), actor(req), String(req.params.id)));
+    respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "apply"));
   });
 
   // The knowledge-graph 팀 브레인 tab (read-only).

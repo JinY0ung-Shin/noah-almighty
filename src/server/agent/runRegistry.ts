@@ -374,6 +374,12 @@ export function pushRunSteer(
   runId: string,
   userId: string,
   text: string,
+  /**
+   * A message Noah wrote for the viewer's own action (a team-brain card press):
+   * its Korean bubble, the card it reports, and what to do if the run ends
+   * before the model takes it (`onDropped` — the report goes back to waiting).
+   */
+  options: { displayText?: string; cardPress?: { proposalId: string }; onDropped?: () => void } = {},
 ): { ok: true; steer: SteerRecord } | { ok: false; reason: "not_found" | "unsupported" | "closed" | "too_many" } {
   const run = runs.get(runId);
   if (!run || run.ended || run.userId !== userId) {
@@ -389,7 +395,16 @@ export function pushRunSteer(
   if (channel.undelivered().length >= MAX_UNDELIVERED_STEERS) {
     return { ok: false, reason: "too_many" };
   }
-  const steer = channel.push(text);
+  const { onDropped, ...pushOptions } = options;
+  const steer = channel.push(text, pushOptions);
+  if (steer && onDropped) {
+    // One-shot: the record either reaches the model or is dropped.
+    const off = channel.onChange((record) => {
+      if (record.id !== steer.id || record.state === "queued") return;
+      off();
+      if (record.state === "dropped") onDropped();
+    });
+  }
   if (!steer) {
     // Closed between the check and the push (the run loop reached its result
     // boundary on another tick) — same answer as a closed channel.

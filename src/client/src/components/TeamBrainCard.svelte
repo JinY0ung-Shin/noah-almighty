@@ -9,6 +9,7 @@
   import { api } from "../lib/api";
   import Icon from "./Icon.svelte";
   import type {
+    TeamBrainCardPressAction,
     TeamBrainCardView,
     TeamBrainIntake,
     TeamBrainProposalKind,
@@ -25,12 +26,15 @@
     TEAM_SOURCE_KIND_LABELS,
     TEAM_SOURCE_KIND_PLACEHOLDERS,
     isTeamIntakeUnknown,
+    teamBrainCardButtonLabel,
+    teamBrainCardPressBubble,
     teamProvenanceProblem,
     teamProvenanceProblemLabel,
     teamSourceKindOf,
   } from "../../../shared/teamBrain";
   import { collapseUnchanged, diffLines, type DiffHunkItem } from "../../../shared/lineDiff";
   import { refreshTeamBrainStatus } from "../lib/teamBrain";
+  import { reportTeamBrainCardPress } from "../lib/chat";
 
   export let proposalId: string;
 
@@ -51,15 +55,41 @@
     }
   }
 
+  // The card's root (either branch of the markup), to find the chat pane it sits in.
+  let root: HTMLElement | null = null;
+
+  /**
+   * Tell the avatar what a press of 관리자에게 제출 / the confirm button did —
+   * done or refused — so it can go on by itself (lib/chat.ts
+   * reportTeamBrainCardPress). 취소 / 제안 철회 is not told. `pressed` is the card as
+   * it was when pressed: its kind, decision and title name the button.
+   */
+  function tellAvatar(paneId: string | undefined, action: TeamBrainCardPressAction, pressed: TeamBrainCardView, ok: boolean): void {
+    if (!paneId) return;
+    void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(action, pressed.proposal, ok));
+  }
+
   async function act(action: "submit" | "withdraw" | "apply"): Promise<void> {
-    if (busy) return;
+    if (busy || !view) return;
+    const pressed = view;
+    // The pane is read NOW, at the press: a card drafted in the turn still being
+    // written sits in the live bubble, which is torn down (and this instance with
+    // it — `root` goes null) when that turn ends, possibly before the server answers.
+    const paneId = root?.closest<HTMLElement>("[data-pane]")?.dataset.pane;
     busy = true;
     actionError = "";
     try {
       view = await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${action}`, { method: "POST" });
       void refreshTeamBrainStatus();
+      if (action !== "withdraw") tellAvatar(paneId, action, pressed, true);
     } catch (err) {
       actionError = (err as Error).message;
+      // A press the SERVER refused is told too (the avatar may be the one to fix
+      // it): 403 / 409 / 500 are the action's own refusals, each recorded with
+      // its reason. Anything else — a 404 (no such card for this user), a lost
+      // connection — left nothing on the server to tell.
+      const status = (err as { status?: number }).status;
+      if (action !== "withdraw" && (status === 403 || status === 409 || status === 500)) tellAvatar(paneId, action, pressed, false);
       await load();
     } finally {
       busy = false;
@@ -218,14 +248,9 @@
     return { text: "취소했습니다.", tone: "muted" };
   }
 
+  // The confirm button's label — the same one the press report names to the avatar.
   function applyLabel(v: TeamBrainCardView): string {
-    if (v.proposal.kind === "review") {
-      if (v.proposal.decision === "approve") return "승인 반영";
-      if (v.proposal.decision === "ask") return "보완 요청 보내기";
-      return "반려 확정";
-    }
-    if (v.proposal.kind === "policy") return "팀 정책 반영";
-    return "팀 브레인에 반영";
+    return teamBrainCardButtonLabel("apply", v.proposal);
   }
 
   function kindLine(v: TeamBrainCardView): string {
@@ -447,7 +472,7 @@
     {/if}
   </div>
 {:else}
-  <section class="team-brain-card" aria-label={KIND_LABEL[proposal.kind]}>
+  <section class="team-brain-card" aria-label={KIND_LABEL[proposal.kind]} bind:this={root}>
     <header class="team-brain-head">
       <span class="team-brain-icon" aria-hidden="true"><Icon name="book" size={16} /></span>
       <div class="team-brain-title">

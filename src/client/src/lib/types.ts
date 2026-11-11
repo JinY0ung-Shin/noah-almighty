@@ -107,6 +107,13 @@ export interface SteerPublic {
    */
   source?: import("../../../server/types.js").MessageConsultationSource;
   /**
+   * Noah wrote it for something the viewer DID — the report of a team-brain
+   * card press, naming the card: the viewer's own bubble, but never composer
+   * text. A dropped one is not handed back to the composer; it is sent again
+   * as a turn of its own (lib/chat.ts reportTeamBrainCardPress).
+   */
+  cardPress?: { proposalId: string };
+  /**
    * The persisted user row (`kind: "steer"`, or `"consultation"` with a
    * `source`), `null` when the conversation was
    * deleted mid-run. Present only on the `delivered` SSE frame — the POST

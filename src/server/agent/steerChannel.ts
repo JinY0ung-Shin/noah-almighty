@@ -61,6 +61,15 @@ export interface SteerRecord {
    * handed back to the composer when it is dropped.
    */
   source?: SteerSource;
+  /**
+   * Set when Noah wrote the record for something the viewer DID rather than
+   * typed — the report of a team-brain card press (`teamBrainCardPress.ts`),
+   * naming the card. It is still the viewer's own row in the transcript
+   * (`kind: "steer"`, showing `displayText`), but it was never in their
+   * composer: a dropped one is not handed back to it — the report waits on the
+   * server again and the client sends it as a turn of its own.
+   */
+  cardPress?: { proposalId: string };
   createdAt: string;
   state: SteerState;
   /**
@@ -98,7 +107,10 @@ export class SteerChannel {
    * turn is wrapping up, so nothing more can reach the model) — the route maps
    * that to a 410.
    */
-  push(text: string, options: { displayText?: string; source?: SteerSource } = {}): SteerRecord | null {
+  push(
+    text: string,
+    options: { displayText?: string; source?: SteerSource; cardPress?: { proposalId: string } } = {},
+  ): SteerRecord | null {
     if (this.isClosed) {
       return null;
     }
@@ -107,6 +119,7 @@ export class SteerChannel {
       text,
       ...(options.displayText !== undefined ? { displayText: options.displayText } : {}),
       ...(options.source ? { source: options.source } : {}),
+      ...(options.cardPress ? { cardPress: { proposalId: options.cardPress.proposalId } } : {}),
       createdAt: new Date().toISOString(),
       state: "queued",
       followUp: false,
