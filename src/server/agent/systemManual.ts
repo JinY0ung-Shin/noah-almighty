@@ -7,6 +7,13 @@
  * Update a topic alongside the feature it documents; verify exact API examples
  * against routes and tool schemas, not just the older architecture notes.
  */
+import {
+  CHAT_DOCUMENT_SANDBOX_DIR,
+  MAX_CHAT_DOCUMENTS_PER_MESSAGE,
+  MAX_CHAT_DOCUMENTS_TOTAL_BYTES,
+  MAX_CHAT_DOCUMENT_BYTES,
+} from "../../shared/chatDocuments.js";
+import { DOCUMENT_ENCODING_CLAUSE, DOCUMENT_LIBRARIES_PHRASE, DOCUMENT_TYPES_PHRASE, PI_SUBAGENT_SENTENCE } from "./ownerState.js";
 import { brainPolicyManualText } from "./brainPolicy.js";
 import { TEAM_POLICY_KEYS } from "../teamBrainPolicy.js";
 import { widgetComponentReference } from "../../shared/widget/spec.js";
@@ -140,6 +147,10 @@ Respond to question or canvas cards in Noah to let a waiting run continue. A sub
 
 ## Attachments
 Attach supported files with the composer. Image understanding depends on the selected model; a text-only model receives image file paths rather than visible images. Generated files arrive as file cards; local filesystem paths are not download links. Read files-canvas for previews and exports.
+
+Documents: in a chat with your OWN avatar the composer also takes ${DOCUMENT_TYPES_PHRASE} files — up to ${MAX_CHAT_DOCUMENTS_PER_MESSAGE} per message, ${MAX_CHAT_DOCUMENT_BYTES / (1024 * 1024)} MB each and ${MAX_CHAT_DOCUMENTS_TOTAL_BYTES / (1024 * 1024)} MB together (less when images ride the same message). Text files are accepted in any text encoding: ${DOCUMENT_ENCODING_CLAUSE}. The avatar gets each one as a file in its sandbox at \`${CHAT_DOCUMENT_SANDBOX_DIR}/<filename>\` and reads it there (${DOCUMENT_LIBRARIES_PHRASE}). That folder belongs to the user, not to one conversation: it is kept between conversations, and attaching another file with the same name replaces the earlier one. The message keeps its own copy, so the bubble can download it again and regenerating or editing the message sends the same file again; deleting the message or the conversation removes that copy but not the file in the sandbox. Documents cannot be attached in a chat with a colleague's avatar (it runs read-only), to a message sent while an answer is still running, to a routine, or through the external task API.
+
+Subagents: ${PI_SUBAGENT_SENTENCE}.
 
 Example: "이 파일을 분석하고 결과를 CSV 파일로 줘. 불명확한 기준은 먼저 물어봐."`,
   },

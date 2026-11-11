@@ -35,6 +35,9 @@ import { TEAM_BRAIN_SCHEMA_VERSION } from "../../shared/teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
 import { EFFORT_LEVELS, type ModelEffort } from "../effortLevels.js";
 import {
+  DOCUMENT_TYPES_PHRASE,
+  DOCUMENT_UPLOADS_SENTENCE,
+  PI_SUBAGENT_SENTENCE,
   gettingStartedGaps,
   piSandboxOwnerSentence,
   shellSecretsSentence,
@@ -43,6 +46,7 @@ import {
   summarizeOwnerState,
 } from "./ownerState.js";
 import { MCP_TOOL_GROUPS, effectiveMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
+import { CHAT_DOCUMENT_SANDBOX_DIR } from "../../shared/chatDocuments.js";
 import type { ToolSkillPolicy } from "../toolSkillPolicy.js";
 import {
   deckModeOf,
@@ -715,12 +719,49 @@ function relayListFailuresClause(failures: readonly PiListFailure[]): string {
   );
 }
 
+const DOCUMENT_ATTACHMENTS_LINE_PREFIX = "- Document attachments: ";
+
+/**
+ * describe_system's document-attachments line (both viewer branches): whether
+ * a message of THIS run can carry user-attached documents — the capability
+ * plan's `documentAttachments`, the same function the chat route's refusal
+ * reads — and, when not, why (by precedence: nobody's sandbox > a colleague's
+ * read-only session > an external-task turn > an unattended run). The
+ * available branch reuses the frozen prompt's sentence (`DOCUMENT_UPLOADS_SENTENCE`).
+ */
+export function documentAttachmentsLine(
+  ctx: Pick<SystemToolsContext, "piRuntime" | "headless" | "externalTaskApi">,
+): string {
+  const pi = ctx.piRuntime;
+  if (pi?.documentAttachments) {
+    return `${DOCUMENT_ATTACHMENTS_LINE_PREFIX}AVAILABLE in this run — the user can attach ${DOCUMENT_TYPES_PHRASE} files to a message; ${DOCUMENT_UPLOADS_SENTENCE}`;
+  }
+  const reason =
+    pi?.sandboxOwner === "nobody"
+      ? "this consultation runs in a temporary sandbox with nobody attaching anything"
+      : pi?.sandboxOwner === "viewer"
+        ? "this session is read-only in a colleague's sandbox, and documents can be attached only in a chat with one's OWN avatar (ask them to paste the relevant text instead)"
+        : ctx.externalTaskApi
+          ? "an external system submitted this turn, and the task API carries text only"
+          : ctx.headless
+            ? "this is an unattended run with nobody attaching anything"
+            : "this turn did not offer it";
+  return (
+    `${DOCUMENT_ATTACHMENTS_LINE_PREFIX}NOT available in this run — ${reason}. ` +
+    (pi?.sandboxOwner === "owner"
+      ? `Files the user attached in earlier chats may still be in \`${CHAT_DOCUMENT_SANDBOX_DIR}/\` (kept between conversations; a same-named upload replaces a file)`
+      : "No message of this run carries a document")
+  );
+}
+
 /**
  * pi lines (both viewer branches): the skills this run has — mirrored by the
  * prompt's skill index (promptBuilder piSkillsSection) — and where the open
  * working repo's sandbox copy is (design D1). Empty without pi facts.
  */
-function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName">): string[] {
+function piRunLines(
+  ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName" | "headless" | "externalTaskApi">,
+): string[] {
   const pi = ctx.piRuntime;
   if (!pi) return [];
   const skills = pi.skills ?? [];
@@ -761,6 +802,8 @@ function piRunLines(ctx: Pick<SystemToolsContext, "piRuntime" | "activeRepoName"
           }. Relayed hex-ssh/plugin/shared tools are on the relayed-servers line`,
         ]
       : []),
+    documentAttachmentsLine(ctx),
+    `- Subagents: ${PI_SUBAGENT_SENTENCE}`,
     `- Long-running tools on this runtime: ${
       pi.asyncAskAvatar
         ? "mcp__avatars__ask_avatar returns at once with a consultation id and its answer arrives later as its own message (at your next tool-call boundary while you are still working, else right after your current answer; the run stays open for it)"

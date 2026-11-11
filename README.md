@@ -66,6 +66,20 @@ which check owner/teammate trust themselves.
   → 공유 링크**. A link exports one file — it grants no
   access to the conversation or the avatar. Mechanics:
   [`docs/architecture/share-links.md`](docs/architecture/share-links.md).
+- **Document attachments (문서 첨부)**: in a chat with **your own avatar** you can attach documents to a
+  message — `pdf`, `docx`, `xlsx`, `pptx`, `csv`, `txt`, `md`, `json` — and the avatar reads them in its
+  sandbox (pi-gateway writes each to `/workspace/uploads/<filename>`; the sandbox image ships `pypdf`,
+  `python-docx`, `python-pptx`, `openpyxl`, `pandas`). Limits: **5 documents per message, 8 MB each, 8 MB
+  together**, and less when the same message also carries images (images and documents share pi-gateway's
+  16 MiB request body). The content must match the extension (a renamed or password-protected Office file is
+  refused); a CSV or text file may be in any text encoding (CP949/EUC-KR and UTF-16 exports from Excel are
+  fine — only a clearly binary file is refused). `/workspace/uploads/` belongs to the user,
+  not to one conversation: files stay between conversations and a later upload with the same name replaces
+  the earlier one. The message keeps its own copy (downloadable from the bubble, re-sent on 다시 생성 / edit),
+  which is deleted with the message or the conversation; the sandbox file is not. Not available in a chat
+  with a colleague's avatar (read-only), in a message sent while an answer is running, in routines or
+  through the external task API. Mechanics:
+  [`docs/architecture/chat-sse-media.md`](docs/architecture/chat-sse-media.md) "Document attachments".
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
   e.g. Confluence attachments) and hand them over as download cards; the chat renders them as
   interactive diagrams (zoom/pan/pages) in the file side panel, fully offline via a vendored

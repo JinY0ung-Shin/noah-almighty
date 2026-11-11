@@ -92,10 +92,18 @@ function pickFiles(container: HTMLElement, files: File[]): Promise<boolean> {
   return fireEvent.change(input!, { target: { files } });
 }
 
-function attachLabel(container: HTMLElement): HTMLLabelElement {
+/**
+ * The attach control's NAME. It sits on the (visually hidden, focusable) file
+ * input since document attachments: the label's tooltip carries the name plus
+ * the hint that a paste or a drop works too. The fixture avatar is the viewer's
+ * own, so the control offers images and documents.
+ */
+function attachName(container: HTMLElement): string {
   const label = container.querySelector<HTMLLabelElement>("label.composer-attach");
   expect(label).toBeTruthy();
-  return label!;
+  const name = label!.querySelector("input[type='file']")?.getAttribute("aria-label") ?? "";
+  expect(label!.title).toBe(`${name} · 붙여넣기(Ctrl+V)나 끌어다 놓기로도 첨부할 수 있어요`);
+  return name;
 }
 
 beforeEach(() => {
@@ -130,7 +138,7 @@ describe("composer image attach in file mode", () => {
     const { container } = render(ChatView);
 
     // The control stays reachable on a vision-off model, and carries WHY.
-    expect(attachLabel(container).title).toBe("이미지 첨부 (모델이 내용을 보지 못하고 파일로 전달됨)");
+    expect(attachName(container)).toBe("이미지·문서 첨부 (모델이 이미지 내용을 보지 못해 이미지도 파일로 전달됨)");
 
     await pickFiles(container, [new File([PNG_BYTES], "shot.png", { type: "image/png" })]);
 
@@ -166,13 +174,13 @@ describe("composer image attach in file mode", () => {
   it("keeps the plain label on a model that can actually see the image", () => {
     seed("seeing");
     const { container } = render(ChatView);
-    expect(attachLabel(container).title).toBe("이미지 첨부");
+    expect(attachName(container)).toBe("이미지·문서 첨부");
   });
 
   it("treats a pick pi no longer offers as the default model (vision included)", () => {
     seed("opus");
     const { container } = render(ChatView);
-    expect(attachLabel(container).title).toBe("이미지 첨부");
+    expect(attachName(container)).toBe("이미지·문서 첨부");
     const select = container.querySelector<HTMLSelectElement>('select[aria-label="이 대화에 사용할 모델"]')!;
     expect(select.value).toBe("");
   });

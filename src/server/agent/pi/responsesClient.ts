@@ -75,8 +75,26 @@ export interface PiInputImage {
   data: string;
 }
 
+/**
+ * A document for pi's `input_file` part (pi `api/request.ts` `inputFile`): pi
+ * writes it to `/workspace/uploads/<filename>` in the principal's sandbox
+ * BEFORE the turn (a same-named file is overwritten) and puts
+ * `[Attached file: <path>]` into the prompt text at the part's position. pi
+ * accepts only a plain file name with one of its extensions and a base64
+ * `data:` URL; a `read_only` session answers 400 `invalid_file_input`, and a
+ * failed sandbox write 502 `Sandbox error: …`.
+ */
+export interface PiInputFile {
+  /** A plain file name (no path separators / control characters, ≤ 255 bytes, an extension pi lists). */
+  filename: string;
+  /** Only the `data:` URL's label: pi stores the bytes and never reads it. */
+  mediaType: string;
+  /** Base64 payload (no `data:` prefix). */
+  data: string;
+}
+
 export type PiTurnInput =
-  | { kind: "prompt"; text: string; images?: PiInputImage[] }
+  | { kind: "prompt"; text: string; images?: PiInputImage[]; files?: PiInputFile[] }
   /** The answer to a pending AskUserQuestion (`requires_action`). pi feeds it as `User responded: <output>`. */
   | { kind: "answer"; callId: string; output: string };
 
@@ -403,13 +421,20 @@ export function buildResponsesBody(request: PiResponseRequest): Record<string, u
     input = [{ type: "function_call_output", call_id: request.input.callId, output: request.input.output }];
   } else {
     const images = request.input.images ?? [];
-    if (!images.length) {
+    const files = request.input.files ?? [];
+    if (!images.length && !files.length) {
+      // No attachment: the plain string, exactly as before documents existed.
       input = request.input.text;
     } else {
       const content: Record<string, unknown>[] = [];
       if (request.input.text) content.push({ type: "input_text", text: request.input.text });
       for (const image of images) {
         content.push({ type: "input_image", image_url: `data:${image.mediaType};base64,${image.data}` });
+      }
+      // After the text and images: pi appends `[Attached file: …]` to the
+      // prompt text in part order, so the notes follow the user's message.
+      for (const file of files) {
+        content.push({ type: "input_file", filename: file.filename, file_data: `data:${file.mediaType};base64,${file.data}` });
       }
       input = [{ type: "message", role: "user", content }];
     }
@@ -739,7 +764,12 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
   async function* stream(request: PiResponseRequest, options: PiStreamOptions = {}): AsyncGenerator<PiStreamEvent> {
     const body = JSON.stringify(buildResponsesBody(request));
     if (Buffer.byteLength(body, "utf8") > PI_MAX_REQUEST_BYTES) {
-      throw new PiGatewayError("too_large", { message: "첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다." });
+      const withFiles = request.input.kind === "prompt" && Boolean(request.input.files?.length);
+      throw new PiGatewayError("too_large", {
+        message: withFiles
+          ? "첨부한 문서와 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다. 파일을 줄이거나 나눠서 보내 주세요."
+          : "첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다.",
+      });
     }
     const headers: Record<string, string> = {};
     for (const [name, value] of Object.entries(request.headers ?? {})) {

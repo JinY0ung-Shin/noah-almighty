@@ -212,6 +212,40 @@ export function planMcpToolFamilies(enabled: McpToolGroupId[]): McpToolFamilyPla
   };
 }
 
+/** The request fields that decide whose pi sandbox a run works in. */
+export type SandboxOwnerInput = Pick<AgentRequest, "viewerUserId" | "avatarConsultation"> & {
+  avatar: Pick<AgentRequest["avatar"], "id">;
+};
+
+/**
+ * Whose sandbox a run's built-ins work in (`piRunPrincipal`: `viewerUserId ??
+ * avatar.id`; a consultation's own fresh one belongs to nobody). THE one
+ * decision behind the pi session's `read_only` (a `viewer` run), stated on both
+ * metacognition surfaces, and read by callers that must decide before a run
+ * exists (the chat route's document-attachment refusal).
+ */
+export function piSandboxOwnerOf(run: SandboxOwnerInput): PiSandboxOwner {
+  if (run.avatarConsultation) return "nobody";
+  return (run.viewerUserId ?? run.avatar.id) === run.avatar.id ? "owner" : "viewer";
+}
+
+/**
+ * Whether a message of this run may carry user-attached DOCUMENTS (pi
+ * `input_file` → `/workspace/uploads/<name>`): only an interactive turn in the
+ * avatar owner's OWN sandbox. A colleague's chat is a `read_only` pi session
+ * (pi 400s `input_file` there) in the colleague's sandbox; a consultation runs
+ * in nobody's; a headless run (routine, profile generator) and an
+ * external-task-API turn have no person attaching anything — the
+ * interactive-only gate every such capability carries (`headless` AND
+ * `externalTaskApi`). ONE function for the chat route's 400, the capability
+ * plan's fact (`PiRuntimeFacts.documentAttachments`) and describe_system.
+ */
+export function documentAttachmentsAllowed(
+  run: SandboxOwnerInput & Pick<AgentRequest, "headless" | "externalTaskApi">,
+): boolean {
+  return piSandboxOwnerOf(run) === "owner" && !run.headless && !run.externalTaskApi;
+}
+
 /**
  * The run's CONVERSATION scratch workspace: where tools that hand the model a
  * file of its own (get_attachment's `save_to_workspace`) write, and the path
@@ -663,11 +697,7 @@ export async function buildRunCapabilities(
   const deckToolchain = piSandboxDeckToolchain(config);
   // Whose sandbox the built-ins work in (piRunPrincipal: viewerUserId ??
   // avatar.id; a consultation's own fresh one belongs to nobody).
-  const sandboxOwner: PiSandboxOwner = consultationRun
-    ? "nobody"
-    : (request.viewerUserId ?? request.avatar.id) === request.avatar.id
-      ? "owner"
-      : "viewer";
+  const sandboxOwner: PiSandboxOwner = piSandboxOwnerOf(request);
   // A colleague's chat runs someone ELSE's avatar in the colleague's own
   // sandbox, so its pi session is read_only: read/ls/find/grep, no
   // write/edit/bash (user decision 2026-10-31). ONE value for the runner's
@@ -800,6 +830,8 @@ export async function buildRunCapabilities(
         sandboxOwner,
         readOnlyBuiltins,
         nonInteractive,
+        // The same function the chat route's refusal reads.
+        documentAttachments: documentAttachmentsAllowed(request),
         mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),

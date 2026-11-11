@@ -47,6 +47,17 @@
     type BridgeVersionVerdict,
   } from "../lib/browserBridge";
   import { autosize, clickOutside, copyText, downscaleImageToDataUrl, enhanceMarkdown, markdownBlocks, readFileAsDataUrl } from "../lib/dom";
+  import {
+    DOCUMENT_TYPE_LIST,
+    IMAGE_ACCEPT,
+    IMAGE_AND_DOCUMENT_ACCEPT,
+    documentTypeLabel,
+    documentsReading,
+    isFileDrag,
+    removePendingDocument,
+    splitAttachFiles,
+    stageDocuments,
+  } from "../lib/composerDocuments";
   import { loadAvatars, loadConversations } from "../lib/loaders";
   import { goView, routeFromHash } from "../lib/nav";
   import { formatFileSize, formatUsageLabel, renderMarkdownCached, timeLabel } from "../lib/format";
@@ -486,11 +497,14 @@
     await tick();
   }
 
+  // A staged document whose bytes are still being read holds the send back: a
+  // message must never go out with half of what its chips promise.
   function canSendMessage(item: ChatPane): boolean {
     return Boolean(
       !item.streaming &&
         item.avatar &&
-        (item.draft.trim() || item.pendingImages?.length),
+        (item.draft.trim() || item.pendingImages?.length || item.pendingDocuments?.length) &&
+        !documentsReading(item),
     );
   }
 
@@ -620,18 +634,48 @@
     if (fileMode) notify("현재 모델은 이미지 내용을 보지 못합니다. 이미지는 파일로만 전달됩니다.", "info");
   }
 
+  // Documents (pdf, docx, …) are offered only where the avatar is the viewer's
+  // OWN: its runtime writes them into the viewer's own sandbox. The same rule
+  // as `isOwnPane`, reading only its arguments so a template call stays live.
+  function paneTakesDocuments(item: ChatPane, state: ReturnType<typeof readState>): boolean {
+    return Boolean(item.avatar.isOwn || item.avatar.id === state.user?.id);
+  }
+
   // A vision-off pane still attaches — the model gets the FILE, never the
   // pixels. Say that on the control itself instead of hiding it.
   function attachHint(item: ChatPane, state: ReturnType<typeof readState>): string {
+    if (paneTakesDocuments(item, state))
+      return paneVisionEnabled(item, state) ? "이미지·문서 첨부" : "이미지·문서 첨부 (모델이 이미지 내용을 보지 못해 이미지도 파일로 전달됨)";
     return paneVisionEnabled(item, state) ? "이미지 첨부" : "이미지 첨부 (모델이 내용을 보지 못하고 파일로 전달됨)";
   }
 
-  // The disabled send button's title enumerates what WOULD make it sendable.
-  const EMPTY_COMPOSER_HINT = "메시지 또는 이미지를 추가하세요";
+  // The tooltip also names the two ways in that need no file dialog: on the
+  // fleet a security agent can refuse the picker, and nothing else would say so.
+  function attachTitle(item: ChatPane, state: ReturnType<typeof readState>): string {
+    return `${attachHint(item, state)} · 붙여넣기(Ctrl+V)나 끌어다 놓기로도 첨부할 수 있어요`;
+  }
 
-  async function onPickImages(event: Event, item: ChatPane) {
+  // The disabled send button's title enumerates what WOULD make it sendable —
+  // or says what it is waiting for.
+  function sendBlockedHint(item: ChatPane, state: ReturnType<typeof readState>): string {
+    if (documentsReading(item)) return "첨부한 파일을 읽는 중입니다…";
+    return paneTakesDocuments(item, state) ? "메시지를 입력하거나 이미지·문서를 첨부하세요" : "메시지 또는 이미지를 추가하세요";
+  }
+
+  // EVERY way in (picker, paste, drop) ends here. An image keeps the image
+  // path whatever it is named; anything else is a document candidate, judged
+  // by the shared rules — and refused outright where documents are not offered.
+  async function addFiles(item: ChatPane, files: FileList | File[] | null | undefined) {
+    const { images, others } = splitAttachFiles(files);
+    await Promise.all([
+      images.length ? addImages(item, images) : undefined,
+      stageDocuments(item.id, others, paneTakesDocuments(item, readState())),
+    ]);
+  }
+
+  async function onPickFiles(event: Event, item: ChatPane) {
     const input = event.currentTarget as HTMLInputElement;
-    await addImages(item, input.files);
+    await addFiles(item, input.files);
     input.value = ""; // allow re-picking the same file
   }
 
@@ -639,19 +683,73 @@
     const clipboard = event.clipboardData;
     if (!clipboard) return;
     // Prefer items (covers screenshots/copied images), fall back to files (some
-    // browsers only populate one of the two for a pasted image).
+    // browsers only populate one of the two; files copied in the OS file
+    // manager arrive as `files`). Text entries are `kind:"string"` and never
+    // count: a plain-text paste has no file and stays the textarea's own.
     const fromItems = Array.from(clipboard.items || [])
-      .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+      .filter((it) => it.kind === "file")
       .map((it) => it.getAsFile())
       .filter((f): f is File => Boolean(f));
-    const fromFiles = Array.from(clipboard.files || []).filter((f) => f.type.startsWith("image/"));
+    const fromFiles = Array.from(clipboard.files || []);
     const files = (fromItems.length ? fromItems : fromFiles).filter(
       (f, i, arr) => arr.findIndex((g) => g.name === f.name && g.size === f.size) === i,
     );
     if (files.length) {
       event.preventDefault();
-      void addImages(item, files);
+      void addFiles(item, files);
     }
+  }
+
+  /* ---- file drag and drop ---- */
+  // The pane a file drag is over ("" = none): it shows the drop affordance.
+  let fileDropPaneId = "";
+
+  // A pane takes dropped files. Files only: the rail's conversation drag
+  // (CONV_DND_MIME, below) carries no "Files" type and keeps its own handlers.
+  function onPaneFileDragOver(event: DragEvent, item: ChatPane) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (fileDropPaneId !== item.id) fileDropPaneId = item.id;
+  }
+  function onPaneFileDragLeave(event: DragEvent, item: ChatPane) {
+    if (fileDropPaneId !== item.id) return;
+    // Crossing between the pane's own children is not leaving it.
+    const to = event.relatedTarget as Node | null;
+    if (to && (event.currentTarget as HTMLElement).contains(to)) return;
+    fileDropPaneId = "";
+  }
+  function onPaneFileDrop(event: DragEvent, item: ChatPane) {
+    if (!isFileDrag(event)) return;
+    event.preventDefault();
+    fileDropPaneId = "";
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (!files.length) return;
+    void addFiles(item, files);
+    focusComposer(item.id);
+  }
+
+  // A file dropped anywhere ELSE would make the browser open it — navigating
+  // away from the chat (and from an answer still streaming). While this view is
+  // mounted the window refuses such a drop; <svelte:window> removes the
+  // listeners with the view. A native file input keeps its own drop.
+  function isFileInput(target: EventTarget | null): boolean {
+    return target instanceof HTMLInputElement && target.type === "file";
+  }
+  function onWindowFileDragOver(event: DragEvent) {
+    if (!isFileDrag(event) || event.defaultPrevented || isFileInput(event.target)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+  }
+  function onWindowFileDrop(event: DragEvent) {
+    fileDropPaneId = "";
+    if (!isFileDrag(event) || event.defaultPrevented || isFileInput(event.target)) return;
+    event.preventDefault();
+  }
+  // The drag ended outside the page (or was cancelled there): no pane's
+  // dragleave ever fires for that.
+  function onWindowDragLeave(event: DragEvent) {
+    if (fileDropPaneId && !event.relatedTarget) fileDropPaneId = "";
   }
 
   function removePendingImage(item: ChatPane, id: string) {
@@ -676,8 +774,17 @@
     return (attachments ?? []).filter((att) => !att.hidden);
   }
 
-  // Download URL for a generated-file attachment; `name` only picks the
-  // save-dialog filename (the server sanitizes it).
+  // What waits for the answer to end when a mid-turn message is sent: a steer
+  // carries no attachment. "" = nothing staged.
+  function heldAttachmentNoun(item: ChatPane): string {
+    const images = Boolean(item.pendingImages?.length);
+    const documents = Boolean(item.pendingDocuments?.length);
+    return images && documents ? "이미지와 문서" : images ? "이미지" : documents ? "문서" : "";
+  }
+
+  // Download URL for a file attachment — a generated file or a document the
+  // user uploaded (always served as a download, never inline); `name` only picks
+  // the save-dialog filename (the server sanitizes it).
   function fileSrc(conversationId: string, att: MessageAttachment): string {
     const base = `/api/conversations/${encodeURIComponent(conversationId)}/files/${encodeURIComponent(att.id)}`;
     return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
@@ -827,11 +934,13 @@
       if (item.streaming) {
         // Mid-turn message: the server hands it to the model between the running
         // turn's tool calls.
-        if (item.pendingImages?.length) {
+        const held = heldAttachmentNoun(item);
+        if (held) {
           // Swallow the Enter too: the user meant "send", and a stray newline on
-          // top of the refusal is noise.
+          // top of the refusal is noise. What is staged stays staged for the
+          // next ordinary message.
           event.preventDefault();
-          notify("이미지는 응답이 끝난 뒤 보낼 수 있어요.", "warn");
+          notify(`${held}는 응답이 끝난 뒤 보낼 수 있어요.`, "warn");
           return;
         }
         // Nothing typed — fall through so Enter still breaks the line.
@@ -1246,6 +1355,9 @@
   $: if (streamRenderers.size || openLiveThinking.size) pruneLiveRenderState(panes, $liveReveal);
 </script>
 
+<!-- While the chat view is mounted a file dropped outside a pane must not
+     navigate the browser to it (see onWindowFileDragOver). -->
+<svelte:window on:dragover={onWindowFileDragOver} on:drop={onWindowFileDrop} on:dragleave={onWindowDragLeave} />
 
 {#snippet fileCard(item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined)}
   <button class="msg-file-card" type="button" on:click={() => openFilePreview(item, att, source)}>
@@ -1255,6 +1367,44 @@
       <span class="msg-file-info">{att.size ? `${formatFileSize(att.size)} · ` : ""}열기</span>
     </span>
   </button>
+{/snippet}
+
+<!-- A document the USER attached, in their own bubble. Always a DOWNLOAD of
+     their own file: user-uploaded content is never rendered inline and never
+     opened in the side-panel preview. Until the server has stored it (`unsent`)
+     there is nothing to link to, so the card only says it is on its way. -->
+{#snippet uploadedDocumentCard(item: ChatPane, att: MessageAttachment, unsent: boolean)}
+  {#if unsent}
+    <div class="msg-file-card is-unsent" aria-busy="true">
+      <span class="msg-file-icon" aria-hidden="true"><Icon name="file-text" /></span>
+      <span class="msg-file-meta">
+        <span class="msg-file-name">{att.name || "파일"}</span>
+        <span class="msg-file-info">{documentTypeLabel(att.name)}{att.size ? ` · ${formatFileSize(att.size)}` : ""} · 보내는 중…</span>
+      </span>
+    </div>
+  {:else}
+    <a class="msg-file-card" href={fileSrc(item.conversationId, att)} download={att.name || "file"} title={`${att.name || "파일"} 내려받기`}>
+      <span class="msg-file-icon" aria-hidden="true"><Icon name="file-text" /></span>
+      <span class="msg-file-meta">
+        <span class="msg-file-name">{att.name || "파일"}</span>
+        <span class="msg-file-info">{documentTypeLabel(att.name)}{att.size ? ` · ${formatFileSize(att.size)}` : ""} · 내려받기</span>
+      </span>
+    </a>
+  {/if}
+{/snippet}
+
+<!-- Shown over the pane a file drag is on. Pointer-events are off (CSS), so it
+     never becomes the drag's target and the pane keeps receiving the events. -->
+{#snippet fileDropOverlay(item: ChatPane, takesDocuments: boolean)}
+  {#if fileDropPaneId === item.id}
+    <div class="chat-drop-overlay" aria-hidden="true">
+      <div class="chat-drop-card">
+        <Icon name="file-text" size={28} />
+        <strong>{takesDocuments ? "여기에 놓아 첨부" : "여기에 놓아 이미지 첨부"}</strong>
+        <span>{takesDocuments ? `이미지 · ${DOCUMENT_TYPE_LIST}` : "문서는 내 아바타와의 대화에서만 첨부할 수 있어요"}</span>
+      </div>
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet attachmentCards(item: ChatPane, atts: MessageAttachment[], source: MessageAttachment[] | undefined)}
@@ -1454,17 +1604,22 @@
                 {#if visibleAttachments(message.attachments).length}
                   <div class="msg-images">
                     {#each visibleAttachments(message.attachments) as att (att.id)}
-                      <figure class="msg-image-item">
-                        <a class="msg-image-link" href={imageSrc(message, att, item)} target="_blank" rel="noopener noreferrer">
-                          <img class="msg-image" src={imageSrc(message, att, item)} alt={att.caption || att.name || "첨부 이미지"} loading="lazy" />
-                        </a>
-                        {#if att.caption}<figcaption class="msg-image-caption">{att.caption}</figcaption>{/if}
-                      </figure>
+                      {#if att.kind === "file"}
+                        <!-- A user row's file attachment is a document they attached (`uploaded`). -->
+                        {@render uploadedDocumentCard(item, att, (item.unsentDocumentIds ?? []).includes(att.id))}
+                      {:else}
+                        <figure class="msg-image-item">
+                          <a class="msg-image-link" href={imageSrc(message, att, item)} target="_blank" rel="noopener noreferrer">
+                            <img class="msg-image" src={imageSrc(message, att, item)} alt={att.caption || att.name || "첨부 이미지"} loading="lazy" />
+                          </a>
+                          {#if att.caption}<figcaption class="msg-image-caption">{att.caption}</figcaption>{/if}
+                        </figure>
+                      {/if}
                     {/each}
                   </div>
                 {/if}
                 {#if editing}
-                  <!-- The images above ride along unchanged; only the text is edited. -->
+                  <!-- The images and documents above ride along unchanged; only the text is edited. -->
                   <textarea
                     class="rewind-editor-input"
                     rows="2"
@@ -1479,7 +1634,7 @@
                   <p id={paneDomId("rewind-hint", item.id)} class="rewind-editor-hint">보내면 이 메시지부터 다시 시작하고, 이후 대화는 삭제됩니다.</p>
                   <div class="rewind-editor-actions">
                     <button class="btn btn-ghost btn-sm" type="button" on:click={() => cancelRewindEdit(item.id)}>취소</button>
-                    <!-- An image-only message may go back with no text: its images are the message. -->
+                    <!-- An image- or document-only message may go back with no text: its attachments are the message. -->
                     <button class="btn btn-primary btn-sm" type="button" disabled={item.streaming || (!(item.rewindEdit?.draft ?? "").trim() && !hasVisibleImages(message))} on:click={() => void submitRewindEdit(item.id)}>보내기</button>
                   </div>
                 {:else if message.content}{message.content}{/if}
@@ -1612,6 +1767,7 @@
 {/snippet}
 
 {#snippet composer(item: ChatPane, compact: boolean, index: number)}
+  {@const takesDocuments = paneTakesDocuments(item, $appState)}
   <footer class="composer">
     <div class="composer-inner">
       <form class="composer-form" on:submit|preventDefault={() => submit(item)}>
@@ -1641,9 +1797,9 @@
             </div>
           {/if}
         {/if}
-        {#if item.pendingImages?.length}
-          <div class="composer-attachments" aria-label="첨부한 이미지">
-            {#each item.pendingImages as img (img.id)}
+        {#if item.pendingImages?.length || item.pendingDocuments?.length}
+          <div class="composer-attachments" role="group" aria-label="첨부한 파일">
+            {#each item.pendingImages ?? [] as img (img.id)}
               <div class="composer-thumb">
                 <img src={img.dataUrl} alt={img.name} />
                 <button
@@ -1658,6 +1814,27 @@
                 </button>
               </div>
             {/each}
+            <!-- Document chips, after the image thumbnails: type, name, size (or
+                 that the file is still being read) and a remove button. -->
+            {#each item.pendingDocuments ?? [] as doc (doc.id)}
+              <div class="composer-doc" class:is-reading={doc.dataUrl === null}>
+                <span class="composer-doc-type">{documentTypeLabel(doc.name)}</span>
+                <span class="composer-doc-meta">
+                  <span class="composer-doc-name" title={doc.name}>{doc.name}</span>
+                  <span class="composer-doc-info">{doc.dataUrl === null ? "읽는 중…" : formatFileSize(doc.size)}</span>
+                </span>
+                <button
+                  class="composer-doc-remove"
+                  type="button"
+                  aria-label={`${doc.name} 제거`}
+                  title="제거"
+                  disabled={item.streaming}
+                  on:click={() => removePendingDocument(item.id, doc.id)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            {/each}
           </div>
         {/if}
         <div
@@ -1667,17 +1844,20 @@
           <label
             class="composer-attach"
             class:disabled={item.streaming}
-            title={attachHint(item, $appState)}
-            aria-label={attachHint(item, $appState)}
+            title={attachTitle(item, $appState)}
           >
-            <Icon name="image" />
+            <Icon name={takesDocuments ? "plus" : "image"} />
+            <!-- Visually hidden, NOT `hidden`: the input stays in the tab order,
+                 so the picker opens from the keyboard too (Space/Enter), and it
+                 carries the control's name. -->
             <input
+              class="sr-only"
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
+              accept={takesDocuments ? IMAGE_AND_DOCUMENT_ACCEPT : IMAGE_ACCEPT}
               multiple
-              hidden
+              aria-label={attachHint(item, $appState)}
               disabled={item.streaming}
-              on:change={(event) => onPickImages(event, item)}
+              on:change={(event) => onPickFiles(event, item)}
             />
           </label>
           <!-- Intentionally NOT disabled while streaming: disabling blurs the
@@ -1721,7 +1901,7 @@
             class:is-stop={item.streaming}
             type="button"
             aria-label={item.streaming ? "응답 중지" : "보내기"}
-            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : EMPTY_COMPOSER_HINT}
+            title={item.streaming ? "응답 중지" : canSendMessage(item) ? "보내기" : sendBlockedHint(item, $appState)}
             disabled={!item.streaming && !canSendMessage(item)}
             on:click={() => (item.streaming ? stopPane(item.id) : submit(item))}
           >
@@ -1950,6 +2130,10 @@
           aria-labelledby={paneDomId("pane-title", item.id)}
           aria-current={item.id === pane.id ? "true" : undefined}
           on:focusin={() => setActive(item.id)}
+          on:dragenter={(event) => onPaneFileDragOver(event, item)}
+          on:dragover={(event) => onPaneFileDragOver(event, item)}
+          on:dragleave={(event) => onPaneFileDragLeave(event, item)}
+          on:drop={(event) => onPaneFileDrop(event, item)}
         >
           <div class="pane-head">
             <button
@@ -1974,6 +2158,7 @@
           </div>
           {@render transcript(item)}
           {@render composer(item, true, index)}
+          {@render fileDropOverlay(item, paneTakesDocuments(item, $appState))}
           <PromptModal paneId={item.id} />
         </section>
       {/each}
@@ -1988,7 +2173,14 @@
 {:else}
   <!-- svelte-ignore a11y-no-static-element-interactions -->
   <div class="chat-layout" class:drop-active={dropActive} on:dragover={onWorkbenchDragOver} on:dragleave={onWorkbenchDragLeave} on:drop={onWorkbenchDrop}>
-    <section class="chat-col chat-pane active" data-pane={pane.id}>
+    <section
+      class="chat-col chat-pane active"
+      data-pane={pane.id}
+      on:dragenter={(event) => onPaneFileDragOver(event, pane)}
+      on:dragover={(event) => onPaneFileDragOver(event, pane)}
+      on:dragleave={(event) => onPaneFileDragLeave(event, pane)}
+      on:drop={(event) => onPaneFileDrop(event, pane)}
+    >
       <header class="view-header chat-head">
         <div class="header-left">
           <div class="chat-avatar">
@@ -2006,6 +2198,7 @@
       </header>
       {@render transcript(pane)}
       {@render composer(pane, false, 0)}
+      {@render fileDropOverlay(pane, paneTakesDocuments(pane, $appState))}
       <PromptModal paneId={pane.id} />
     </section>
     {#if hasSideTabs(pane)}

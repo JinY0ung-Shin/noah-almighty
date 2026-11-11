@@ -49,6 +49,14 @@ import type {
   StoredMessage,
 } from "./types";
 
+import {
+  CHAT_DOCUMENT_MESSAGES,
+  attachmentsTooLarge,
+  documentAttachments,
+  documentsReading,
+  isUploadedDocument,
+} from "./composerDocuments";
+
 const MAX_CHAT_PANES = 4;
 
 // Internal orchestration tools the viewer shouldn't see as activity rows.
@@ -596,12 +604,17 @@ export function canRegenerate(messages: StoredMessage[]): boolean {
 }
 
 /**
- * Whether a rewound row carries images of its own. Its text may then be empty — an
- * image-only message is still a message (the server re-feeds those images), so
- * neither 다시 생성 nor an edit needs text to go back to it.
+ * Whether a rewound row carries images of its own — or DOCUMENTS the user attached
+ * (`uploaded` file attachments; the name predates them, and the server's twin in
+ * routes/chat.ts reads the same two). Its text may then be
+ * empty — an image-only or document-only message is still a message (the server
+ * re-feeds its stored copies), so neither 다시 생성 nor an edit needs text to go
+ * back to it.
  */
 export function hasVisibleImages(message: StoredMessage | undefined): boolean {
-  return (message?.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
+  return (message?.attachments ?? []).some(
+    (att) => (att.kind === "image" && !att.hidden) || isUploadedDocument(att),
+  );
 }
 
 /**
@@ -969,9 +982,25 @@ export async function sendMessage(
   // stored turn (its own images are re-read server-side), and whatever sits in
   // the composer belongs to the NEXT message.
   const pendingImages = rewinding || opts.widgetSend ? [] : [...(pane.pendingImages || [])];
+  // Staged documents ride the same way (own-avatar panes only stage any): never
+  // on a rewind/regenerate — the server re-sends its stored copy of that turn's.
+  const pendingDocuments = rewinding || opts.widgetSend ? [] : [...(pane.pendingDocuments || [])];
   // An image-only row is still a message: going back to it needs no text.
   const anchorImages = rewinding && hasVisibleImages(anchor);
-  if (!message && pendingImages.length === 0 && !anchorImages) return;
+  if (!message && pendingImages.length === 0 && pendingDocuments.length === 0 && !anchorImages) return;
+  // A document whose bytes are still being read cannot go out half-attached;
+  // the composer disables its send for the same reason (this is the backstop
+  // for a canvas submission or a send racing the read).
+  if (pendingDocuments.length && documentsReading({ pendingDocuments })) {
+    notify("첨부한 파일을 아직 읽는 중입니다. 잠시 후 다시 보내 주세요.", "warn");
+    return;
+  }
+  // Images + documents share ONE request budget; the server refuses a message
+  // over it with this same sentence, so do not upload what cannot be accepted.
+  if (pendingDocuments.length && attachmentsTooLarge(pendingImages, pendingDocuments)) {
+    notify(CHAT_DOCUMENT_MESSAGES.TOTAL_TOO_LARGE, "warn");
+    return;
+  }
 
   const slash =
     message && !opts.canvasSubmission && !opts.widgetSend
@@ -1003,7 +1032,7 @@ export async function sendMessage(
     // Send the literal "/command [args]"; the server swaps in the expanded
     // (agent-facing) prompt so the bubble + persisted turn stay the literal.
     message = `/${slash.command.name}${slash.args ? ` ${slash.args}` : ""}`;
-    if (!message && pendingImages.length === 0 && !anchorImages) return;
+    if (!message && pendingImages.length === 0 && pendingDocuments.length === 0 && !anchorImages) return;
   }
 
   // Staged images ride this turn and can be restored if the send fails before
@@ -1018,13 +1047,17 @@ export async function sendMessage(
       ? anchor?.attachments?.length
         ? anchor.attachments.map((att) => ({ ...att }))
         : undefined
-      : pendingImages.length
-        ? pendingImages.map((img) => ({
-            id: img.id,
-            kind: "image" as const,
-            mediaType: img.mediaType,
-            name: img.name,
-          }))
+      : pendingImages.length || pendingDocuments.length
+        ? [
+            ...pendingImages.map((img) => ({
+              id: img.id,
+              kind: "image" as const,
+              mediaType: img.mediaType,
+              name: img.name,
+            })),
+            // Images first, then the document cards — the order the server stores.
+            ...documentAttachments(pendingDocuments),
+          ]
         : undefined,
     response: null,
     createdAt: new Date().toISOString(),
@@ -1084,8 +1117,12 @@ export async function sendMessage(
     }
     if (!rewinding && !opts.widgetSend) {
       target.pendingImages = [];
+      target.pendingDocuments = [];
       target.draft = "";
     }
+    // The bubble's document cards are not downloadable until the server has
+    // them (`open` clears this; so does the end of a send that never opened).
+    target.unsentDocumentIds = pendingDocuments.map((doc) => doc.id);
     resetLive(target);
     // The previous turn's run id outlives its turn (resetLive keeps it for the
     // canvas/stop paths). Drop it here so this send's failure handling can tell
@@ -1131,6 +1168,11 @@ export async function sendMessage(
         // stored attachment id + filename. Omit when none.
         images: pendingImages.length
           ? pendingImages.map((img) => ({ id: img.id, data: img.dataUrl }))
+          : undefined,
+        // Staged documents (base64 data URLs, names already unique). `id` is the
+        // stored attachment id, as for an image. Omit when none.
+        files: pendingDocuments.length
+          ? pendingDocuments.map((doc) => ({ id: doc.id, name: doc.name, data: doc.dataUrl }))
           : undefined,
         // Non-blocking canvas submission/edit (#50), when this turn was triggered
         // from a canvas form rather than the composer.
@@ -1186,6 +1228,7 @@ export async function sendMessage(
             for (const img of pendingImages)
               delete target.localImages?.[img.id];
           }
+          if (pendingDocuments.length) target.pendingDocuments = pendingDocuments;
         });
         notify(`메시지를 보내지 못했습니다: ${error.message}`);
       } else {
@@ -1202,6 +1245,7 @@ export async function sendMessage(
       target.streaming = false;
       target.abortController = null;
       target.liveStatus = "";
+      target.unsentDocumentIds = [];
     });
     // A rewind/regenerate whose run really ENDED (a refusal re-reads on its own
     // path): the server's rows are the truth now, whatever this view assumed. A
@@ -1683,6 +1727,9 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         if (data?.runId) pane.liveRunId = data.runId;
         pane.liveStatus = "응답 준비 중…";
         adoptUserMessageId(pane, optimisticId, data?.userMessageId);
+        // The server stored this send's documents before it opened the run:
+        // their cards may link to the download now.
+        if (pane.unsentDocumentIds?.length) pane.unsentDocumentIds = [];
       });
       if (cleanup) applyRewindCleanup(paneId, cleanup, data?.runId);
       syncHash(true);

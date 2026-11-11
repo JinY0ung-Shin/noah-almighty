@@ -57,9 +57,14 @@ export function shareHashRoute(token: string): string {
   return `#/share/${token}`;
 }
 
-/** A visible PPTX download card (never a hidden render, never a screenshot card). */
-export function isPptxCard(att: { kind: string; mediaType: string; hidden?: boolean }): boolean {
-  return att.kind === "file" && !att.hidden && att.mediaType === PPTX_MEDIA_TYPE;
+/**
+ * A visible PPTX download card the AVATAR delivered (never a hidden render,
+ * never a screenshot card, never a .pptx the user attached to their own
+ * message — `uploaded`, see `src/shared/chatDocuments.ts`: a share link exports
+ * a generated deck, not something the user sent in).
+ */
+export function isPptxCard(att: { kind: string; mediaType: string; hidden?: boolean; uploaded?: boolean }): boolean {
+  return att.kind === "file" && !att.hidden && !att.uploaded && att.mediaType === PPTX_MEDIA_TYPE;
 }
 
 /** What the owner sees for one of their links (settings list, the file card's dialog). */

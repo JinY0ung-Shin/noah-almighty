@@ -1176,6 +1176,134 @@ tbody tr:hover td {
   height: 12px;
 }
 
+/* The attach label wraps a visually hidden — still focusable — file input (so
+   the picker opens from the keyboard): anchor it, and draw keyboard focus on
+   the control the user actually sees. */
+.composer-attach {
+  position: relative;
+}
+.composer-attach:has(input:focus-visible) {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Staged-document chip, in the same strip as the image thumbnails and as tall
+   as one: type badge, name over size (or "읽는 중…"), remove button. */
+.composer-doc {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-width: 0;
+  max-width: min(280px, 100%);
+  height: 64px;
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+}
+/* Bytes still being read: the chip is not sendable yet. */
+.composer-doc.is-reading {
+  border-style: dashed;
+}
+.composer-doc.is-reading .composer-doc-type {
+  opacity: var(--disabled-opacity);
+}
+.composer-doc-type {
+  flex: none;
+  min-width: 44px;
+  padding: var(--s-1) var(--s-1-5);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-size: var(--t-2xs);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+.composer-doc-meta {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--s-0-5);
+}
+.composer-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+.composer-doc-info {
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+}
+.composer-doc-remove {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--r-pill);
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--muted);
+}
+.composer-doc-remove:hover:not(:disabled) {
+  background: var(--panel-strong);
+  color: var(--text);
+}
+.composer-doc-remove svg {
+  width: 14px;
+  height: 14px;
+}
+/* Touch: the global coarse-pointer rule already gives every button a 44px
+   height; match the width so the target is square. */
+@media (pointer: coarse) {
+  .composer-doc-remove {
+    width: 44px;
+  }
+}
+
+/* File drag over a chat pane: the drop affordance covers the pane (`.chat-pane`
+   is positioned). It never takes pointer events, so the pane underneath stays
+   the drag's target and the overlay cannot make the drag "leave". */
+.chat-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-popover);
+  display: grid;
+  place-items: center;
+  padding: var(--s-4);
+  pointer-events: none;
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+.chat-drop-card {
+  display: grid;
+  justify-items: center;
+  gap: var(--s-1);
+  max-width: min(420px, 100%);
+  padding: var(--s-4) var(--s-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  text-align: center;
+}
+.chat-drop-card svg {
+  color: var(--accent);
+}
+.chat-drop-card strong {
+  font-size: var(--t-md);
+}
+.chat-drop-card span {
+  color: var(--text-soft);
+  font-size: var(--t-xs);
+}
+
 .composer textarea {
   width: 100%;
   border: 0;

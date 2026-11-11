@@ -166,6 +166,23 @@ export interface PendingImage {
   mediaType: import("../../../server/types.js").ImageMediaType;
 }
 
+/**
+ * A DOCUMENT (pdf, docx, … — never an image) staged in the composer before
+ * sending. Only a pane on the viewer's OWN avatar ever holds one.
+ */
+export interface PendingDocument {
+  /** Client-generated id; the server stores the attachment under it (as it does for an image). */
+  id: string;
+  /** The name as it will be SENT: the shared `chatDocumentName`, made unique within the message. */
+  name: string;
+  /** Raw byte size of the picked file. */
+  size: number;
+  /** Stored media type for the extension (shared `CHAT_DOCUMENT_MEDIA_TYPES`). */
+  mediaType: string;
+  /** The bytes as a base64 `data:` URL; null while the file is still being READ (not sendable yet). */
+  dataUrl: string | null;
+}
+
 export interface ChatPane {
   id: string;
   avatar: import("../../../server/types.js").AvatarDetail;
@@ -227,6 +244,14 @@ export interface ChatPane {
   rewindEdit?: { messageId: string; draft: string } | null;
   /** Images staged in the composer, not yet sent (data URLs for preview + upload). */
   pendingImages?: PendingImage[];
+  /** Documents staged in the composer, not yet sent (own-avatar panes only; see lib/composerDocuments). */
+  pendingDocuments?: PendingDocument[];
+  /**
+   * Ids of document cards in the optimistic user bubble whose upload the server
+   * has not confirmed yet (no `open` frame): the card shows 보내는 중 instead of a
+   * download link that would 404. Cleared at `open` and when the send ends.
+   */
+  unsentDocumentIds?: string[];
   /**
    * Locally-held image data URLs keyed by attachment id, so a just-sent user
    * message renders its images instantly (before the bytes are fetchable from

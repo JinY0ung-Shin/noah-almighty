@@ -201,6 +201,16 @@ export interface PiRuntimeFacts {
    */
   asyncAskAvatar?: boolean;
   /**
+   * Whether a message of THIS run may carry user-attached documents
+   * (`documentAttachmentsAllowed`, `agent/runCapabilities.ts` — the same
+   * function the chat route's refusal reads): an interactive turn in the
+   * avatar owner's own sandbox. False on a colleague's chat (its pi session is
+   * `read_only`, and pi refuses `input_file` there), a consultation, a headless
+   * run and an external-task-API turn. describe_system states it live; the
+   * frozen prompt states only the per-conversation half (`sandboxOwner`).
+   */
+  documentAttachments?: boolean;
+  /**
    * The Noah MCP tools THIS run registered (`mcpAllowedTools`), full names —
    * describe_system's live "callable now" line. Set by the capability plan.
    */
@@ -683,6 +693,16 @@ export interface MessageAttachment {
   /** File size in bytes (`kind:"file"` only) — shown on the download card. */
   size?: number;
   /**
+   * `kind:"file"` on a USER message only: a DOCUMENT the user attached in the
+   * composer (`chatDocuments.ts`), as opposed to a file the avatar published
+   * (`share_file`). Its bytes sit in the same chat-files store, so the download
+   * route and every deletion cascade treat it like any file card; a regenerate
+   * or edit re-sends it to the model, and a share link never picks it
+   * (`isPptxCard`). `name` is the exact file name the sandbox copy has
+   * (`/workspace/uploads/<name>`).
+   */
+  uploaded?: boolean;
+  /**
    * Published for URL use only (e.g. slide PNGs embedded in a canvas): the
    * serving route works, but the bubble does not render it.
    */
@@ -761,6 +781,24 @@ export interface StoredMessage {
 export interface AgentImageInput {
   mediaType: ImageMediaType;
   data: string;
+}
+
+/**
+ * One DOCUMENT the user attached to this turn's message (`chatDocuments.ts`):
+ * the pi runner sends it as an `input_file` part, and pi writes it to
+ * `/workspace/uploads/<name>` in the sandbox of the run's principal before the
+ * turn starts. Only ever set on an interactive turn in the owner's own sandbox
+ * (`documentAttachmentsAllowed`, `agent/runCapabilities.ts`).
+ */
+export interface AgentDocumentInput {
+  /** The plain file name pi stores it under (validated by `chatDocumentName`). */
+  name: string;
+  /** Derived from the extension after the bytes were checked — never the client's claim. */
+  mediaType: string;
+  /** Base64 payload (no `data:` prefix). */
+  data: string;
+  /** Decoded size in bytes. */
+  size: number;
 }
 
 /**
@@ -1709,6 +1747,13 @@ export interface AgentRequest {
    * headless/external turns.
    */
   imageFiles?: AgentImageFileInput[];
+  /**
+   * Documents attached to THIS turn's user message (the fresh send, or the
+   * anchor row's stored copies on a rewind/regenerate). The pi runner sends
+   * each as an `input_file`; `buildPiTurnPreamble` names their sandbox paths.
+   * Never set for headless, task-API or colleague turns (the route refuses).
+   */
+  documents?: AgentDocumentInput[];
   /**
    * True when this run IS an avatar-to-avatar consultation (#ask-avatar): a
    * headless one-shot turn another avatar started via `mcp__avatars__ask_avatar`.

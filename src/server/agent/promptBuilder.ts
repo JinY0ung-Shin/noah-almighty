@@ -4,6 +4,10 @@ import { normalizeGithubHost } from "../marketplace.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE } from "../hexSshPolicy.js";
 import { kstDateTimeString } from "../routineSchedule.js";
 import {
+  DOCUMENT_ENCODING_CLAUSE,
+  DOCUMENT_LIBRARIES_PHRASE,
+  DOCUMENT_TYPES_PHRASE,
+  DOCUMENT_UPLOADS_SENTENCE,
   GROUP_REPOS_RETIRED_SENTENCE,
   gettingStartedGaps,
   PI_NO_ASK_USER_SENTENCE,
@@ -30,6 +34,7 @@ import {
   MCP_TOOL_GROUPS,
   type McpToolGroupId,
 } from "../../shared/mcpToolGroups.js";
+import { CHAT_DOCUMENT_SANDBOX_DIR, chatDocumentExtension } from "../../shared/chatDocuments.js";
 
 const HISTORY_MESSAGE_LIMIT = 24;
 const HISTORY_CHAR_LIMIT = 12_000;
@@ -855,6 +860,75 @@ function piRuntimeSection(request: AgentRequest): string | null {
 }
 
 /**
+ * Standing note on user-attached DOCUMENTS (pi `input_file`). Frozen with the
+ * rest of the append, so it states only what is true for the whole
+ * conversation — whose sandbox it runs in (`sandboxOwner`): the owner's own
+ * conversation can receive them in a chat, a colleague's never can (its pi
+ * session is `read_only`). Which TURN carries one rides `buildPiTurnPreamble`,
+ * and describe_system states the live per-run fact
+ * (`PiRuntimeFacts.documentAttachments`). A run without a conversation (a
+ * consultation, a profile generator) has nobody attaching anything: no note.
+ */
+function piDocumentAttachmentsSection(request: AgentRequest): string | null {
+  const pi = request.piRuntime;
+  if (!pi?.conversationDir || pi.conversationDir.startsWith("/workspace/c/run-")) return null;
+  if (pi.sandboxOwner === "owner") {
+    return (
+      `**Attached documents**: in a chat the user can attach ${DOCUMENT_TYPES_PHRASE} files to a message; ${DOCUMENT_UPLOADS_SENTENCE}. ` +
+      "A scheduled routine run or an external-task turn of this conversation carries no attachments."
+    );
+  }
+  if (pi.sandboxOwner === "viewer") {
+    return (
+      `**Attached documents**: this viewer cannot attach documents (${DOCUMENT_TYPES_PHRASE}) in this conversation — that works only in a chat with one's OWN avatar, and this session is read-only. ` +
+      "If they want you to work from a document, ask them to paste the relevant text, or to attach it in a chat with their own avatar."
+    );
+  }
+  return null;
+}
+
+/** "PDF", "Excel workbook", … for the per-turn attached-documents line. */
+const DOCUMENT_KIND_LABEL: Record<string, string> = {
+  pdf: "PDF",
+  docx: "Word document",
+  xlsx: "Excel workbook",
+  pptx: "PowerPoint deck",
+  csv: "CSV",
+  txt: "plain text",
+  md: "Markdown",
+  json: "JSON",
+};
+
+function documentSizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * pi only: the documents THIS turn's message carries (`AgentRequest.documents`)
+ * — path, type and size of each. Per turn, so it also reaches a conversation
+ * whose frozen prompt predates document attachments; pi's own
+ * `[Attached file: …]` notes name the same paths. The path is JSON-quoted: a
+ * file name may hold spaces, quotes or backticks.
+ */
+function piAttachedDocumentsLine(request: AgentRequest): string | null {
+  const documents = request.documents ?? [];
+  if (documents.length === 0) return null;
+  const listing = documents
+    .map((document) => {
+      const kind = DOCUMENT_KIND_LABEL[chatDocumentExtension(document.name) ?? ""] ?? document.mediaType;
+      return `${JSON.stringify(`${CHAT_DOCUMENT_SANDBOX_DIR}/${document.name}`)} (${kind}, ${documentSizeLabel(document.size)})`;
+    })
+    .join("; ");
+  return (
+    `**Attached documents (this turn)**: the user attached ${documents.length === 1 ? "a document" : `${documents.length} documents`} to this message, saved in your sandbox before this turn started: ${listing}. ` +
+    `Read ${documents.length === 1 ? "it" : "them"} from ${documents.length === 1 ? "that path" : "those paths"} — python3 with ${DOCUMENT_LIBRARIES_PHRASE} for PDF and Office files, \`read\` for csv/txt/md/json — instead of asking the user to paste the content; ${DOCUMENT_ENCODING_CLAUSE}. ` +
+    `\`${CHAT_DOCUMENT_SANDBOX_DIR}/\` is shared by all of this user's conversations and a later upload with the same name replaces a file there, so copy one into this conversation's folder if you will need it later.`
+  );
+}
+
+/**
  * The composer's effort pick is clamped per model before it is sent (pi 400s an
  * effort the model does not list): mirrored by describe_system's effort line.
  */
@@ -1028,6 +1102,10 @@ export function buildSystemPromptAppend(
   const piBlock = piRuntimeSection(request);
   if (piBlock) {
     lines.push(piBlock);
+  }
+  const piDocumentsBlock = piDocumentAttachmentsSection(request);
+  if (piDocumentsBlock) {
+    lines.push(piDocumentsBlock);
   }
   const piKnownToolsBlock = piKnownToolsSection(request);
   if (piKnownToolsBlock) {
@@ -1594,9 +1672,10 @@ export function buildPrompt(
  * pi only: the per-turn lines the frozen system prompt cannot carry (design
  * D2) — the current KST date/time (pi fixes its own at session creation), a
  * rewind's provenance, the turn's RUN KIND (live chat / routine / task API,
- * with the guidance that depends on it), the open working repo, what the
- * viewer's browser could not draw of a canvas since the last turn, and whether
- * a lost session was rebuilt. Prepended to the turn's user input.
+ * with the guidance that depends on it), the open working repo, the documents
+ * the user attached to this message, what the viewer's browser could not draw
+ * of a canvas since the last turn, and whether a lost session was rebuilt.
+ * Prepended to the turn's user input.
  */
 /** How much of a stopped answer a continued pi turn restates (its tail — what the user read last). */
 const STOPPED_ANSWER_MAX_CHARS = 4_000;
@@ -1643,6 +1722,10 @@ export function buildPiTurnPreamble(
   const activeRepoLine = piActiveRepoTurnLine(request);
   if (activeRepoLine) {
     lines.push(activeRepoLine);
+  }
+  const documentsLine = piAttachedDocumentsLine(request);
+  if (documentsLine) {
+    lines.push(documentsLine);
   }
   lines.push(...canvasRenderReportParagraphs(request));
   if (options.continuedAfterStop && request.stoppedAnswer !== undefined) {

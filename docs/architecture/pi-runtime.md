@@ -121,7 +121,8 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    adds `piRuntimeSection` (sandbox, work folder, built-in tools, `mcp_call`/`mcp_search`, what is missing, "these
    instructions were fixed at conversation start — check describe_system").
 4. **Input** — preamble + `buildUserPrompt` (history only on a fresh session, cap `PI_FIRST_TURN_HISTORY_LIMITS`
-   120 msgs / 60k chars instead of 24 / 12k) + image blocks as `input_image` data URLs. Attachment files are staged
+   120 msgs / 60k chars instead of 24 / 12k) + image blocks as `input_image` data URLs + the message's documents
+   as `input_file` parts (see "Document input"; the preamble names their `/workspace/uploads/` paths). Attachment files are staged
    by the route straight into `/workspace/c/<seg>/attachments/` and listed by sandbox path (`stagePiAttachmentFiles`
    maps host → sandbox; it copies only a file staged elsewhere). Skills are synced first (see "Skills").
 5. **Session** — `previous_response_id` = `resumeSessionAt ?? resumeSessionId` when it is a `resp_…` id; anything
@@ -168,6 +169,46 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    first). Nothing else of the run (capability plan, run token, instructions) is built — and since no run token
    is sent, pi takes down a session it had to OPEN for the compaction, so the next turn opens it with its token.
    Mechanics → [`chat-sse-media.md`](chat-sse-media.md) "Manual `/compact`".
+
+## Document input (`input_file`) and built-in subagents (pi bump 2026-11-11)
+
+- **The `input_file` contract (pi `api/request.ts` `inputFile`, `api/responses.ts`).** A user-message content part
+  `{ type: "input_file", filename, file_data: "data:…;base64,…" }` (`file_id` / `file_url` are 400
+  `invalid_file_input`). pi takes a plain `filename` (no `/`, `\`, control characters; not `.`/`..`; ≤ 255 bytes;
+  one of its extensions — Noah sends pdf/docx/xlsx/pptx/csv/txt/md/json and keeps images on `input_image`), writes
+  the bytes to `/workspace/uploads/<filename>` in the sandbox of the run's PRINCIPAL **before the turn**
+  (overwriting a same-named file) and puts `[Attached file: /workspace/uploads/<filename>]` into the prompt text
+  at the part's position. The whole request body is capped at 16 MiB (`PI_MAX_REQUEST_BYTES`; the limits that
+  keep Noah under it → [`chat-sse-media.md`](chat-sse-media.md) "Document attachments").
+- **What Noah sends (`responsesClient.ts` `buildResponsesBody`).** `PiTurnInput.files` → one `input_file` part
+  per document AFTER the `input_text` and `input_image` parts (so pi's notes follow the user's message). A turn
+  with neither images nor files still sends `input` as the plain string — byte-for-byte the request it was
+  before documents existed (`tests/pi-documents.test.ts` pins both). The runner sends the files on the run's
+  FIRST request and on every re-send of that attempt (a lost-session rebuild, a model fallback); a steer
+  follow-up turn carries none, and its preamble drops the documents line.
+- **Refusals are surfaced, never dropped (`runPiAgent.ts` `piDocumentTurnError`).** On a turn that carried
+  documents: 400 `invalid_file_input` (pi's name/type rule, or a **`read_only` session** — pi refuses
+  `input_file` there because it writes to the workspace) and 502 `Sandbox error: …` (the sandbox could not be
+  opened or the write failed) become their own Korean error on the turn; the 502's status is dropped so the
+  chat route does not read it as a transient model failure and offer another model. A `read_only` refusal
+  cannot normally happen: `documentAttachmentsAllowed` (`runCapabilities.ts`) keeps documents off every run
+  whose sandbox owner is not the avatar owner, the route answers 400 `NOT_ALLOWED_HERE` first, and the runner
+  throws before any request when a document reaches a run whose plan says no.
+- **The sandbox image's document libraries:** `pypdf`, `python-docx`, `python-pptx` next to `numpy pandas
+  openpyxl matplotlib` (pi `images/sandbox/Dockerfile`). Noah's deployed pi prompt
+  (`scripts/pi-system-prompt.md`), the frozen append's **Attached documents** note, the per-turn documents line
+  and describe_system name them, so the avatar reads an attached file instead of asking for a paste.
+- **Built-in subagents.** pi now ALWAYS offers `Agent` / `SendMessage` with a built-in `general-purpose`
+  subagent (`agent/subagents.ts`; before, only when a plugin shipped an agent). A subagent is a child pi
+  session in the SAME sandbox with the parent's tools minus `Agent`, `SendMessage`, `AskUserQuestion`,
+  `present_file` and `request_admin` (depth 1; only the parent talks to the user); its tool events reach Noah
+  with `parent_tool_use_id` and only its final report returns as the parent call's result. Noah states it in
+  the deployed pi prompt (one `<tools>` line), in describe_system's `Subagents` line (every pi run) and in the
+  manual's `chat` topic — one sentence, `PI_SUBAGENT_SENTENCE` (`agent/ownerState.ts`).
+- **Not verified against a real gateway:** there is no pi-gateway on the dev box, so the `input_file` round trip
+  (the file really landing in `/workspace/uploads/`, pi's `[Attached file: …]` note, a real `read_only` 400) is
+  covered only by the scripted fake and by reading pi's source at the pinned submodule commit. Run one document
+  turn on the dind stack / the deployment after the pi bump.
 
 ## S1 degrades (what pi still lacks)
 

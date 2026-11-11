@@ -14,6 +14,7 @@ import { kstDateWithWeekday } from "../routineSchedule.js";
 import type { Store } from "../store.js";
 import type {
   AgentConversationMessage,
+  AgentDocumentInput,
   AgentImageFileInput,
   AgentImageInput,
   AgentResponse,
@@ -102,7 +103,16 @@ import {
   sanitizeDownloadName,
   withDownloadExtension,
 } from "../chatFiles.js";
+import {
+  decodeChatDocuments,
+  isUploadedDocument,
+  readChatDocuments,
+  saveChatDocuments,
+  type DecodedChatDocument,
+} from "../chatDocuments.js";
+import { CHAT_DOCUMENT_MESSAGES, base64EncodedLength } from "../../shared/chatDocuments.js";
 import { runAgentStream, isRetryableModelError } from "../agent/index.js";
+import { documentAttachmentsAllowed } from "../agent/runCapabilities.js";
 import { MAX_MODEL_ID_CHARS, catalogModel, defaultRunModelId, noahDefaultModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { isEffortLevel } from "../effortLevels.js";
 import {
@@ -679,9 +689,14 @@ function lastTurnEndRow(rows: StoredMessage[]): StoredMessage | undefined {
   return rows[end - 1];
 }
 
-/** A user row's own (bubble) images — what a rewind or regenerate re-feeds. */
+/**
+ * A user row's own (bubble) images or attached documents — what a rewind or
+ * regenerate re-feeds, and what lets a row without text still be a message.
+ */
 function hasVisibleImages(message: StoredMessage): boolean {
-  return (message.attachments ?? []).some((att) => att.kind === "image" && !att.hidden);
+  return (message.attachments ?? []).some(
+    (att) => (att.kind === "image" && !att.hidden) || isUploadedDocument(att),
+  );
 }
 
 /**
@@ -834,6 +849,13 @@ export interface ChatTurnContext {
   displayMessage: string;
   images: DecodedChatImage[];
   /**
+   * Documents attached to this message (`files` of the chat POST, validated by
+   * `decodeChatDocuments`). Refused unless the turn is an interactive one in
+   * the avatar owner's own sandbox (`documentAttachmentsAllowed`); the task
+   * API runner never sets it (its body carries text only).
+   */
+  documents?: DecodedChatDocument[];
+  /**
    * Re-run the conversation's LAST NON-STEER user message: every row after it
    * is dropped and the run answers it again (`displayMessage`/`agentMessage`
    * are re-derived from the stored row, not taken from the request).
@@ -920,6 +942,22 @@ export async function executeChatTurn(
   let { agentMessage, displayMessage } = ctx;
   const { avatar, viewerIsOwner } = ctx.target;
   const decodedImages = ctx.images;
+  const decodedDocuments = ctx.documents ?? [];
+  // Whether THIS turn's message may carry documents: the capability plan's own
+  // decision (the one behind the pi session's `read_only` and both
+  // metacognition surfaces), so the refusal and the run never disagree. An
+  // executeChatTurn turn is never headless; a task-API turn is refused.
+  const documentsAllowed = documentAttachmentsAllowed({
+    avatar: { id: avatar.id },
+    viewerUserId: ownerUserId,
+    ...(ctx.externalTaskId ? { externalTaskApi: true } : {}),
+  });
+  if (decodedDocuments.length > 0 && !documentsAllowed) {
+    return {
+      ok: false,
+      refusal: { status: 400, message: CHAT_DOCUMENT_MESSAGES.NOT_ALLOWED_HERE, userMessagePersisted: false },
+    };
+  }
   // Absent (a server-started turn) reads as "keep whatever is stored", which is
   // the same null the HTTP prelude produces when the client sends nothing.
   const requestedModel = ctx.requestedModel ?? null;
@@ -1201,6 +1239,9 @@ export async function executeChatTurn(
     // model gets, and next to the image blocks on a vision model, so an image
     // the avatar sees is also a file it can place into a deck or document.
     let requestImageFiles: AgentImageFileInput[] = [];
+    // Documents sent to the model THIS turn (pi `input_file`): the fresh
+    // uploads, or — on a rewind/regenerate — the anchor row's stored copies.
+    let requestDocuments: AgentDocumentInput[] = [];
     // Per-conversation workspace: each chat session gets an isolated cwd, scoped
     // under the avatar so sessions cannot mix files by accident. Created here
     // (before the message persist) because the image staging writes into it.
@@ -1276,6 +1317,11 @@ export async function executeChatTurn(
       if (!imageFileMode) {
         requestImages = saved.images;
       }
+      // Documents: Noah's copy goes into the conversation's file store (the
+      // bubble's download, a later regenerate's re-send); the sandbox copy is
+      // pi's write (`/workspace/uploads/<name>`) when the turn starts.
+      const savedDocuments = saveChatDocuments(config, conversationId, decodedDocuments);
+      requestDocuments = savedDocuments.documents;
       // A re-queued task-API turn skips this: its earlier attempt already
       // stored the user's message, and re-adding it would double the bubble.
       // The touchConversation above still ran, so the thread's updated_at moves.
@@ -1283,7 +1329,7 @@ export async function executeChatTurn(
         userMessageId = store.addMessage(conversationId, {
           role: "user",
           content: displayMessage,
-          attachments: saved.attachments,
+          attachments: [...saved.attachments, ...savedDocuments.attachments],
         }).id;
       }
     } else {
@@ -1305,6 +1351,12 @@ export async function executeChatTurn(
           conversationId,
           rewindPlan.anchor.attachments,
         );
+      }
+      // The anchor row's documents are re-sent too (an edit keeps them on its
+      // replacement row): pi writes them to /workspace/uploads/ again, so the
+      // re-run reads the files that message really carried.
+      if (documentsAllowed) {
+        requestDocuments = readChatDocuments(config, conversationId, rewindPlan.anchor.attachments);
       }
       // A regenerate re-runs its anchor in place. An edit's replacement row is
       // written together with the rewind itself, right before openRun.
@@ -1687,6 +1739,9 @@ export async function executeChatTurn(
           imageFiles: requestImageFiles.length
             ? requestImageFiles
             : undefined,
+          // Documents attached to this message: sent to pi as `input_file`
+          // parts, named (path, type, size) in the turn's preamble.
+          ...(requestDocuments.length ? { documents: requestDocuments } : {}),
           model: conversationModel ?? undefined,
           effort: conversationEffort ?? undefined,
           mcpToolGroups: effectiveMcpToolGroupsForRun,
@@ -3348,6 +3403,23 @@ export function createChatRouter({
       }
       const decodedImages = decodedImagesResult.images;
 
+      // Document attachments on this turn (`files`: `{ name, data }` with a
+      // base64 data URL, see src/shared/chatDocuments.ts). Validated here for the
+      // same reason as the images; they share ONE size budget with them, since
+      // both ride the same request to pi-gateway. Whether THIS conversation may
+      // carry documents at all is the turn's own check (NOT_ALLOWED_HERE).
+      const decodedDocumentsResult = decodeChatDocuments(req.body?.files, {
+        encodedImageBytes: decodedImages.reduce(
+          (sum, image) => sum + base64EncodedLength(image.buffer.length),
+          0,
+        ),
+      });
+      if ("error" in decodedDocumentsResult) {
+        apiError(res, 400, CHAT_DOCUMENT_MESSAGES[decodedDocumentsResult.error]);
+        return;
+      }
+      const decodedDocuments = decodedDocumentsResult.documents;
+
       // Rewind = edit an earlier message and continue from there. It rides the
       // ordinary send (the edited text is `message`) and REPLACES that row and
       // everything after it; the row keeps its own images, so a rewind brings
@@ -3368,6 +3440,13 @@ export function createChatRouter({
           return;
         }
       }
+      // A rewind or regenerate re-sends its anchor row's OWN documents; a new
+      // one would be stored nowhere (no new row is written for it), so it is
+      // refused rather than dropped.
+      if (decodedDocuments.length > 0 && (rewindFromMessageId !== undefined || regenerate)) {
+        apiError(res, 400, "다시 시작하거나 다시 생성할 때는 문서를 새로 첨부할 수 없습니다.");
+        return;
+      }
 
       // /compact (see ChatSlashExpansion.compact). A regenerate never is one —
       // its text is re-derived from the stored row, which refuses it — and a
@@ -3376,6 +3455,10 @@ export function createChatRouter({
       if (compact) {
         if (decodedImages.length > 0) {
           apiError(res, 400, "/compact에는 이미지를 첨부할 수 없습니다.");
+          return;
+        }
+        if (decodedDocuments.length > 0) {
+          apiError(res, 400, "/compact에는 문서를 첨부할 수 없습니다.");
           return;
         }
         if (rewindFromMessageId !== undefined) {
@@ -3391,6 +3474,7 @@ export function createChatRouter({
       if (
         !displayMessage &&
         decodedImages.length === 0 &&
+        decodedDocuments.length === 0 &&
         rewindFromMessageId === undefined &&
         !regenerate
       ) {
@@ -3497,6 +3581,7 @@ export function createChatRouter({
           agentMessage,
           displayMessage,
           images: decodedImages,
+          documents: decodedDocuments,
           regenerate,
           rewindFromMessageId,
           compact,
@@ -3620,6 +3705,12 @@ export function createChatRouter({
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
       const runId = safeString(req.params.runId);
+      // A mid-turn message is plain text. A document sent with one is refused
+      // instead of dropped: the model would answer as if it had the file.
+      if (Array.isArray(req.body?.files) && req.body.files.length > 0) {
+        apiError(res, 400, "응답 중에 보내는 메시지에는 문서를 첨부할 수 없습니다. 응답이 끝난 뒤 보내 주세요.");
+        return;
+      }
       const message = safeString(req.body?.message).trim();
       if (!message) {
         apiError(res, 400, "메시지를 입력해 주세요.");

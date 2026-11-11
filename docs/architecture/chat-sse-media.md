@@ -200,6 +200,9 @@
 - **A new conversation-deleting path** calls `deleteShareLinksForConversation` next to the canvas cascade
   ([`server-core.md`](server-core.md)) AND `deleteConversationWorkspaceCopies` (the server-written
   `attachments/`/`captures/`/`confluence/` copies in the sandbox folder die with what they mirror).
+- **User-attached documents need nothing extra:** their stored copies are `kind:"file"` attachments in the
+  chat-files store, so the file sweeps above already take them; the sandbox copy in `/workspace/uploads/` is
+  pi's per-user file and is deliberately NOT swept ("Document attachments" below).
 
 ## Image attachments
 - The user message can carry images. The composer stages images (`ChatPane.pendingImages`, downscaled to
@@ -272,9 +275,87 @@
   (the agent's own work files) stays until its avatar's whole tree is removed (user deletion).
   Sweeping it with the conversation is a separate decision for the user.
 
+## Document attachments (`files` → pi `input_file`, 2026-11-11)
+- **A user message can carry DOCUMENTS the avatar reads in its sandbox** — pdf/docx/xlsx/pptx/csv/txt/md/json
+  (pi's `input_file` list minus the images, which stay images). The client↔server contract is ONE shared
+  module, `src/shared/chatDocuments.ts`: the extension list, the limits, the name rule (`chatDocumentName` —
+  pi's FILENAME rule plus C1/line-separator/bidi controls; NFC + trim is the only normalization),
+  `uniqueChatDocumentNames` ("a.pdf", "a (2).pdf", case-insensitive) and the Korean refusals
+  (`CHAT_DOCUMENT_MESSAGES`) both sides show. `POST /api/chat/stream` takes
+  `files: [{ id?, name, data }]` (`data` = a base64 `data:` URL; its MIME is ignored).
+- **Limits and the arithmetic behind them:** 5 documents per message, 8 MiB each, 8 MiB together. The binding
+  cap is pi-gateway's request body (16 MiB for the WHOLE `/v1/responses` JSON, `PI_MAX_REQUEST_BYTES`): 1 MiB is
+  left for everything that is not an attachment (instructions on a first turn, text + preamble, `sandbox_env`
+  ≤ 256 KiB), so images + documents share 15 MiB of base64 (`MAX_CHAT_ATTACHMENTS_ENCODED_BYTES`); 8 MiB of
+  documents is 10.67 MiB of base64 and leaves ≈ 3.25 MiB raw for the same message's images. The server measures
+  the two TOGETHER at intake (`TOTAL_TOO_LARGE`), so an oversized message is a 400 before the turn, never a late
+  413. Noah's own `express.json` limit (50 MB) is far above anything that passes.
+- **Intake (`chatDocuments.ts` `decodeChatDocuments`, before SSE — a bad one is a Korean 400 like images):**
+  count → shape → name/extension (`NAME` / `TYPE`) → data URL → size (`EMPTY` / `TOO_LARGE` /
+  `TOTAL_TOO_LARGE`) → CONTENT (`BAD_FORMAT`): `%PDF-` in the first 1024 bytes; a ZIP local header plus
+  `[Content_Types].xml` and the kind's part folder (`word/`, `xl/`, `ppt/`) for docx/xlsx/pptx — a renamed
+  .doc, a password-protected file (an OLE container) or an .xlsx named .docx fails; for csv/txt/md/json **any text
+  encoding passes** (the fleet's Excel exports are often CP949/EUC-KR; user decision 2026-11-11) — only a NUL
+  byte in the first 8 KiB (a binary file) is refused — except UTF-16 text that starts with a byte-order mark
+  (Excel's "Unicode text") — and json need not parse; the bytes are stored and sent to pi unchanged (nothing
+  is converted). Every place that
+  tells the avatar to read an attachment carries `DOCUMENT_ENCODING_CLAUSE` (try `encoding="cp949"` when UTF-8
+  decoding fails). The client's
+  MIME is never used: the stored media type derives from the extension after the bytes passed.
+- **Where it is allowed: ONE decision, `documentAttachmentsAllowed` (`agent/runCapabilities.ts`)** — the run's
+  sandbox owner is the avatar owner (`piSandboxOwnerOf`, the same value behind the pi session's `read_only`)
+  AND the turn is neither `headless` nor `externalTaskApi`. `executeChatTurn` refuses anything else with
+  `NOT_ALLOWED_HERE` (400) before any write; the capability plan stamps the same function's result as
+  `PiRuntimeFacts.documentAttachments` (describe_system), and the pi runner throws rather than send a file on
+  a run whose plan says no. So: the owner chatting with their own avatar — never a colleague's chat (a
+  `read_only` pi session, where pi 400s `input_file`), a consultation, a routine or the external task API
+  (its body is not extended). A mid-turn message carries none (`POST …/runs/:id/message` with `files` is a
+  400, not a silent drop), nor does `/compact`; a rewind/regenerate brings no NEW document (400).
+- **Two copies, two lifecycles.** NOAH's copy goes into the conversation's chat-files store
+  (`chat-files/<conversation>/<id>.<ext>`, `saveChatDocuments`) with a `kind:"file"` attachment marked
+  **`uploaded: true`** on the USER message — `{ id, kind: "file", mediaType, name, size, uploaded: true }`.
+  It rides every existing cascade of that store unchanged: the rewind/regenerate sweep
+  (`deleteChatFileAttachments`, minus what an edit's replacement row carries), single and bulk conversation
+  delete, user delete (`deleteConversationFiles`). The bubble re-downloads it through the existing file route
+  (`GET /api/conversations/:id/files/:fileId?name=…`: owner-scoped, `Content-Disposition: attachment`,
+  `nosniff`, never inline; `json` is a serve-only type there, not a share_file type). The SANDBOX copy,
+  `/workspace/uploads/<name>`, is **pi's write** in the per-USER workspace (user decision 2026-11-11: pi's
+  folder, not a per-conversation one): kept between conversations, replaced by a later upload of the same
+  name, and never written or deleted by Noah — deleting the message or the conversation leaves it (a rewind
+  cuts history, never the world), and user delete removes it with the whole sandbox workspace.
+- **A share link never picks an upload:** `isPptxCard` (`src/shared/shareLinks.ts`) excludes
+  `uploaded` cards, so neither the 공유 링크 button, the route nor `create_share_link` exports a .pptx the
+  user sent in.
+- **Regenerate / edit re-send the anchor row's documents** (`readChatDocuments` — only `uploaded` file
+  attachments whose stored name and extension still match), so pi writes `/workspace/uploads/<name>` again
+  with the stored bytes; a missing stored copy is skipped and logged, like `readChatImages`. A document-only
+  message (no text) is a valid message and a valid rewind anchor.
+- **To the model:** `AgentRequest.documents` → `input_file` parts after the text and images
+  ([`pi-runtime.md`](pi-runtime.md) "Document input"), and `buildPiTurnPreamble` adds ONE line naming each
+  path, type and size — the per-turn fact that also reaches a conversation whose frozen prompt predates the
+  feature. Standing text: the frozen append's **Attached documents** note (owner conversation: how they
+  arrive; colleague: this viewer cannot attach one), describe_system's `Document attachments` line (the live
+  per-run fact with its reason), pi's system prompt (`scripts/pi-system-prompt.md`) and the manual's `chat`
+  topic. The shared sentences live in `agent/ownerState.ts` (`DOCUMENT_UPLOADS_SENTENCE` and friends).
+
+- **Client: three ways in, one staging path.** `ChatView.addFiles` is the single entrance for the attach button
+  (its `accept` widened; the input is `sr-only`, so it is keyboard reachable), a PASTE of files copied in the OS
+  file manager, and a DROP on the pane (file drags are told apart from the conversation drag by
+  `dataTransfer.types`; while the chat view is mounted a file dropped outside the target no longer navigates
+  the browser away). The picker cannot be the only path: on the fleet a security agent may refuse the browser's
+  file dialog. `lib/composerDocuments.ts` judges name/type/size/count/total from the shared module BEFORE reading
+  bytes (a refused file never blocks the others, each refusal names the file), stages a chip in a "읽는 중…"
+  state and reads asynchronously; a send is held while a read is in flight and when images + documents exceed
+  `MAX_CHAT_ATTACHMENTS_ENCODED_BYTES`. `pane.pendingDocuments` is per pane; a failed send restores them with
+  the draft (`unsentDocumentIds`). Offered only in a pane of the viewer's OWN avatar — in a colleague's pane the
+  button attaches images only and a dropped/pasted document is refused with `NOT_ALLOWED_HERE`. While the
+  avatar answers, documents can be staged but ride the next ordinary message (a mid-turn message carries none).
+  The bubble's card is a DOWNLOAD of the viewer's own file through the existing file route (`<a download>`),
+  never an inline render or a side-panel preview; a regenerate/edit sends no `files` — the server re-sends its
+  stored copy.
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
-- **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (there is deliberately NO
-  upload path): `mcp__file_output__share_file` → `onShareFile` (routes/chat.ts) → `publishWorkspaceFile`
+- **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (the only way IN is a user's
+  document attachment, above): `mcp__file_output__share_file` → `onShareFile` (routes/chat.ts) → `publishWorkspaceFile`
   (same realpath+roots containment; extension allowlist pptx/docx/xlsx/zip/pdf/csv/md/txt/drawio with
   magic-byte checks for the container formats; 30 MB cap) → bytes at
   `dataDir/chat-files/<conversationId>/<id>.<ext>`, metadata on `messages.attachments_json` as

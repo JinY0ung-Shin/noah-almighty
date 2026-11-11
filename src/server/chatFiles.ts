@@ -18,9 +18,10 @@ import {
  * download cards — pptx decks, pdf exports, …). Mirrors the chat-image store
  * (`chatImages.ts`): bytes on disk under `dataDir/chat-files/<conversationId>/`,
  * only {@link MessageAttachment} metadata (kind:"file") on the message row,
- * swept with the conversation. There is deliberately NO upload path — files
- * only flow OUT of the agent workspace into this store (`publishWorkspaceFile`),
- * never in. The one write the other way is {@link saveBrowserCapture}: a
+ * swept with the conversation. Files flow OUT of the agent workspace into this
+ * store (`publishWorkspaceFile`); the ONE way in is a document the user attaches
+ * to a message (`chatDocuments.ts` — validated there, marked `uploaded`, served
+ * only as a download like everything else here). The one write the other way is {@link saveBrowserCapture}: a
  * screenshot's bytes land in the workspace's `captures/` folder (not in this
  * store) so the avatar can place them into what it produces.
  * See `routes/chat.ts` for the share wiring + download endpoint.
@@ -121,6 +122,15 @@ const LEGACY_SERVED_FILE_TYPES: Record<string, { mediaType: string }> = {
   svg: { mediaType: "image/svg+xml" },
   psd: { mediaType: "image/vnd.adobe.photoshop" },
   pcraft: { mediaType: "application/vnd.photocraft" },
+};
+
+/**
+ * SERVE-ONLY types a USER may attach as a chat document (`chatDocuments.ts`,
+ * stored here next to the avatar's shares) that share_file does not publish.
+ * Kept out of {@link FILE_TYPES} so the avatar's shareable list is unchanged.
+ */
+const UPLOADED_SERVED_FILE_TYPES: Record<string, { mediaType: string }> = {
+  json: { mediaType: "application/json" },
 };
 
 export function chatFilesDir(config: AppConfig, conversationId: string): string {
@@ -442,7 +452,8 @@ export function resolveStoredFile(
   });
   if (!file) return null;
   const ext = file.slice(file.lastIndexOf(".") + 1).toLowerCase();
-  const fileType = FILE_TYPES[ext] ?? SERVED_IMAGE_TYPES[ext] ?? LEGACY_SERVED_FILE_TYPES[ext];
+  const fileType =
+    FILE_TYPES[ext] ?? SERVED_IMAGE_TYPES[ext] ?? LEGACY_SERVED_FILE_TYPES[ext] ?? UPLOADED_SERVED_FILE_TYPES[ext];
   if (!fileType) return null;
   return { path: path.join(dir, file), mediaType: fileType.mediaType, ext };
 }

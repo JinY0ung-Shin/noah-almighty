@@ -1504,6 +1504,31 @@ body.col-resizing .canvas-html-frame {
   font-size: var(--t-xs);
 }
 
+/* A document the USER uploaded, in their own (accent) bubble: a download link,
+   or — until the server has stored it — a plain card that says it is on its
+   way. The surface is mixed from the bubble's own text colour, so it reads on
+   the accent fill in light and dark alike. */
+.message.user .msg-file-card {
+  border-color: color-mix(in srgb, var(--on-accent) 36%, transparent);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
+}
+.message.user .msg-file-card:hover {
+  border-color: var(--on-accent);
+}
+.message.user .msg-file-icon {
+  background: color-mix(in srgb, var(--on-accent) 18%, transparent);
+}
+.message.user .msg-file-info {
+  color: color-mix(in srgb, var(--on-accent) 86%, transparent);
+}
+.msg-file-card.is-unsent {
+  cursor: default;
+  border-style: dashed;
+}
+.message.user .msg-file-card.is-unsent:hover {
+  border-color: color-mix(in srgb, var(--on-accent) 36%, transparent);
+}
+
 /* Team-brain confirmation card (kind:"team_brain" attachments, TeamBrainCard).
    The avatar only drafts it; the buttons here are where a person decides. Status
    tones reuse the semantic tokens so dark mode follows them. */

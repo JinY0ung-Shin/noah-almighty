@@ -75,6 +75,7 @@ import { ensurePiConversationDir, piWorkspaceFor, stagePiAttachmentFiles } from 
 import { materializePiSkills } from "./piSkills.js";
 import { PiTurnFailedError, runPiTurn, type PiRunResult } from "./eventAdapter.js";
 import { PI_PROXY_SERVER_NAMES, PiMcpProxyPool } from "./mcpProxies.js";
+import { CHAT_DOCUMENT_MESSAGES } from "../../../shared/chatDocuments.js";
 import { PiAsyncJobs } from "./asyncJobs.js";
 import { RunRepoLocks } from "../../activeRepoLock.js";
 import { redactSecretValues } from "../secretRedaction.js";
@@ -120,6 +121,43 @@ export function isLostPiSession(error: unknown): error is PiGatewayError {
       error.kind === "conflict" ||
       (error.kind === "bad_request" && error.code === "model_not_configured"))
   );
+}
+
+/**
+ * What a pi failure means on a turn that carried user-attached documents
+ * (`input_file`), as a Korean error the turn shows — never a silent drop, and
+ * never the "model is temporarily unavailable" nudge a bare 502 would get:
+ * - 400 `invalid_file_input`: pi refused a file (its name/type rule, or a
+ *   `read_only` session);
+ * - 502 `Sandbox error: …`: pi could not open the sandbox or write the file
+ *   into `/workspace/uploads/` (the status is dropped so the route does not
+ *   read it as a transient model failure);
+ * - 413: the request body exceeded pi's cap (Noah's own pre-check in
+ *   `responsesClient.stream` already says so in Korean and passes through).
+ * Anything else is returned unchanged.
+ */
+export function piDocumentTurnError(error: unknown): unknown {
+  if (!(error instanceof PiGatewayError)) return error;
+  const upstream = { code: error.code, type: error.type, upstreamMessage: error.upstreamMessage, cause: error };
+  if (error.kind === "bad_request" && error.code === "invalid_file_input") {
+    return new PiGatewayError("bad_request", {
+      ...upstream,
+      message: "pi-gateway가 첨부한 문서를 받지 않았습니다 (파일 이름이나 형식을 받을 수 없거나, 문서를 받을 수 없는 대화입니다). 파일을 확인한 뒤 다시 첨부해 주세요.",
+    });
+  }
+  if (error.status === 502 && /^sandbox error/i.test(error.upstreamMessage ?? "")) {
+    return new PiGatewayError("server", {
+      ...upstream,
+      message: "첨부한 문서를 아바타의 작업 공간(샌드박스)에 저장하지 못했습니다. 문서는 전달되지 않았으니 잠시 후 다시 보내 주세요.",
+    });
+  }
+  if (error.kind === "too_large" && error.status === 413) {
+    return new PiGatewayError("too_large", {
+      ...upstream,
+      message: "첨부한 문서와 이미지가 너무 커서 pi-gateway가 받지 않았습니다. 파일을 줄이거나 나눠서 보내 주세요.",
+    });
+  }
+  return error;
 }
 
 /** An effort pi knows (Noah's picks low…max, or a level pi listed for a model), else nothing is sent. */
@@ -383,6 +421,19 @@ async function runPiAgentAs(
       ),
     ].join("\n\n");
   const images = (request.images ?? []).map((image) => ({ mediaType: image.mediaType, data: image.data }));
+  // Documents the user attached to this message: pi writes each `input_file`
+  // to /workspace/uploads/<name> in THIS principal's sandbox before the turn.
+  // The route refuses them on a run that cannot take one; a caller that got
+  // one here anyway fails loudly — a read_only pi session would 400 it, and
+  // dropping it silently would leave the model answering without the file.
+  const files = (request.documents ?? []).map((document) => ({
+    filename: document.name,
+    mediaType: document.mediaType,
+    data: document.data,
+  }));
+  if (files.length && !capabilities.piRuntimeFacts.documentAttachments) {
+    throw new PiGatewayError("bad_request", { message: CHAT_DOCUMENT_MESSAGES.NOT_ALLOWED_HERE });
+  }
 
   // ---- MCP run token ------------------------------------------------------
   const catalog = await noahMcpCatalog(store, config);
@@ -523,7 +574,12 @@ async function runPiAgentAs(
         attemptActed = false;
         const piRequest: PiResponseRequest = {
           user: principal,
-          input: input ?? { kind: "prompt", text: firstInputText(fresh), ...(images.length ? { images } : {}) },
+          input: input ?? {
+            kind: "prompt",
+            text: firstInputText(fresh),
+            ...(images.length ? { images } : {}),
+            ...(files.length ? { files } : {}),
+          },
           ...(model ? { model } : {}),
           ...(effort ? { reasoningEffort: effort } : {}),
           ...(fresh
@@ -552,8 +608,11 @@ async function runPiAgentAs(
             },
           });
           break;
-        } catch (error) {
-          if (signal?.aborted || input) throw error;
+        } catch (caught) {
+          if (signal?.aborted || input) throw caught;
+          // A turn that carried documents: pi's refusal of one (or a failed
+          // write into the sandbox) reads as what it is, never as a model outage.
+          const error = files.length ? piDocumentTurnError(caught) : caught;
           // Every recovery below re-sends this attempt's input, so none runs
           // once the attempt showed the user something, ran a tool, started a
           // subagent or had a question answered: the failure stands.
@@ -651,7 +710,11 @@ async function runPiAgentAs(
         kind: "prompt",
         text: [
           // The run's first turn already carried the canvas render reports (they are consumed once).
-          buildPiTurnPreamble({ ...promptRequest, rewind: undefined, externalTaskApi: false, canvasRenderReports: undefined }, { now: now() }),
+          // …and the attached documents: a follow-up turn carries none.
+          buildPiTurnPreamble(
+            { ...promptRequest, rewind: undefined, externalTaskApi: false, canvasRenderReports: undefined, documents: undefined },
+            { now: now() },
+          ),
           ...pending.map((steer) => steer.text),
         ].join("\n\n"),
       };

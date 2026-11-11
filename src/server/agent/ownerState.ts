@@ -8,6 +8,7 @@ import { kstDateString } from "../routineSchedule.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
+import { CHAT_DOCUMENT_EXTENSIONS, CHAT_DOCUMENT_SANDBOX_DIR } from "../../shared/chatDocuments.js";
 
 /**
  * Structured, UNFORMATTED snapshot of an avatar owner's current system self-state.
@@ -199,6 +200,41 @@ export function piSandboxOwnerSentence(owner: PiSandboxOwner | undefined): strin
   }
   return "";
 }
+
+/** "pdf, docx, xlsx, pptx, csv, txt, md, json" — from the shared contract, so neither surface drifts from the route. */
+export const DOCUMENT_TYPES_PHRASE = CHAT_DOCUMENT_EXTENSIONS.join(", ");
+
+/** The sandbox image's Python libraries for reading documents (pi `images/sandbox/Dockerfile`). */
+export const DOCUMENT_LIBRARIES_PHRASE = "pypdf, python-docx, python-pptx, openpyxl, pandas";
+
+/**
+ * A text attachment's encoding is not checked at intake (the fleet's Excel
+ * exports are often CP949/EUC-KR), so every place that tells the avatar to read
+ * an attached file carries this clause.
+ */
+export const DOCUMENT_ENCODING_CLAUSE =
+  'a csv or text file may be CP949/EUC-KR (common for Korean Excel exports) rather than UTF-8 — if UTF-8 decoding fails, read it with `encoding="cp949"`';
+
+/**
+ * Where a user-attached document lands and how long it stays — ONE text for
+ * both metacognition surfaces (the frozen prompt's attached-documents note and
+ * describe_system's line). pi writes the file; the folder is per USER, not per
+ * conversation (user decision 2026-11-11).
+ */
+export const DOCUMENT_UPLOADS_SENTENCE =
+  `each one is saved at \`${CHAT_DOCUMENT_SANDBOX_DIR}/<filename>\` in your sandbox before the turn starts, and the message names its path. ` +
+  `\`${CHAT_DOCUMENT_SANDBOX_DIR}/\` is kept between conversations and shared by all of this user's conversations, and a later file with the same name REPLACES the earlier one — if that matters, copy the file into this conversation's folder. ` +
+  `Read an attached document with the sandbox's Python libraries (${DOCUMENT_LIBRARIES_PHRASE}) instead of asking the user to paste it; ${DOCUMENT_ENCODING_CLAUSE}`;
+
+/**
+ * pi's built-in subagents (pi `agent/subagents.ts`): every pi session has the
+ * `Agent` and `SendMessage` tools with a `general-purpose` subagent, whether or
+ * not a plugin ships one. ONE text for describe_system's line and the manual.
+ */
+export const PI_SUBAGENT_SENTENCE =
+  "the built-in `Agent` tool starts a `general-purpose` subagent (plus any agent a loaded plugin ships) that works on its own in this same sandbox with the same tools you have, and `SendMessage` continues one by its agent_id. " +
+  "It does not see this conversation, so put everything it needs in the prompt; only its final report comes back, which keeps long intermediate work (reading many files, running many commands) out of this conversation. " +
+  "A subagent cannot ask the user anything, cannot show or share files with them, and cannot start another subagent";
 
 /**
  * A run nobody can answer (`PiRuntimeFacts.nonInteractive`: a scheduled
