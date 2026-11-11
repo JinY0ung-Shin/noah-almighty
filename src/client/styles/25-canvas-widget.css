@@ -479,9 +479,7 @@
     background-position: 0 50%;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .widget-slot-bar {
-    animation: none;
-  }
+:root[data-motion="reduce"] .widget-slot-bar {
+  animation: none;
 }
 

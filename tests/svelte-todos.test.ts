@@ -209,6 +209,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  // 움직임 줄이기 is the app's own attribute (lib/motion.ts) — never leak it into the next test.
+  delete document.documentElement.dataset.motion;
 });
 
 describe("rail entry", () => {
@@ -1330,8 +1332,9 @@ describe("chat overlay", () => {
       expect(animatedFor(animate, next, 160)).toBe(false);
     });
 
-    it("makes the avatar's exit instant under reduced motion", async () => {
-      stubMatchMedia(true); // every query matches: reduced motion (and the phone sheet)
+    it("makes the avatar's exit instant under the app's 움직임 줄이기", async () => {
+      // The viewer's own setting, as 설정 writes it — the OS media query is not read.
+      document.documentElement.dataset.motion = "reduce";
       const keep = todo({ title: "남는 일" });
       const doomed = todo({ title: "지울 일" });
       const server = fakeServer([keep, doomed]);
@@ -1346,6 +1349,37 @@ describe("chat overlay", () => {
       await avatarTool("mcp__todo__delete_todo");
       await waitFor(() => expect(row(overlay, "지울 일")).toBeNull());
       expect(animate.mock.contexts.includes(doomedRow)).toBe(false);
+    });
+
+    it("still animates the avatar's exit when only the OPERATING SYSTEM asks for reduced motion", async () => {
+      // A PC with its system animations off: `prefers-reduced-motion: reduce` matches,
+      // the app's attribute is absent — and the row leaves with its motion.
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((media: string) => ({
+          matches: media.includes("prefers-reduced-motion"),
+          media,
+          onchange: null,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          dispatchEvent: vi.fn(() => true),
+        })),
+      );
+      const keep = todo({ title: "남는 일" });
+      const doomed = todo({ title: "지울 일" });
+      const server = fakeServer([keep, doomed]);
+      seedLoaded([keep, doomed]);
+      seedChat();
+      setTodoOverlayOpen(true);
+      render(ChatView);
+      const overlay = await screen.findByRole("complementary", { name: "할 일" });
+      const doomedRow = row(overlay, "지울 일")!;
+      const animate = vi.spyOn(Element.prototype, "animate");
+      server.setItems([keep]);
+      await avatarTool("mcp__todo__delete_todo");
+      await waitFor(() => expect(animate.mock.contexts.includes(doomedRow)).toBe(true));
     });
 
     it("never re-measures the rows for state writes that leave the list alone (each streamed token)", async () => {

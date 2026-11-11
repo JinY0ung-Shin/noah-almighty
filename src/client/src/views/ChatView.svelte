@@ -2323,11 +2323,9 @@
   /* The avatar changed the list: the number pops once (`todo-count-pop`,
      30-agent-md-composer.css). inline-block only while popping — a transform
      needs it, and the resting row stays exactly as laid out. */
-  @media (prefers-reduced-motion: no-preference) {
-    .composer-todo-count.is-popping {
-      display: inline-block;
-      animation: todo-count-pop 360ms var(--ease-out);
-    }
+  :global(:root:not([data-motion="reduce"])) .composer-todo-count.is-popping {
+    display: inline-block;
+    animation: todo-count-pop 360ms var(--ease-out);
   }
   .composer-todo-overdue {
     display: inline-flex;

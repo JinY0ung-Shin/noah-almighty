@@ -19,6 +19,9 @@ Svelte 5 gotchas, mirrored validators, Playwright recipe) live in
   are verified in a real browser (Playwright).
 - **Legacy-mode template deps are resolved at COMPILE time** (every component is non-runes): state read only
   inside a helper the markup calls renders STALE. Pass it as an argument or name it in the markup.
+- **Motion is the app's own setting (움직임 줄이기), never the OS's.** No `prefers-reduced-motion` media
+  query anywhere in the client (a test fails on one): CSS keys on `:root[data-motion="reduce"]`, JS on
+  `prefersReducedMotion()`; no native smooth scroll (`scrollToStart`). Details in `client.md`.
 - **Selective motion is gated INSIDE the transition/animation function**, on non-reactive state read when it
   starts. Details in `client.md`.
 - **A status indicator that only STATES a problem is a dead end — make it the way to the fix.** Actionable

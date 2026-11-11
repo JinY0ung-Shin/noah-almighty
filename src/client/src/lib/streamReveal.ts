@@ -13,7 +13,8 @@
 // lose or duplicate text; the worst a bug can do is show it early.
 //
 // Rules (each is a requirement, see `tests/client-stream-reveal.test.ts`):
-//  - `prefers-reduced-motion` → no pacing at all. Read when a reveal STARTS.
+//  - 움직임 줄이기 (the app's own setting, `lib/motion.ts` — never the OS's
+//    `prefers-reduced-motion`) → no pacing at all. Read when a reveal STARTS.
 //  - A hidden tab gets no animation frames: text goes straight through while
 //    hidden, and a frame loop that stalls is abandoned on the next arrival.
 //  - Every pane paces by itself (split view).
@@ -23,6 +24,7 @@
 //    stored message that replaced the live bubble (`handoff`).
 
 import { writable, type Readable } from "svelte/store";
+import { prefersReducedMotion } from "./motion";
 
 /** Seconds of text the reveal deliberately trails the arrival by — what absorbs the bursts. */
 export const REVEAL_LAG_SECONDS = 0.25;
@@ -54,7 +56,7 @@ export interface RevealClock {
   /** Schedule one frame; returns a handle for `cancel`. */
   request(callback: (time: number) => void): number;
   cancel(handle: number): void;
-  /** The user asked for reduced motion. */
+  /** The viewer chose 움직임 줄이기 in this app. */
   reducedMotion(): boolean;
   /** The document is hidden (no frames will run). */
   hidden(): boolean;
@@ -68,8 +70,7 @@ export function browserRevealClock(): RevealClock | null {
     now: () => performance.now(),
     request: (callback) => window.requestAnimationFrame(callback),
     cancel: (handle) => window.cancelAnimationFrame(handle),
-    reducedMotion: () =>
-      typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    reducedMotion: prefersReducedMotion,
     hidden: () => document.hidden === true,
   };
 }

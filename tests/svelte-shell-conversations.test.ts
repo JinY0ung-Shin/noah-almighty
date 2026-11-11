@@ -5,6 +5,7 @@ import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Shell from "../src/client/src/components/Shell.svelte";
+import { resolveConfirmation } from "../src/client/src/lib/confirm.js";
 import { invalidateConversationPrefetch } from "../src/client/src/lib/conversationPrefetch.js";
 import { readState, replaceState } from "../src/client/src/lib/state.js";
 import type { ConversationSummary, User } from "../src/client/src/lib/types.js";
@@ -232,6 +233,82 @@ describe("Shell conversation date groups", () => {
     await settle(0);
     expect(headings()).toEqual(["오늘", "어제", "지난 7일", "지난 30일"]);
     expect(rowsOf("오늘")).toEqual(["오래된 것", "오늘 둘", "오늘 하나"]);
+  });
+});
+
+describe("Shell conversation deletion motion", () => {
+  // Which node leaves with motion, and when — the gate. How it LOOKS (the height
+  // closing, the rows below rising without a jump) is a real-browser fact: jsdom
+  // never lays out. The exit is the only 200 ms animation the rail starts.
+  const list = [
+    conv("c-today-2", "오늘 둘", local(11, 14)),
+    conv("c-today-1", "오늘 하나", local(11, 9)),
+    conv("c-yday", "어제 것", local(10, 18)),
+    conv("c-week", "지난주 것", local(6, 10)),
+  ];
+
+  afterEach(() => {
+    delete document.documentElement.dataset.motion;
+    vi.restoreAllMocks();
+  });
+
+  async function mountDeletable() {
+    await mountRail(list);
+    const base = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown, init?: RequestInit) => (init?.method === "DELETE" ? jsonRes({ ok: true }) : base(input as RequestInfo, init))),
+    );
+    return vi.spyOn(Element.prototype, "animate");
+  }
+
+  async function deleteRow(title: string) {
+    await fireEvent.click(screen.getByRole("button", { name: `대화 삭제: ${title}` }));
+    await settle();
+    resolveConfirmation(true);
+    await settle(5);
+  }
+
+  const rowNamed = (title: string) => screen.getByRole("button", { name: `대화 열기: ${title}` }).closest(".conv-item")!;
+  /** The nodes that left with the exit (its duration marks it). */
+  const exited = (animate: { mock: { calls: unknown[][]; contexts: unknown[] } }) =>
+    animate.mock.calls.flatMap((call, index) => ((call[1] as KeyframeAnimationOptions | undefined)?.duration === 200 ? [animate.mock.contexts[index]] : []));
+
+  it("the row the viewer deletes leaves with motion; its group and the other rows do not", async () => {
+    const animate = await mountDeletable();
+    const row = rowNamed("오늘 둘");
+    const group = row.closest(".conv-group")!;
+    await deleteRow("오늘 둘");
+    expect(rowsOf("오늘")).toEqual(["오늘 하나"]);
+    expect(exited(animate)).toEqual([row]);
+    expect(exited(animate)).not.toContain(group);
+  });
+
+  it("a deletion that empties its date group takes the whole group out with motion (heading included)", async () => {
+    const animate = await mountDeletable();
+    const group = rowNamed("어제 것").closest(".conv-group")!;
+    await deleteRow("어제 것");
+    expect(headings()).toEqual(["오늘", "지난 7일"]);
+    // The row's own exit is local to its group's list and does not run when the
+    // group goes — the group is what moves.
+    expect(exited(animate)).toEqual([group]);
+  });
+
+  it("is instant under the app's 움직임 줄이기", async () => {
+    const animate = await mountDeletable();
+    document.documentElement.dataset.motion = "reduce";
+    await deleteRow("오늘 둘");
+    await deleteRow("어제 것");
+    expect(headings()).toEqual(["오늘", "지난 7일"]);
+    expect(exited(animate)).toEqual([]);
+  });
+
+  it("rows that leave for any other reason (a search filter) never move", async () => {
+    const animate = await mountDeletable();
+    await fireEvent.input(screen.getByRole("searchbox", { name: "대화 검색" }), { target: { value: "오늘 하나" } });
+    await settle(5);
+    expect(headings()).toEqual(["오늘"]);
+    expect(exited(animate)).toEqual([]);
   });
 });
 

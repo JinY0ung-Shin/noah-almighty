@@ -240,12 +240,12 @@ test("explore shell stays visually stable in light and dark themes", async ({ pa
   await page.locator(".contrast-probe").evaluate((element) => element.remove());
   await expect(page).toHaveScreenshot("explore-dark.png", { fullPage: true });
 
+  // Reduced motion is the app's own setting (lib/motion.ts); reduced
+  // transparency still follows the system.
+  await page.evaluate(() => (document.documentElement.dataset.motion = "reduce"));
   const session = await page.context().newCDPSession(page);
   await session.send("Emulation.setEmulatedMedia", {
-    features: [
-      { name: "prefers-reduced-motion", value: "reduce" },
-      { name: "prefers-reduced-transparency", value: "reduce" },
-    ],
+    features: [{ name: "prefers-reduced-transparency", value: "reduce" }],
   });
   await expect(page).toHaveScreenshot("explore-dark-reduced-transparency.png", { fullPage: true });
 
@@ -254,7 +254,6 @@ test("explore shell stays visually stable in light and dark themes", async ({ pa
 });
 
 test("mobile rail and destructive confirmation remain spatially connected", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await waitForKoreanFont(page);

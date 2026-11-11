@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { quartOut } from "svelte/easing";
+  import { slide } from "svelte/transition";
+  import type { TransitionConfig } from "svelte/transition";
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
   import { api } from "../lib/api";
@@ -264,6 +267,61 @@
     }
   }
 
+  // Rows the viewer just deleted ONE AT A TIME — the only rows that leave with
+  // motion. A reorder, a move between date groups, a search filter and 전체 삭제
+  // all stay instant: this list is core navigation. Plain Sets on purpose — the
+  // gate is read when the exit STARTS, never by the markup (client.md,
+  // "Conditional motion on a keyed {#each}").
+  const deletedConversationIds = new Set<string>();
+  // A deletion that empties its date group removes the whole group (heading
+  // included). The row's own exit is local to the group's list and does not run
+  // then, so the GROUP leaves the same way instead.
+  const emptiedGroupIds = new Set<ConversationGroup<ConversationSummary>["id"]>();
+  const NO_EXIT: TransitionConfig = { duration: 0 };
+
+  const px = (value: string): number => Number.parseFloat(value) || 0;
+  const rowGapOf = (element: Element | null): number => (element ? px(getComputedStyle(element).rowGap) : 0);
+
+  // Fades while the height closes, so what is below rises with it instead of
+  // jumping; `trailing` is the space after the node that goes away with it (the
+  // list's gap). An `animate:` FLIP is deliberately not used here — the list
+  // reconciles on every store write and would measure every row each time.
+  function collapseOut(node: Element, trailing: number): TransitionConfig {
+    const style = getComputedStyle(node);
+    // A row being deleted is dimmed (`.busy`): fade from what is on screen.
+    const opacity = Number.parseFloat(style.opacity);
+    const from = Number.isNaN(opacity) ? 1 : opacity;
+    const ownMargin = px(style.marginBottom);
+    const collapse = slide(node, { duration: 200, easing: quartOut });
+    return {
+      ...collapse,
+      // Later declarations win: fade across the whole exit (slide only fades its
+      // last 5 %), and close the trailing space with the node.
+      css: (t, u) => `${collapse.css?.(t, u) ?? ""}; opacity: ${t * from}; margin-bottom: ${t * ownMargin - u * trailing}px`,
+    };
+  }
+
+  // Both exits are DEFERRED (return a function) so the gate is asked when the
+  // node actually leaves.
+  function conversationOut(node: Element, id: string) {
+    return (): TransitionConfig => {
+      if (!deletedConversationIds.delete(id) || prefersReducedMotion()) return NO_EXIT;
+      return collapseOut(node, rowGapOf(node.parentElement));
+    };
+  }
+
+  function groupOut(node: Element, id: ConversationGroup<ConversationSummary>["id"]) {
+    return (): TransitionConfig => {
+      if (!emptiedGroupIds.delete(id) || prefersReducedMotion()) return NO_EXIT;
+      // A FIRST group hands its place to the next one, which then loses the
+      // separation it had as a later group (`.conv-group + .conv-group`).
+      const next = node.nextElementSibling;
+      const first = !node.previousElementSibling?.classList.contains("conv-group");
+      const handover = first && next?.classList.contains("conv-group") ? px(getComputedStyle(next).marginTop) : 0;
+      return collapseOut(node, rowGapOf(node.parentElement) + handover);
+    };
+  }
+
   async function deleteConversation(conversation: ConversationSummary, event: MouseEvent) {
     event.stopPropagation();
     if (isConversationBusy(conversation.id)) return;
@@ -284,6 +342,16 @@
     // The widget values this browser kept for the conversation go with it.
     forgetConversationWidgets(conversation.id);
     const openPane = $appState.chatPanes.find((pane) => pane.conversationId === conversation.id);
+    // Marked before the row is removed; forgotten shortly after in case the row
+    // was not on screen (filtered out by a search) and never asked.
+    deletedConversationIds.add(conversation.id);
+    const group = conversationGroups.find((candidate) => candidate.items.some((item) => item.id === conversation.id));
+    const emptied = group && group.items.length === 1 ? group.id : null;
+    if (emptied) emptiedGroupIds.add(emptied);
+    window.setTimeout(() => {
+      deletedConversationIds.delete(conversation.id);
+      if (emptied) emptiedGroupIds.delete(emptied);
+    }, 1000);
     updateState((state) => {
       state.conversations = state.conversations.filter((c) => c.id !== conversation.id);
     });
@@ -816,7 +884,7 @@
           <div class="conv-empty">{conversationQuery ? "검색 결과가 없습니다." : "아직 저장된 대화가 없습니다."}</div>
         {:else}
           {#each conversationGroups as group (group.id)}
-          <div class="conv-group">
+          <div class="conv-group" out:groupOut={group.id}>
             <!-- A real heading, not a control: never focusable or clickable. -->
             <h3 class="conv-group-label" id={`rail-conversation-group-${group.id}`}>{group.label}</h3>
             <div class="conv-group-list" role="list" aria-labelledby={`rail-conversation-group-${group.id}`}>
@@ -844,6 +912,7 @@
               on:pointerleave={() => hoverIntent.cancel(conversation.id)}
               on:focusin={() => focusIntent.arm(conversation.id)}
               on:focusout={() => focusIntent.cancel(conversation.id)}
+              out:conversationOut={conversation.id}
             >
               {#if renamingId === conversation.id}
                 <div class="conv-edit-wrap">

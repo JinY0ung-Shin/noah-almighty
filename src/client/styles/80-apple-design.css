@@ -780,9 +780,57 @@ button:disabled {
   transform-origin: bottom center;
 }
 
-.composer-tools-panel,
 .slash-menu {
   transform-origin: bottom left;
+}
+
+/* Small surfaces materialize instead of popping in. ENTRANCE only (closing stays
+   immediate), transform/opacity only (DESIGN §2.5), and all of it goes quiet
+   under 움직임 줄이기 through the global rule in 40-responsive-core.css. The
+   slash menu is opened from the keyboard, so it stays instant on purpose. */
+.composer-tools-panel {
+  /* Grows from `bottom center` (the group rule above): the MCP 도구 button sits
+     under the panel's middle, not at either end (measured at 1280px). */
+  animation: apple-surface-in 160ms var(--ease-out);
+}
+
+/* A pasted or dropped attachment: the entrance says the paste landed. */
+.composer-thumb,
+.composer-doc {
+  --surface-in-scale: 0.96;
+  animation: apple-surface-in 160ms var(--ease-out);
+}
+
+/* Seen many times a day (every scroll away from the newest text) — barely there. */
+.scroll-bottom {
+  animation: apple-rise-in 120ms var(--ease-out);
+}
+
+.chat-drop-overlay {
+  animation: apple-crossfade 120ms var(--ease-out);
+}
+
+/* The side panel's CONTENT fades in when the panel appears or is expanded
+   (`display: none` → shown restarts it). The width is not animated: that would
+   re-lay out the transcript every frame. Opacity only — a transform here would
+   shift the rects the canvas/graph renderers measure while they mount. */
+.canvas-panel:not(.collapsed) > .canvas-head,
+.canvas-panel:not(.collapsed) > .canvas-body {
+  animation: apple-crossfade 180ms var(--ease-out);
+}
+
+@keyframes apple-surface-in {
+  from {
+    opacity: 0;
+    transform: scale(var(--surface-in-scale, 0.97));
+  }
+}
+
+@keyframes apple-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 
 .toast {
@@ -930,19 +978,18 @@ button:disabled {
   }
 }
 
-/* Accessibility: preserve useful feedback while removing vestibular travel. */
-@media (prefers-reduced-motion: reduce) {
-  .message,
-  .canvas-fs {
-    animation-name: apple-crossfade !important;
-    animation-duration: 160ms !important;
-  }
+/* Accessibility: preserve useful feedback while removing vestibular travel.
+   Keyed on the app's own 움직임 줄이기 (see 40-responsive-core.css), not the OS. */
+:root[data-motion="reduce"] .message,
+:root[data-motion="reduce"] .canvas-fs {
+  animation-name: apple-crossfade !important;
+  animation-duration: 160ms !important;
+}
 
-  button,
-  [role="button"],
-  .composer-box {
-    transform: none !important;
-  }
+:root[data-motion="reduce"] button,
+:root[data-motion="reduce"] [role="button"],
+:root[data-motion="reduce"] .composer-box {
+  transform: none !important;
 }
 
 ::view-transition-old(root),
@@ -961,11 +1008,9 @@ button:disabled {
   transition: color 180ms var(--ease-out), background-color 180ms var(--ease-out), border-color 180ms var(--ease-out);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-old(root),
-  ::view-transition-new(root) {
-    animation-duration: 0.001ms;
-  }
+:root[data-motion="reduce"]::view-transition-old(root),
+:root[data-motion="reduce"]::view-transition-new(root) {
+  animation-duration: 0.001ms;
 }
 
 @keyframes apple-crossfade {

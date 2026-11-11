@@ -2,10 +2,12 @@
   import AvatarImage from "./AvatarImage.svelte";
   import Icon from "./Icon.svelte";
   import HashtagChipEditor from "./HashtagChipEditor.svelte";
+  import Toggle from "./Toggle.svelte";
   import { api, refreshMe } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
   import { normalizeTags } from "../lib/format";
   import { downscaleImageToDataUrl, pastedImageFile } from "../lib/dom";
+  import { getMotionPref, setMotionPref } from "../lib/motion";
   import { appState, notify, readState, replaceState, updateState } from "../lib/state";
   import type { AvatarVisibility, User } from "../lib/types";
 
@@ -17,6 +19,13 @@
   ];
 
   $: user = $appState.user;
+
+  // 움직임 줄이기 — device-local like the theme (lib/motion.ts), so there is no
+  // save round-trip and nothing to roll back.
+  const motionReduced = getMotionPref() === "reduce";
+  function changeMotion(reduce: boolean): void {
+    setMotionPref(reduce ? "reduce" : "full");
+  }
 
   // profile form
   const u0 = readState().user;
@@ -510,6 +519,18 @@
         <span class="muted">이 계정을 팀 공용 계정으로 표시합니다. 팀원이 이 아바타와 대화하면서 지식 저장소를 직접 수정하고 커밋할 수 있게 돼요. 저장소 생성·연결 같은 설정 변경은 계속 소유자만 할 수 있습니다.</span>
       </span>
     </label>
+  </section>
+
+  <section class="settings-card">
+    <div class="panel-section-head">
+      <div>
+        <h3>움직임 줄이기</h3>
+        <p class="muted">화면 전환 애니메이션과 답변이 부드럽게 이어져 나오는 표시를 끕니다. Windows 같은 시스템의 애니메이션 설정과는 따로 동작하고, 이 브라우저에만 저장돼요.</p>
+      </div>
+      <div class="head-actions">
+        <Toggle on={motionReduced} label="움직임 줄이기" onChange={changeMotion} />
+      </div>
+    </div>
   </section>
 
   <section class="settings-card">

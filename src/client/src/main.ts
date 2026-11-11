@@ -1,12 +1,18 @@
 import "./styles.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
+import { applyMotionPref } from "./lib/motion";
 import { initNotifications } from "./lib/notifications";
 
 const target = document.getElementById("app");
 if (!target) {
   throw new Error("#app not found");
 }
+
+// 움직임 줄이기 is the app's own device-local setting (never the OS's). Applied
+// before the first component mounts so no entrance plays for a viewer who
+// turned motion down.
+applyMotionPref();
 
 mount(App, { target });
 

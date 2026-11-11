@@ -52,6 +52,45 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
 - **The inline-`<script>`-in-`<head>` anti-FOUC trick is impossible** (CSP blocks inline scripts). The
   CSS-only `--bg` fallback is the substitute; any first-paint theming must stay CSS-only.
 
+## Motion preference (움직임 줄이기) — `src/lib/motion.ts`
+- **Motion is the APP's setting, never the operating system's (2026-11-11).** Chrome reports a PC whose
+  system animations are off (Windows 설정 > 접근성 > 시각 효과, "최적 성능" presets, some remote sessions) as
+  `prefers-reduced-motion: reduce`; following it silently removed every animation AND the paced answer text
+  on such machines. So nothing in `src/client/{src,styles}` reads that media query any more
+  (`tests/motion-os-independence.test.ts` fails on a new one). One device-local preference, like the
+  theme: `localStorage["noah-motion"]` is absent (= `full`, the default) | `reduce`; `applyMotionPref()`
+  writes `<html data-motion="reduce">` (full removes the attr) and runs in `main.ts` BEFORE the first
+  mount. The switch is 설정 > 프로필 > 움직임 줄이기 (no server round-trip). There is deliberately no
+  "follow the system" choice — that is the dependency this removed.
+- **CSS keys on the attribute, JS on `prefersReducedMotion()`.** Reduced rules are
+  `:root[data-motion="reduce"] …`; motion-only rules are `:root:not([data-motion="reduce"]) …` (in a
+  component's scoped style: `:global(:root[data-motion="reduce"]) .x`). The global quiet rule
+  (`40-responsive-core.css`) sets every animation/transition duration to 0.001ms, so a new FINITE CSS
+  animation needs no rule of its own to go quiet. An `infinite` one does NOT stop — it loops every
+  0.001ms — so it needs its own `:root[data-motion="reduce"] .x { animation: none }` (the shimmer, the
+  caret, the presenter); spinners are deliberately re-enabled next to the global rule. `prefersReducedMotion()` is
+  read when a motion STARTS (`springValue`, the stream reveal, the theme cross-fade, every Svelte
+  transition gate).
+- **`scrollToStart(el)` replaces `scrollIntoView({ behavior: "smooth" })`.** The browser's own smooth
+  scroll is switched off by the same OS setting and cannot be overridden, so the two "reveal the pane
+  below the list" scrolls (할 일, 예약 작업; stacked ≤ 980px) spring `scrollTop` of the nearest scrollable
+  ancestor instead — same scroller and end position as the native call (checked in Chromium) — and let go
+  on the viewer's wheel/touch/pointer/key. Still OS-bound and left alone: the browser's wheel/keyboard
+  scroll animation, and `prefers-reduced-transparency` (materials turn opaque).
+- **Entrances added with it (all in `80-apple-design.css`, entrance only, transform/opacity only):** the
+  MCP 도구 panel, composer attachment thumbnails/chips, the 맨 아래로 button, the file-drop overlay, and the
+  side panel's head/body (opacity only — a transform would shift the rects the canvas/graph renderers
+  measure while they mount; the width is never animated). The slash menu stays instant (keyboard-opened).
+  A conversation the viewer deletes one at a time leaves by fading while its height closes
+  (`Shell.svelte` `conversationOut`, gated on a plain Set); when that empties its date group the row's
+  exit never runs (it is local to the group's list), so the GROUP leaves the same way (`groupOut`),
+  taking the list gap and — for a first group — the next group's `.conv-group + .conv-group` margin with
+  it. Deleting the LAST conversation swaps to the empty state at once (an `{#if}` branch change). No
+  `animate:` FLIP there — the rail list reconciles on every store write and would measure every row.
+  Known limit: these CSS entrances replay when their element REMOUNTS for another reason (returning to
+  the chat view with attachments staged or the side panel open, single ↔ split) — the same as the
+  existing `.message` entrance.
+
 ## CSS gotchas (`src/client/styles/*.css`)
 - **Input chrome comes ONLY from `.field input`, not a global rule.** The global
   `button,input,select,textarea` rule (`10-base.css`) sets just `font`/`color: inherit`. All input styling
@@ -134,7 +173,7 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   `lib/streamReveal.ts` paces what is shown (EMA arrival rate, ~0.25 s behind, ≤ 3× catch-up, word
   boundaries, injectable clock): `pane.liveText` is ALWAYS the full text and the reveal store only says how
   many characters show, so 중지 / an error / a text fold / a delivered steer / the finalizer cannot lose or
-  duplicate text — they read the pane. It is off under `prefers-reduced-motion` (read when a reveal STARTS),
+  duplicate text — they read the pane. It is off under the app's 움직임 줄이기 (never the OS setting; read when a reveal STARTS),
   flushes on `visibilitychange` and when frames stall, flushes everything when a card (`file` frame) arrives so
   a card never precedes its text, and drains the rest inside ~0.3 s on the stored bubble at turn end.
   The thinking card shows elapsed seconds and the current sub-heading in its collapsed header and renders
