@@ -173,7 +173,7 @@ describe("store: canvas submitted values + render reports", () => {
         artifactId,
         title: `제목 ${artifactId}`,
         content,
-        contentType: "widget",
+        contentType: "markdown",
         interaction: "async",
       });
     return { store, owner, other, show };
@@ -291,6 +291,66 @@ describe("store: canvas submitted values + render reports", () => {
     expect(store.deleteCanvasArtifact(owner.id, "cv")).toBe(true);
     store.reportCanvasRenderErrors(owner.id, "conv-1", "cv-b", []);
     expect(store.takeCanvasRenderReports(owner.id, "conv-1")).toEqual([]);
+  });
+
+  it("inline UI reports: only the conversation's LATEST answer is accepted, handed to the next turn once, dropped when that answer is no longer the latest", () => {
+    const { store, owner, other } = setup("ui");
+    const answer = (conversationId: string, content: string) => store.addMessage(conversationId, { role: "assistant", content }).id;
+    const question = (conversationId: string, content: string) => store.addMessage(conversationId, { role: "user", content }).id;
+
+    // A conversation with no answer yet has nothing to report on.
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", "anything", ["e"])).toBe("ignored");
+    const q1 = question("conv-1", "보여줘");
+    const a1 = answer("conv-1", "<stat />");
+    // Not this owner's conversation → "not_found" (the route's 404), whatever the message id.
+    expect(store.reportInlineUiRenderErrors(other.id, "conv-1", a1, ["e"])).toBe("not_found");
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-missing", a1, ["e"])).toBe("not_found");
+    // A user message, an unknown id, or the answer of another conversation → ignored.
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", q1, ["e"])).toBe("ignored");
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", "nope", ["e"])).toBe("ignored");
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-2", a1, ["e"])).toBe("ignored");
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]);
+
+    // The latest answer: queued, merged per answer, handed out once.
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", a1, ["rate is not defined"])).toBe("queued");
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", a1, ["rate is not defined", "chart: bad spec"])).toBe("queued");
+    // Another user asking gets nothing — and does not consume it.
+    expect(store.takeInlineUiRenderErrors(other.id, "conv-1")).toEqual([]);
+    // The next turn starts: its user message is appended first, the answer is still the latest ASSISTANT message.
+    question("conv-1", "고쳐줘");
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual(["rate is not defined", "chart: bad spec"]);
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]); // once
+    // The same failure reported again after a reload is not news.
+    store.reportInlineUiRenderErrors(owner.id, "conv-1", a1, ["rate is not defined"]);
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]);
+
+    // A newer answer exists: the older one is no longer accepted, and a report
+    // that was still waiting for it is dropped instead of delivered.
+    store.reportInlineUiRenderErrors(owner.id, "conv-1", a1, ["a new failure of the old answer"]);
+    const a2 = answer("conv-1", "<chart />");
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", a1, ["late"])).toBe("ignored");
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]);
+    // (An answer removed by 다시 생성 / a rewind is the same case — tests/routes-chat.test.ts drives it through the route.)
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", a2, ["of the newer answer"])).toBe("queued");
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual(["of the newer answer"]);
+    // An empty report clears a waiting one.
+    const a3 = answer("conv-1", "<table />");
+    store.reportInlineUiRenderErrors(owner.id, "conv-1", a3, ["boom"]);
+    expect(store.reportInlineUiRenderErrors(owner.id, "conv-1", a3, [])).toBe("queued");
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]);
+    // It is a queue of its own: a canvas report of the same conversation is untouched by it.
+    store.upsertCanvasArtifact(owner.id, "conv-1", { artifactId: "cv", title: "차트", content: "{}", contentType: "vega" });
+    store.reportCanvasRenderErrors(owner.id, "conv-1", "cv", ["canvas failure"]);
+    store.reportInlineUiRenderErrors(owner.id, "conv-1", a3, ["ui failure"]);
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual(["ui failure"]);
+    expect(store.takeCanvasRenderReports(owner.id, "conv-1")).toEqual([{ canvasId: "cv", title: "차트", errors: ["canvas failure"] }]);
+
+    // Deleting the conversation forgets its report (the id may be reused).
+    store.reportInlineUiRenderErrors(owner.id, "conv-1", a3, ["last"]);
+    expect(store.deleteConversation(owner.id, "conv-1")).toBeTruthy();
+    store.touchConversation(owner.id, "conv-1", owner.id, "hi");
+    store.addMessage("conv-1", { role: "assistant", content: "새 대화" });
+    expect(store.takeInlineUiRenderErrors(owner.id, "conv-1")).toEqual([]);
   });
 
   it("forgets a conversation's reports when the conversation is deleted", () => {

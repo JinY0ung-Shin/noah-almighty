@@ -1,9 +1,14 @@
 /**
- * Static check of a canvas `widget` source — what `mcp__canvas__show` runs
- * before anything is shown. It parses the document and analyses it WITHOUT
- * evaluating a single expression (the avatar's code never runs in Noah's
- * process): syntax, known components and props, required props, declared
- * names, where setters may be called, and the size limits.
+ * Static check of an inline UI source (the tags and directives an avatar writes
+ * in its answer). It parses the document and analyses it WITHOUT evaluating a
+ * single expression (the avatar's code never runs in Noah's process): syntax,
+ * known components and props, required props, declared names, where setters
+ * may be called, and the size limits.
+ *
+ * Nothing gates on it any more: an answer is already on screen when it could be
+ * checked, so the renderer is lenient and this is the ADVICE — the viewer's
+ * browser runs `widgetProblems` on what it drew and reports the lines to the
+ * avatar with its next turn; the server uses `checkWidget` on its own examples.
  */
 import type { Expr, Param, Pattern, Stmt } from "./expr.js";
 import { GLOBAL_NAMES } from "./interp.js";
@@ -104,7 +109,11 @@ class Checker {
   effects = new Set<string>(ACTION_NAMES);
   root = new Scope();
 
-  constructor(public doc: WidgetDoc) {
+  constructor(
+    public doc: WidgetDoc,
+    /** The document is an ANSWER: its top-level text is the answer's own Markdown, and it may hold no component at all. */
+    public answer = false,
+  ) {
     this.problems = [...doc.problems];
   }
 
@@ -156,9 +165,9 @@ class Checker {
     }
     this.children(doc.nodes, root, true);
 
-    if (this.elements === 0 && this.problems.length === 0) {
+    if (!this.answer && this.elements === 0 && this.problems.length === 0) {
       this.problem(
-        "This widget has no component: a widget needs at least one (for plain text use contentType 'markdown'). " +
+        "This source has no component: inline UI needs at least one (plain text is just Markdown). " +
           "If the components are there but every line is indented 4+ spaces, the whole source is read as a Markdown code block — unindent it. " +
           "A component is recognised at the top level only at the START of a line.",
         0,
@@ -182,7 +191,7 @@ class Checker {
     }
     switch (node.t) {
       case "text":
-        if (top) this.topText(node.value, node.s, scope);
+        if (top && !this.answer) this.topText(node.value, node.s, scope);
         return;
       case "expr":
         this.expr(node.expr, scope, "render", node.s);
@@ -243,7 +252,7 @@ class Checker {
       this.problem(
         svgElementSpec(node.name)
           ? `<${node.name}> is an SVG element: it exists only inside <svg viewBox="…">…</svg>. Wrap the drawing in an <svg>.`
-          : `Unknown component <${node.name}>.${hint ? ` Did you mean <${hint}>?` : ""} HTML tags are not supported in a widget. Components: ${WIDGET_TAGS.join(", ")}. If this "<" was meant as text, write \\< or &lt;.`,
+          : `Unknown component <${node.name}>.${hint ? ` Did you mean <${hint}>?` : ""} HTML tags are not supported in inline UI. Components: ${WIDGET_TAGS.join(", ")}. If this "<" was meant as text, write \\< or &lt;.`,
         node.s,
       );
       // Still check what is inside, so its expressions are reported in the same round.
@@ -281,7 +290,7 @@ class Checker {
         const choices = spec.oneOf.map((name) => `${name} (${spec.props[name].doc ?? name})`).join("; ");
         this.problem(
           `<${spec.tag}> needs EXACTLY ONE of ${spec.oneOf.join(" | ")} — ${choices}. ` +
-            (given.length === 0 ? "It has none." : `It has ${given.join(" and ")}: keep one (use separate <${spec.tag}>s for separate actions).`),
+            (given.length === 0 ? "It has none." : `It has ${given.join(" and ")}: keep one (a second one needs its own <${spec.tag}>).`),
           node.s,
         );
       }
@@ -735,8 +744,7 @@ function report(src: string, problems: Finding[]): string {
   });
   const more = unique.length > shown.length ? `\n(+${unique.length - shown.length} more; fix these first.)` : "";
   return (
-    `Widget source has ${unique.length} problem${unique.length === 1 ? "" : "s"} — the canvas was NOT shown. ` +
-    `Fix ${unique.length === 1 ? "it" : "them"} and call show again (pass the same canvasId if you were refining one).\n` +
+    `The inline UI source has ${unique.length} problem${unique.length === 1 ? "" : "s"}:\n` +
     lines.join("\n") +
     more
   );
@@ -748,7 +756,7 @@ function report(src: string, problems: Finding[]): string {
  */
 export function checkWidget(source: string): WidgetCheck {
   if (typeof source !== "string" || source.trim() === "") {
-    return { ok: false, error: "Widget source is empty — the canvas was NOT shown. Pass the widget document as content." };
+    return { ok: false, error: "The inline UI source is empty." };
   }
   const doc = parseWidget(source);
   const checker = new Checker(doc);
@@ -763,4 +771,29 @@ export function checkWidget(source: string): WidgetCheck {
   }
   if (checker.problems.length > 0) return { ok: false, error: report(source, checker.problems) };
   return { ok: true, submits: checker.submits };
+}
+
+/**
+ * What is wrong with a parsed ANSWER's inline UI, as short English lines for
+ * the avatar (`line L:C — …`), at most `limit` of them. The renderer draws the
+ * document anyway; this is the advice that goes with the next turn.
+ */
+export function widgetProblems(doc: WidgetDoc, limit = MAX_REPORTED): string[] {
+  const checker = new Checker(doc, true);
+  if (!(doc.nodes.length === 0 && doc.problems.length > 0)) {
+    try {
+      checker.run();
+    } catch (err) {
+      if (!(err instanceof RangeError)) throw err;
+      checker.problem("The UI source is nested too deeply to analyse. Flatten it.", 0);
+    }
+  }
+  const out: string[] = [];
+  for (const p of [...checker.problems].sort((a, b) => a.pos - b.pos)) {
+    const { line, col } = lineCol(doc.src, p.pos);
+    const text = `line ${line}:${col} — ${p.full ? p.full() : p.message}`;
+    if (!out.includes(text)) out.push(text);
+    if (out.length >= limit) break;
+  }
+  return out;
 }

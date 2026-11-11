@@ -38,7 +38,6 @@ import type {
 } from "../agent/events.js";
 import { isPiResponseId } from "../agent/pi/runPiAgent.js";
 import {
-  CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE,
   formatSubmission,
   MAX_CANVAS_CONTENT_CHARS,
 } from "../agent/canvasTools.js";
@@ -132,6 +131,7 @@ import {
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
 import { sanitizeCanvasRenderErrors } from "../canvasRenderReports.js";
+import { inlineUiAllowed } from "../agent/ownerState.js";
 import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
@@ -452,7 +452,7 @@ interface CanvasSubmissionInput {
   editedContent?: string;
 }
 
-/** Caps on a canvas submission's `values` (control answers or a widget `<submit>`). */
+/** Caps on a canvas submission's `values` (the answers to its controls). */
 export const MAX_CANVAS_SUBMISSION_KEYS = 50;
 export const MAX_CANVAS_SUBMISSION_CHARS = MAX_CANVAS_CONTENT_CHARS;
 
@@ -497,8 +497,7 @@ function parseCanvasSubmission(raw: unknown): CanvasSubmissionInput | null {
   ) {
     // Bounded: the values become the agent's turn text (formatSubmission) and
     // ride the session's context from then on. A canvas's own controls stay far
-    // below this; a widget's `<submit>` caps itself lower on the client. An
-    // over-limit submission is INVALID (ignored like a malformed one) — never
+    // below this. An over-limit submission is INVALID (ignored like a malformed one) — never
     // truncated into something the user did not send.
     if (!canvasSubmissionValuesWithinLimits(obj.values as Record<string, unknown>)) {
       return null;
@@ -1700,6 +1699,16 @@ export async function executeChatTurn(
         !ctx.compact && effectiveMcpToolGroupsForRun.includes("canvas")
           ? store.takeCanvasRenderReports(ownerUserId, conversationId)
           : [];
+      // The same for the inline UI of the previous ANSWER (POST
+      // /api/conversations/:id/ui-report): consumed for a turn whose answer can
+      // carry the corrected UI — the capability plan's own gate (an executeChatTurn
+      // turn is never headless or a consultation, so the task API decides). A
+      // task-API turn leaves it waiting; it is dropped once the reported answer
+      // is no longer the conversation's latest.
+      const inlineUiRenderErrors =
+        !ctx.compact && inlineUiAllowed({ externalTaskApi: Boolean(ctx.externalTaskId) })
+          ? store.takeInlineUiRenderErrors(ownerUserId, conversationId)
+          : [];
 
       const response = await runAgentStream(
         {
@@ -1746,6 +1755,7 @@ export async function executeChatTurn(
           effort: conversationEffort ?? undefined,
           mcpToolGroups: effectiveMcpToolGroupsForRun,
           ...(canvasRenderReports.length ? { canvasRenderReports } : {}),
+          ...(inlineUiRenderErrors.length ? { inlineUiRenderErrors } : {}),
           viewerUserId: ownerUserId,
           viewerName: ctx.ownerDisplayName,
           viewerIsOwner,
@@ -1962,34 +1972,6 @@ export async function executeChatTurn(
               interaction: interaction ?? null,
               editable: Boolean(editable),
             });
-            // A WIDGET is drawn inline in the answer, at the point the avatar
-            // called the tool — so it also rides the message's attachments, like
-            // a team-brain card (id = the canvas id, no file behind it; the
-            // bubble reads the content from the canvas tables). After the
-            // `canvas` frame, so a client already holds the content when the
-            // card arrives. ONE per message: showing the same canvas again in
-            // this turn (a refinement, a retry after a check error) keeps the
-            // first card where it is and only follows the title; a LATER turn
-            // attaches the id to its own message. Every other content type
-            // stays a side-panel artifact and attaches nothing.
-            if (contentType === "widget") {
-              const earlier = shownAttachments
-                .slice(persistedAttachmentsOffset)
-                .find((att) => att.kind === "widget" && att.id === artifactId);
-              if (earlier) {
-                if (title) earlier.name = title;
-              } else {
-                const attachment: MessageAttachment = {
-                  id: artifactId,
-                  kind: "widget",
-                  mediaType: CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE,
-                  ...(title ? { name: title } : {}),
-                  ...(requestData.anchor !== undefined ? { anchor: requestData.anchor } : {}),
-                };
-                shownAttachments.push(attachment);
-                emitRunEvent(runId, "file", { runId, attachment });
-              }
-            }
             const record = (submittedValues?: Record<string, unknown>) => {
               // Persist to the dedicated canvas tables (version history). Refining
               // the same id appends a version; an unchanged re-show just refreshes
@@ -3156,8 +3138,8 @@ export function createChatRouter({
     },
   );
 
-  // A canvas the viewer's browser could not draw completely (a widget block
-  // that failed to evaluate, a chart the renderer rejected): the server only
+  // A canvas the viewer's browser could not draw completely (a chart the
+  // renderer rejected, a diagram that failed to lay out): the server only
   // parses + statically checks a canvas, so without this the avatar never
   // learns. Queued in process memory and handed to this conversation's NEXT
   // turn, once (executeChatTurn → buildPiTurnPreamble). Same access rule as the
@@ -3180,6 +3162,40 @@ export function createChatRouter({
       );
       if (!reported) {
         apiError(res, 404, "캔버스를 찾을 수 없습니다.");
+        return;
+      }
+      res.status(204).end();
+    },
+  );
+
+  // The inline UI of an ANSWER that the viewer's browser could not draw
+  // completely (a block that failed to evaluate, a tag it had to drop, an
+  // exceeded budget). Nothing checks an answer's tags on the server — they are
+  // drawn while the text streams — so without this the avatar never learns.
+  // Same queue idea as the canvas report above: process memory, handed to the
+  // conversation's NEXT turn once (executeChatTurn → buildPiTurnPreamble), same
+  // sanitizing. Only the caller's own conversation (anything else is ONE 404),
+  // and only its LATEST assistant message — "your previous answer" for the turn
+  // that will hear it; a report about any other message is ignored with the
+  // same 204, so the client need not know which answer is the newest. An empty
+  // `errors` clears a waiting report.
+  router.post(
+    "/api/conversations/:conversationId/ui-report",
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const messageId = safeString(req.body?.messageId);
+      if (!messageId || !Array.isArray(req.body?.errors)) {
+        apiError(res, 400, "messageId와 errors가 필요합니다.");
+        return;
+      }
+      const outcome = store.reportInlineUiRenderErrors(
+        req.user!.id,
+        req.params.conversationId,
+        messageId,
+        sanitizeCanvasRenderErrors(req.body.errors),
+      );
+      if (outcome === "not_found") {
+        apiError(res, 404, "대화를 찾을 수 없습니다.");
         return;
       }
       res.status(204).end();

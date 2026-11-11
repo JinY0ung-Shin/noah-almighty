@@ -1013,12 +1013,12 @@ describe("canvas submission turns (#50)", () => {
 
   it("bounds canvas submission values: an over-limit one is invalid, never truncated", async () => {
     // The values become the agent's turn text and ride the session from then
-    // on — a control answer or a widget <submit> stays far below these caps.
+    // on — a control answer stays far below these caps.
     const { app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "cvcap").expect(201)).body.user.id as string;
 
-    // Just under the serialized limit goes through (a long widget/text answer).
+    // Just under the serialized limit goes through (a long text answer).
     const fits = "가".repeat(MAX_CANVAS_SUBMISSION_CHARS - 20);
     expect(JSON.stringify({ note: fits }).length).toBeLessThanOrEqual(MAX_CANVAS_SUBMISSION_CHARS);
     await owner
@@ -1074,8 +1074,15 @@ describe("canvas submission turns (#50)", () => {
     store.setSuspended(mateId, false);
     store.touchConversation(ownerId, "conv-keep", ownerId, "seed");
     store.touchConversation(ownerId, "conv-keep-2", ownerId, "seed");
-    const widget = { artifactId: "cv-w", title: "대출 계산기", content: "<submit values={{ months }}>보내기</submit>", contentType: "widget", interaction: "async" as const };
-    store.upsertCanvasArtifact(ownerId, "conv-keep", widget);
+    const form = {
+      artifactId: "cv-w",
+      title: "대출 조건",
+      content: "# 조건을 골라 주세요",
+      contentType: "markdown" as const,
+      controls: [{ type: "number" as const, id: "months", label: "개월" }],
+      interaction: "async" as const,
+    };
+    store.upsertCanvasArtifact(ownerId, "conv-keep", form);
     const reload = async (conversationId = "conv-keep") =>
       (await owner.get("/api/messages").query({ conversationId }).expect(200)).body.canvases as { id: string; submittedValues?: unknown }[];
     expect((await reload())[0]!.submittedValues).toBeUndefined();
@@ -1132,25 +1139,25 @@ describe("canvas submission turns (#50)", () => {
 
     // The avatar refines the canvas (a new version): it starts unanswered, and a
     // rollback brings the earlier version's own answer back.
-    store.upsertCanvasArtifact(ownerId, "conv-keep", { ...widget, content: "v2" });
+    store.upsertCanvasArtifact(ownerId, "conv-keep", { ...form, content: "v2" });
     expect((await reload())[0]!.submittedValues).toBeUndefined();
     const rolled = await owner.post("/api/chat/canvases/cv-w/rollback").send({ version: 1 }).expect(200);
     expect(rolled.body.canvas.submittedValues).toEqual({ months: 36 });
   });
 });
 
-describe("inline widget: a shown `widget` canvas rides the message as an attachment", () => {
-  const WIDGET_MEDIA = "application/vnd.noah.canvas-widget+json";
-  const widgetShow = (artifactId: string, content: string, over: Record<string, unknown> = {}) => ({
+describe("a canvas is a side-panel artifact: it never rides the message (the inline `widget` card is retired)", () => {
+  const WIDGET_MEDIA = "application/vnd.noah.canvas-widget+json"; // what an unreleased build stored
+  const canvasShow = (artifactId: string, content: string, over: Record<string, unknown> = {}) => ({
     artifactId,
     title: `제목 ${artifactId}`,
     content,
-    contentType: "widget" as const,
+    contentType: "markdown" as const,
     awaitInput: false,
     ...over,
   });
   const text = (config: AppConfig, value: string): AgentResponse => ({ kind: "text", runtime: config.agentRuntime, summary: "mock", text: value });
-  async function setupInline(name: string) {
+  async function setupCanvas(name: string) {
     const { store, app } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, name).expect(201)).body.user.id as string;
@@ -1161,153 +1168,102 @@ describe("inline widget: a shown `widget` canvas rides the message as an attachm
     return { store, app, owner, ownerId, turn, assistants };
   }
 
-  it("emits `canvas` then a `file` frame and persists ONE widget attachment per message, anchored where the tool ran", async () => {
-    const { store, owner, ownerId, turn, assistants } = await setupInline("wdginline");
+  it("emits a `canvas` frame per show and attaches NOTHING to the message — whatever content type the sink is handed", async () => {
+    const { store, owner, ownerId, turn, assistants } = await setupCanvas("cvnocard");
     H.impl = async (_request, _roots, config, _store, events) => {
-      events.onDelta?.("이자를 계산해 볼게요.");
-      await events.onCanvas!(widgetShow("w-loan", "v1", { anchor: 12 }));
-      // The same canvas again in the SAME message (a refinement): no second card.
-      await events.onCanvas!(widgetShow("w-loan", "v2", { title: "대출 계산기", anchor: 30 }));
-      // A panel canvas in the same turn attaches nothing.
-      await events.onCanvas!({ artifactId: "c-md", title: "메모", content: "# hi", contentType: "markdown", awaitInput: false });
-      // A second, different widget gets its own card.
-      await events.onCanvas!(widgetShow("w-quiz", "q1", { anchor: 40 }));
-      return text(config, "이자를 계산해 볼게요. 아래에서 바꿔 보세요.");
+      events.onDelta?.("정리해 볼게요.");
+      await events.onCanvas!(canvasShow("c-md", "# v1"));
+      await events.onCanvas!(canvasShow("c-md", "# v2", { title: "메모" })); // a refinement in the same turn
+      await events.onCanvas!(canvasShow("c-chart", "{}", { contentType: "vega" }));
+      // The tool refuses the retired type before it gets here; even a caller that
+      // handed the sink one would only record a canvas — no inline card exists.
+      await events.onCanvas!(canvasShow("c-legacy", "x", { contentType: "widget", anchor: 12 }));
+      return text(config, "정리해 볼게요. 옆 패널을 보세요.");
     };
     let res: request.Response;
     try {
-      res = await turn("conv-inline");
+      res = await turn("conv-nocard");
     } finally {
       H.impl = null;
     }
     const frames = parseSse(res.text);
-    const fileFrames = frames.filter((f) => f.event === "file").map((f) => frameData(f).attachment);
-    expect(fileFrames).toEqual([
-      { id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-loan", anchor: 12 },
-      { id: "w-quiz", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-quiz", anchor: 40 },
-    ]);
-    // The canvas frame comes first: the client holds the content when the card arrives.
-    const firstCanvas = frames.findIndex((f) => f.event === "canvas");
-    const firstFile = frames.findIndex((f) => f.event === "file");
-    expect(firstCanvas).toBeGreaterThanOrEqual(0);
-    expect(firstCanvas).toBeLessThan(firstFile);
-    expect(frames.filter((f) => f.event === "canvas")).toHaveLength(4); // every show still reaches the panel/canvas state
-
-    // Persisted on the assistant row: the first card keeps its place, its name follows the latest title.
-    const [message] = assistants("conv-inline");
-    expect(message!.attachments).toEqual([
-      { id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "대출 계산기", anchor: 12 },
-      { id: "w-quiz", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-quiz", anchor: 40 },
-    ]);
-    expect(frameData(frames.find((f) => f.event === "done")!).message.attachments).toEqual(message!.attachments);
-    // The content lives in the canvas tables (current version), exactly as before.
-    const reload = await owner.get("/api/messages").query({ conversationId: "conv-inline" }).expect(200);
+    expect(frames.filter((f) => f.event === "canvas")).toHaveLength(4);
+    expect(frames.filter((f) => f.event === "file")).toEqual([]);
+    const [message] = assistants("conv-nocard");
+    expect(message!.attachments ?? []).toEqual([]);
+    expect(frameData(frames.find((f) => f.event === "done")!).message.attachments ?? []).toEqual([]);
+    // The canvases themselves are recorded as before (current version).
+    const reload = await owner.get("/api/messages").query({ conversationId: "conv-nocard" }).expect(200);
     expect(reload.body.canvases.map((c: { id: string; content: string; contentType: string }) => [c.id, c.contentType, c.content])).toEqual([
-      ["w-loan", "widget", "v2"],
-      ["c-md", "markdown", "# hi"],
-      ["w-quiz", "widget", "q1"],
+      ["c-md", "markdown", "# v2"],
+      ["c-chart", "vega", "{}"],
+      ["c-legacy", "widget", "x"],
     ]);
-    expect(reload.body.messages.find((m: { role: string }) => m.role === "assistant").attachments).toEqual(message!.attachments);
-
-    // A LATER turn that shows the same canvas id attaches it to ITS message too
-    // (the client draws the last one as the live widget).
-    H.impl = async (_request, _roots, config, _store, events) => {
-      await events.onCanvas!(widgetShow("w-loan", "v3"));
-      return text(config, "고쳤어요.");
-    };
-    try {
-      await turn("conv-inline");
-    } finally {
-      H.impl = null;
-    }
-    const rows = assistants("conv-inline");
-    expect(rows).toHaveLength(2);
-    // No anchor from the tool (an older runner) → the card simply renders after the text.
-    expect(rows[1]!.attachments).toEqual([{ id: "w-loan", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-loan" }]);
-    expect(store.getCanvasArtifact(ownerId, "w-loan")).toMatchObject({ content: "v3", currentVersion: 3 });
+    expect(store.getCanvasArtifact(ownerId, "c-md")).toMatchObject({ content: "# v2", currentVersion: 2 });
   });
 
-  it("gives each message of a run its own card: a steer follow-up turn re-attaches, and a text fold re-anchors to 0", async () => {
-    const { turn, assistants } = await setupInline("wdgsteer");
-    H.impl = async (_request, _roots, config, _store, events) => {
-      events.onDelta?.("먼저 이걸 보세요.");
-      await events.onCanvas!(widgetShow("w-a", "a1", { anchor: 9 }));
-      events.onTurnResult?.({ text: "먼저 이걸 보세요.", steerPending: true });
-      // The follow-up turn of the SAME run: a new message, so the same id is attached again…
-      events.onDelta?.("중간 설명");
-      await events.onCanvas!(widgetShow("w-a", "a2", { anchor: 5 }));
-      // …and when the model's interim text is folded away, the card moves before the new text.
-      events.onTextFold?.("중간 설명");
-      events.onTurnResult?.({ text: "수정했어요.", steerPending: false });
-      return text(config, "수정했어요.");
-    };
-    try {
-      await turn("conv-steer-widget");
-    } finally {
-      H.impl = null;
-    }
-    const rows = assistants("conv-steer-widget");
-    expect(rows.map((m) => m.content)).toEqual(["먼저 이걸 보세요.", "수정했어요."]);
-    expect(rows[0]!.attachments).toEqual([{ id: "w-a", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-a", anchor: 9 }]);
-    expect(rows[1]!.attachments).toEqual([{ id: "w-a", kind: "widget", mediaType: WIDGET_MEDIA, name: "제목 w-a", anchor: 0 }]);
-  });
-
-  it("is never a file: no serving route, share link or image re-feed resolves a widget attachment's id", async () => {
+  it("still READS what an unreleased build stored — a `widget` canvas row and a `kind: widget` attachment — and never resolves that attachment to a file", async () => {
     const { services, app, store } = boot();
     const owner = request.agent(app);
-    const ownerId = (await signup(owner, "wdgnofile").expect(201)).body.user.id as string;
-    // The avatar picks the canvas id — here it deliberately names a real image of the conversation.
+    const ownerId = (await signup(owner, "wdglegacy").expect(201)).body.user.id as string;
+    // A real image of the conversation, so the legacy card can deliberately name its id.
     let imageId = "";
     H.impl = async (agentRequest, _roots, config, _store, events) => {
       fs.writeFileSync(path.join(agentRequest.cwd!, "shot.png"), PNG_BYTES);
       const shown = await events.onFile!({ path: "shot.png", hidden: true });
       if (shown.behavior !== "shown") throw new Error("image was not published");
       imageId = shown.attachment.id;
-      await events.onCanvas!(widgetShow(imageId, "<image />"));
-      await events.onCanvas!(widgetShow("w-plain", "x"));
       return text(config, "ok");
     };
     try {
-      await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-nofile", message: "보여줘" }).expect(200);
+      await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-legacy", message: "보여줘" }).expect(200);
     } finally {
       H.impl = null;
     }
-    const attachments = store.listMessages(ownerId, "conv-nofile").find((m) => m.role === "assistant")!.attachments!;
-    const widgets = attachments.filter((att) => att.kind === "widget");
-    expect(widgets.map((att) => att.id)).toEqual([imageId, "w-plain"]);
+    // The rows as the retired build wrote them. Nothing migrates or deletes them.
+    store.upsertCanvasArtifact(ownerId, "conv-legacy", { artifactId: "w-plain", title: "대출 계산기", content: "{@state n = 1}", contentType: "widget" });
+    const legacy = [
+      { id: imageId, kind: "widget" as const, mediaType: WIDGET_MEDIA, name: "이미지 id를 고른 위젯" },
+      { id: "w-plain", kind: "widget" as const, mediaType: WIDGET_MEDIA, name: "대출 계산기", anchor: 4 },
+    ];
+    store.addMessage("conv-legacy", { role: "assistant", content: "예전 답변", attachments: legacy });
+
+    const reload = await owner.get("/api/messages").query({ conversationId: "conv-legacy" }).expect(200);
+    expect(reload.body.canvases).toEqual([expect.objectContaining({ id: "w-plain", contentType: "widget", content: "{@state n = 1}" })]);
+    expect(reload.body.messages.at(-1).attachments).toEqual(legacy);
 
     // Serving routes look files up by the URL id, never through an attachment: a widget id has nothing behind it.
-    await owner.get("/api/conversations/conv-nofile/images/w-plain").expect(404);
-    await owner.get("/api/conversations/conv-nofile/files/w-plain").expect(404);
+    await owner.get("/api/conversations/conv-legacy/images/w-plain").expect(404);
+    await owner.get("/api/conversations/conv-legacy/files/w-plain").expect(404);
     // Share links: a widget is never a deck card and never a slide.
-    expect(pickShareLinkCard([attachments], "w-plain")).toHaveProperty("error");
-    expect(pickShareLinkCard([widgets])).toHaveProperty("error");
-    expect(shareSlideAttachments(widgets, "w-plain")).toEqual([]);
-    await owner.post("/api/conversations/conv-nofile/files/w-plain/share-links").send({}).expect(404);
+    expect(pickShareLinkCard([legacy], "w-plain")).toHaveProperty("error");
+    expect(pickShareLinkCard([legacy])).toHaveProperty("error");
+    expect(shareSlideAttachments(legacy, "w-plain")).toEqual([]);
+    await owner.post("/api/conversations/conv-legacy/files/w-plain/share-links").send({}).expect(404);
     // Re-feeding a message's images (regenerate) reads IMAGE attachments only —
-    // a widget whose id equals an image's id does not smuggle that image in.
-    expect(readChatImages(services.config, "conv-nofile", widgets)).toEqual([]);
-    expect(readChatImages(services.config, "conv-nofile", attachments.filter((att) => att.kind === "image"))).toHaveLength(1);
+    // a widget card whose id equals an image's id does not smuggle that image in.
+    expect(readChatImages(services.config, "conv-legacy", legacy)).toEqual([]);
+    expect(readChatImages(services.config, "conv-legacy", [{ id: imageId, kind: "image", mediaType: "image/png" }])).toHaveLength(1);
   });
 
-  it("follows the canvas rewind: a widget first shown in a dropped message is deleted, one refined there goes back to its earlier version", async () => {
-    const { store, owner, ownerId, turn, assistants } = await setupInline("wdgrewind");
+  it("follows the canvas rewind: a canvas first shown in a dropped message is deleted, one refined there goes back to its earlier version", async () => {
+    const { store, owner, ownerId, turn, assistants } = await setupCanvas("cvrewind");
     const show = (shows: [string, string][], reply: string) => {
       H.impl = async (_request, _roots, config, _store, events) => {
-        for (const [id, content] of shows) await events.onCanvas!(widgetShow(id, content));
+        for (const [id, content] of shows) await events.onCanvas!(canvasShow(id, content));
         return text(config, reply);
       };
     };
     try {
-      show([["w-old", "old-1"]], "첫 답");
+      show([["c-old", "old-1"]], "첫 답");
       await turn("conv-rw", { message: "첫 질문" });
       // The cutoff is compared against created_at: keep the two turns on different timestamps.
       await new Promise((resolve) => setTimeout(resolve, 15));
-      show([["w-old", "old-2"], ["w-new", "new-1"]], "둘째 답");
+      show([["c-old", "old-2"], ["c-new", "new-1"]], "둘째 답");
       await turn("conv-rw", { message: "둘째 질문" });
-      expect(assistants("conv-rw")[1]!.attachments!.map((att) => att.id)).toEqual(["w-old", "w-new"]);
+      expect(store.getCanvasArtifact(ownerId, "c-old")).toMatchObject({ content: "old-2", currentVersion: 2 });
 
-      // Regenerate the second answer: its message (and the cards on it) is dropped.
+      // Regenerate the second answer: its message is dropped.
       show([], "다시 쓴 둘째 답");
       await turn("conv-rw", { message: "", regenerate: true });
     } finally {
@@ -1315,31 +1271,29 @@ describe("inline widget: a shown `widget` canvas rides the message as an attachm
     }
     const rows = assistants("conv-rw");
     expect(rows.map((m) => m.content)).toEqual(["첫 답", "다시 쓴 둘째 답"]);
-    expect(rows[1]!.attachments ?? []).toEqual([]);
-    // The kept message still names w-old, whose canvas is back on the version that message showed…
-    expect(rows[0]!.attachments!.map((att) => [att.kind, att.id])).toEqual([["widget", "w-old"]]);
-    expect(store.getCanvasArtifact(ownerId, "w-old")).toMatchObject({ content: "old-1", currentVersion: 1 });
-    // …and the widget that only the dropped message showed is gone with it.
-    expect(store.getCanvasArtifact(ownerId, "w-new")).toBeNull();
+    // The canvas the kept message showed is back on the version that message showed…
+    expect(store.getCanvasArtifact(ownerId, "c-old")).toMatchObject({ content: "old-1", currentVersion: 1 });
+    // …and the canvas that only the dropped message showed is gone with it.
+    expect(store.getCanvasArtifact(ownerId, "c-new")).toBeNull();
     const reload = await owner.get("/api/messages").query({ conversationId: "conv-rw" }).expect(200);
-    expect(reload.body.canvases.map((c: { id: string }) => c.id)).toEqual(["w-old"]);
+    expect(reload.body.canvases.map((c: { id: string }) => c.id)).toEqual(["c-old"]);
   });
 
-  it("deleting the conversation takes the widget canvases with it (the attachment rows go with the messages)", async () => {
-    const { store, owner, ownerId, turn } = await setupInline("wdgdel");
+  it("deleting the conversation takes its canvases with it", async () => {
+    const { store, owner, ownerId, turn } = await setupCanvas("cvdel");
     H.impl = async (_request, _roots, config, _store, events) => {
-      await events.onCanvas!(widgetShow("w-gone", "x"));
+      await events.onCanvas!(canvasShow("c-gone", "x"));
       return text(config, "ok");
     };
     try {
-      await turn("conv-wdel");
+      await turn("conv-cdel");
     } finally {
       H.impl = null;
     }
-    expect(store.getCanvasArtifact(ownerId, "w-gone")).not.toBeNull();
-    await owner.delete("/api/conversations/conv-wdel").expect(200);
-    expect(store.getCanvasArtifact(ownerId, "w-gone")).toBeNull();
-    expect(store.listMessages(ownerId, "conv-wdel")).toEqual([]);
+    expect(store.getCanvasArtifact(ownerId, "c-gone")).not.toBeNull();
+    await owner.delete("/api/conversations/conv-cdel").expect(200);
+    expect(store.getCanvasArtifact(ownerId, "c-gone")).toBeNull();
+    expect(store.listMessages(ownerId, "conv-cdel")).toEqual([]);
   });
 });
 
@@ -1351,7 +1305,7 @@ describe("canvas render reports (browser → the conversation's next turn)", () 
     store.touchConversation(ownerId, "conv-r", ownerId, "seed");
     store.touchConversation(ownerId, "conv-r2", ownerId, "seed");
     const show = (artifactId: string, content: string, conversationId = "conv-r") =>
-      store.upsertCanvasArtifact(ownerId, conversationId, { artifactId, title: `제목 ${artifactId}`, content, contentType: "widget" });
+      store.upsertCanvasArtifact(ownerId, conversationId, { artifactId, title: `제목 ${artifactId}`, content, contentType: "vega" });
     show("cv-w", "v1");
     const report = (canvasId: string, body: unknown, agent = owner) => agent.post(`/api/canvases/${canvasId}/render-report`).send(body as object);
     const turn = (body: Record<string, unknown>) =>
@@ -1425,7 +1379,7 @@ describe("canvas render reports (browser → the conversation's next turn)", () 
     // The avatar shows a NEW version of the same id during a turn (the real onCanvas path): the old report is gone.
     await report("cv-w", { conversationId: "conv-r", errors: ["old version failure"] }).expect(204);
     H.impl = async (_request, _roots, config, _store, events) => {
-      await events.onCanvas?.({ artifactId: "cv-w", title: "제목 cv-w", content: "v2", contentType: "widget", awaitInput: false });
+      await events.onCanvas?.({ artifactId: "cv-w", title: "제목 cv-w", content: "v2", contentType: "vega", awaitInput: false });
       return { kind: "text", runtime: config.agentRuntime, summary: "mock", text: "고쳤어요" };
     };
     try {
@@ -1460,6 +1414,115 @@ describe("canvas render reports (browser → the conversation's next turn)", () 
     show("cv-w", "v3");
     await turn({});
     expect(H.requests[5].canvasRenderReports).toBeUndefined();
+  });
+});
+
+describe("inline UI render reports (browser → the conversation's next turn)", () => {
+  async function setupUi(name: string) {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, name).expect(201)).body.user.id as string;
+    const turn = (body: Record<string, unknown> = {}, conversationId = "conv-ui") =>
+      owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId, message: "계속", ...body }).expect(200);
+    const rows = (conversationId = "conv-ui") => store.listMessages(ownerId, conversationId);
+    const lastAnswer = (conversationId = "conv-ui") => rows(conversationId).filter((m) => m.role === "assistant").at(-1)!.id;
+    const report = (conversationId: string, body: unknown, agent = owner) =>
+      agent.post(`/api/conversations/${conversationId}/ui-report`).send(body as object);
+    return { store, app, owner, ownerId, turn, rows, lastAnswer, report };
+  }
+
+  it("queues a sanitized report about the LATEST answer (204) and hands it to exactly ONE turn of that conversation", async () => {
+    const { turn, lastAnswer, report } = await setupUi("uirep");
+    await turn(); // H.requests[0] — the answer whose inline UI the browser then fails to draw
+    expect(H.requests[0].inlineUiRenderErrors).toBeUndefined();
+    const res = await report("conv-ui", {
+      messageId: lastAnswer(),
+      errors: ["line 4: rate is not defined\n(in <stat>)", 7, "가".repeat(400), "a", "b", "c", "d"],
+    }).expect(204);
+    expect(res.text).toBe("");
+
+    // A turn of ANOTHER conversation does not carry (or consume) it.
+    await turn({}, "conv-ui-2");
+    expect(H.requests[1].inlineUiRenderErrors).toBeUndefined();
+
+    await turn();
+    // One line each, non-strings dropped, 300 chars and 5 lines at most — the canvas report's sanitizer.
+    expect(H.requests[2].inlineUiRenderErrors).toEqual(["line 4: rate is not defined (in <stat>)", "가".repeat(300), "a", "b", "c"]);
+    // It needs no canvas, and no canvas report rides with it.
+    expect(H.requests[2].canvasRenderReports).toBeUndefined();
+    // Consumed: the turn after it hears nothing.
+    await turn();
+    expect(H.requests[3].inlineUiRenderErrors).toBeUndefined();
+
+    // Reports of the same answer merge until a turn takes them; a repeat is not news.
+    const answer = lastAnswer();
+    await report("conv-ui", { messageId: answer, errors: ["first"] }).expect(204);
+    await report("conv-ui", { messageId: answer, errors: ["first", "second"] }).expect(204);
+    await turn({ mcpToolGroups: ["git_repo"] }); // the canvas group is irrelevant: inline UI is not a tool
+    expect(H.requests[4].inlineUiRenderErrors).toEqual(["first", "second"]);
+  });
+
+  it("ignores (204) a report about anything but the latest answer; 404 for a conversation that is not the caller's, 400 malformed, 401 unauthenticated", async () => {
+    const { app, turn, rows, lastAnswer, report } = await setupUi("uirepgate");
+    await turn();
+    const older = lastAnswer();
+    await turn();
+    const latest = lastAnswer();
+    expect(older).not.toBe(latest);
+    const userMessage = rows().find((m) => m.role === "user")!.id;
+    const stranger = request.agent(app);
+    await signup(stranger, "uirepstranger").expect(201);
+
+    // Ignored quietly — the client need not know which answer is the newest.
+    await report("conv-ui", { messageId: older, errors: ["old answer redrawn on reload"] }).expect(204);
+    await report("conv-ui", { messageId: userMessage, errors: ["a user message"] }).expect(204);
+    await report("conv-ui", { messageId: "no-such-message", errors: ["unknown"] }).expect(204);
+    // Another conversation of the same user naming this answer.
+    await turn({}, "conv-ui-2");
+    await report("conv-ui-2", { messageId: latest, errors: ["wrong conversation"] }).expect(204);
+
+    // No access: ONE 404, and nothing is learned about the message id.
+    await report("conv-ui", { messageId: latest, errors: ["e"] }, stranger).expect(404);
+    await report("conv-unknown", { messageId: latest, errors: ["e"] }).expect(404);
+    // Malformed.
+    await report("conv-ui", { errors: ["e"] }).expect(400);
+    await report("conv-ui", { messageId: "", errors: ["e"] }).expect(400);
+    await report("conv-ui", { messageId: latest }).expect(400);
+    await report("conv-ui", { messageId: latest, errors: "boom" }).expect(400);
+    await request(app).post("/api/conversations/conv-ui/ui-report").send({ messageId: latest, errors: ["e"] }).expect(401);
+
+    // None of them queued anything, in either conversation.
+    const before = H.requests.length;
+    await turn();
+    await turn({}, "conv-ui-2");
+    expect(H.requests[before].inlineUiRenderErrors).toBeUndefined();
+    expect(H.requests[before + 1].inlineUiRenderErrors).toBeUndefined();
+  });
+
+  it("drops a report whose answer is gone (다시 생성), cleared by the browser, or whose conversation was deleted", async () => {
+    const { owner, turn, lastAnswer, report } = await setupUi("uirepdrop");
+    await turn({ message: "첫 질문" });
+    await turn({ message: "둘째 질문" });
+
+    // The user regenerates the reported answer: the session the new turn
+    // continues does not end with it, so there is no "previous answer" to fix.
+    await report("conv-ui", { messageId: lastAnswer(), errors: ["dropped with its answer"] }).expect(204);
+    await turn({ message: "", regenerate: true });
+    expect(H.requests[2].inlineUiRenderErrors).toBeUndefined();
+    await turn();
+    expect(H.requests[3].inlineUiRenderErrors).toBeUndefined();
+
+    // An empty list means it draws fine now → the waiting report is cleared.
+    await report("conv-ui", { messageId: lastAnswer(), errors: ["boom"] }).expect(204);
+    await report("conv-ui", { messageId: lastAnswer(), errors: [] }).expect(204);
+    await turn();
+    expect(H.requests[4].inlineUiRenderErrors).toBeUndefined();
+
+    // Deleting the conversation forgets its report (the id may be reused by the client).
+    await report("conv-ui", { messageId: lastAnswer(), errors: ["last"] }).expect(204);
+    await owner.delete("/api/conversations/conv-ui").expect(200);
+    await turn();
+    expect(H.requests[5].inlineUiRenderErrors).toBeUndefined();
   });
 });
 

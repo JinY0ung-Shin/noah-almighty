@@ -677,11 +677,13 @@ export interface MessageAttachment {
   /**
    * `team_brain` = a team-brain confirmation card (id = the proposal id; no file
    * behind it — the card reads its live state from /api/team-brain/cards/:id).
-   * `widget` = a canvas `widget` shown INLINE in the answer (id = the canvas
-   * artifact id; no file behind it either — the bubble draws the canvas's
-   * current content from the canvas tables, `/api/messages` → `canvases`). The
-   * id is whatever `canvasId` the avatar chose, so it is NEVER a file name:
-   * every path that resolves an attachment to bytes must check `kind` first.
+   * `widget` = RETIRED (2026-11-11), never written any more: the card of a
+   * canvas `widget` shown inline in the answer (id = the canvas artifact id, no
+   * file behind it). Interactive UI is now written in the answer TEXT (inline
+   * UI) and attaches nothing. The kind stays in the type only so a row stored
+   * by an unreleased build still reads; its id was whatever `canvasId` the
+   * avatar chose, so it is NEVER a file name — every path that resolves an
+   * attachment to bytes checks `kind` first.
    */
   kind: "image" | "file" | "team_brain" | "widget";
   /** MIME type: one of {@link ImageMediaType} for images; document MIME for files. */
@@ -1009,9 +1011,10 @@ export type CanvasContentType =
   | "html"
   | "mermaid"
   | "vega"
-  // An interactive widget (declarative tags + a sandboxed expression language,
-  // `src/shared/widget`): recomputes in the client as the user changes inputs,
-  // without a model round trip. Experimental (`canvasWidget`).
+  // RETIRED (2026-11-11): `mcp__canvas__show` refuses it and nothing writes it
+  // any more — interactive UI is written in the answer text (inline UI,
+  // `src/shared/widget`). Kept in the type only so a canvas row stored by an
+  // unreleased build still reads; the name is reserved.
   | "widget";
 
 /**
@@ -1594,13 +1597,25 @@ export interface AgentRequest {
    */
   canvasEnabled?: boolean;
   /**
-   * The run's canvas accepts the experimental inline `widget` content type (the
-   * canvas is registered AND the avatar owner turned `canvasWidget` on —
-   * runCapabilities' `widgetEnabled`, the boolean the `show` handler refuses
-   * on). Drives ONE standing sentence of the canvas guidance; frozen with the
-   * prompt, so `describe_system` is what says whether it is still on.
+   * This run's ANSWER TEXT may carry inline UI: tags the viewer's app draws in
+   * place while the answer streams (`src/shared/widget/guide.ts`). Decided by
+   * the capability plan with `inlineUiAllowed` (`agent/ownerState.ts`): true
+   * only for an interactive chat turn a person is watching — never `headless`,
+   * `externalTaskApi` or an avatar consultation — for every viewer class, and
+   * independent of the canvas tool group. Drives the standing `# Inline UI`
+   * section of the (frozen) prompt, describe_system's inline-UI line and the
+   * turn preamble's render report / answer-format note.
    */
-  canvasWidgetEnabled?: boolean;
+  inlineUiEnabled?: boolean;
+  /**
+   * What the viewer's browser could not draw of the inline UI in this
+   * conversation's LATEST answer (`POST /api/conversations/:id/ui-report`),
+   * CONSUMED by the host when it started this turn — so the lines ride exactly
+   * one turn's input (`buildPiTurnPreamble`; never the frozen prompt), and only
+   * on a run with `inlineUiEnabled`. Browser-reported DATA about avatar-written
+   * content, never instructions. Absent = nothing to report.
+   */
+  inlineUiRenderErrors?: string[];
   /**
    * Canvas render errors the viewer's browser reported since this conversation's
    * last turn (`POST /api/canvases/:canvasId/render-report`), CONSUMED by the

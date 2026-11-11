@@ -54,7 +54,6 @@ import {
 import { gitRepoClonePath, gitRepoContextFromRecord } from "../src/server/gitRepos.js";
 import { getWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildCanvasTools, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES, MAX_CANVAS_CONTENT_CHARS } from "../src/server/agent/canvasTools.js";
-import { CANVAS_WIDGET_MANUAL_EXAMPLES } from "../src/server/agent/systemManual.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, CanvasRequest, CanvasResult } from "../src/server/agent/events.js";
 import {
@@ -2141,25 +2140,53 @@ describe("system tools (avatar system management)", () => {
     ).content[0].text ?? "";
     expect(on).toContain("Visual canvas (mcp__canvas__show): available");
     expect(on).toContain("use AskUserQuestion instead of a canvas");
-    // The experimental `widget` type is reported with the SAME boolean the
-    // `show` handler refuses on (runCapabilities' widgetEnabled): off unless
-    // the avatar owner turned 캔버스 위젯 on.
-    expect(on).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): DISABLED");
-    expect(on).toContain("Settings → 실험 기능, so `show` refuses it; use 'vega' or 'markdown'");
-    const widgetOn = (
-      await callTool(
-        buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, canvasEnabled: true, canvasWidgetEnabled: true }),
-        "describe_system",
-        {},
-      )
-    ).content[0].text ?? "";
-    expect(widgetOn).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): ENABLED for this avatar");
-    expect(widgetOn).toContain("read manual topic `canvas-widget` before writing one");
+    // The canvas is a side-panel artifact: the line names its types and sends
+    // what the user only looks at or operates to inline UI. No `widget` type.
+    expect(on).toContain("a SIDE-PANEL artifact worked on with the user");
+    expect(on).toContain("contentType markdown | vega | mermaid | svg | html.");
+    expect(on).toContain("A chart, table or calculator the user only needs to see or operate in the answer is inline UI (next line), not a canvas");
+    expect(on).not.toContain("widget");
+    expect(on).not.toContain("실험 기능, so `show` refuses");
 
     const off = (await callTool(toolsFor(s), "describe_system", {})).content[0].text ?? "";
     expect(off).toContain("Visual canvas (mcp__canvas__show): unavailable in this run");
-    // No canvas this run → no widget line either (nothing to offer or refuse).
-    expect(off).not.toContain("contentType 'widget'");
+    expect(off).not.toContain("widget");
+  });
+
+  it("describe_system reports inline UI for every viewer class: available, or why not (consultation > task API > unattended)", async () => {
+    // Mirrors runCapabilities' inlineUiActive: the live surface of the prompt's
+    // standing `# Inline UI` section. The line sits right under the canvas line.
+    const s = setup("st-inline-ui");
+    const line = async (ctx: Partial<SystemToolsContext> & { viewerIsOwner: boolean }) => {
+      const body = (await callTool(buildSystemTools(s.store, { ...s.baseCtx, ...ctx }), "describe_system", {})).content[0].text ?? "";
+      const lines = body.split("\n");
+      const at = lines.findIndex((l) => l.startsWith("- Inline UI: "));
+      expect(at, body).toBeGreaterThan(0);
+      expect(lines[at - 1]!.startsWith("- Visual canvas (mcp__canvas__show): ")).toBe(true);
+      expect(lines.filter((l) => l.startsWith("- Inline UI: "))).toHaveLength(1);
+      return lines[at]!;
+    };
+    const AVAILABLE =
+      "- Inline UI: AVAILABLE in this run — write UI tags directly in your ANSWER TEXT (a chart, a table, a dashboard of figures, a calculator or what-if, a quiz, choices to pick from) and the user's app draws them in place while the answer streams; no tool call, nothing opens in the side panel. " +
+      'The grammar is the "Inline UI" section of your instructions; the full reference — and the whole grammar when your instructions have no such section — is mcp__system__read_manual topic `inline-ui`';
+    const not = (reason: string) =>
+      `- Inline UI: NOT available in this run — ${reason}. Answer in plain Markdown and write no UI tags, even where your instructions describe inline UI: they would reach the reader as raw text`;
+    for (const viewerIsOwner of [true, false]) {
+      expect(await line({ viewerIsOwner, inlineUiEnabled: true })).toBe(AVAILABLE);
+      // Independent of the canvas.
+      expect(await line({ viewerIsOwner, inlineUiEnabled: true, canvasEnabled: true })).toBe(AVAILABLE);
+      expect(await line({ viewerIsOwner, inlineUiEnabled: false, headless: true })).toBe(
+        not("this is an unattended run, so nobody is watching the answer being written in the app"),
+      );
+      expect(await line({ viewerIsOwner, inlineUiEnabled: false, externalTaskApi: true })).toBe(
+        not("an external system submitted this turn and reads the answer as plain text"),
+      );
+      expect(await line({ viewerIsOwner, inlineUiEnabled: false, headless: true, avatarConsultation: true })).toBe(
+        not("this is an avatar-to-avatar consultation, so the answer goes to another avatar as text, not to a person's screen"),
+      );
+      // A context that never stamped it reads as off, never as a promise.
+      expect(await line({ viewerIsOwner })).toBe(not("this run is not an interactive chat turn"));
+    }
   });
 
   it("describe_system reports deck-generation availability honestly", async () => {
@@ -3944,38 +3971,6 @@ describe("canvas tools (#50)", () => {
     });
     expect(fixed.isError).toBeFalsy();
     expect(called).toBe(true);
-  });
-
-  it("canvas widget, real checker: a manual example is shown, a broken source comes back as an error (nothing shown)", async () => {
-    // tests/agent-canvas-widget.test.ts scripts the checker; this one runs the
-    // real src/shared/widget/check.ts through the handler.
-    const shown: CanvasRequest[] = [];
-    const tools = buildCanvasTools({
-      emitCanvas: async (req): Promise<CanvasResult> => {
-        shown.push(req);
-        return { behavior: "shown" };
-      },
-      widgetEnabled: true,
-    });
-    const ok = await callTool(tools, "show", {
-      title: "대출 계산기",
-      content: CANVAS_WIDGET_MANUAL_EXAMPLES.calculator,
-      contentType: "widget",
-    });
-    expect(ok.isError, ok.content[0].text).toBeFalsy();
-    expect(shown).toHaveLength(1);
-    expect(shown[0]!.interaction).toBe("async"); // the example ends with a <submit>
-
-    for (const broken of [
-      '{@state n = 1}\n<slider label="n" value={n onChange={setN} />', // unterminated expression
-      "{@state n = 1}\n<div>{n}</div>", // not a widget component
-      '<stat label="x" value={missing * 2} />', // undefined identifier
-    ]) {
-      const res = await callTool(tools, "show", { title: "t", content: broken, contentType: "widget" });
-      expect(res.isError, broken).toBe(true);
-      expect(res.content[0].text).toContain("Widget source error — the canvas was NOT shown");
-    }
-    expect(shown).toHaveLength(1);
   });
 
   it("never awaits input: declared controls render async and the submission is the next message", async () => {

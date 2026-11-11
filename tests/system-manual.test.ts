@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  CANVAS_WIDGET_MANUAL_EXAMPLES,
+  INLINE_UI_MANUAL_EXAMPLES,
   SYSTEM_MANUAL_TOPICS,
   readSystemManual,
   systemManualIndex,
@@ -9,6 +9,7 @@ import { checkWidget } from "../src/shared/widget/check.js";
 import { WIDGET_ICON_NAMES } from "../src/shared/widget/icons.js";
 import { widgetComponentReference } from "../src/shared/widget/spec.js";
 import { svgReference } from "../src/shared/widget/svg.js";
+import { INLINE_UI_REPORT_TITLE } from "../src/shared/widget/guide.js";
 import { buildSystemTools, SYSTEM_TOOL_NAMES, type SystemToolsContext } from "../src/server/agent/systemTools.js";
 import type { Store } from "../src/server/store.js";
 import { callTool } from "./helpers.js";
@@ -93,17 +94,54 @@ describe("official system manual", () => {
     expect(page).toContain("(`wait` is ignored)");
     expect(page).not.toContain("BLOCKS until the user submits");
     expect(page).not.toContain("pass `wait:false`");
-    // …and it routes to the widget reference instead of restating the grammar.
-    expect(page).toContain("`markdown` | `vega` | `mermaid` | `svg` | `html` | `widget`");
-    expect(page).toContain("read topic `canvas-widget` BEFORE writing one");
+    // A side-panel artifact with five content types; what the user only sees
+    // or operates is inline UI — routed to its own topic, not restated here.
+    expect(page).toContain("(`markdown` | `vega` | `mermaid` | `svg` | `html`).");
+    expect(page).toContain("Use it for an ARTIFACT you work out WITH the user in the side panel");
+    expect(page).toContain(
+      "A chart, table, calculator or dashboard the user only needs to SEE or operate in the answer is NOT a canvas: write it in your answer text as inline UI (topic `inline-ui`; describe_system says whether this run has it).",
+    );
+    expect(page).toContain("The former contentType `widget` is retired — `show` refuses it");
+    expect(page).toContain("For a side-panel DATA CHART use `vega`");
+    for (const stale of ["| `widget`", "canvas-widget", "EXPERIMENTAL", "실험 기능", "For something the user OPERATES"]) {
+      expect(page).not.toContain(stale);
+    }
   });
 
-  it("documents the experimental canvas widget: grammar, submit, limits, and examples the checker accepts", () => {
-    expect(readSystemManual().text).toContain("- canvas-widget: Canvas widget reference (experimental)");
-    const page = readSystemManual("canvas-widget").text;
+  it("retires topic `canvas-widget`: not in the index, never a page, and a redirect to `inline-ui` instead of 'unknown topic'", () => {
+    const ids: string[] = SYSTEM_MANUAL_TOPICS.map((topic) => topic.id);
+    expect(ids).not.toContain("canvas-widget");
+    expect(ids).toContain("inline-ui");
+    expect(readSystemManual().text).not.toContain("canvas-widget");
+    const retired = readSystemManual("canvas-widget");
+    expect(retired.isError).toBe(true);
+    expect(retired.text).toBe(
+      "Manual topic `canvas-widget` is retired: interactive UI is no longer a canvas content type (`mcp__canvas__show` refuses contentType 'widget'). " +
+        "It is now written directly in your answer text as inline UI, with no tool call — call read_manual with topic `inline-ui` for the guide that replaced it.",
+    );
+    expect(retired.text).not.toContain("Unknown manual topic");
+    // An id that merely looks like one is still unknown (no prototype lookups).
+    for (const unknown of ["canvas-widgets", "constructor", "toString", "__proto__"]) {
+      expect(readSystemManual(unknown).text.startsWith("Unknown manual topic.")).toBe(true);
+    }
+  });
+
+  it("documents inline UI: where to write it, grammar, send/submit, limits, leniency, and examples the checker accepts", () => {
+    expect(readSystemManual().text).toContain("- inline-ui: Inline UI reference");
+    const page = readSystemManual("inline-ui").text;
+    // It is the ANSWER TEXT, not a tool and not the side panel.
+    expect(page).toContain("**Inline UI** is UI you write directly in your ANSWER TEXT.");
+    expect(page).toContain("There is no tool to call and nothing opens in the side panel.");
+    expect(page).toContain("you are NOT called and never see the values the user sets");
     // Availability is a runtime fact — the manual defers to describe_system.
-    expect(page).toContain("describe_system is authoritative");
-    expect(page).toContain("Settings → 실험 기능 (캔버스 위젯)");
+    expect(page).toContain("Interactive chat turns only — a routine, an external-task turn or a consultation answers in plain Markdown; describe_system is authoritative");
+    expect(page).toContain("Answer a plain question in plain Markdown; never decorate, and do not repeat in prose what the UI shows.");
+    expect(page).toContain("is a canvas: topic `canvas-operations`");
+    // Where and how: final answer, own line at top level, Markdown between tags, never in a fence.
+    expect(page).toContain("In your FINAL answer text. Text written before a tool call is folded into the reasoning view, where tags are not drawn.");
+    expect(page).toContain("A tag starts on its own line at the TOP LEVEL of the answer, indented at most 3 spaces");
+    expect(page).toContain("Never inside a fenced code block");
+    expect(page).toContain("Top-level text between tags is ordinary Markdown, and STATIC");
     // Document structure + the two things that only work in a handler.
     for (const piece of ["{@state name = expr}", "{@const name = expr}", "{#each list as item, index}", "{#if cond}", "TOP LEVEL only"]) {
       expect(page).toContain(piece);
@@ -112,42 +150,61 @@ describe("official system manual", () => {
     expect(page).toContain("no `Math.random`");
     // The component list is the shared spec's own text, never a hand copy.
     expect(page).toContain(`## Components\n${widgetComponentReference()}`);
-    // It is drawn INLINE in the answer, not in the side panel — and the avatar is told to write around it.
-    expect(page).toContain("drawn INLINE in your answer, at the point where you call the tool — not in the side panel");
-    expect(page).toContain("do not repeat in prose what it shows");
-    expect(page).toContain("Answer a plain question in plain text; never decorate.");
-    // The TWO ways back to the avatar, with their caps: structured values, or a follow-up chat message.
+    // The TWO ways back to the avatar, each an ordinary next message.
     expect(page).toContain("Only two things come back, each as the user's NEXT message");
-    expect(page).toContain("`<submit values={{ months, rate }}>Proceed</submit>` — STRUCTURED values");
-    expect(page).toContain("≤ 20 keys");
-    expect(page).toContain("≤ 8,000 characters");
     expect(page).toContain('`<button send="Compare the two plans in a table">Compare plans</button>` — a natural FOLLOW-UP');
     expect(page).toContain("The user sees the text before pressing; 1–2,000 characters");
     expect(page).toContain("must not start with `/`");
+    expect(page).toContain(
+      '`<submit values={{ months, rate }}>Proceed</submit>` — STRUCTURED values. Posts the label followed by one `- key: value` line per value ("Proceed", "- months: 12", "- rate: 4.5").',
+    );
+    expect(page).toContain("≤ 20 keys");
+    expect(page).toContain("≤ 8,000 characters");
     // Links open; images are this conversation's own, by the URL a hidden show_file returns.
     expect(page).toContain("Links open in a new tab and send you nothing: `<button href>`, `<link href>`, `[text](https://…)` in text — absolute http(s) only.");
     expect(page).toContain("publish the file with `mcp__file_output__show_file` + `hidden:true` and pass the returned URL unchanged");
     expect(page).toContain("remote and `data:` URLs are refused");
-    // Nothing of the earlier, stricter shape is left to mislead.
-    for (const stale of ["there is no free-text send", "no link opening", "links do not open", "It is the ONLY way anything returns to you", "cannot load remote data or images"]) {
-      expect(page).not.toContain(stale);
+    // Runtime budgets stay; state is the browser's.
+    expect(page).toContain("≤ 50 state variables");
+    expect(page).toContain("50,000 evaluation steps");
+    expect(page).toContain("a table ≤ 500 rows");
+    expect(page).toContain("kept in THEIR browser only");
+    // Leniency + the render report, by the shared title.
+    expect(page).toContain("Nothing checks your answer before it is drawn. A tag or prop that does not exist is dropped where it stands and the rest still draws");
+    expect(page).toContain(`told to you at the start of your next turn ("${INLINE_UI_REPORT_TITLE}")`);
+    // Nothing of the canvas it used to be is left to mislead.
+    for (const stale of [
+      "mcp__canvas__show",
+      "canvasId",
+      "`controls`",
+      "editable",
+      "Content ≤ 20,000 characters",
+      "EXPERIMENTAL",
+      "실험 기능",
+      "widget",
+      "references this canvas",
+      "Canvas render report",
+      "call show again",
+    ]) {
+      expect(page, stale).not.toContain(stale);
     }
-    // The spec's own reference documents the three revived props (so the prose above is not the only place).
+    // The spec's own reference documents the declared-action props and the two chart forms.
     expect(widgetComponentReference()).toContain("send: text");
     expect(widgetComponentReference()).toContain("<image />");
     expect(widgetComponentReference()).toContain("<link>");
-    expect(page).toContain("`controls` and `editable` cannot be combined with a widget");
-    expect(page).toContain("kept in THEIR browser only");
-    // A manual example the tool would reject teaches a broken grammar: every
-    // example goes through the SAME checker `mcp__canvas__show` runs.
-    for (const [name, source] of Object.entries(CANVAS_WIDGET_MANUAL_EXAMPLES)) {
+    expect(widgetComponentReference()).toContain("type: bar|line|area|pie|donut");
+    // A manual example that does not parse teaches a broken grammar: every
+    // example goes through the static checker.
+    for (const [name, source] of Object.entries(INLINE_UI_MANUAL_EXAMPLES) as [string, string][]) {
       expect(page).toContain(source);
       const verdict = checkWidget(source);
       expect(verdict, `${name}: ${verdict.ok ? "" : verdict.error}`).toMatchObject({ ok: true });
     }
-    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
-    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
-    expect(checkWidget(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge)).toEqual({ ok: true, submits: false });
+    expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
+    expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
+    expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.gauge)).toEqual({ ok: true, submits: false });
+    // Examples are written the way an answer writes them: not inside a code fence.
+    expect(page).not.toContain("```");
     // The sortable table, the icons and the state-bound <svg>: each is in the generated reference
     // (the spec's own text) and shown once in an example — and the page still fits its cap.
     expect(page).toContain("sortable: bool (headers sort on click — the viewer's own view; your rows and state are untouched)");
@@ -156,24 +213,32 @@ describe("official system manual", () => {
     expect(page).toContain("NOT available: style class href events font-family, <style> <script> <use> <image> <a> <foreignObject>, filters, animation");
     expect(page).toContain("colours are default muted accent success warning danger info surface subtle line");
     expect(page).toContain("## Example: filtered sortable table, chart, icon");
-    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable).toContain("<table sortable columns=");
-    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable).toContain('<icon name="activity" color="muted" />');
+    expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).toContain("<table sortable columns=");
+    expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).toContain('<icon name="activity" color="muted" />');
+    // The chart example uses the simple form (data + type + xKey + series), not a Vega-Lite spec.
+    expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).toContain(
+      '<chart type="bar" data={shown} xKey="month" series={[{ key: "sales", label: "Sales" }, { key: "cost", label: "Cost" }]} unit="만원"',
+    );
+    expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).not.toContain("spec={");
     expect(page).toContain("## Example: svg gauge bound to a slider");
-    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge).toContain('<svg viewBox="0 0 200 110" label="Progress">');
-    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.gauge).toContain("x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)}");
+    expect(INLINE_UI_MANUAL_EXAMPLES.gauge).toContain('<svg viewBox="0 0 200 110" label="Progress">');
+    expect(INLINE_UI_MANUAL_EXAMPLES.gauge).toContain("x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)}");
     expect(page).toContain("a filterable or sortable table, a gauge or chart driven by sliders");
     expect(page.length).toBeLessThan(16000);
     // One example shows the follow-up button next to the structured submit.
-    expect(CANVAS_WIDGET_MANUAL_EXAMPLES.calculator).toContain('<button send="금리를 더 낮출 방법을 알려줘" variant="ghost">');
-    // The user-facing product page mentions the feature, where it is enabled and where it appears.
+    expect(INLINE_UI_MANUAL_EXAMPLES.calculator).toContain('<button send="금리를 더 낮출 방법을 알려줘" variant="ghost">');
+    expect(INLINE_UI_MANUAL_EXAMPLES.calculator).toContain("<submit values={{ amount, months, rate }}>");
+    // The user-facing product page: always on, where it appears, what reaches the avatar, where it is off.
     const product = readSystemManual("files-canvas").text;
-    expect(product).toContain("experimental 캔버스 위젯 feature on (설정 → 실험 기능");
-    expect(product).toContain("appears inside its answer (not in the side panel)");
+    expect(product).toContain("## Inline UI in an answer");
+    expect(product).toContain("There is no setting to turn on and nothing opens in the side panel");
+    expect(product).toContain("a chart or calculator the user just looks at or operates is inline UI, not a canvas (avatar reference: topic `inline-ui`)");
+    expect(product).toContain("a submit button (its label and the chosen values become the user's next message)");
     expect(product).toContain("a button that posts a follow-up chat message, whose text is shown before it is pressed");
-    // canvas-operations routes to it with the same placement fact.
-    const operations = readSystemManual("canvas-operations").text;
-    expect(operations).toContain("it is drawn INLINE in your answer, where you call the tool — not in the side panel");
-    expect(operations).toContain("a `<button send>` posts the user's next chat message");
+    expect(product).toContain("Routines, external Task API runs and avatar consultations answer in plain text");
+    for (const stale of ["캔버스 위젯", "실험 기능", "experimental"]) {
+      expect(product).not.toContain(stale);
+    }
   });
 
   it("offers a compact index and complete individually addressable guides", () => {

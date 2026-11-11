@@ -314,17 +314,17 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   its DOM (the draw.io viewer has no `destroy()`): it paints only into a body that has a width (hidden tab
   or collapsed panel = 0) and its ResizeObserver repaints (debounced) when the width changes —
   `.canvas-body` reserves its scrollbar gutter, so a tall diagram's scrollbar cannot flip that width.
-- **A `widget` canvas is drawn INLINE in the bubble by the same `CanvasTab`** (`inline` prop, mounted by
-  `widget/InlineWidget.svelte` from `attachmentCards` at the attachment's anchor; `lib/sidePanel.ts` leaves an
-  inline widget out of the tab strip). A sortable `<table>` keeps its sort in `WidgetTable`'s own state (view
-  state — not widget state, not persisted, not submitted) and `<svg>` is drawn by `WidgetSvg` through
-  `lib/widgetSvg.ts` into a shadow root that is updated in place. Its state stays in `CanvasTab`'s script, next to `ctrlVals` — the inline
-  card and the fullscreen stage are two `WidgetView`s over the same values. The card re-mounts when the live
-  bubble becomes the stored one at turn end (values come back from localStorage; focus inside it is lost). The view model is
-  rebuilt by `lib/widgetView.ts` on every state change and the widget components only draw it; the library
-  and components are lazy-loaded with the first widget (like mermaid/Vega). `.canvas-content` drops its `.md`
-  class for a widget so prose rules (`.md p`) do not style widget elements; `.wg-*` lives in
-  `styles/25-canvas-widget.css`. Mechanics and the trust boundary: `chat-sse-media.md` § Visual canvas.
+- **Inline UI is not a canvas: `components/widget/AnswerUi.svelte` draws an answer that holds UI tags, in
+  the bubble.** ChatView decides with `containsInlineUi` (`src/shared/widget/detect.ts`, imports nothing)
+  and lazy-loads the component, parser and interpreter on the first such answer (like mermaid/Vega); the
+  live bubble and the stored message are two instances, and what the viewer set mid-stream is handed from
+  one to the other (`lib/widgetState.ts`). Its state is per message, next to nothing else: the side panel,
+  `CanvasTab` and the canvas tables are not involved. A sortable `<table>` keeps its sort in `WidgetTable`'s
+  own state (view state — not UI state, not persisted, not sent) and `<svg>` is drawn by `WidgetSvg` through
+  `lib/widgetSvg.ts` into a shadow root that is updated in place. The view model is rebuilt by
+  `lib/widgetView.ts` and the components only draw it. The UI blocks sit OUTSIDE the answer's `.md`
+  containers (`.answer-ui`), so prose rules (`.md p`) do not style them; `.wg-*` lives in
+  `styles/25-canvas-widget.css`. Mechanics and the trust boundary: `chat-sse-media.md` § Inline UI.
 - **Selection** = `pane.sideTab`; `null` means the default (`resolveSideTab`: the latest canvas still
   `pending`, else the latest canvas, else the latest file; answering or skipping a default-shown ask pins
   it first, so the panel does not jump once `pending` clears). **What the avatar shows takes the panel while the pane FOLLOWS** (`sideFollow` undefined/true);

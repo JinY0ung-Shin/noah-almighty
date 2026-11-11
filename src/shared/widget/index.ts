@@ -1,7 +1,8 @@
 /**
- * Canvas `widget` — the shared library (server static check + client runtime).
+ * Inline UI — the shared library (prompt/manual text + static check + client runtime).
+ * The directory keeps its name (`widget`) from when this was a canvas content type.
  *
- * Server:  `checkWidget(source)` and `widgetComponentReference()`.
+ * Server:  `inlineUiPromptSpec()`, `widgetComponentReference()` and `checkWidget(source)`.
  * Client:  `parseWidget` → `restoreState`/`initialState` → `createRootEnv` →
  *          walk `doc.nodes` with `resolveProps` / `childScope` / `eachScopes` /
  *          `pickBranch` / `interpolate`, and `invokeHandler` for events.
@@ -9,11 +10,15 @@
  * The parser and interpreter are ported from mireiffe/mirineereum
  * (src/lib/genui @ 0e469c4) with the owner's permission; see each file's header.
  */
-export { checkWidget, MAX_WIDGET_NODES, MAX_WIDGET_STATES, type WidgetCheck } from "./check.js";
+export { checkWidget, widgetProblems, MAX_WIDGET_NODES, MAX_WIDGET_STATES, type WidgetCheck } from "./check.js";
+export { MAX_CHART_ROWS, MAX_CHART_SERIES, simpleChartSpec, type SimpleChart } from "./chart.js";
+export { INLINE_UI_TAG_NAMES, containsInlineUi, inlineUiPlainText } from "./detect.js";
+export { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, inlineUiPromptSpec, widgetComponentBrief } from "./guide.js";
 export {
   WIDGET_COMPONENTS,
   WIDGET_TAGS,
   componentSpec,
+  emptyValue,
   normalizeProps,
   widgetComponentReference,
   MAX_OPTIONS,
@@ -29,8 +34,11 @@ export {
   type WidgetOption,
 } from "./spec.js";
 export {
+  parseAnswer,
   parseWidget,
   lineCol,
+  MAX_ANSWER_SOURCE_CHARS,
+  type AnswerDoc,
   setterName,
   MAX_TEMPLATE_NESTING,
   MAX_WIDGET_SOURCE_CHARS,

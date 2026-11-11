@@ -12,7 +12,8 @@
  *     `demo <name>` replays one (`localScenarios.ts`) through the run's
  *     `AgentEvents`, in the order and shapes the real runner emits them
  *     (`pi/runPiAgent.ts` + `pi/eventAdapter.ts`); a turn that is a canvas
- *     submission echoes the values it received.
+ *     submission echoes the values it received. `demo ui` is an answer whose
+ *     text carries inline UI — no event of its own, the client draws the tags.
  *
  * Reachability: `runAgentStream` (`agent/index.ts`) is the only caller and it
  * branches on `config.agentRuntime === "local"` — `parseRuntime` (`config.ts`)
@@ -280,11 +281,8 @@ async function runDemo(
     }
   };
 
-  // The canvas tool's own emit (`canvasTools.ts`): never blocking, controls or a
-  // widget `<submit>` make it "async". It goes straight to the events sink, so
-  // — unlike the real tool, whose handler refuses `widget` unless the avatar
-  // owner turned the experimental `canvasWidget` feature on — a demo widget
-  // shows whatever that setting is.
+  // The canvas tool's own emit (`canvasTools.ts`): never blocking, controls
+  // make it "async".
   const showCanvas = async (canvas: LocalDemoCanvas): Promise<void> => {
     if (!events.onCanvas) {
       state.canvasSinkMissing = true;
@@ -302,10 +300,8 @@ async function runDemo(
       contentType: canvas.contentType,
       controls: controls.length > 0 ? controls : undefined,
       awaitInput: false,
-      interaction: controls.length > 0 || canvas.submits ? "async" : undefined,
+      interaction: controls.length > 0 ? "async" : undefined,
       editable: Boolean(canvas.editable),
-      // A widget is drawn inline in the answer where the tool ran: runCapabilities' emit stamps the text anchor.
-      ...(canvas.contentType === "widget" ? { anchor: turn.anchor() } : {}),
     };
     const result = await events.onCanvas(canvasRequest);
     turn.checkAbort();

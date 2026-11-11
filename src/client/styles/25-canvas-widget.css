@@ -1,9 +1,9 @@
-/* Canvas `widget` (components/widget/*): an interactive artifact the avatar
-   DECLARES and the client draws from its own components. Every color here is a
-   design token — a widget supplies token NAMES, never CSS — and the tone
+/* Inline UI (components/widget/*): the interactive layout an avatar DECLARES
+   in its answer and the client draws from its own components. Every color here
+   is a design token — the UI supplies token NAMES, never CSS — and the tone
    variables (--wg-tone*) are set inline from those tokens (lib/widgetStyle.ts).
    Controls reuse the app's own classes (.btn, .field, .seg-control, .toggle,
-   .canvas-slider, .stat-card) so a widget looks like the rest of Noah. */
+   .canvas-slider, .stat-card) so it looks like the rest of Noah. */
 .wg-root {
   display: flex;
   flex-direction: column;
@@ -353,17 +353,7 @@
   padding: 0 var(--s-3) var(--s-3);
 }
 
-/* Fullscreen: a widget is a document, not a drawing — give it a readable
-   column on the app's own surface instead of floating on the scrim. */
-.canvas-fs-content.is-widget {
-  width: min(760px, 100%);
-  padding: var(--s-4);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  background: var(--bg);
-}
-
-/* Links and images of a widget */
+/* Links and images */
 .wg-link {
   color: var(--accent);
   text-decoration: underline;
@@ -383,11 +373,6 @@
   display: block;
   max-width: 100%;
   height: auto;
-}
-.wg-md a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 /* Icons: the app's own line icons, in the text colour unless a token says otherwise. */
@@ -443,48 +428,25 @@
   flex: 0 1 auto;
 }
 
-/* ---- A widget in the chat bubble (components/widget/InlineWidget.svelte) ----
-   The same card the side panel draws for a canvas (CanvasTab, `inline`), as wide
-   as the bubble. Its tools stay out of the way until the card is hovered or
-   focused — on a device that can hover; a touch screen always shows them. */
-.canvas-card.canvas-inline {
-  flex: 1 1 100%;
-  min-width: 0;
-  max-width: 100%;
-  border-radius: var(--r-md);
+/* ---- Inline UI in an answer (components/widget/AnswerUi.svelte) ----
+   The UI blocks sit in the bubble between the answer's Markdown runs, as wide
+   as the bubble, with the same air around them a paragraph has. */
+.bubble > .answer-ui {
+  margin: var(--s-3) 0;
   font-size: var(--t-base);
   line-height: 1.5;
+  white-space: normal;
 }
-.canvas-inline .canvas-title {
-  color: var(--muted);
-  font-size: var(--t-sm);
+.bubble > .answer-ui:first-child {
+  margin-top: 0;
 }
-@media (hover: hover) {
-  .canvas-inline .canvas-toolbar {
-    opacity: 0;
-    transition: opacity 0.15s var(--ease-out);
-  }
-  .canvas-inline:hover .canvas-toolbar,
-  .canvas-inline:focus-within .canvas-toolbar {
-    opacity: 1;
-  }
+.bubble > .answer-ui:last-child {
+  margin-bottom: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .canvas-inline .canvas-toolbar {
-    transition: none;
-  }
+.bubble > .wg-status:empty {
+  display: none;
 }
-/* Where a widget WAS (an earlier answer's copy, a deleted canvas), in one quiet line. */
-.widget-slot-note {
-  flex: 1 1 100%;
-  margin: 0;
-  padding: var(--s-2) var(--s-3);
-  border: 1px dashed var(--line);
-  border-radius: var(--r-sm);
-  color: var(--muted);
-  font-size: var(--t-sm);
-}
-/* Where a widget is ABOUT to be: the avatar is still building it. */
+/* Where a component is ABOUT to be: its tag is still being written. */
 .widget-slot-pending {
   flex: 1 1 100%;
   display: flex;
@@ -522,7 +484,4 @@
     animation: none;
   }
 }
-/* A little air between the answer's text and the widget it introduces. */
-.bubble > .md + .msg-images:has(> .canvas-inline) {
-  margin-top: var(--s-2);
-}
+

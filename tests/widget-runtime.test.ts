@@ -456,7 +456,7 @@ describe("widget runtime: what a render may produce", () => {
   it("nested loops cannot multiply past the output budget", () => {
     // 1,000,000 elements (300 ms, +237 MB) without the budget
     const r = blocks("<col>\n{#each 1000}{#each 1000}<divider/>{/each}{/each}\n</col>");
-    expect(r.errors).toEqual(["WidgetBudgetError: the widget renders too much (output budget exceeded)"]);
+    expect(r.errors).toEqual(["WidgetBudgetError: too much is rendered (output budget exceeded)"]);
     expect(r.els).toBeLessThanOrEqual(MAX_OUT_ELEMENTS);
     expect(r.ms).toBeLessThan(1000);
     // static text repeated by a loop counts too, with no component in the body

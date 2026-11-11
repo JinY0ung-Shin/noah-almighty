@@ -14,6 +14,8 @@ import {
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WIDGET_RETIRED_ERROR } from "../src/server/agent/canvasTools.js";
+import { inlineUiPromptSpec } from "../src/shared/widget/guide.js";
 import { PI_EFFORT_CLAMP_SENTENCE, buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { piEphemeralRunKey, piRunPrincipal, piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
@@ -364,11 +366,10 @@ describe("run capability plan", () => {
     expect(run.allowed).toContain("mcp__canvas__show");
   });
 
-  it("gates the experimental canvas `widget` on the AVATAR OWNER's flag, on both surfaces and in the handler", async () => {
-    const WIDGET_NUDGE = "The experimental `widget` content type was ON for this avatar when this conversation started: use it UNPROMPTED";
+  it("inline UI: on for every interactive chat turn (any viewer, any tool group), off for headless / task-API / consultation runs — on both surfaces and in the turn preamble", async () => {
+    const SECTION = inlineUiPromptSpec();
     const env = setup();
     const onCanvas = vi.fn(async (_request: { contentType: string }) => ({ behavior: "shown" as const }));
-    const WIDGET = '{@state n = 1}\n<slider label="n" value={n} onChange={setN} min={1} max={9} />\n<stat label="double" value={n * 2} />';
     // One call per server of a planned run, through real MCP (zod included).
     const call = async (request: AgentRequest, server: "canvas" | "system", name: string, args: Record<string, unknown>) => {
       const run = await plan(env, request, makeEvents({ onCanvas }));
@@ -384,62 +385,113 @@ describe("run capability plan", () => {
         await client.close();
       }
     };
-    const showWidget = (request: AgentRequest) => call(request, "canvas", "show", { title: "배수", content: WIDGET, contentType: "widget" });
-    const canvasLine = async (request: AgentRequest) =>
-      (await call(request, "system", "describe_system", {})).text.split("\n").find((l) => l.startsWith("- Visual canvas")) ?? "";
+    const describeLine = async (request: AgentRequest, head: string) =>
+      (await call(request, "system", "describe_system", {})).text.split("\n").find((l) => l.startsWith(head)) ?? "";
 
-    // Off by default: the static catalog still lists the type, the handler refuses it.
-    const refused = await showWidget(env.baseRequest);
-    expect(refused.isError).toBe(true);
-    expect(refused.text).toContain("experimental feature the avatar owner has not turned on (Settings → 실험 기능)");
-    expect(onCanvas).not.toHaveBeenCalled();
-    expect(await canvasLine(env.baseRequest)).toContain("contentType 'widget' (experimental; renders inline in the answer, not in the side panel, and recomputes locally): DISABLED");
-    // No standing nudge either: on an avatar without the feature it would only buy refused calls.
-    expect(refused.run.append).toContain("**Visual canvas** is available via `mcp__canvas__show`.");
-    expect(refused.run.append).not.toContain(WIDGET_NUDGE);
-    // Tool registration is unchanged by the flag — it is a content type, not a tool.
-    expect(refused.run.allowed).toContain("mcp__canvas__show");
-    expect(refused.run.allowed.filter((n) => n.startsWith("mcp__canvas__"))).toEqual(["mcp__canvas__show"]);
+    // The owner's own chat: the flag, the standing section (the shared spec, verbatim), the live line.
+    const chat = await plan(env, env.baseRequest, makeEvents({ onCanvas }));
+    expect(chat.caps.inlineUiActive).toBe(true);
+    expect(chat.stamped.inlineUiEnabled).toBe(true);
+    expect(chat.append).toContain(SECTION);
+    expect(chat.append).toContain("# Inline UI\nYour answer is Markdown.");
+    expect(chat.turn).not.toContain("Answer format (this turn)");
+    const available = await describeLine(env.baseRequest, "- Inline UI");
+    expect(available).toContain("- Inline UI: AVAILABLE in this run — write UI tags directly in your ANSWER TEXT");
+    expect(available).toContain("no tool call, nothing opens in the side panel");
+    expect(available).toContain("mcp__system__read_manual topic `inline-ui`");
+    // The canvas line and the standing canvas guidance draw the line between the two.
+    const canvasLine = await describeLine(env.baseRequest, "- Visual canvas");
+    expect(canvasLine).toContain("a SIDE-PANEL artifact worked on with the user");
+    expect(canvasLine).toContain("contentType markdown | vega | mermaid | svg | html.");
+    expect(canvasLine).toContain("is inline UI (next line), not a canvas");
+    expect(canvasLine).not.toContain("widget");
+    expect(chat.append).toContain("**Visual canvas** is available via `mcp__canvas__show`: a SIDE-PANEL artifact you work on WITH the user");
+    expect(chat.append).toContain("belongs in your answer text as inline UI (the Inline UI section), NOT on a canvas.");
+    expect(chat.append).not.toContain("prefer vega for charts");
+    // It is not a tool: nothing is registered for it.
+    expect(chat.allowed.filter((n) => n.startsWith("mcp__canvas__"))).toEqual(["mcp__canvas__show"]);
+    expect(chat.allowed.some((n) => /inline|widget/i.test(n))).toBe(false);
 
-    // The owner turns it on: the SAME call goes through and both surfaces say so.
+    // No flag and no tool group decides it: the canvas group off changes nothing.
+    const noCanvas = await plan(env, { ...env.baseRequest, mcpToolGroups: ["system"] }, makeEvents({ onCanvas }));
+    expect(noCanvas.servers).not.toContain("canvas");
+    expect(noCanvas.stamped.inlineUiEnabled).toBe(true);
+    expect(noCanvas.append).toContain(SECTION);
+    expect(noCanvas.append).not.toContain("**Visual canvas** is available");
+    // …nor does the retired experimental key, whatever a stored value says.
     env.store.updateProfile(env.owner.id, { experimentalFeatures: ["canvasWidget"] });
-    const shown = await showWidget(env.baseRequest);
-    expect(shown.isError, shown.text).toBe(false);
-    expect(shown.text).toContain("recomputes locally in the user's browser");
-    expect(onCanvas).toHaveBeenCalledTimes(1);
-    expect(onCanvas.mock.calls[0]![0]).toMatchObject({ contentType: "widget", awaitInput: false });
-    // A widget is drawn inline where the tool ran: the run stamps the answer-text
-    // anchor (this plan's accessor reads 0) — a panel canvas carries none.
-    expect(onCanvas.mock.calls[0]![0]).toHaveProperty("anchor", 0);
+    expect(env.store.getExperimentalFeatures(env.owner.id)).toEqual([]);
+    expect((await plan(env, env.baseRequest)).append).not.toContain("Enabled experimental (beta) features");
+
+    // Every viewer class: a teammate (elevated) and a plain colleague chatting with this avatar.
+    for (const viewer of [{ elevated: true }, { elevated: false }]) {
+      const mate: AgentRequest = { ...env.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, ...viewer };
+      const mateRun = await plan(env, mate, makeEvents({ onCanvas }));
+      expect(mateRun.stamped.inlineUiEnabled).toBe(true);
+      expect(mateRun.append).toContain(SECTION);
+      expect(await describeLine(mate, "- Inline UI")).toContain("AVAILABLE in this run");
+    }
+
+    // Interactive-only: each of the three non-chat run kinds is off, says why
+    // on the live surface, and gets no standing section.
+    const off: [string, AgentRequest, string][] = [
+      ["routine", { ...env.baseRequest, headless: true, allowHeadlessTools: true }, "this is an unattended run, so nobody is watching the answer being written in the app"],
+      ["task API", { ...env.baseRequest, externalTaskApi: true }, "an external system submitted this turn and reads the answer as plain text"],
+      [
+        "consultation",
+        { ...env.baseRequest, conversationId: undefined, avatarConsultation: true, viewerUserId: "asker-id", viewerIsOwner: false, elevated: true, headless: true, allowHeadlessTools: true },
+        "this is an avatar-to-avatar consultation, so the answer goes to another avatar as text, not to a person's screen",
+      ],
+    ];
+    for (const [kind, request, reason] of off) {
+      const run = await plan(env, request, makeEvents({ onCanvas }));
+      expect(run.caps.inlineUiActive, kind).toBe(false);
+      expect(run.stamped.inlineUiEnabled, kind).toBe(false);
+      expect(run.append, kind).not.toContain("# Inline UI");
+      const line = await describeLine(request, "- Inline UI");
+      expect(line, kind).toBe(
+        `- Inline UI: NOT available in this run — ${reason}. Answer in plain Markdown and write no UI tags, even where your instructions describe inline UI: they would reach the reader as raw text`,
+      );
+      // A conversation's frozen prompt may carry the section (it began as a
+      // chat): its unattended turns hear the same reason per turn. A
+      // consultation has no conversation and no such prompt — no note.
+      if (request.conversationId) {
+        expect(run.turn, kind).toContain(
+          `Answer format (this turn): plain Markdown only — ${reason}, so inline UI tags (\`<chart>\`, \`<table>\`, \`<box>\` …) would not be drawn. Write none in this answer, even where the standing instructions describe inline UI.`,
+        );
+      } else {
+        expect(run.turn, kind).not.toContain("Answer format (this turn)");
+      }
+    }
+    // The task API still has the canvas (the route supplies the sink) — its
+    // guidance then keeps the chart advice and names no inline UI section.
+    const api = await plan(env, { ...env.baseRequest, externalTaskApi: true }, makeEvents({ onCanvas }));
+    expect(api.append).toContain("**Visual canvas** is available");
+    expect(api.append).not.toContain("the Inline UI section");
+
+    // The RETIRED canvas `widget`: a conversation whose frozen prompt still
+    // says to call it gets a redirect from the handler — through real MCP, so
+    // not a schema rejection — and nothing is shown. The listed schema no
+    // longer offers the type.
+    const WIDGET = '{@state n = 1}\n<slider label="n" value={n} onChange={setN} min={1} max={9} />\n<stat label="double" value={n * 2} />';
+    const retired = await call(env.baseRequest, "canvas", "show", { title: "배수", content: WIDGET, contentType: "widget" });
+    expect(retired.isError).toBe(true);
+    expect(retired.text).toBe(WIDGET_RETIRED_ERROR);
+    expect(retired.text).not.toContain("Input validation error");
+    expect(onCanvas).not.toHaveBeenCalled();
+    const other = await call(env.baseRequest, "canvas", "show", { title: "t", content: "x", contentType: "pdf" });
+    expect(other.isError).toBe(true);
+    expect(other.text).toBe("Unknown contentType 'pdf'. Use one of: 'markdown', 'vega', 'mermaid', 'svg', 'html'. Nothing was shown.");
+    expect(onCanvas).not.toHaveBeenCalled();
     expect((await call(env.baseRequest, "canvas", "show", { title: "메모", content: "# hi", contentType: "markdown" })).isError).toBe(false);
-    expect(onCanvas.mock.calls[1]![0]).toMatchObject({ contentType: "markdown" });
-    expect(onCanvas.mock.calls[1]![0]).not.toHaveProperty("anchor");
-    expect(shown.text).toContain("The widget was shown INLINE in your answer, at this point of the text (not in the side panel)");
-    expect(await canvasLine(env.baseRequest)).toContain("ENABLED for this avatar");
-    // The standing guidance now tells the avatar to reach for it unprompted — and where it appears.
-    expect(shown.run.append).toContain(WIDGET_NUDGE);
-    expect(shown.run.append).toContain("It renders INLINE in your answer where you call it (not in the side panel)");
-    expect(shown.run.append).toContain("if `describe_system` says the type is DISABLED, do not use it.");
-    // The frozen prompt carries the owner's enabled feature list (owner-driven turns).
-    expect(shown.run.append).toContain("Enabled experimental (beta) features for this avatar: `canvasWidget`");
+    expect(onCanvas).toHaveBeenCalledTimes(1);
+    expect(onCanvas.mock.calls[0]![0]).toMatchObject({ contentType: "markdown", awaitInput: false });
+    expect(onCanvas.mock.calls[0]![0]).not.toHaveProperty("anchor"); // a canvas is a side-panel artifact
 
-    // It is the avatar OWNER's flag: a teammate chatting with this avatar gets
-    // widgets too (canvases reach every viewer class), without the owner-only
-    // feature list in their prompt.
-    const mate: AgentRequest = { ...env.baseRequest, viewerUserId: "someone-else", viewerIsOwner: false, elevated: true };
-    const mateShown = await showWidget(mate);
-    expect(mateShown.isError, mateShown.text).toBe(false);
-    expect(await canvasLine(mate)).toContain("ENABLED for this avatar");
-    expect(mateShown.run.append).not.toContain("Enabled experimental (beta) features");
-    // …but with the same standing nudge: the widget works on their run too.
-    expect(mateShown.run.append).toContain(WIDGET_NUDGE);
-
-    // A run with no canvas sink (a routine, a headless generator) has no canvas at all —
-    // no server, no tool, no widget nudge — whatever the owner's flag says.
+    // A run with no canvas sink (a routine, a headless generator) has no canvas at all.
     const routine = await plan(env, { ...env.baseRequest, headless: true, allowHeadlessTools: true }, makeEvents());
     expect(routine.servers).not.toContain("canvas");
     expect(routine.allowed).not.toContain("mcp__canvas__show");
-    expect(routine.append).not.toContain(WIDGET_NUDGE);
     expect(routine.append).not.toContain("**Visual canvas** is available");
   });
 

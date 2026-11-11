@@ -136,7 +136,7 @@ export function spendSteps(rt: Runtime, n: number): void {
 export function chargeOutput(rt: Runtime, elements: number, chars: number): void {
   rt.outEls -= elements;
   rt.outChars -= chars;
-  if (rt.outEls < 0 || rt.outChars < 0) throw new WidgetBudgetError("the widget renders too much (output budget exceeded)");
+  if (rt.outEls < 0 || rt.outChars < 0) throw new WidgetBudgetError("too much is rendered (output budget exceeded)");
 }
 
 /* ───────────────────────── Environment ───────────────────────── */

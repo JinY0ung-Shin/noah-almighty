@@ -1,4 +1,5 @@
 import type {
+  AgentRequest,
   AgentRewindInfo,
   AppConfig,
   PiSandboxOwner,
@@ -245,6 +246,43 @@ export const PI_SUBAGENT_SENTENCE =
  */
 export const PI_NO_ASK_USER_SENTENCE =
   "`AskUserQuestion` is not available in this run: its session was started without it because nobody can answer.";
+
+/** The run facts inline UI is decided on (`AgentRequest` and `SystemToolsContext` both carry them). */
+export type InlineUiRun = Pick<AgentRequest, "headless" | "externalTaskApi" | "avatarConsultation">;
+
+/**
+ * Whether a run's ANSWER TEXT may carry inline UI (`src/shared/widget/guide.ts`:
+ * tags the viewer's app draws in place while the answer streams): only an
+ * interactive chat turn a person is watching in the app. Never a headless run
+ * (a routine or a profile generator — nobody watches the stream), never an
+ * external-task-API turn (the calling system reads the answer as text), never
+ * an avatar consultation (the answer goes to another avatar) — the
+ * interactive-only gate every such capability carries (`headless` AND
+ * `externalTaskApi`). It depends on no tool group and no flag, and holds for
+ * every viewer class. ONE function for the capability plan
+ * (`AgentRequest.inlineUiEnabled`) and whatever else has to agree with it.
+ */
+export function inlineUiAllowed(run: InlineUiRun): boolean {
+  return !run.headless && !run.externalTaskApi && !run.avatarConsultation;
+}
+
+/**
+ * Why a run has no inline UI, by precedence consultation > external task >
+ * unattended. ONE text for both metacognition surfaces (describe_system's
+ * inline-UI line and the turn preamble's answer-format note).
+ */
+export function inlineUiUnavailableReason(run: InlineUiRun): string {
+  if (run.avatarConsultation) {
+    return "this is an avatar-to-avatar consultation, so the answer goes to another avatar as text, not to a person's screen";
+  }
+  if (run.externalTaskApi) {
+    return "an external system submitted this turn and reads the answer as plain text";
+  }
+  if (run.headless) {
+    return "this is an unattended run, so nobody is watching the answer being written in the app";
+  }
+  return "this run is not an interactive chat turn";
+}
 
 /**
  * What happens to a sandbox repo copy that open_repo or sync_repo REPLACES

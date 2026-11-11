@@ -8,7 +8,7 @@
   import SidePanel from "../components/SidePanel.svelte";
   import TodoOverlay from "../components/TodoOverlay.svelte";
   import TeamBrainCard from "../components/TeamBrainCard.svelte";
-  import InlineWidget from "../components/widget/InlineWidget.svelte";
+  import type AnswerUiComponent from "../components/widget/AnswerUi.svelte";
   import { activePane, appState, newId, notify, readState, updateState } from "../lib/state";
   import {
     PLUGIN_STATUS_LABELS,
@@ -66,7 +66,8 @@
   import { formatThinkingDuration, thinkingClocks, thinkingElapsed, thinkingNow, thinkingTopic } from "../lib/streamThinking";
   import { createStickController, type StickController } from "../lib/autoscroll";
   import { panelSlides, segmentAttachments } from "../lib/bubbleSegments";
-  import { hasSideTabs, isWidgetAttachment, widgetHome } from "../lib/sidePanel";
+  import { hasSideTabs } from "../lib/sidePanel";
+  import { containsInlineUi } from "../../../shared/widget/detect";
   import { menuCommandsForPane, filterSlashCommands, type SlashCommand } from "../lib/slash";
   import { setTodoOverlayOpen, todoActivity, todoOverlayVisible } from "../lib/todos";
   import type { AgentActivity, AvatarSummary, ChatPane, ImageMediaType, LiveAgentNode, LiveTaskRow, LiveToolRow, MessageAttachment, PendingImage, SkillInfo, StoredMessage } from "../lib/types";
@@ -1202,6 +1203,48 @@
   function messageText(message: StoredMessage) {
     return message.response?.text || message.response?.summary || message.content;
   }
+
+  // Inline UI: an answer whose text holds component tags is drawn by
+  // components/widget/AnswerUi (the parser, the interpreter and the components),
+  // loaded on the first answer that needs it — `containsInlineUi` is the cheap
+  // line scan that decides. Until the chunk is here the answer's place shows a
+  // placeholder (never its raw tags); if it cannot be loaded, the answer is
+  // drawn as the Markdown it is.
+  let AnswerUi: typeof AnswerUiComponent | null = null;
+  let answerUiFailed = false;
+  let answerUiLoading = false;
+  function loadAnswerUi(_node: HTMLElement) {
+    if (!AnswerUi && !answerUiLoading) {
+      answerUiLoading = true;
+      void import("../components/widget/AnswerUi.svelte").then(
+        (mod) => {
+          AnswerUi = mod.default;
+        },
+        () => {
+          answerUiFailed = true;
+        },
+      );
+    }
+    return {};
+  }
+  // The scan runs for every answer on every render of the transcript; a stored
+  // answer's text does not change, so its verdict is kept.
+  const inlineUiVerdicts = new Map<string, boolean>();
+  function hasInlineUi(text: string | null | undefined): boolean {
+    if (!text) return false;
+    if (text.length < 400) return containsInlineUi(text);
+    const known = inlineUiVerdicts.get(text);
+    if (known !== undefined) return known;
+    const verdict = containsInlineUi(text);
+    inlineUiVerdicts.set(text, verdict);
+    if (inlineUiVerdicts.size > 300) inlineUiVerdicts.delete(inlineUiVerdicts.keys().next().value as string);
+    return verdict;
+  }
+  /** The conversation's last assistant message: the one whose render problems the avatar is told. */
+  function latestAnswerId(messages: StoredMessage[]): string | null {
+    for (let i = messages.length - 1; i >= 0; i -= 1) if (messages[i].role === "assistant") return messages[i].id;
+    return null;
+  }
   function runtimeBadge(message: StoredMessage): string | null {
     const runtime = message.response?.runtime;
     if (runtime === "local") return "로컬";
@@ -1433,11 +1476,8 @@
         {/if}
       {:else if att.kind === "team_brain"}
         <TeamBrainCard proposalId={att.id} />
-      {:else if isWidgetAttachment(att)}
-        <!-- A widget canvas lives HERE, in the answer that showed it — only its
-             newest attachment draws it (`widgetHome`, read from `item` so the
-             slot re-evaluates when a later answer takes the widget over). -->
-        <InlineWidget pane={item} attachment={att} home={widgetHome(item, att.id) === source} live={source === item.liveAttachments} />
+      {:else if (att.kind as string) === "widget"}
+        <!-- The attachment of the retired canvas `widget` type (an older build's row): nothing to draw. -->
       {:else}
         <figure class="msg-image-item">
           <a class="msg-image-link" href={`/api/conversations/${encodeURIComponent(item.conversationId)}/images/${encodeURIComponent(att.id)}`} target="_blank" rel="noopener noreferrer">
@@ -1453,7 +1493,24 @@
 <!-- An answer drawn as live blocks: the streaming bubble, and for a moment the
      stored message it became. `text`/`atts` are what is revealed so far;
      `source` stays the full attachment list the cards compare against. -->
+<!-- Where an answer with inline UI will be, while its components load. -->
+{#snippet answerUiLoadingSlot()}
+  <div class="widget-slot-pending" role="status" use:loadAnswerUi>
+    <span class="widget-slot-bar" aria-hidden="true"></span>
+    <span>화면을 준비하는 중…</span>
+  </div>
+{/snippet}
+
 {#snippet streamedAnswer(item: ChatPane, scope: string, text: string, atts: MessageAttachment[] | undefined, source: MessageAttachment[] | undefined, caret: boolean)}
+  {#if !answerUiFailed && hasInlineUi(caret ? item.liveText : text)}
+    <!-- The live bubble of an answer that holds inline UI (judged on ALL of the
+         text so far, not on what the paced reveal has shown). -->
+    {#if AnswerUi}
+      <svelte:component this={AnswerUi} pane={item} {text} {atts} {source} streaming {caret} cards={attachmentCards} />
+    {:else}
+      {@render answerUiLoadingSlot()}
+    {/if}
+  {:else}
   {#each segmentAttachments(text, atts) as seg, segIndex (segIndex)}
     {#if seg.text || (seg.tail && text)}
       <!-- Only the tail segment is still being written, so only it is healed. -->
@@ -1464,6 +1521,7 @@
       {@render attachmentCards(item, seg.atts, source)}
     {/if}
   {/each}
+  {/if}
 {/snippet}
 
 {#snippet transcript(item: ChatPane)}
@@ -1563,7 +1621,26 @@
                     <div class="md plan-card-body" use:enhanceMarkdown={message.response.plan}>{@html renderMarkdownCached(message.response.plan)}</div>
                   </details>
                 {/if}
-                {#if draining !== undefined}
+                {#if !answerUiFailed && hasInlineUi(messageText(message))}
+                  <!-- An answer that holds inline UI: ONE component from the
+                       moment it is stored — while its end drains in and after —
+                       so the state the viewer set is not remounted away. -->
+                  {#if AnswerUi}
+                    <svelte:component
+                      this={AnswerUi}
+                      pane={item}
+                      text={draining !== undefined ? revealedText(messageText(message), draining) : messageText(message)}
+                      atts={draining !== undefined ? revealedAttachments(message.attachments, messageText(message).length, draining) : message.attachments}
+                      source={message.attachments}
+                      streaming={draining !== undefined}
+                      messageId={message.id}
+                      latest={message.id === latestAnswerId(item.messages)}
+                      cards={attachmentCards}
+                    />
+                  {:else}
+                    {@render answerUiLoadingSlot()}
+                  {/if}
+                {:else if draining !== undefined}
                   <!-- The turn just ended and the paced reveal had not shown
                        all of it: the remainder drains in here (≤ 0.3 s), drawn
                        like the live bubble. Then the entry goes and the cached
@@ -1710,14 +1787,6 @@
                 </details>
               {/if}
               {@render streamedAnswer(item, item.id, liveShownText, liveShownAtts, item.liveAttachments, true)}
-              <!-- A canvas the avatar is building right now: a widget lands in
-                   this very spot (the bubble's tail), so the place is held for it. -->
-              {#each item.liveCanvasTools ?? [] as tool (tool.id)}
-                <div class="widget-slot-pending" role="status">
-                  <span class="widget-slot-bar" aria-hidden="true"></span>
-                  <span>{tool.widget ? "위젯을 만드는 중…" : "캔버스를 준비하는 중…"}</span>
-                </div>
-              {/each}
               <!-- BELOW the streamed text, at the reading edge, for two reasons
                    that are both about motion: the card GROWS as tools run, and at
                    the top every growth spurt shoved the text the user was reading

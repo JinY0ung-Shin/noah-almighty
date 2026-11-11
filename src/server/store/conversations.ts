@@ -751,8 +751,11 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
         .prepare("DELETE FROM canvas_versions WHERE artifact_id IN (SELECT id FROM canvas_artifacts WHERE conversation_id = ?)")
         .run(conversationId);
       this.db.prepare("DELETE FROM canvas_artifacts WHERE conversation_id = ?").run(conversationId);
-      // The canvases are gone: so is everything a browser reported about them.
+      // The canvases are gone: so is everything a browser reported about them —
+      // and, since every caller is deleting the conversation's messages too,
+      // about the inline UI in its answers.
       this.canvasRenderReportQueue.forgetConversation(conversationId);
+      this.inlineUiReportQueue.forgetConversation(conversationId);
     }
 
     /** Drop the oldest versions beyond MAX_CANVAS_VERSIONS so heavy refinement can't grow unbounded. */
@@ -864,8 +867,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * Record what the user SUBMITTED on a non-blocking canvas (its controls, or a
-     * widget's `<submit>`) on the canvas's CURRENT version, so the panel's
+     * Record what the user SUBMITTED on a non-blocking canvas (its controls) on
+     * the canvas's CURRENT version, so the panel's
      * "응답 완료" survives a reload — the blocking path records through
      * `upsertCanvasArtifact`, this is the async one (the values arrive as a chat
      * turn). A re-submission overwrites. Written only to a canvas of THIS owner in
@@ -933,6 +936,70 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
           continue;
         }
         out.push({ canvasId: pending.canvasId, title: version.title ?? "", errors: pending.errors });
+      }
+      return out;
+    }
+
+    // ---- Inline UI render reports (browser → next turn; process memory) ---
+
+    /**
+     * What viewers' browsers could not draw of the inline UI an avatar wrote in
+     * its ANSWER TEXT, waiting for each conversation's next turn. The same
+     * bounded queue class as the canvas reports, keyed by the MESSAGE id (a
+     * message has no versions: always 1). Instance state, lost on restart by
+     * design — the client reports again when it redraws the message.
+     */
+    private readonly inlineUiReportQueue = new CanvasRenderReportQueue();
+
+    /** The id of the conversation's newest assistant message, or null when it has none. */
+    private latestAssistantMessageId(conversationId: string): string | null {
+      const row = this.db
+        .prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 1")
+        .get(conversationId) as { id: string } | undefined;
+      return row?.id ?? null;
+    }
+
+    /**
+     * Queue a browser's inline-UI render report for one answer of the caller's
+     * own conversation (`errors` already sanitized; empty = it draws fine now,
+     * so a waiting report is dropped). Only the conversation's LATEST assistant
+     * message is accepted — the next turn's "your previous answer": a report
+     * about any other message (an older answer redrawn on reload, an unknown
+     * id, a user message) is ignored and reads "ignored". "not_found" = the
+     * conversation is not this owner's (the route's 404).
+     */
+    reportInlineUiRenderErrors(
+      ownerId: string,
+      conversationId: string,
+      messageId: string,
+      errors: string[],
+    ): "queued" | "ignored" | "not_found" {
+      if (!this.ownsConversation(ownerId, conversationId)) return "not_found";
+      if (this.latestAssistantMessageId(conversationId) !== messageId) return "ignored";
+      this.inlineUiReportQueue.put(conversationId, messageId, 1, errors);
+      return "queued";
+    }
+
+    /**
+     * CONSUME the conversation's waiting inline-UI report for the turn that is
+     * starting: its lines are returned once. A report whose message is no
+     * longer the latest assistant message (a rewind or 다시 생성 removed it, or
+     * a newer answer exists) is dropped instead — the session the turn
+     * continues does not end with that answer.
+     */
+    takeInlineUiRenderErrors(ownerId: string, conversationId: string): string[] {
+      // Someone else asking gets nothing — and consumes nothing.
+      if (!this.ownsConversation(ownerId, conversationId)) return [];
+      const pending = this.inlineUiReportQueue.take(conversationId);
+      if (pending.length === 0) return [];
+      const latest = this.latestAssistantMessageId(conversationId);
+      const out: string[] = [];
+      for (const report of pending) {
+        if (report.canvasId !== latest) {
+          this.inlineUiReportQueue.forgetCanvas(conversationId, report.canvasId);
+          continue;
+        }
+        out.push(...report.errors);
       }
       return out;
     }

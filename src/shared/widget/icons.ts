@@ -1,5 +1,5 @@
 /**
- * The icon names a canvas widget may use (`<icon name>`, `icon` on a button or
+ * The icon names inline UI may use (`<icon name>`, `icon` on a button or
  * a callout): exactly the icons the app itself draws
  * (`src/client/src/lib/icons.ts`, `ICON_PATHS`).
  *

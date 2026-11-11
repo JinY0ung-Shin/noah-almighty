@@ -1,35 +1,11 @@
-<script lang="ts" context="module">
-  import { renderWidgetProse } from "../../lib/widgetProse";
-
-  // Top-level prose is STATIC Markdown (no interpolation), so its sanitized HTML
-  // depends on the source text alone — and a widget re-evaluates on every slider
-  // step. `renderWidgetProse` keeps only the tags Markdown produces and no
-  // class / id / style / href: the avatar's prose cannot dress itself as the
-  // app's own controls or sit over them.
-  const MD_CACHE_LIMIT = 200;
-  const mdCache = new Map<string, string>();
-  function mdHtml(text: string): string {
-    const hit = mdCache.get(text);
-    if (hit !== undefined) return hit;
-    const html = renderWidgetProse(text);
-    mdCache.set(text, html);
-    if (mdCache.size > MD_CACHE_LIMIT) {
-      const oldest = mdCache.keys().next().value;
-      if (oldest !== undefined) mdCache.delete(oldest);
-    }
-    return html;
-  }
-</script>
-
 <script lang="ts">
-  // One evaluated node of a canvas widget (lib/widgetView.ts). The component
-  // reads nothing but the `v` it is handed, so a state change — which hands it a
-  // NEW `v` — can never leave a stale value on screen. Containers render their
+  // One evaluated node of inline UI (lib/widgetView.ts). The component reads
+  // nothing but the `v` it is handed, so a state change — which hands it a NEW
+  // `v` — can never leave a stale value on screen. Containers render their
   // children with this same component.
   //
-  // The only `{@html}` here is the sanitized static Markdown above (an allowlist
-  // of Markdown's own tags, no attributes); everything an expression produced is
-  // inserted as text.
+  // There is no `{@html}` here: everything the avatar wrote, and everything an
+  // expression produced, is inserted as text.
   import type { VNode } from "../../lib/widgetView";
   import type { WidgetCtx } from "../../lib/widgetCtx";
   import { cellText } from "../../lib/widgetView";
@@ -76,9 +52,7 @@
   }
 </script>
 
-{#if v.k === "md"}
-  <div class="wg-md md">{@html mdHtml(v.text)}</div>
-{:else if v.k === "inline"}
+{#if v.k === "inline"}
   <p class="wg-inline"><WidgetInline segs={v.segs} /></p>
 {:else if v.k === "error"}
   <p class="wg-error" role="note" title={v.detail}>{v.message}</p>
@@ -194,7 +168,7 @@
     class="btn btn-primary btn-sm wg-submit"
     disabled={v.props.disabled === true || ctx.locked}
     aria-describedby={ctx.statusId}
-    on:click={() => ctx.submit(v.props.values)}
+    on:click={() => ctx.submit(v.props.values, v.segs.length ? v.segs.map((seg) => seg.text).join("") : typeof v.props.label === "string" && v.props.label ? v.props.label : "보내기")}
   >{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{typeof v.props.label === "string" && v.props.label ? v.props.label : "보내기"}{/if}</button>
 {:else if CONTROLS.has(v.tag)}
   <WidgetControl {v} {ctx} />

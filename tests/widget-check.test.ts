@@ -83,7 +83,7 @@ describe("checkWidget", () => {
   });
 
   it("a source without any component is refused, and the 4-space trap is named", () => {
-    const hint = /This widget has no component: a widget needs at least one \(for plain text use contentType 'markdown'\)\. If the components are there but every line is indented 4\+ spaces, the whole source is read as a Markdown code block — unindent it\./;
+    const hint = /This source has no component: inline UI needs at least one \(plain text is just Markdown\)\. If the components are there but every line is indented 4\+ spaces, the whole source is read as a Markdown code block — unindent it\./;
     expect(errorOf(SAMPLES.proseOnly)).toMatch(hint);
     expect(errorOf("{@state n = 1}\n{@const d = n * 2}")).toMatch(hint);
     // every line indented 4+: the whole widget is a Markdown code block
@@ -99,13 +99,13 @@ describe("checkWidget", () => {
 
   it("leads with what happened and how to retry, then numbered problems with line:col", () => {
     const err = errorOf("{@state n = 1}\n<row>\n  <sliderr value={n} />\n</row>");
-    expect(err.startsWith("Widget source has 1 problem — the canvas was NOT shown. Fix it and call show again (pass the same canvasId if you were refining one).")).toBe(true);
+    expect(err.startsWith("The inline UI source has 1 problem:\n")).toBe(true);
     expect(err).toMatch(/\n1\. line 3:3 — Unknown component <sliderr>\. Did you mean <slider>\?/);
     expect(err).toContain(`Components: ${WIDGET_TAGS.join(", ")}`);
   });
 
   it("unknown components: HTML and case mistakes get a pointed fix", () => {
-    expect(errorOf("<div>hi</div>")).toMatch(/Unknown component <div>\. HTML tags are not supported in a widget\./);
+    expect(errorOf("<div>hi</div>")).toMatch(/Unknown component <div>\. HTML tags are not supported in inline UI\./);
     expect(errorOf("<Slider />")).toMatch(/Did you mean <slider>\?/);
     // <svg> is a component now (tests/widget-svg.test.ts); an SVG element outside one says where it belongs
     expect(errorOf("<span>hi</span>")).toMatch(/Unknown component <span>/);
@@ -219,7 +219,7 @@ describe("checkWidget", () => {
   it("several problems are reported together, sorted, at most five, without duplicates", () => {
     const src = ["<row>", "  <nope1 />", "  <nope2 />", "  <text>{x1}</text>", "  <text>{x2}</text>", "  <text>{x3}</text>", "  <text>{x4}</text>", "  <text>{x1}</text>", "</row>"].join("\n");
     const err = errorOf(src);
-    expect(err).toMatch(/^Widget source has 6 problems — the canvas was NOT shown\. Fix them and call show again/);
+    expect(err).toMatch(/^The inline UI source has 6 problems:\n/);
     expect(err.match(/^\d\. line/gm)).toHaveLength(5);
     expect(err).toMatch(/1\. line 2:3[^\n]*\n2\. line 3:3[^\n]*\n3\. line 4:9/);
     expect(err).toMatch(/\(\+1 more; fix these first\.\)$/);
@@ -253,7 +253,7 @@ describe("checkWidget", () => {
       expect(Date.now() - t0, `round ${round}`).toBeLessThan(2000);
       if (!r.ok) {
         failed++;
-        expect(r.error, `round ${round}`).toMatch(/^Widget source (has \d+ problems?|is empty) — the canvas was NOT shown\./);
+        expect(r.error, `round ${round}`).toMatch(/^The inline UI source (has \d+ problems?:|is empty\.)/);
       }
     }
     expect(failed).toBeGreaterThan(100); // the noise really does break documents
@@ -344,7 +344,11 @@ describe("widget component spec", () => {
     expect(ref.endsWith(`\nIcons: ${WIDGET_ICON_NAMES.join(" ")}`)).toBe(true);
     expect(ref).toContain("- <svg>SVG elements</svg> — A drawing that follows state (a gauge, a diagram).");
     expect(ref).toContain(svgReference());
-    expect(ref.length).toBeLessThan(6500);
+    // A chart has two forms, and its `series` is not spelled like a table's columns.
+    expect(ref).toContain("- <chart /> — Give `data` (+ type, xKey, series) for the common charts, or a whole Vega-Lite `spec` — exactly one of the two.");
+    expect(ref).toContain('type: bar|line|area|pie|donut (default bar); xKey: str (category key; default the first); series: ["key"] | [{key, label}] (numeric keys; default all)');
+    // The manual page it rides is capped (tests/system-manual.test.ts): keep the reference terse.
+    expect(ref.length).toBeLessThan(6800);
   });
 });
 
@@ -414,7 +418,7 @@ describe("checkWidget: agrees with the runtime", () => {
 
   it("a prop whose value does not parse is reported once, not also as missing", () => {
     const err = errorOf("{@state n = 0}\n<button onClick={() => { if (n) }}>x</button>\n<stat label=\"a\" value={} />");
-    expect(err).toMatch(/^Widget source has 2 problems/);
+    expect(err).toMatch(/^The inline UI source has 2 problems/);
     expect(err).toMatch(/Prop "onClick" of <button>: Syntax error in expression/);
     expect(err).toMatch(/Prop "value" of <stat> has an empty \{\}/);
     expect(err).not.toMatch(/missing the required prop/);
@@ -481,7 +485,7 @@ describe("widget effects are declared props: button send / href, <link>, <image>
     expect(none).toMatch(
       /<button> needs EXACTLY ONE of onClick \| send \| href — onClick \(runs a function: changes state locally, sends nothing to you\); send \(the text becomes the user's NEXT chat message when pressed \(1–2000 chars; may be computed from state\)\); href \(opens this absolute http\(s\) URL in a new tab\)\. It has none\./,
     );
-    expect(errorOf('{@state n = 0}\n<button onClick={() => setN(1)} send="go">x</button>')).toMatch(/It has onClick and send: keep one \(use separate <button>s for separate actions\)\./);
+    expect(errorOf('{@state n = 0}\n<button onClick={() => setN(1)} send="go">x</button>')).toMatch(/It has onClick and send: keep one \(a second one needs its own <button>\)\./);
     expect(errorOf('<button send="a" href="https://example.com">x</button>')).toMatch(/It has send and href: keep one/);
     expect(errorOf('{@state n = 0}\n<button onClick={() => setN(1)} send="a" href="https://example.com">x</button>')).toMatch(/It has onClick and send and href: keep one/);
     // a prop that failed to parse still counts as written: one problem, not two

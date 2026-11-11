@@ -60,12 +60,44 @@ function clip(line: string): string {
  * answers next). Safe to call on every render — repeats are dropped.
  */
 export function queueCanvasRenderReport(report: CanvasRenderReport): void {
-  const { canvasId, conversationId, content } = report;
+  const { canvasId, conversationId } = report;
   if (!canvasId || !conversationId || !readState().user?.id) return;
-  const lines = report.errors.map(clip).filter(Boolean);
+  queueReport(`${conversationId}\n${canvasId}`, report.content, report.errors, report.stillCurrent, (errors) =>
+    send(`/api/canvases/${encodeURIComponent(canvasId)}/render-report`, { conversationId, errors }),
+  );
+}
+
+export interface InlineUiRenderReport {
+  conversationId: string | null | undefined;
+  /** The stored assistant message whose answer holds the UI. */
+  messageId: string | null | undefined;
+  /** The answer text these errors belong to. */
+  content: string;
+  /** English lines for the avatar. */
+  errors: string[];
+  /** Whether that answer is (still) the conversation's latest and on screen. */
+  stillCurrent: () => boolean;
+}
+
+/**
+ * The same for inline UI — the tags an avatar wrote in its ANSWER: what the
+ * viewer's browser could not draw of the conversation's latest answer goes to
+ * the avatar with the next turn. Same rules as a canvas report (new lines only,
+ * a moment's wait, a few reports per answer).
+ */
+export function queueInlineUiReport(report: InlineUiRenderReport): void {
+  const { conversationId, messageId } = report;
+  if (!messageId || !conversationId || !readState().user?.id) return;
+  queueReport(`${conversationId}\nmessage:${messageId}`, report.content, report.errors, report.stillCurrent, (errors) =>
+    send(`/api/conversations/${encodeURIComponent(conversationId)}/ui-report`, { messageId, errors }),
+  );
+}
+
+function queueReport(key: string, content: string, errors: string[], stillCurrent: () => boolean, post: (errors: string[]) => void): void {
+  const report = { stillCurrent };
+  const lines = errors.map(clip).filter(Boolean);
   if (lines.length === 0) return;
 
-  const key = `${conversationId}\n${canvasId}`;
   let entry = tracked.get(key);
   if (!entry || entry.content !== content) {
     // Another version of the canvas: whatever was waiting belonged to the old one.
@@ -98,19 +130,19 @@ export function queueCanvasRenderReport(report: CanvasRenderReport): void {
     if (tracked.get(key) !== waiting || !waiting.stillCurrent()) return;
     for (const line of errors) waiting.sent.add(line);
     waiting.reports += 1;
-    send(canvasId, conversationId, errors.slice(0, MAX_REPORT_ERRORS));
+    post(errors.slice(0, MAX_REPORT_ERRORS));
   }, CANVAS_REPORT_DELAY_MS);
 }
 
-function send(canvasId: string, conversationId: string, errors: string[]): void {
+function send(url: string, body: Record<string, unknown>): void {
   try {
     // Plain fetch, not `api()`: a failure here must not toast, and a 401 must
     // not log the viewer out from a background report.
-    void fetch(`/api/canvases/${encodeURIComponent(canvasId)}/render-report`, {
+    void fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
-      body: JSON.stringify({ conversationId, errors }),
+      body: JSON.stringify(body),
     }).catch(() => {});
   } catch {
     /* no fetch, or it threw synchronously: dropped */

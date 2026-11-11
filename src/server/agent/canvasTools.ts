@@ -5,8 +5,7 @@ import type { CanvasControl } from "../types.js";
 import type { CanvasRequest, CanvasResult } from "./events.js";
 import { checkMermaidSyntax } from "./mermaidCheck.js";
 import { text } from "./mcpTools.js";
-import logger from "../logger.js";
-import { checkWidget, type WidgetCheck } from "../../shared/widget/check.js";
+import { INLINE_UI_MANUAL_TOPIC } from "../../shared/widget/guide.js";
 
 /** MCP server name; the tool surfaces to the model as `mcp__canvas__show`. */
 export const CANVAS_SERVER_NAME = "canvas";
@@ -15,11 +14,17 @@ export const CANVAS_SERVER_NAME = "canvas";
 export const CANVAS_TOOL_NAMES = ["mcp__canvas__show"] as const;
 
 /**
- * `mediaType` of the message attachment a shown `widget` rides (kind `widget`,
- * id = the canvas artifact id, no file behind it): the chat route attaches one
- * so the bubble draws the widget inline. Hand-mirrored by the client.
+ * The content types `show` accepts. `widget` is NOT one of them any more
+ * (retired 2026-11-11): interactive UI is written in the answer text as inline
+ * UI (`src/shared/widget/guide.ts`), never shown as a canvas. The name stays
+ * reserved — see {@link WIDGET_RETIRED_ERROR}.
  */
-export const CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE = "application/vnd.noah.canvas-widget+json";
+export const CANVAS_SHOW_CONTENT_TYPES = ["markdown", "vega", "mermaid", "svg", "html"] as const;
+export type CanvasShowContentType = (typeof CANVAS_SHOW_CONTENT_TYPES)[number];
+
+function isCanvasShowContentType(value: string): value is CanvasShowContentType {
+  return (CANVAS_SHOW_CONTENT_TYPES as readonly string[]).includes(value);
+}
 
 /**
  * Caps on a single canvas artifact. The content rides the pi session's history,
@@ -45,52 +50,28 @@ export const MAX_CANVAS_CONTROLS = 12;
  */
 export interface CanvasToolsContext {
   emitCanvas: (request: CanvasRequest) => Promise<CanvasResult>;
-  /**
-   * Whether the AVATAR OWNER turned the experimental `canvasWidget` feature on
-   * (runCapabilities' `widgetEnabled`). pi's tools/list is a static catalog, so
-   * `widget` is always in the contentType enum — the handler refuses it here
-   * when this is not true. Absent = off.
-   */
-  widgetEnabled?: boolean;
 }
-
-/** Agent-facing refusal for a `widget` on an avatar whose owner has not enabled it. */
-export const WIDGET_DISABLED_ERROR =
-  "contentType 'widget' is an experimental feature the avatar owner has not turned on (Settings → 실험 기능). " +
-  "Use 'vega' (a chart) or 'markdown' instead, or ask the owner to enable it. Nothing was shown.";
-
-/** Agent-facing refusal for `controls` on a widget (design D8: one input model per canvas). */
-export const WIDGET_CONTROLS_ERROR =
-  "A 'widget' canvas declares its own inputs, so `controls` cannot be combined with it. Drop `controls`; " +
-  "to send values back to you, put a `<submit values={{ key: value }}>Label</submit>` inside the widget. Nothing was shown.";
-
-/** Agent-facing refusal for `editable` on a widget. */
-export const WIDGET_EDITABLE_ERROR =
-  "`editable` cannot be combined with contentType 'widget': the user changes a widget through its own inputs, not by editing its source. " +
-  "Drop `editable` (use 'markdown' with `editable:true` when the user should rewrite the content). Nothing was shown.";
 
 /**
- * Static check of a widget source (`src/shared/widget/check.ts`: parse + static
- * checks under the checker's own work budget — it never EVALUATES an expression,
- * so no avatar-authored code runs in this process). A verdict rejects; an
- * unexpected throw of the checker itself is `unverified` and the canvas shows,
- * where the client renders its own error (fail-open on infrastructure only).
+ * Agent-facing redirect for the RETIRED `widget` content type. A conversation
+ * that started before the retirement has a FROZEN prompt (and a pi session
+ * with a frozen tool schema) that still tells the avatar to call `show` with
+ * `contentType: 'widget'`, so that call must come back with where the feature
+ * went — never as a bare schema rejection. That is why `contentType` is
+ * validated in the handler and not by a zod enum.
  */
-function checkWidgetSource(source: string): WidgetCheck {
-  try {
-    return checkWidget(source);
-  } catch (error) {
-    logger.warn({ err: error }, "canvas widget check threw; showing the widget unverified");
-    return { ok: true, submits: /<submit[\s>/]/.test(source) };
-  }
-}
+export const WIDGET_RETIRED_ERROR =
+  "contentType 'widget' is retired: interactive UI is no longer a canvas. It is now written directly in your answer text " +
+  `(inline UI) and the user's app draws it in place — read mcp__system__read_manual topic \`${INLINE_UI_MANUAL_TOPIC}\`, ` +
+  "then write the tags in your answer; there is no tool to call for it. " +
+  "(mcp__system__describe_system says whether inline UI is available in this run; where it is not, use 'vega' for a chart or 'markdown'.) " +
+  "Nothing was shown.";
 
-/** Head of every widget check error, so the model knows nothing reached the user. */
-function widgetCheckError(detail: string): string {
+/** Agent-facing refusal for a content type that never existed. */
+function unknownContentTypeError(value: string): string {
   return (
-    "Widget source error — the canvas was NOT shown. Fix the widget source and call show again " +
-    "(pass the same canvasId if you were refining one). The grammar is in mcp__system__read_manual topic `canvas-widget`.\n" +
-    detail
+    `Unknown contentType '${value.slice(0, 40)}'. Use one of: ${CANVAS_SHOW_CONTENT_TYPES.map((type) => `'${type}'`).join(", ")}. ` +
+    "Nothing was shown."
   );
 }
 
@@ -178,9 +159,9 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
   return [
     tool(
       "show",
-      "Show a visual canvas to the user in the chat side panel. Use it to share a diagram, mockup, layout, chart, or option comparison and refine it together — not to repeat text the chat could already render. " +
-        "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; PREFER this for any data chart over hand-drawn SVG, it is far cheaper in tokens — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open), " +
-        "or 'widget' (EXPERIMENTAL — unlike every other type it renders INLINE in your answer, at the point where you call this tool, not in the side panel: something the user operates — a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable table, a slider-driven chart. Write the text before and after it as ONE answer and do not repeat in prose what the widget shows. It recomputes locally in the user's browser and you are NOT called again on each change — for a chart that is only looked at, use 'vega'. Content is a declarative tag + expression source, never HTML/JS: read mcp__system__read_manual topic `canvas-widget` BEFORE writing one; the source is checked before display and an error comes back to you to fix; `controls`/`editable` do not combine with it — it returns structured values with its own `<submit>`, and a `<button send>` posts the user's next chat message). " +
+      "Show a visual canvas in the chat side panel: an ARTIFACT you work on WITH the user — a document to edit, a page mockup or layout, a diagram, an option comparison, a chart that will be refined, exported or needs controls — or anything the user asks to see in the side panel. " +
+        "It is NOT for repeating text the chat already renders, and NOT for a chart, table, calculator or dashboard the user only needs to SEE or operate in the answer: that is inline UI, written directly in your answer text with no tool call (manual topic `inline-ui`; `mcp__system__describe_system` says whether this run has it). " +
+        "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; far cheaper in tokens than hand-drawn SVG — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
         "For a plain question or a simple choice with no visual content to show, use the built-in AskUserQuestion tool instead — never open a canvas just to ask something. " +
@@ -191,9 +172,13 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
       {
         title: z.string().describe("Short title shown atop the canvas panel."),
         content: z.string().describe("The artifact body, interpreted per contentType."),
+        // A plain string whose LISTED schema carries the enum (`meta`), checked
+        // in the handler: a zod enum would turn the retired 'widget' into a bare
+        // "Input validation error" before WIDGET_RETIRED_ERROR could redirect.
         contentType: z
-          .enum(["markdown", "vega", "mermaid", "svg", "html", "widget"])
-          .describe("How to render content. Prefer 'vega' (Vega-Lite spec) for charts and 'mermaid' for diagrams — both render rich visuals from a tiny token-cheap source. 'widget' (experimental) is for something the user operates: it renders inline in the answer and recomputes locally; see manual topic `canvas-widget`."),
+          .string()
+          .meta({ enum: [...CANVAS_SHOW_CONTENT_TYPES] })
+          .describe("How to render content. For a side-panel chart use 'vega' (a Vega-Lite spec) and for a diagram 'mermaid' — both render rich visuals from a tiny token-cheap source."),
         controls: z.array(controlSchema).optional().describe("Optional interactive controls to collect a response."),
         canvasId: z
           .string()
@@ -213,19 +198,19 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
           ),
       },
       async (args) => {
-        const isWidget = args.contentType === "widget";
-        // Self-gate: the static catalog always lists 'widget', so only this
-        // handler knows whether the avatar owner enabled it. Checked first — an
-        // avatar without the feature should hear that, not a syntax error.
-        if (isWidget && !ctx.widgetEnabled) {
-          return text(WIDGET_DISABLED_ERROR, true);
+        // Checked first: an avatar following a prompt frozen before the
+        // retirement should hear where the feature went, not a size or syntax error.
+        const contentType = args.contentType.trim();
+        if (contentType === "widget") {
+          return text(WIDGET_RETIRED_ERROR, true);
+        }
+        if (!isCanvasShowContentType(contentType)) {
+          return text(unknownContentTypeError(contentType), true);
         }
         if (args.content.length > MAX_CANVAS_CONTENT_CHARS) {
           return text(
             `Canvas content is too large (${args.content.length} chars; limit ${MAX_CANVAS_CONTENT_CHARS}). ` +
-              (isWidget
-                ? "Compact it: inline less data (keep only the rows the widget needs), move repeated values into `{@const}`, drop decoration, or split it across smaller canvases — then call show again."
-                : "Compact it: for a chart prefer a 'vega' Vega-Lite spec over hand-written SVG, drop inline data you don't need, or split it across smaller canvases — then call show again."),
+              "Compact it: for a chart prefer a 'vega' Vega-Lite spec over hand-written SVG, drop inline data you don't need, or split it across smaller canvases — then call show again.",
             true,
           );
         }
@@ -233,12 +218,6 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
           return text(`Canvas title is too long (limit ${MAX_CANVAS_TITLE_CHARS} chars). Use a short title.`, true);
         }
         const controls = (args.controls ?? []) as CanvasControl[];
-        if (isWidget && controls.length > 0) {
-          return text(WIDGET_CONTROLS_ERROR, true);
-        }
-        if (isWidget && args.editable) {
-          return text(WIDGET_EDITABLE_ERROR, true);
-        }
         if (controls.length > MAX_CANVAS_CONTROLS) {
           return text(`Too many controls (${controls.length}; limit ${MAX_CANVAS_CONTROLS}). Show fewer at once.`, true);
         }
@@ -264,33 +243,22 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         }
         // The client renders mermaid, so without this a parse error was a banner
         // only the user saw. Fail-open: only a real parse verdict rejects.
-        if (args.contentType === "mermaid") {
+        if (contentType === "mermaid") {
           const check = await checkMermaidSyntax(args.content);
           if (check.ok === false) {
             return text(mermaidSyntaxError(check.error), true);
           }
         }
-        // A widget is parsed + statically checked before display (the mermaid #69
-        // rule): a silent client-side failure is an error only the user sees.
-        let widgetSubmits = false;
-        if (isWidget) {
-          const check = checkWidgetSource(args.content);
-          if (check.ok === false) {
-            return text(widgetCheckError(check.error), true);
-          }
-          widgetSubmits = check.submits;
-        }
         // Never blocking (design D8): controls render async and the user's answer
-        // arrives later as a new chat turn. A widget's `<submit>` rides the same
-        // async path (`canvasSubmission.values`).
-        const interaction: "async" | undefined = controls.length > 0 || widgetSubmits ? "async" : undefined;
+        // arrives later as a new chat turn (`canvasSubmission.values`).
+        const interaction: "async" | undefined = controls.length > 0 ? "async" : undefined;
         const editable = Boolean(args.editable);
         const artifactId = args.canvasId?.trim() || crypto.randomUUID();
         const result = await ctx.emitCanvas({
           artifactId,
           title: args.title,
           content: args.content,
-          contentType: args.contentType,
+          contentType,
           // Pass controls WHENEVER present so async forms render too (not just blocking).
           controls: controls.length > 0 ? controls : undefined,
           awaitInput: false,
@@ -303,16 +271,6 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         }
         if (result.behavior === "cancelled") {
           return text(`The user dismissed the canvas without responding. Proceed without a selection.${idNote}`);
-        }
-        if (isWidget) {
-          return text(
-            "The widget was shown INLINE in your answer, at this point of the text (not in the side panel): continue the answer after it and do not repeat in prose what it shows. " +
-              "It recomputes locally in the user's browser as they change its inputs — you are NOT called on those changes and cannot see the values they set. " +
-              (widgetSubmits
-                ? "It has a `<submit>`: when the user presses it, the submitted values arrive as their NEXT message referencing this canvas, so finish your answer now (say what the widget does and what pressing submit sends) instead of waiting."
-                : "It has no `<submit>`, so no structured values come back from it (a `<button send>` in it posts the user's next chat message when pressed); if you need the user's result as data, refine the widget with a `<submit values={{ … }}>`.") +
-              idNote,
-          );
         }
         // Display-only OR async/editable: nothing blocked. Tell the model how the
         // user's later response will arrive so it doesn't wait on this call.

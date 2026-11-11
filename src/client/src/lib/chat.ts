@@ -8,8 +8,9 @@ import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
 import { newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
-import { isWidgetAttachment, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
-import { removeConversationWidgetState, removeWidgetState } from "./widgetState";
+import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
+import { removeConversationWidgetState } from "./widgetState";
+import { inlineUiPlainText } from "../../../shared/widget/detect";
 import { formatTokenCount } from "./format";
 import { flushReveal, handoffReveal, noteLiveText, resetReveal } from "./streamReveal";
 import { noteThinking, resetThinkingClock, thinkingElapsedMs } from "./streamThinking";
@@ -489,7 +490,7 @@ export async function startNewChat(): Promise<void> {
 }
 
 /**
- * A deleted conversation takes the widget values this browser kept for it with
+ * A deleted conversation takes the inline UI values this browser kept for it with
  * it (lib/widgetState.ts) — call it from EVERY path that deletes a conversation,
  * once the server confirmed the delete.
  */
@@ -1809,7 +1810,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
         detail,
         status: "running",
       });
-      noteCanvasToolStart(paneId, data);
       setStatus(paneId, `${label}${detail ? ` · ${detail}` : ""}`, true, data.toolUseId);
       return;
     }
@@ -1817,8 +1817,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
       if (data?.toolUseId) {
         noteTodoToolEnd(data.toolUseId, data.ok !== false);
         updatePane(paneId, (pane) => {
-          if (pane.liveCanvasTools?.some((tool) => tool.id === data.toolUseId))
-            pane.liveCanvasTools = pane.liveCanvasTools.filter((tool) => tool.id !== data.toolUseId);
           const row = pane.liveTools.find((t) => t.id === data.toolUseId);
           if (!row || row.status === "blocked") return;
           row.status = data.ok === false ? "failed" : "done";
@@ -1899,8 +1897,6 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             // (it's stamped after the emit), so this never overwrites one.
             pane.liveAttachments.push({ ...data.attachment, anchor: pane.liveText.length });
           }
-          // The widget is here: its "being made" placeholder gives way to it.
-          if (isWidgetAttachment(data.attachment) && pane.liveCanvasTools?.length) pane.liveCanvasTools = [];
           // A live .drawio share opens as a side-panel tab by itself, ONCE: a
           // replayed frame (reconnect, return to the running conversation)
           // never re-opens a tab the viewer closed. Single-pane layout only —
@@ -2354,7 +2350,6 @@ function resetLive(pane: ChatPane): void {
   pane.turnFinalized = false;
   pane.liveText = "";
   pane.liveAttachments = [];
-  pane.liveCanvasTools = [];
   pane.liveTextBreakPending = false;
   pane.liveThinking = "";
   pane.thinkingActive = false;
@@ -2552,7 +2547,8 @@ function notifyTurnComplete(paneId: string): void {
   if (!pane) return;
   const last = pane.messages[pane.messages.length - 1];
   if (!last || last.role !== "assistant") return;
-  const text = (last.content || "").replace(/\s+/g, " ").trim();
+  // The prose of the answer: an answer that opens with inline UI must not put its tag source in a notification.
+  const text = inlineUiPlainText(last.content || "").replace(/\s+/g, " ").trim();
   const body = text
     ? text.length > 140
       ? `${text.slice(0, 140)}…`
@@ -2832,9 +2828,6 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
       : undefined;
   const pending = Boolean(controls && controls.length && interaction !== "async");
   updatePane(paneId, (pane) => {
-    // A canvas for the panel landed: nothing is "being prepared" any more. (A
-    // widget's placeholder stays until its attachment puts it in the bubble.)
-    if (data.contentType !== "widget" && pane.liveCanvasTools?.length) pane.liveCanvasTools = [];
     const fresh = freshSideFrame(pane, pane.liveRunId ?? data.runId, frameId);
     // What showed BEFORE this canvas joined: a new last canvas would otherwise
     // become the default tab and take the panel over from the viewer.
@@ -2873,21 +2866,9 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
       // frame is a new version — nothing has been submitted on that yet.
       ...(!fresh && prev?.submittedValues !== undefined ? { submittedValues: prev.submittedValues } : {}),
     };
-    // A widget is drawn in the chat bubble, where its attachment places it. The
-    // attachment rides its own frame, so until this run ends the canvas is
-    // marked as on its way there — the panel must not open for it meanwhile.
-    const widget = entry.contentType === "widget";
-    if (widget) {
-      const runId = entry.runId;
-      if (fresh && runId) entry.inlineRunId = runId;
-      else if (prev?.inlineRunId) entry.inlineRunId = prev.inlineRunId;
-    }
     const idx = pane.canvases.findIndex((c) => c.id === entry.id);
     if (idx >= 0) pane.canvases[idx] = entry;
     else pane.canvases.push(entry);
-    // Nothing to reveal: a widget is not a panel tab. (Without an attachment —
-    // an older server — it becomes one when the run ends; see isInlineCanvas.)
-    if (widget) return;
     // A canvas that ASKS for input must be seen, whatever tab the viewer is
     // on: an owner reading the new deck card's preview would otherwise never
     // see the next review round's form (the deck-review loop would stall
@@ -2903,23 +2884,6 @@ function handleCanvas(paneId: string, data: any, frameId = ""): void {
   // A blocking canvas parks the run on the USER's answer — say so instead of
   // leaving the last "실행 중: …" tool label implying avatar work.
   if (pending) setStatus(paneId, "캔버스 응답을 기다리는 중…", true);
-}
-
-/**
- * A `mcp__canvas__show` call started: the live bubble shows a placeholder where
- * the canvas is about to appear (a widget lands right there, in the bubble).
- * The call's input says whether it is a widget when the frame carries it; a
- * canvas of another type goes to the side panel, so it gets no placeholder.
- */
-function noteCanvasToolStart(paneId: string, data: any): void {
-  if (data?.name !== "mcp__canvas__show") return;
-  const type = data.input && typeof data.input === "object" ? (data.input as { contentType?: unknown }).contentType : undefined;
-  if (typeof type === "string" && type !== "widget") return;
-  updatePane(paneId, (pane) => {
-    const tools = pane.liveCanvasTools ?? [];
-    if (tools.some((tool) => tool.id === data.toolUseId)) return;
-    pane.liveCanvasTools = [...tools, { id: data.toolUseId, widget: type === "widget" }];
-  });
 }
 
 /* ---------- side panel: canvases + open files as one tab strip ---------- */
@@ -3037,7 +3001,7 @@ export function closeFileTab(paneId: string, attachmentId: string): void {
 }
 
 /**
- * A widget's `<button send="…">` was pressed: the text goes out as the viewer's
+ * An inline UI `<button send="…">` (or `<submit>`) was pressed: the text goes out as the viewer's
  * next chat message, shown in their bubble like anything they typed. It is the
  * AVATAR's text, though, so two things a typed message can do are off:
  * a text starting with "/" is not sent at all (it would run as a slash command,
@@ -3045,12 +3009,12 @@ export function closeFileTab(paneId: string, attachmentId: string): void {
  * not touched (no draft cleared, no staged image taken along).
  * Returns whether the message was handed to the send path.
  */
-export async function sendWidgetMessage(paneId: string, text: string): Promise<boolean> {
+export async function sendWidgetMessage(paneId: string, text: string, maxChars = 2000): Promise<boolean> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
-  const message = text.trim().slice(0, 2000);
+  const message = text.trim().slice(0, maxChars);
   if (!pane || pane.streaming || !message) return false;
   if (message.startsWith("/")) {
-    notify("슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다.", "warn");
+    notify("슬래시(/)로 시작하는 메시지는 답변 안의 버튼으로 보낼 수 없습니다.", "warn");
     return false;
   }
   await sendMessage(paneId, message, { widgetSend: true });
@@ -3231,8 +3195,6 @@ export async function deleteCanvas(
       return;
     }
   }
-  // A widget's values kept in this browser die with the canvas.
-  removeWidgetState({ userId: readState().user?.id, conversationId: pane?.conversationId, canvasId });
   updatePane(paneId, (p) => {
     const idx = p.canvases.findIndex((c) => c.id === canvasId);
     if (idx < 0) return;

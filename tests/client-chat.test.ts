@@ -716,12 +716,12 @@ describe("pane lifecycle", () => {
 
   it("deleting conversations forgets the widget values this browser kept for them", async () => {
     // The signed-in user is "owner" (beforeEach). c1 has two widgets, c2 one, another account one.
-    const key = (user: string, conversation: string, canvas: string) => `noah:canvas-widget:${user}:${conversation}:${canvas}`;
+    const key = (user: string, conversation: string, canvas: string) => `noah:inline-ui:${user}:${conversation}:${canvas}`;
     const stored = JSON.stringify({ n: { sig: "n = 2", value: 5 } });
     const keys = [key("owner", "c1", "cv1"), key("owner", "c1", "cv2"), key("owner", "c2", "cv1"), key("other", "c1", "cv1"), key("owner", "c3", "cv1")];
     localStorage.clear();
     for (const k of keys) localStorage.setItem(k, stored);
-    localStorage.setItem("noah:canvas-widget-index", JSON.stringify(keys));
+    localStorage.setItem("noah:inline-ui-index", JSON.stringify(keys));
 
     seedPane({ conversationId: "c1" });
     replaceState({ conversations: [{ id: "c1" } as any, { id: "c2" } as any, { id: "c3" } as any] });
@@ -737,7 +737,7 @@ describe("pane lifecycle", () => {
     // A single delete (the conversation list's trash) goes through the same helper.
     forgetConversationWidgets("c3");
     expect(localStorage.getItem(keys[4])).toBeNull();
-    expect(JSON.parse(localStorage.getItem("noah:canvas-widget-index")!)).toEqual([keys[2], keys[3]]);
+    expect(JSON.parse(localStorage.getItem("noah:inline-ui-index")!)).toEqual([keys[2], keys[3]]);
     localStorage.clear();
   });
 
@@ -976,7 +976,7 @@ describe("canvas flows", () => {
     expect(await sendWidgetMessage(id, "   ")).toBe(false);
     expect(pane(id).messages).toHaveLength(1);
     expect(pane(id).draft).toBe("쓰던 글");
-    expect(get(toasts).some((t) => t.message.includes("슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다."))).toBe(true);
+    expect(get(toasts).some((t) => t.message.includes("슬래시(/)로 시작하는 메시지는 답변 안의 버튼으로 보낼 수 없습니다."))).toBe(true);
     updateState((state) => {
       state.chatPanes[0].streaming = true;
     });

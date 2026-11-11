@@ -1,5 +1,5 @@
 /**
- * `<svg>` drawings inside a canvas widget: the ALLOWLISTS (elements, the
+ * `<svg>` drawings inside inline UI: the ALLOWLISTS (elements, the
  * attributes each one takes, what may sit inside what) and the SHAPE every
  * attribute value must have. One home, read by the static check (`check.ts`),
  * the renderer (`svgRender.ts`) and the manual (`svgReference`).

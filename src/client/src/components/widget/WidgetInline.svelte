@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Inline text of a canvas widget: styled runs assembled from ELEMENTS, with
+  // Inline text of inline UI: styled runs assembled from ELEMENTS, with
   // every run's text inserted as a text node. Nothing here parses HTML, so a
   // value like `<img onerror=…>` an avatar interpolates shows as those characters.
   //

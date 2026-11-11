@@ -1,23 +1,28 @@
-// Canvas widget state in localStorage (lib/widgetState.ts): one key per
-// (user, conversation, canvas), a size cap, an LRU of 50 canvases, and no throw
-// when storage is unavailable.
+// Inline UI state in localStorage (lib/widgetState.ts): one key per
+// (user, conversation, message), a size cap, an LRU of 50 answers, no throw
+// when storage is unavailable — and the in-memory handover of a streaming
+// answer's state to the stored message it becomes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_WIDGET_STATE_CHARS,
   MAX_WIDGET_STATE_ENTRIES,
   WIDGET_STATE_INDEX_KEY,
+  clearLiveWidgetState,
   createWidgetStateSaver,
   loadWidgetState,
+  peekLiveWidgetState,
   removeConversationWidgetState,
   removeWidgetState,
   saveWidgetState,
+  setLiveWidgetState,
+  takeLiveWidgetState,
   widgetStateKey,
 } from "../src/client/src/lib/widgetState.js";
 import { dataSize, parseWidget, restoreState } from "../src/shared/widget/index.js";
 
-function ref(userId: string | null | undefined, canvasId: string, conversationId: string | null = "conv-1") {
-  return { userId, conversationId, canvasId };
+function ref(userId: string | null | undefined, messageId: string, conversationId: string | null = "conv-1") {
+  return { userId, conversationId, messageId };
 }
 
 function memoryStorage(initial: Record<string, string> = {}) {
@@ -49,7 +54,7 @@ describe("widgetState", () => {
     const storage = memoryStorage();
     const record = { n: { sig: "n = 2", value: 5 }, tags: { sig: 'tags = ["a"]', value: ["a", "b"] } };
     expect(saveWidgetState(ref("u1", "cv1"), record, dataSize, storage)).toBe(true);
-    expect([...storage.data.keys()].sort()).toEqual([WIDGET_STATE_INDEX_KEY, "noah:canvas-widget:u1:conv-1:cv1"].sort());
+    expect([...storage.data.keys()].sort()).toEqual([WIDGET_STATE_INDEX_KEY, "noah:inline-ui:u1:conv-1:cv1"].sort());
     expect(loadWidgetState(ref("u1", "cv1"), storage)).toEqual(record);
     // Another account on the same browser, or another canvas, sees nothing…
     expect(loadWidgetState(ref("u2", "cv1"), storage)).toBeNull();
@@ -209,28 +214,77 @@ describe("widgetState", () => {
     vi.useFakeTimers();
     const storage = memoryStorage();
     const saver = createWidgetStateSaver(dataSize, 300, storage);
-    saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 1 } });
+    saver.schedule(ref("u1", "cv1", "conv-saver"), { n: { sig: "n = 2", value: 1 } });
     vi.advanceTimersByTime(200);
-    saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 2 } });
+    saver.schedule(ref("u1", "cv1", "conv-saver"), { n: { sig: "n = 2", value: 2 } });
     vi.advanceTimersByTime(200);
-    expect(loadWidgetState(ref("u1", "cv1"), storage)).toBeNull(); // the second call restarted the wait
+    expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toBeNull(); // the second call restarted the wait
     vi.advanceTimersByTime(100);
-    expect(loadWidgetState(ref("u1", "cv1"), storage)).toEqual({ n: { sig: "n = 2", value: 2 } });
+    expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 2 } });
 
-    saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 3 } });
+    saver.schedule(ref("u1", "cv1", "conv-saver"), { n: { sig: "n = 2", value: 3 } });
     saver.flush();
-    expect(loadWidgetState(ref("u1", "cv1"), storage)).toEqual({ n: { sig: "n = 2", value: 3 } });
+    expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 3 } });
 
-    saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 4 } });
+    saver.schedule(ref("u1", "cv1", "conv-saver"), { n: { sig: "n = 2", value: 4 } });
     saver.cancel();
     vi.advanceTimersByTime(1000);
-    expect(loadWidgetState(ref("u1", "cv1"), storage)).toEqual({ n: { sig: "n = 2", value: 3 } });
+    expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 3 } });
 
     // A pending save for one canvas is written before another canvas's replaces it.
-    saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } });
-    saver.schedule(ref("u1", "cv2"), { n: { sig: "n = 2", value: 6 } });
-    expect(loadWidgetState(ref("u1", "cv1"), storage)).toEqual({ n: { sig: "n = 2", value: 5 } });
+    saver.schedule(ref("u1", "cv1", "conv-saver"), { n: { sig: "n = 2", value: 5 } });
+    saver.schedule(ref("u1", "cv2", "conv-saver"), { n: { sig: "n = 2", value: 6 } });
+    expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 5 } });
     vi.advanceTimersByTime(300);
-    expect(loadWidgetState(ref("u1", "cv2"), storage)).toEqual({ n: { sig: "n = 2", value: 6 } });
+    expect(loadWidgetState(ref("u1", "cv2", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 6 } });
+  });
+});
+
+describe("a deleted conversation", () => {
+  it("is not written to again: a save that was still pending must not bring its key back", () => {
+    const storage = memoryStorage();
+    const record = { n: { sig: "n = 2", value: 5 } };
+    expect(saveWidgetState(ref("u-del", "m-1", "conv-del"), record, dataSize, storage)).toBe(true);
+    removeConversationWidgetState("u-del", "conv-del", storage);
+    expect(storage.data.size).toBe(0);
+    expect(saveWidgetState(ref("u-del", "m-1", "conv-del"), record, dataSize, storage)).toBe(false);
+    expect(storage.data.size).toBe(0);
+    // Another conversation, and the same conversation id of another account, are unaffected.
+    expect(saveWidgetState(ref("u-del", "m-1", "conv-other"), record, dataSize, storage)).toBe(true);
+    expect(saveWidgetState(ref("u-two", "m-1", "conv-del"), record, dataSize, storage)).toBe(true);
+  });
+});
+
+describe("the live handover", () => {
+  const record = { n: { sig: "n = 2", value: 9 } };
+  const entry = (text: string, over: Record<string, unknown> = {}) => ({ conversationId: "conv-1", runId: "run-1", text, record, focus: null, ...over });
+
+  it("goes to the stored answer that continues the live text — and only once", () => {
+    setLiveWidgetState("pane-1", entry("계산기입니다.\n\n{@state n = 2}\n<slider"));
+    // Another answer with the same declaration is not that answer.
+    expect(takeLiveWidgetState("pane-1", "conv-1", "다른 답변입니다.\n\n{@state n = 2}\n")).toBeNull();
+    // Another conversation in the same pane is not either.
+    expect(takeLiveWidgetState("pane-1", "conv-2", "계산기입니다.\n\n{@state n = 2}\n<slider label")).toBeNull();
+    // The stored message shows the whole answer, or only the part revealed so far: both continue the live text.
+    expect(takeLiveWidgetState("pane-1", "conv-1", "계산기입니다.\n\n{@state n = 2}\n<slider label=\"수량\" />")?.record).toEqual(record);
+    expect(takeLiveWidgetState("pane-1", "conv-1", "계산기입니다.\n\n{@state n = 2}\n<slider label=\"수량\" />")).toBeNull();
+    setLiveWidgetState("pane-1", entry("계산기입니다.\n\n{@state n = 2}\n<slider"));
+    expect(takeLiveWidgetState("pane-1", "conv-1", "계산기입니다.")?.record).toEqual(record);
+    // Nothing shown yet says nothing about whose it is.
+    setLiveWidgetState("pane-1", entry("계산기입니다."));
+    expect(takeLiveWidgetState("pane-1", "conv-1", "")).toBeNull();
+    clearLiveWidgetState("pane-1");
+  });
+
+  it("is left in place for the SAME run's live bubble (the chat view was reopened mid-stream)", () => {
+    setLiveWidgetState("pane-1", entry("계산기", { focus: "-12" }));
+    expect(peekLiveWidgetState("pane-1", "conv-1", "run-2")).toBeNull();
+    expect(peekLiveWidgetState("pane-1", "conv-9", "run-1")).toBeNull();
+    expect(peekLiveWidgetState("pane-2", "conv-1", "run-1")).toBeNull();
+    expect(peekLiveWidgetState("pane-1", "conv-1", null)).toBeNull();
+    expect(peekLiveWidgetState("pane-1", "conv-1", "run-1")).toMatchObject({ record, focus: "-12" });
+    expect(peekLiveWidgetState("pane-1", "conv-1", "run-1")).not.toBeNull();
+    clearLiveWidgetState("pane-1");
+    expect(peekLiveWidgetState("pane-1", "conv-1", "run-1")).toBeNull();
   });
 });

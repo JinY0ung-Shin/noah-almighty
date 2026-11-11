@@ -135,13 +135,15 @@ These are the invariants the project is built around. New work should reinforce 
   attachments land in the conversation's sandbox folder; host-side writes go through `PinnedDir`). Text
   stays a legitimate slide choice: **never add a check that fires because a slide has no image.**
   → `chat-sse-media.md`, `pptx-converter.md`.
-- **A canvas `widget` is DECLARED, never executed code, and renders INLINE in the answer bubble**
-  (experimental `canvasWidget`, the owner's flag). The server only parses and statically checks it;
-  evaluation happens in the viewer's browser, in an AST interpreter. ONE table is the grammar
-  (`src/shared/widget/spec.ts`). **What a control will do is a declared prop the user can see before
-  pressing** (`send` = their next chat message, never a `/` command; `href`; `<submit>` = structured
-  values) — never a free action, a remote/`data:` load or anything evaluated outside the interpreter.
-  → `chat-sse-media.md` ("Visual canvas").
+- **Inline UI is WRITTEN IN THE ANSWER TEXT — never a canvas, a tool call or executed code.** The avatar
+  mixes component tags into its Markdown (the grammar rides the prompt of every interactive chat run; always
+  on, no flag) and the viewer's browser parses and evaluates them in an AST interpreter while the answer
+  streams. The answer is already on screen, so rendering is LENIENT and what could not be drawn is told to
+  the avatar on its next turn. ONE table is the grammar (`src/shared/widget/spec.ts`). **What a control
+  will do is a declared prop the user can see before pressing** (`send`/`<submit>` = their next chat
+  message, never a `/` command; `href`) — never a free action, a remote/`data:` load or anything evaluated
+  outside the interpreter. A chart the user only looks at goes here too; the canvas is for a side-panel
+  artifact. → `chat-sse-media.md` ("Inline UI").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

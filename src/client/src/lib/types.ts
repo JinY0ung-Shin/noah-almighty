@@ -191,12 +191,6 @@ export interface ChatPane {
   draft: string;
   streaming: boolean;
   liveText: string;
-  /**
-   * `mcp__canvas__show` calls still running in the live turn — what the bubble
-   * shows a placeholder for until the canvas (and a widget's attachment) lands.
-   * `widget`: the call's input said so; false when the type is not known yet.
-   */
-  liveCanvasTools?: { id: string; widget: boolean }[];
   /** Images published by show_file during the currently streaming assistant turn. */
   liveAttachments: import("../../../server/types.js").MessageAttachment[];
   /** Set when tool/agent activity interrupts the text stream; the next delta inserts a paragraph break so resumed text doesn't run onto the previous line. */
@@ -326,12 +320,6 @@ export interface PaneCanvas extends CanvasArtifact {
   pending?: boolean;
   /** A submit POST is in flight. */
   submitting?: boolean;
-  /**
-   * A `widget` canvas a LIVE run just showed: the run id. Its attachment (which
-   * places it in the chat bubble) may arrive a frame later, and until the run
-   * ends the side panel must not open for it (lib/sidePanel `isInlineCanvas`).
-   */
-  inlineRunId?: string;
 }
 
 /** One agent in the live activity tree; "main" is the root, others nest under parentId. */

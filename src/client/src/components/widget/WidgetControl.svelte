@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The input components of a canvas widget — native form elements, each one
+  // The input components of inline UI — native form elements, each one
   // labelled. A control is CONTROLLED by the widget's state: it shows `value`
   // and reports a change through its handler; the state change re-renders it.
   //
@@ -35,7 +35,7 @@
   $: sendText = typeof p.send === "string" ? p.send.slice(0, MAX_SEND_CHARS) : "";
   // A "/…" message would run as a slash command — those are the viewer's to type.
   $: sendRefused = sendText.startsWith("/");
-  $: sendHint = sendRefused ? "슬래시(/)로 시작하는 메시지는 위젯에서 보낼 수 없습니다." : `보낼 메시지: ${sendText}`;
+  $: sendHint = sendRefused ? "슬래시(/)로 시작하는 메시지는 답변 안의 버튼으로 보낼 수 없습니다." : `보낼 메시지: ${sendText}`;
   $: linkHref = typeof p.href === "string" ? p.href : "";
   $: idle = v.tag === "button" && !sendText && !linkHref && typeof p.onClick !== "function";
   $: if (sendRefused) ctx.report('<button send>: a message starting with "/" is not sent from a widget (slash commands are typed by the user)');
@@ -149,10 +149,11 @@
 </script>
 
 {#if v.tag === "button" && linkHref && p.disabled !== true}
-  <a class={`${buttonClass} wg-button-link`} href={linkHref} target="_blank" rel="noopener noreferrer" title={linkHref}
+  <a data-wg-key={id} class={`${buttonClass} wg-button-link`} href={linkHref} target="_blank" rel="noopener noreferrer" title={linkHref}
     >{#if icon}<Icon name={icon} size={14} />{/if}{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</a>
 {:else if v.tag === "button" && sendText}
   <button
+    data-wg-key={id}
     type="button"
     class={`${buttonClass} wg-button-send`}
     disabled={p.disabled === true || ctx.locked || sendRefused}
@@ -166,6 +167,7 @@
   <span id={`${id}-send`} class="sr-only">{sendHint}</span>
 {:else if v.tag === "button"}
   <button
+    data-wg-key={id}
     type="button"
     class={buttonClass}
     disabled={p.disabled === true || idle || Boolean(linkHref)}
@@ -173,7 +175,7 @@
     on:click={() => ctx.fire(p.onClick, [])}
   >{#if icon}<Icon name={icon} size={14} />{/if}{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</button>
 {:else if v.tag === "checkbox"}
-  <label class="wg-check">
+  <label class="wg-check" data-wg-key={id}>
     <input
       type="checkbox"
       checked={p.checked === true}
@@ -183,7 +185,7 @@
     <span>{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</span>
   </label>
 {:else if v.tag === "switch"}
-  <div class="wg-switch">
+  <div class="wg-switch" data-wg-key={id}>
     <button
       class="toggle"
       class:on={p.checked === true}
@@ -199,7 +201,7 @@
     <span id={`${id}-label`}>{#if v.segs.length}<WidgetInline segs={v.segs} />{:else}{label}{/if}</span>
   </div>
 {:else if v.tag === "slider"}
-  <div class="wg-field">
+  <div class="wg-field" data-wg-key={id}>
     <span id={`${id}-label`} class="wg-label">{label}</span>
     <div class="canvas-slider">
       <input
@@ -217,7 +219,7 @@
     </div>
   </div>
 {:else if v.tag === "select"}
-  <label class="field wg-field">
+  <label class="field wg-field" data-wg-key={id}>
     <span>{label}</span>
     <select value={selectedIndex < 0 ? "" : String(selectedIndex)} on:change={onSelect}>
       <option value="" disabled>{typeof p.placeholder === "string" ? p.placeholder : "선택하세요"}</option>
@@ -227,7 +229,7 @@
     </select>
   </label>
 {:else if v.tag === "input"}
-  <label class="field wg-field">
+  <label class="field wg-field" data-wg-key={id}>
     <span>{label}</span>
     <input
       type={p.type === "number" ? "number" : "text"}
@@ -242,7 +244,7 @@
     />
   </label>
 {:else if v.tag === "segmented-control"}
-  <div class="wg-field">
+  <div class="wg-field" data-wg-key={id}>
     <span id={`${id}-label`} class="wg-label">{label}</span>
     <div class="seg-control wg-seg" role="radiogroup" aria-labelledby={`${id}-label`}>
       {#each options as opt, i}
@@ -258,7 +260,7 @@
     </div>
   </div>
 {:else if v.tag === "tabs"}
-  <div class="wg-tabs" role="tablist" aria-label={label}>
+  <div class="wg-tabs" data-wg-key={id} role="tablist" aria-label={label}>
     {#each options as opt, i}
       <button
         type="button"

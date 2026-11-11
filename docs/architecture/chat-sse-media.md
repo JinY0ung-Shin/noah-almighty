@@ -445,7 +445,7 @@
 
 ## Visual canvas (`mcp__canvas__show`)
 - CSP-SAFE port of Superpowers' visual companion: the avatar DECLARES content
-  (`markdown`/`vega`/`mermaid`/`svg`/`html`, and the experimental `widget` — its own bullet below) + optional
+  (`markdown`/`vega`/`mermaid`/`svg`/`html`) + optional
   `controls` (buttons/text); the CLIENT renders
   sanitized content (DOMPurify; mermaid `securityLevel: strict`; **`vega` = a compact Vega-Lite spec
   compiled+rendered to an SVG STRING via the CSP-safe `vega-interpreter` AST evaluator — no `Function`
@@ -528,110 +528,165 @@
   `seenThrough`): it selects nothing, and with no tab picked the panel's default prefers the latest canvas
   still pending — so the parked ask shows, a refinement in place included, and the default moves on once
   the replayed `prompt_resolved` clears it. E2E pin: `tests/visual/canvas-park-return.spec.ts`.
-- **`widget` is a DECLARED interactive canvas, never executed code (2026-11-10, experimental).** The avatar
-  sends a small source (`{@state}`/`{@const}`/`{#each}`/`{#if}`, JSX-like tags, a JavaScript-subset expression
-  language); the viewer's browser evaluates it with an AST interpreter (`src/shared/widget/` — no `eval`/
-  `Function`, so `script-src` is unchanged) and redraws on every input change WITHOUT calling the avatar.
-  The parser and interpreter are ported from `mireiffe/mirineereum` (`src/lib/genui` @ `0e469c4`, with the
-  owner's permission; each file's header says so) and hardened: sizes are rejected BEFORE the result is
-  allocated, a per-window allocation budget, explicit nesting caps, a work budget in the parser.
-  **Every native call is CHARGED** — the 2026-11-10 red-team review escaped nothing but ran 10^9 native
-  calls on 20 steps (a native function passed as a callback), allocated 1 GB through an uncharged default
-  `sort()`/`String()`, and drew 10^6 elements from 61 characters. So: a callback wrapper ticks per call,
-  array/string methods spend steps proportional to the receiver (searches `n × m`), every string a coercion
-  builds is charged, `JSON.stringify` serializes a sanitized copy (no `toJSON`), and one render has an OUTPUT
-  budget (`beginRender`: 20 000 elements / 2 000 000 characters / 1 000 000 steps in total) on top of the
-  per-block window. **A new method or global in `interp.ts` charges its work before it runs** — the probes
-  that found these live in the review notes, the regressions in `tests/widget-runtime.test.ts`.
-  - **The server only PARSES and statically CHECKS (`checkWidget`, in-process), it never evaluates** — the
-    agent's code does not run in Noah's container. The parser counts its own work and gives up with "too
-    complex", so any ≤ `MAX_CANVAS_CONTENT_CHARS` input returns in bounded time; a verdict rejects and
-    NOTHING is shown (the mermaid #69 rule, but fail-CLOSED on a verdict because the same parser runs in the
-    user's tab), while an exception inside the checker itself is logged and let through. Checked: syntax
-    (line:col), unknown tag/prop/missing required prop, undefined identifiers, `{@state}` placement and
-    duplicates, setter/`copy` calls outside a handler, node/nesting/state caps.
-  - **ONE table is the grammar's home: `src/shared/widget/spec.ts`** (`WIDGET_COMPONENTS`). The server check,
-    the client renderer and the manual's component list (`widgetComponentReference()`) all read it — add a
-    component or prop THERE, never in one of the three. Colours/backgrounds are token names only; nothing a
-    model writes becomes a `style`, `class`, `href` or `src`.
-  - **A widget renders INLINE in the answer bubble, not in the side panel (2026-11-11, the user's call —
-    the inline generative-UI behaviour).** `show` still records the canvas and emits the `canvas` frame, and
-    for a widget the route ALSO publishes a message attachment the way a team-brain card does:
-    `{ id: <canvasId>, kind: "widget", mediaType: CANVAS_WIDGET_ATTACHMENT_MEDIA_TYPE, name, anchor }` on the
-    `file` frame and on the stored message (`runCapabilities` stamps `CanvasRequest.anchor` for a widget
-    only). One attachment per message per canvas (a re-show in the same message keeps the first anchor); a
-    re-show in a LATER turn attaches again there. The client (`widget/InlineWidget.svelte` → `CanvasTab`
-    with `inline`) draws the widget at the LAST attachment of that id in the conversation and a one-line
-    note at the earlier ones or for a deleted canvas; an inline widget is left out of the side-panel tabs,
-    default, auto-reveal and unseen dot. **Safety net:** a widget canvas with NO attachment in the loaded
-    messages stays a panel tab, so a widget never vanishes. While `mcp__canvas__show` runs, the live bubble
-    shows a placeholder (it reads `contentType` from the tool frame's input). Every other content type is
-    still a panel tab. A rewind follows the canvas rule (`rewindCanvasArtifacts`): a widget first shown in a
-    removed message is deleted, a refined one falls back to its last surviving version.
-  - **What a button will do is DECLARED as a prop, so the user sees it before pressing** — there is no free
-    `send()`/`open()` action. `<button>` takes EXACTLY ONE of `onClick` (local state), `send` (the text
-    becomes the user's next chat message through the pane's ordinary send — tooltip "보낼 메시지: …", locked
-    while the avatar answers, ≤ `MAX_SEND_CHARS`, the composer's draft and staged images untouched) or
-    `href`; `<link href>` and inline `[text](https://…)` open http(s) only (`safeLinkUrl`) in a new tab;
-    `<image src alt>` takes only an image of THIS conversation (`conversationImageRef` shape-checks
-    `/api/conversations/<id>/images/<id>` in the library, the client checks the conversation id — the avatar
-    gets such a URL from `show_file` with `hidden:true`). **A `send` text may never start with `/`**: it
-    arrives exactly like a typed message, where a leading slash is a chat command (`/compact`, `/routine`,
-    `/todo` …) the server cannot tell apart — the library refuses it (statically for a literal, at render
-    for a computed text, judged AFTER control characters are stripped) and the client refuses again.
-    `<submit values={...}>` remains the STRUCTURED way back and rides the existing `canvasSubmission.values`
-    turn (so a widget with a submit is `interaction: "async"`); the route now writes an accepted async
-    submission into `canvas_versions.submitted_values_json`, so "응답 완료" survives a reload. Still absent
-    on purpose: remote or `data:` images and `Math.random`. `controls` and `editable` are refused with
-    a widget. `parseCanvasSubmission` caps every canvas submission (`MAX_CANVAS_SUBMISSION_KEYS`/`_CHARS`,
-    its own 400 text); the widget's own client cap is lower (`MAX_SUBMIT_*`).
-  - **`<svg>` is a drawing bound to state, checked THREE times.** `src/shared/widget/svg.ts` is its grammar:
-    an allowlist of 20 elements and of attributes per element, and every VALUE validated by SHAPE and
-    re-emitted from the parsed form (numbers/lengths, token or `#hex`/`rgb()`/`hsl()` colours, a path
-    charset with a length cap, `url(#id)` only, numeric `transform` functions) — never a blocklist.
-    (1) `check.ts` refuses statically, (2) `svgRender.ts` re-validates the EVALUATED values and builds the
-    markup, (3) the client still runs DOMPurify's svg profile and draws into a shadow root that is updated
-    in place (`lib/widgetSvg.ts`, `shadowSvg`). Ids are namespaced per view and node so two widgets — or the
-    inline card and its fullscreen copy — cannot collide. ≤ 500 elements and 60 000 characters per `<svg>`,
-    charged to the render's output budget. Left out on purpose because they multiply what is drawn or load
-    something: `use`, `marker-mid`, filters, animation, `image`, `a`, `style`/`class`/`href`/`on*`, nested
-    `svg`, `font-family`. Icons are an enum of the names `Icon.svelte` draws (`src/shared/widget/icons.ts`;
-    a test fails when it drifts from `lib/icons.ts`). The manual page sits ~100 characters under its
-    16 000 cap — the next component means splitting the topic, not squeezing prose.
-  - **A render failure in the browser reaches the avatar on the NEXT turn** (`lib/canvasReport.ts` →
-    `POST /api/canvases/:canvasId/render-report` → `CanvasRenderReportQueue`, in memory on the store →
-    `buildPiTurnPreamble`, once): widget parse/eval errors, an exceeded output budget, a failed handler, a
-    setter called while rendering (ignored, but recorded in `rt.warnings`), and vega/mermaid render errors.
-    Reports are tied to the canvas version, merged per version, dropped when a new version is shown or the
-    canvas/conversation is deleted, kept for a turn whose canvas is off; every miss is ONE 404.
-  - **Gate: the experimental flag `canvasWidget` of the AVATAR OWNER** (`CANVAS_WIDGET_FEATURE_KEY`).
-    tools/list is static, so the enum always shows `widget` and the HANDLER refuses it when the flag is off
-    (`CanvasToolsContext.widgetEnabled`, from runCapabilities). `describe_system`'s canvas line reports
-    ENABLED/DISABLED — for non-owner viewers too, since a colleague's run needs the same answer. The frozen
-    prompt's enabled-features line (`experimentalFeaturesSection`, owner turns) is a START-OF-CONVERSATION
-    snapshot and says so; it and the manual topic `canvas-widget` both name describe_system as authoritative.
-    Graduating = deleting the registry entry and the gate.
-  - **Client:** `lib/widgetView.ts` evaluates the WHOLE document into a plain view model per state change
-    (budget refilled per top-level block; a failing node becomes an error node, the rest still draws) and the
-    `components/widget/*` components only draw that model — no component reads state inside a helper, which
-    is what keeps Svelte's legacy-mode stale reads out. Re-evaluation is deferred until a running handler
-    returns (`resetBudget` puts the runtime back in the render phase). Model text reaches the DOM as text
-    nodes only; the top-level prose goes through `renderWidgetProse` (`lib/widgetProse.ts`: ONLY the tags
-    Markdown itself produces, no `class`/`id`/`style`/`href` — a plain `renderMarkdown` let raw HTML wear
-    the app's own classes as a fake submit button). A control whose handler refuses or clamps the value is
-    written back to the STATE value after the handler (Svelte skips a write equal to its own last one), so
-    what the user sees is what `<submit>` sends; a required prop that evaluates to null/undefined draws as
-    empty, not as an error; `<chart>` goes
-    through the SAME Vega-Lite path as a `vega` canvas (`renderVegaSvg`: inline data only, AST evaluator,
-    sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard.
-  - **State lives in `CanvasTab`'s script** (both surfaces — the inline card and fullscreen — share
-    it) and is mirrored to `localStorage` under `noah:canvas-widget:<userId>:<conversationId>:<canvasId>`
-    (`lib/widgetState.ts`: only setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a
-    200 000-char cap measured with `dataSize` BEFORE serializing, the 50 most recent canvases, removed with
-    the canvas, every access guarded). The conversation id is in the key because an avatar may reuse a
-    `canvasId` it named itself. A value is restored or carried across a refinement in place ONLY while
-    its declaration text (`sig`) is unchanged. Per browser, never sent to the server — the avatar cannot
-    read it.
+- **Interactive UI is NOT a canvas type (2026-11-11).** The experimental `widget` content type lived here for
+  a day; it became inline UI, which the avatar writes in its answer text — "Inline UI" below. `show` answers a
+  call that still passes `contentType: 'widget'` (an older conversation's frozen prompt) with an error that
+  redirects there, the manual topic id `canvas-widget` redirects to `inline-ui`, and both names plus the
+  experimental key `canvasWidget` are retired and reserved. Rows an unreleased build stored are left alone: a
+  `widget` canvas is an ordinary panel tab that shows its source with a notice, and a `kind: "widget"` message
+  attachment draws nothing.
+- **A render failure in the browser reaches the avatar on the NEXT turn** (`lib/canvasReport.ts` →
+  `POST /api/canvases/:canvasId/render-report` → `CanvasRenderReportQueue`, in memory on the store →
+  `buildPiTurnPreamble`, once): vega/mermaid render errors. Reports are tied to the canvas version, merged
+  per version, dropped when a new version is shown or the canvas/conversation is deleted, kept for a turn
+  whose canvas is off; every miss is ONE 404. (Inline UI has the same loop over its own route.)
 - **Questions default to AskUserQuestion, not canvas controls** — controls are for decisions ANCHORED to
   the artifact on screen (stated in the standing canvas guidance + the `show` description). `describe_system`
   reports canvas availability via runCapabilities' `canvasActive` → `ctx.canvasEnabled`, carrying the same redirect.
+
+## Inline UI (UI the avatar writes in its answer)
+- **The avatar writes component tags straight into its ANSWER TEXT; the chat draws them in place
+  (2026-11-11, the user's call: behave like ChatGPT's Intelligent UI and the repo it was ported from).**
+  Markdown and UI are one text: `{@state}`/`{@const}` directives, `{#each}`/`{#if}` blocks and JSX-like tags
+  with a JavaScript-subset expression language, between ordinary Markdown. There is NO tool call, NO canvas,
+  NO side panel, NO experimental flag and NO server step: the text streams as any answer does, is stored as
+  the message's text, and the viewer's browser detects, parses and evaluates it. The parser and interpreter
+  are ported from `mireiffe/mirineereum` (`src/lib/genui` @ `0e469c4`, with the owner's permission; each
+  file's header says so) and live in `src/shared/widget/` — the directory keeps the name from the canvas
+  type it started as.
+- **What makes the model write it: a standing brief in the prompt.** `inlineUiPromptSpec()`
+  (`src/shared/widget/guide.ts`, ~5.6k chars, generated from the spec table) is appended for a run where
+  `AgentRequest.inlineUiEnabled` is true — an interactive chat turn a person watches in the app: never
+  `headless`, never `externalTaskApi`, never a consultation (their text is read by a machine or another avatar,
+  where tags would be noise). ONE predicate decides it, `inlineUiAllowed` (`agent/ownerState.ts`), computed
+  once in `runCapabilities`; it depends on no tool group, flag or events sink, and every viewer class gets it.
+  `describe_system` reports the same state live (`- Inline UI: AVAILABLE in this run …` / `NOT available …`
+  with the reason), and the manual topic `inline-ui` holds the full reference (its page sits ~200 characters
+  under the 16 000 cap — the next component means splitting the topic). The prompt is frozen per conversation,
+  so two things cover the edges: a routine or task-API turn of a conversation that began as a chat hears
+  `Answer format (this turn): plain Markdown only …` in its turn preamble (`inlineUiOffTurnNote`), and a
+  conversation that predates this has no brief at all — it learns inline UI only from `describe_system`, the
+  manual and the redirecting errors. The brief is NOT in the 18 000-char standing-prompt tripwire
+  (`tests/system-manual.test.ts`); its own size is pinned in `tests/widget-guide.test.ts`. The brief also says where: the FINAL answer text —
+  text written before a tool call is folded into the reasoning view (`text_fold`), where tags are not drawn.
+  A chart the user only needs to SEE goes here too (`<chart>`), not on a `vega` canvas; the canvas is for a
+  side-panel artifact worked on together.
+- **Never executed code.** The browser walks an AST (`interp.ts` — no `eval`/`Function`, `script-src`
+  unchanged); every native call is CHARGED (a callback wrapper ticks per call, array/string methods spend
+  steps proportional to the receiver, every string a coercion builds is charged, `JSON.stringify` serializes
+  a sanitized copy) and one render has an OUTPUT budget (`beginRender`: 20 000 elements / 2 000 000
+  characters / 1 000 000 steps) on top of the per-block window. **A new method or global in `interp.ts`
+  charges its work before it runs** — the red-team probes that found the uncharged paths are regressions in
+  `tests/widget-runtime.test.ts`. Model text reaches the DOM as text nodes only; colours and backgrounds are
+  token names; nothing a model writes becomes a `style`, `class`, `href` or `src`.
+- **ONE table is the grammar's home: `src/shared/widget/spec.ts`** (`WIDGET_COMPONENTS`). The static check,
+  the renderer's prop handling, the manual's reference (`widgetComponentReference()`) and the prompt's
+  component list (`widgetComponentBrief()`) all read it — add a component or prop THERE. The one hand copy
+  is `detect.ts`'s tag-name list (it must import nothing); `tests/widget-detect.test.ts` fails on drift.
+- **`parseAnswer(source, { streaming })` (`template.ts`) is the answer's parser; `parseWidget` stays the
+  strict whole-source one** (server examples, tests). An answer differs from a UI-only source in four ways:
+  (1) at the top level only a KNOWN component name opens an element — any other `<name>`, a stray closing
+  tag, an HTML comment, an unknown `{@…}` is the answer's own Markdown/HTML, and a BLOCK-level HTML tag
+  there (`HTML_BLOCK_TAGS`: `table`, `div`, `form`, `details`…) is an HTML block as it is to Markdown: it
+  runs to the next blank line and nothing inside it is ours (a `<col>` of its `<table>`); (2) component
+  names that are also HTML (`details`, `table`, `select`, `input`, `button`, `link`, `progress`) are judged
+  by `isHtmlLookalike` at the top level — ours with a prop the component cannot do without, any
+  `{expression}` value or a prop only the component has (`variant`, `tone`), HTML with an HTML-only
+  attribute (`rel`, `max`) or nothing that tells: `<details><summary>`, a task list's
+  `<input type="checkbox">` and `<link rel="stylesheet">` stay HTML; (3) a construct the text ENDS inside of
+  (a tag whose `>` has not come, an open `{`, half a keyword) is cut: the parse starts over on the text
+  before it (`StreamCut`), `end` says where, `pending` names the component being written, and an element or
+  block that is merely still open keeps its children so far and is `partial`; (4) `problems` are advice,
+  the tree is drawn anyway — so **a mistake costs its own LINE, never the rest of the answer** (`resume`): a
+  `}` or a closing quote that was left out ends the construct at its line end instead of at some later `}`
+  (the strict parser's recovery swallowed every paragraph after it, which nobody saw while a document with
+  problems was not drawn at all). While streaming, a syntax error counts as "still being written" only
+  within the last ~40 characters of the text; further back it is a real one and the answer goes on being
+  drawn. A lone backtick in prose does not run into the fence after it, and a backtick run with a backtick
+  later on its line is inline code (as `detect.ts` reads it). `tests/widget-template.test.ts` parses EVERY
+  prefix of a sample answer and requires zero problems, and pins each of these.
+- **`containsInlineUi` (`detect.ts`) decides per answer, cheaply** — a line scan for a component tag or a
+  directive at the start of a line, outside fenced code. ChatView runs it on every answer (verdict cached
+  for long texts) and lazy-loads `components/widget/AnswerUi.svelte` (the parser, interpreter and
+  components) on the first yes; until the chunk arrives the answer's place shows a placeholder, never raw
+  tags, and a failed load falls back to plain Markdown. A false "maybe" costs nothing: `AnswerUi` draws an
+  answer without UI through the same block renderer as any answer.
+- **`AnswerUi` draws the WHOLE answer** — one instance for the live bubble and one for the stored message
+  (the same instance while its end drains in and after, so it is not remounted): `parseAnswer` →
+  `buildAnswerItems` (`lib/widgetView.ts`: top-level Markdown runs + evaluated UI blocks, with source
+  offsets) → `answerPieces` (`lib/answerLayout.ts`: interleaves the anchored cards the way
+  `bubbleSegments.ts` does; a card anchored inside a UI block comes right after it; adjacent UI blocks are
+  one layout). Markdown runs go through `lib/streamMarkdown.ts` exactly like a plain answer; UI blocks
+  through `WidgetNode`. **A block whose source, the state values and the document's declarations are
+  unchanged is not evaluated again and keeps its nodes** (`AnswerViewCache`), so while an answer streams
+  only the block being written changes and the charts above it do not redraw per token; `values` keeps its
+  identity until a declaration changes. A component whose tag is still arriving at the top level gets a
+  placeholder (`widget-slot-pending`); inside an open container nothing is shown for it.
+- **Lenient on purpose — the answer is already on screen and cannot be retried in that turn.** A tag that
+  does not exist is dropped where it stands and its children are still drawn; an unknown prop is ignored; a
+  required prop that was left out draws as its empty value (`emptyValue` — an unlabelled slider, a control
+  that does nothing) and only one with no empty value (an icon name, a `send` text) is an error node; a node
+  that throws is ONE error node and its siblings still render. The strictness moved to the advice:
+  `widgetProblems(doc)` (the static checker in answer mode) + `collectWidgetProblems` + failed handlers and
+  charts are posted by `lib/canvasReport.ts` (`queueInlineUiReport`) to
+  `POST /api/conversations/:conversationId/ui-report {messageId, errors}` — only for the conversation's
+  LATEST stored answer, never while it streams (the report goes out on the update where `streaming` turns
+  false: a turn's end almost always drains in first) — and reach the avatar once, at the start of its next turn,
+  under "Inline UI render report". Server side (`store.reportInlineUiRenderErrors` /
+  `takeInlineUiRenderErrors`, a second `CanvasRenderReportQueue` keyed by message id — same merging, caps
+  and TTL): 204 when queued OR ignored (not the conversation's latest assistant message), 400 for a missing
+  `messageId` or a non-array `errors`, 404 for a conversation that is not the caller's, session auth only;
+  `errors: []` clears a waiting report; a report whose message is no longer the latest answer when the turn
+  takes it (regenerate, rewind) is dropped; consumed only by a run where inline UI is on, never a compaction
+  or a steer's follow-up turn.
+- **What a control will do is DECLARED as a prop, so the user sees it before pressing** — there is no free
+  `send()`/`open()` action (the original's are deliberately not ported). `<button>` takes EXACTLY ONE of
+  `onClick` (local state), `send` (the text becomes the viewer's next chat message through the pane's
+  ordinary send — tooltip "보낼 메시지: …", locked while the avatar answers, ≤ `MAX_SEND_CHARS`, the
+  composer's draft and staged files untouched) or `href`; `<link href>` and inline `[text](https://…)` open
+  http(s) only (`safeLinkUrl`) in a new tab; `<image src alt>` takes only an image of THIS conversation
+  (`conversationImageRef`; the client checks the conversation id). **A `send` text may never start with `/`**
+  (it arrives exactly like a typed message, where a leading slash is a chat command): refused statically for
+  a literal, at render for a computed text, and again in `sendWidgetMessage`. `<submit values={…}>Label</submit>`
+  is the structured way back: it posts the label followed by `- key: value` lines as the viewer's next
+  message through the same path (`normalizeSubmitValues` caps it) — it no longer rides `canvasSubmission`.
+  Still absent on purpose: remote or `data:` images, `Math.random`, anything that loads.
+- **`<chart>` has two forms and ONE pipeline.** `type` + `data` (+ `xKey`, `series`, `stacked`,
+  `horizontal`, `unit`, `title`) is the short form for bar/line/area/pie/donut — `simpleChartSpec`
+  (`src/shared/widget/chart.ts`) turns it into a Vega-Lite spec; `spec` takes a whole Vega-Lite spec for
+  anything else; exactly one of the two (`oneOf`). Both go through `renderVegaSvg` (inline data only, AST
+  evaluator, sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard and
+  skipped when the spec is unchanged.
+- **`<svg>` is a drawing bound to state, checked THREE times.** `src/shared/widget/svg.ts` is its grammar: an
+  allowlist of 20 elements and of attributes per element, every VALUE validated by SHAPE and re-emitted from
+  the parsed form — never a blocklist. (1) the static check, (2) `svgRender.ts` re-validates the EVALUATED
+  values and builds the markup, (3) the client still runs DOMPurify's svg profile and draws into a shadow
+  root updated in place (`lib/widgetSvg.ts`, `shadowSvg`). Ids are namespaced per view and node. ≤ 500
+  elements and 60 000 characters per `<svg>`, charged to the render's output budget. Left out on purpose:
+  `use`, `marker-mid`, filters, animation, `image`, `a`, `style`/`class`/`href`/`on*`, nested `svg`,
+  `font-family`. Icons are an enum of the names `Icon.svelte` draws (`icons.ts`; a test fails on drift).
+- **State is per ANSWER and stays in the viewer's browser.** A stored message's values are mirrored to
+  `localStorage` under `noah:inline-ui:<userId>:<conversationId>:<messageId>` (`lib/widgetState.ts`: only
+  setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a 200 000-char cap measured with
+  `dataSize` BEFORE serializing, the 50 most recent answers, removed with the conversation, every access
+  guarded; a conversation deleted in this page load is never written to again, so a pending save cannot
+  bring its key back; a client-made message id that is replaced by the server's moves its key). A live
+  answer has no message id yet: its changes stay in memory and are handed to the stored message when the
+  turn ends (the live handover in the same file), so a slider moved mid-answer does not jump back. The entry
+  is bound to the run and to the answer text it was written in: only the same run's live bubble (the chat
+  view was reopened mid-stream) or the stored answer whose text continues that text takes it — an older
+  answer with the same declaration, mounted first on the way back, does not. The focused control's key rides
+  along (`data-wg-key`), so a field the viewer was typing in keeps the focus across the remount at turn end. A value applies only while its declaration text (`sig`) is unchanged. Never sent to the server
+  — the avatar cannot read it; only a pressed `send`/`<submit>` reaches the conversation. Keys of the retired
+  canvas type (`noah:canvas-widget…`) are swept once per page load.
+- **Evaluation is one pass, in one place** (`lib/widgetView.ts`), and the `components/widget/*` components
+  only draw the view model — no component reads state inside a helper, which is what keeps Svelte's
+  legacy-mode stale reads out. Re-evaluation is deferred until a running handler returns (evaluating puts
+  the runtime back in its render phase, where setters do nothing). A control whose handler refuses or clamps
+  the value is written back to the STATE value after the handler, so what the user sees is what is sent.
+- **A snippet of an answer that cannot draw UI uses `inlineUiPlainText`** (`detect.ts`: the prose with the UI
+  source lines left out) — the OS notification body does (`notifyTurnComplete`). A new place that shows part
+  of an answer as plain text takes the same helper.
+- Verified in a real browser by `tests/visual/inline-ui.spec.ts` (the app's CSP on the document, a negative
+  control, Vega under it, a reload, and a streaming answer that must never show a tag as text) and in jsdom
+  by `tests/svelte-chat-inline-ui.test.ts`; the `local` demo runtime's `demo ui` streams such an answer.

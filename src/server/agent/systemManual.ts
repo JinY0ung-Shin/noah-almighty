@@ -17,13 +17,14 @@ import { DOCUMENT_ENCODING_CLAUSE, DOCUMENT_LIBRARIES_PHRASE, DOCUMENT_TYPES_PHR
 import { brainPolicyManualText } from "./brainPolicy.js";
 import { TEAM_POLICY_KEYS } from "../teamBrainPolicy.js";
 import { widgetComponentReference } from "../../shared/widget/spec.js";
+import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE } from "../../shared/widget/guide.js";
 
 /**
- * The worked examples of the `canvas-widget` topic. Exported so a test can
- * run each through the SAME static checker `mcp__canvas__show` uses — a manual
- * example the tool would reject teaches the avatar a broken grammar.
+ * The worked examples of the `inline-ui` topic. Exported so a test can run
+ * each through the static checker (`src/shared/widget/check.ts`) — a manual
+ * example that does not parse teaches the avatar a broken grammar.
  */
-export const CANVAS_WIDGET_MANUAL_EXAMPLES = {
+export const INLINE_UI_MANUAL_EXAMPLES = {
   calculator: `{@state amount = 3000}
 {@state months = 12}
 {@state rate = 4.5}
@@ -39,26 +40,23 @@ Change the inputs — the numbers update at once.
   <stat label="Monthly payment" value={\`\${Math.round(monthly).toLocaleString()}원\`} />
   <stat label="Total" value={\`\${Math.round(monthly * months).toLocaleString()}원\`} />
 </row>
-{#if months > 36}
-  <callout tone="warning">Over 36 months the preferential rate no longer applies.</callout>
-{/if}
 <row gap={2}>
   <submit values={{ amount, months, rate }}>Proceed with these terms</submit>
   <button send="금리를 더 낮출 방법을 알려줘" variant="ghost">How can I lower the rate?</button>
 </row>`,
-  filteredTable: `{@state team = "All"}
+  filteredTable: `{@state region = "Seoul"}
 {@state view = "Table"}
-{@const rows = [{ team: "A", month: "1월", sales: 120 }, { team: "A", month: "2월", sales: 150 }, { team: "B", month: "1월", sales: 90 }]}
-{@const shown = rows.filter((r) => team === "All" || r.team === team)}
+{@const rows = [{ region: "Seoul", month: "1월", sales: 120, cost: 80 }, { region: "Seoul", month: "2월", sales: 150, cost: 90 }, { region: "Busan", month: "1월", sales: 90, cost: 70 }, { region: "Busan", month: "2월", sales: 110, cost: 75 }]}
+{@const shown = rows.filter((r) => r.region === region)}
 
 <row gap={2}>
-  <select label="Team" value={team} onChange={setTeam} options={["All", "A", "B"]} />
+  <select label="Region" value={region} onChange={setRegion} options={["Seoul", "Busan"]} />
   <tabs label="View" value={view} onChange={setView} options={["Table", "Chart"]} />
 </row>
 {#if view === "Table"}
-  <table sortable columns={[{ key: "team", label: "Team" }, { key: "month", label: "Month" }, { key: "sales", label: "Sales" }]} rows={shown} />
+  <table sortable columns={[{ key: "month", label: "Month" }, { key: "sales", label: "Sales" }, { key: "cost", label: "Cost" }]} rows={shown} />
 {:else}
-  <chart height={240} spec={{ mark: "bar", data: { values: shown }, encoding: { x: { field: "month", type: "nominal" }, y: { field: "sales", type: "quantitative", aggregate: "sum" }, color: { field: "team", type: "nominal" } } }} />
+  <chart type="bar" data={shown} xKey="month" series={[{ key: "sales", label: "Sales" }, { key: "cost", label: "Cost" }]} unit="만원" title="Sales and cost by month" />
 {/if}
 <row gap={1}><icon name="activity" color="muted" /><text color="muted">{shown.length} rows, total {shown.reduce((sum, r) => sum + r.sales, 0)}</text></row>`,
   gauge: `{@state pct = 60}
@@ -438,8 +436,10 @@ Artifacts are scoped to their conversation, with one exception: a share link for
 Do not assume a local temporary file will become visible without publication. If file output is unavailable in this run, explain that before promising a downloadable result.
 
 ## Canvas
-The conversation's canvas tool group must be enabled, and the run must support interaction. It can display interactive charts, diagrams or a purpose-built review surface. Use question cards for simple choices instead of building a canvas. The user can reply through the canvas when its artifact defines input. Canvas availability is a runtime fact reported by describe_system.
-With the experimental 캔버스 위젯 feature on (설정 → 실험 기능, set by the avatar's owner), the avatar can also build a widget — a calculator, a what-if comparison, a quiz, a checklist, a filterable table — that appears inside its answer (not in the side panel) and recalculates in the browser as the user changes its inputs, without asking the avatar again. The values a user sets stay in that browser (they survive a reload on the same device) and reach the avatar only when the user presses a button that sends: the widget's send button (the chosen values), or a button that posts a follow-up chat message, whose text is shown before it is pressed. A widget's links open in a new tab.
+The conversation's canvas tool group must be enabled, and the run must support interaction. The canvas is a side panel for an artifact the avatar and the user work on together: a document to edit, a page mockup, a diagram, a chart to refine. Use question cards for simple choices instead of building a canvas. The user can reply through the canvas when its artifact defines input. Canvas availability is a runtime fact reported by describe_system.
+
+## Inline UI in an answer
+In a chat the avatar can also put UI directly inside its answer — a chart, a sortable table, a dashboard of figures, a calculator or what-if comparison, a quiz, a checklist — drawn in place while the answer is written. There is no setting to turn on and nothing opens in the side panel; a chart or calculator the user just looks at or operates is inline UI, not a canvas (avatar reference: topic \`${INLINE_UI_MANUAL_TOPIC}\`). It recalculates in the browser as the user changes its inputs, without asking the avatar again. The values a user sets stay in that browser and reach the avatar only when the user presses a button that sends: a submit button (its label and the chosen values become the user's next message) or a button that posts a follow-up chat message, whose text is shown before it is pressed. Its links open in a new tab. Routines, external Task API runs and avatar consultations answer in plain text — nobody is watching those answers being drawn; describe_system reports whether the current run has it.
 
 ## Presentations and diagrams
 New PowerPoint decks are designed as HTML/CSS slides and converted by the pptx skill into a .pptx whose text boxes, shapes, tables and charts are native, editable PowerPoint objects (charts keep their data for Edit Data). The default profile embeds Pretendard, so desktop PowerPoint shows the designed font even where it is not installed; a 맑은 고딕 build is available on request — prefer it for Hanja-heavy decks or audiences who mostly view in PowerPoint for the web, Teams/SharePoint previews or other web viewers, which ignore embedded fonts and substitute a similar font. The download card's side panel shows the converter's exact slide renders; a deck edited after conversion, and any other PPTX/DOCX/XLSX/PDF, is previewed approximately by LibreOffice. Existing decks and user templates are edited in place with python-pptx. Whether the converter is installed, and its limits, are runtime facts reported by describe_system; do not install a substitute toolchain when it reports otherwise.
@@ -513,14 +513,14 @@ When clicks or reads fail for no visible reason, or the page seems frozen, call 
   {
     id: "canvas-operations",
     title: "Canvas operation reference",
-    summary: "Content formats, controls, never-wait/editable behavior and in-place updates.",
-    body: `**Visual canvas**: you can show a visual artifact to the user in a side panel with \`mcp__canvas__show\` — pass \`title\`, \`content\`, and \`contentType\` (\`markdown\` | \`vega\` | \`mermaid\` | \`svg\` | \`html\` | \`widget\`).
-Use it to share charts, diagrams, mockups, layouts, or side-by-side option comparisons while you work them out WITH the user, not just to dump text the chat could already show.
-For DATA CHARTS prefer \`vega\`: pass a compact Vega-Lite JSON spec as \`content\` (inline the data, keep it small) — it renders a rich chart from a tiny spec and is far cheaper in tokens than hand-writing SVG.
+    summary: "Side-panel artifacts: content formats, controls, never-wait/editable behavior and in-place updates.",
+    body: `**Visual canvas**: you can show a visual artifact to the user in a side panel with \`mcp__canvas__show\` — pass \`title\`, \`content\`, and \`contentType\` (\`markdown\` | \`vega\` | \`mermaid\` | \`svg\` | \`html\`).
+Use it for an ARTIFACT you work out WITH the user in the side panel — a document to edit, a page mockup or layout, a diagram, a side-by-side option comparison, a chart that will be refined, exported or needs controls — or when the user asks for the side panel; not to dump text the chat could already show.
+A chart, table, calculator or dashboard the user only needs to SEE or operate in the answer is NOT a canvas: write it in your answer text as inline UI (topic \`${INLINE_UI_MANUAL_TOPIC}\`; describe_system says whether this run has it). The former contentType \`widget\` is retired — \`show\` refuses it — because that is what inline UI replaced.
+For a side-panel DATA CHART use \`vega\`: pass a compact Vega-Lite JSON spec as \`content\` (inline the data, keep it small) — it renders a rich chart from a tiny spec and is far cheaper in tokens than hand-writing SVG.
 For flow/sequence/graph DIAGRAMS use \`mermaid\` (diagram source only). Double-quote every node/edge label that contains punctuation — \`( ) [ ] { } | : ; #\` — e.g. \`A["Login (SSO)"] -->|"POST /api (json)"| B\`; an unquoted \`(\` inside a label is the classic parse error. The source is syntax-checked before it is shown: on an error the tool returns it and shows NOTHING, so fix the source and call show again.
 Reserve \`svg\`/\`html\` for bespoke visuals the others can't express.
 \`html\` renders as its own sandboxed page: a \`<style>\` block (or a whole \`<!DOCTYPE html>\` document) styles only the canvas, scripts never run, and links don't open.
-For something the user OPERATES — a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable table, a chart driven by sliders — use \`widget\` (EXPERIMENTAL; on only when the avatar owner enabled 캔버스 위젯 under Settings → 실험 기능, which describe_system reports). Unlike every other content type it is drawn INLINE in your answer, where you call the tool — not in the side panel — so write around it and do not repeat it in prose. It recomputes in the user's browser and you are not called on each change. Its content is a declarative tag + expression source, never HTML/JS: read topic \`canvas-widget\` BEFORE writing one. \`controls\` and \`editable\` cannot be combined with it — a widget returns structured values with its own \`<submit>\`, and a \`<button send>\` posts the user's next chat message.
 To collect a decision ANCHORED TO the artifact on screen — choosing between the mockups you just showed, tuning a value against the chart, marking up the content — add \`controls\`: \`buttons\` (a few options as cards), \`select\` (a dropdown for many options), \`slider\`/\`number\` (a numeric value, with min/max/step), \`date\` (a calendar date), and/or \`text\` inputs.
 Each control is required by default; set \`required:false\` to make one optional.
 For a plain question or a simple choice that needs no visual artifact, use the built-in AskUserQuestion tool instead — NEVER open a canvas just to ask the user something.
@@ -532,29 +532,28 @@ Keep each artifact compact (oversized content is rejected).
 The client renders real, sanitized form controls — put NO scripts/JS in the content (it will be stripped).`,
   },
   {
-    id: "canvas-widget",
-    title: "Canvas widget reference (experimental)",
-    summary: "Grammar, expressions, components, submit/send and limits of the inline interactive `widget` canvas type.",
-    body: `**Canvas widget** (\`mcp__canvas__show\` with \`contentType: "widget"\`, EXPERIMENTAL): an interactive piece of UI drawn INLINE in your answer, at the point where you call the tool — not in the side panel. Write the text before and after it as one answer, and do not repeat in prose what it shows. You declare state, inputs and derived values once; the user's browser recomputes and redraws on every change. You are NOT called on those changes and never see the values the user sets — only a \`<submit>\` or a \`<button send>\` reaches you, as the user's next message.
-Availability is per avatar: the owner turns it on under Settings → 실험 기능 (캔버스 위젯). describe_system is authoritative (its canvas line says whether \`widget\` is ENABLED or DISABLED); while it is off, \`show\` refuses the type — use \`vega\` or \`markdown\`.
-Use it — unprompted — when operating something serves the user better than reading: a calculator, a what-if comparison, a quiz, a checklist, choices to pick from, a filterable or sortable table, a gauge or chart driven by sliders. Answer a plain question in plain text; never decorate. For a chart or diagram that is only looked at, use \`vega\`/\`mermaid\`; for a decision about a side-panel artifact, use \`controls\` on that content type. \`controls\` and \`editable\` cannot be combined with a widget.
+    id: INLINE_UI_MANUAL_TOPIC,
+    title: "Inline UI reference",
+    summary: "UI written in the answer text: where to write it, grammar, expressions, components, charts, send/submit and limits.",
+    body: `**Inline UI** is UI you write directly in your ANSWER TEXT. The answer is Markdown; a UI tag in it is drawn in place by the user's app while the answer streams. There is no tool to call and nothing opens in the side panel. The user's browser recomputes and redraws it on every input change: you are NOT called and never see the values the user sets (see "What reaches you").
+Interactive chat turns only — a routine, an external-task turn or a consultation answers in plain Markdown; describe_system is authoritative (its Inline UI line).
+Use it — unprompted — when a visual or interactive layout serves the user better than prose: a chart, a dashboard of key figures, a comparison, a calculator or what-if, a quiz, a checklist, choices to pick from, a filterable or sortable table, a gauge or chart driven by sliders. Answer a plain question in plain Markdown; never decorate, and do not repeat in prose what the UI shows. An artifact to work on in the SIDE PANEL (a document to edit, a mockup, a diagram, a chart to refine or export) is a canvas: topic \`canvas-operations\`.
 
-## Document
-The content is a small declarative source — not HTML, not JS:
-- \`{@state name = expr}\` — a state variable. TOP LEVEL only, unique names. Its setter is \`set\` + the capitalized name: \`{@state months = 12}\` gives \`setMonths(value)\` or \`setMonths(prev => next)\`.
-- \`{@const name = expr}\` — a derived value, recomputed whenever state changes.
-- \`<tag prop="string" prop={expr} flag>…</tag>\` and self-closing \`<tag … />\`. ONLY the components listed below exist: no HTML tags, and no \`style\`, \`class\` or \`on*\` attributes beyond the listed handlers.
+## Where and how to write it
+- In your FINAL answer text. Text written before a tool call is folded into the reasoning view, where tags are not drawn.
+- A tag starts on its own line at the TOP LEVEL of the answer, indented at most 3 spaces (4+ reads as a code block). Never inside a fenced code block — a fence shows the source as text — unless the user asked to see the source.
+- Top-level text between tags is ordinary Markdown, and STATIC (no \`{expr}\` there). Text inside a component is inline Markdown only (bold, italic, code, strikethrough, and \`[text](https://…)\` links, which open in a new tab) and may interpolate \`{expr}\`.
+- \`<tag prop="string" prop={expr} flag>…</tag>\` and self-closing \`<tag … />\`. ONLY the components listed below exist: no HTML tags, and no \`style\`, \`class\` or \`on*\` attributes beyond the listed handlers. Spread props (\`{...obj}\`) are not supported.
+- \`{@state name = expr}\` — a state variable. TOP LEVEL only, on its own line, unique names within the answer. Its setter is \`set\` + the capitalized name: \`{@state months = 12}\` gives \`setMonths(value)\` or \`setMonths(prev => next)\`. Its initial expression may use only globals and the states declared BEFORE it (not consts).
+- \`{@const name = expr}\` — a derived value, recomputed whenever state changes. Declare \`{@state}\`/\`{@const}\` before the tags that use them.
 - \`{#each list as item, index} … {:else} … {/each}\` and \`{#if cond} … {:else if cond} … {:else} … {/if}\`.
-- \`{expr}\` interpolates a value inside a component's text.
-- Plain text at the top level is STATIC Markdown (no \`{expr}\` there). A top-level line that STARTS with \`<\` is read as a component tag, so never start a prose line with \`<\`. Text inside a component is inline Markdown only (bold, italic, code, strikethrough, and \`[text](https://…)\` links, which open in a new tab).
-Declare \`{@state}\`/\`{@const}\` before the tags that use them. A state's initial expression may use only globals and the states declared BEFORE it (not consts). Spread props (\`{...obj}\`) are not supported.
 
 ## Expressions
 A safe JavaScript subset run by an interpreter (never \`eval\`):
-- Literals (numbers, strings, template strings, booleans, null), arrays and objects (with spread), \`.\` \`[]\` \`?.\` \`??\`, arithmetic, comparison and logical operators, the ternary, arrow functions (an expression body, or a block with \`const\`/\`return\`/\`if\`).
+- Literals, template strings, arrays and objects (with spread), \`.\` \`[]\` \`?.\` \`??\`, arithmetic, comparison and logical operators, the ternary, arrow functions (an expression body, or a block with \`const\`/\`return\`/\`if\`).
 - Globals: \`Math\` (no \`Math.random\`), \`Number\`, \`String\`, \`Boolean\`, \`parseInt\`, \`parseFloat\`, \`isNaN\`, \`isFinite\`, \`Array.isArray/from/of\`, \`Object.keys/values/entries/fromEntries\`, \`JSON.stringify/parse\`.
 - Array methods (\`map filter reduce find some every includes slice concat join flat flatMap sort reverse at indexOf\`, \`length\`; \`sort\`/\`reverse\` return a copy), string methods (\`split replace replaceAll trim padStart padEnd startsWith endsWith includes slice toUpperCase toLowerCase\`; patterns are plain strings), number methods (\`toFixed toLocaleString toString\`).
-- NOT available: assignment and \`++\`/\`--\` (change state only through its setter), \`new\`, \`this\`, \`class\`, loops, \`try\`, \`await\`, regular expressions, \`Date\`, timers, \`fetch\`, the DOM, \`window\`/\`globalThis\`. A widget cannot load remote data — inline what it needs; its only images are this conversation's own (\`<image>\`, below).
+- NOT available: assignment and \`++\`/\`--\` (change state only through its setter), \`new\`, \`this\`, \`class\`, loops, \`try\`, \`await\`, regular expressions, \`Date\`, timers, \`fetch\`, the DOM, \`window\`/\`globalThis\`. Inline UI cannot load remote data — inline what it needs; its only images are this conversation's own (\`<image>\`, below).
 Setters and \`copy(text)\` (puts text on the user's clipboard) work ONLY inside an event handler (\`onChange={setMonths}\`, \`onClick={() => setTab("b")}\`); calling one while rendering is an error.
 
 ## Components
@@ -562,31 +561,24 @@ ${widgetComponentReference()}
 
 ## What reaches you, links and images
 Only two things come back, each as the user's NEXT message:
-- \`<submit values={{ months, rate }}>Proceed</submit>\` — STRUCTURED values. Noah's standard send button; the message references this canvas and the widget then lists what was sent. \`values\`: a plain object, ≤ 20 keys, strings/numbers/booleans or arrays of them, ≤ 8,000 characters.
-- \`<button send="Compare the two plans in a table">Compare plans</button>\` — a natural FOLLOW-UP. Posts that text as an ordinary chat message, as if the user had typed it (quiz answers, next-step choices). The user sees the text before pressing; 1–2,000 characters, may be computed from state, must not start with \`/\`.
+- \`<button send="Compare the two plans in a table">Compare plans</button>\` — a natural FOLLOW-UP. Posts that text as an ordinary chat message, as if the user had typed it. The user sees the text before pressing; 1–2,000 characters, may be computed from state, must not start with \`/\`.
+- \`<submit values={{ months, rate }}>Proceed</submit>\` — STRUCTURED values. Posts the label followed by one \`- key: value\` line per value ("Proceed", "- months: 12", "- rate: 4.5"). \`values\`: a plain object, ≤ 20 keys, strings/numbers/booleans or arrays of them, ≤ 8,000 characters.
 Links open in a new tab and send you nothing: \`<button href>\`, \`<link href>\`, \`[text](https://…)\` in text — absolute http(s) only. \`<image src alt>\` shows an image of THIS conversation only: publish the file with \`mcp__file_output__show_file\` + \`hidden:true\` and pass the returned URL unchanged; remote and \`data:\` URLs are refused.
-The tool never waits: finish your answer and say what the widget's buttons send.
 
 ## Limits
-Content ≤ 20,000 characters (it rides every later turn's context — inline only the rows you need). It needs at least one component (text alone is \`markdown\`); do not indent the source 4+ spaces (that reads as a code block). ≤ 50 state variables; tags nest ≤ 32 deep, expressions ≤ 64, one chain of operators or \`.\` accesses ≤ 200 (split a long sum into \`{@const}\` steps or use \`reduce\`). At run time each block and each handler gets 50,000 evaluation steps (native searching/sorting included), strings ≤ 100,000 characters and arrays ≤ 10,000 items; an \`{#each}\` draws ≤ 1,000 items, a table ≤ 500 rows, one render ≤ 20,000 elements and 2,000,000 characters; a block over budget shows an error in its place. A required prop that evaluates to null/undefined is drawn as empty, not as an error. The values the user sets are kept in THEIR browser only (they survive a reload there, not on another device); you cannot read them.
+Inline only the rows the UI needs (it stays in the conversation's context). ≤ 50 state variables; tags nest ≤ 32 deep, expressions ≤ 64, one chain of operators or \`.\` accesses ≤ 200 (split a long sum into \`{@const}\` steps or use \`reduce\`). At run time each block and each handler gets 50,000 evaluation steps, strings ≤ 100,000 characters and arrays ≤ 10,000 items; an \`{#each}\` draws ≤ 1,000 items, a table ≤ 500 rows, one render ≤ 20,000 elements and 2,000,000 characters. The values the user sets are kept in THEIR browser only; you cannot read them.
 
 ## Example: calculator, submit, follow-up button
-\`\`\`
-${CANVAS_WIDGET_MANUAL_EXAMPLES.calculator}
-\`\`\`
+${INLINE_UI_MANUAL_EXAMPLES.calculator}
 
 ## Example: filtered sortable table, chart, icon
-\`\`\`
-${CANVAS_WIDGET_MANUAL_EXAMPLES.filteredTable}
-\`\`\`
+${INLINE_UI_MANUAL_EXAMPLES.filteredTable}
 
 ## Example: svg gauge bound to a slider
-\`\`\`
-${CANVAS_WIDGET_MANUAL_EXAMPLES.gauge}
-\`\`\`
+${INLINE_UI_MANUAL_EXAMPLES.gauge}
 
-## Errors you get back
-The source is parsed and checked before display; on an error NOTHING is shown and the message names the line and column, what is wrong and the fix. Fix the source and call show again — with the SAME \`canvasId\` when refining, which keeps the user's value for every state whose declaration is unchanged. A part the user's browser cannot draw is reported at the start of your next turn ("Canvas render report").`,
+## When something is wrong
+Nothing checks your answer before it is drawn. A tag or prop that does not exist is dropped where it stands and the rest still draws; a block that cannot be evaluated or runs over budget shows an error in its place. What the user's browser could not draw is told to you at the start of your next turn ("${INLINE_UI_REPORT_TITLE}") — write the corrected UI in that answer if it still matters.`,
   },
 ] as const;
 
@@ -601,12 +593,28 @@ export const SYSTEM_MANUAL_NOTICE =
   "Use describe_system and the available tools to verify current access, configuration and run capabilities. " +
   "Explain documented features even when you cannot execute them in this run, clearly naming the prerequisite. Reply in the user's language.";
 
+/**
+ * RETIRED topic ids → where their subject went. Reserved forever: never the id
+ * of a real topic again (the project rule for every retired id), and never
+ * listed in the index. A retired id still answers — with a redirect, not
+ * "unknown topic" — because a prompt frozen before the retirement names it.
+ */
+const RETIRED_MANUAL_TOPICS: Record<string, string> = {
+  "canvas-widget":
+    "Manual topic `canvas-widget` is retired: interactive UI is no longer a canvas content type (`mcp__canvas__show` refuses contentType 'widget'). " +
+    `It is now written directly in your answer text as inline UI, with no tool call — call read_manual with topic \`${INLINE_UI_MANUAL_TOPIC}\` for the guide that replaced it.`,
+};
+
 export function readSystemManual(topic = "index"): { text: string; isError: boolean } {
   if (topic === "index") {
     return {
       text: `${SYSTEM_MANUAL_NOTICE}\n\n${systemManualIndex()}\n\nCall read_manual with an exact topic id for its full guide.`,
       isError: false,
     };
+  }
+  const retired = Object.hasOwn(RETIRED_MANUAL_TOPICS, topic) ? RETIRED_MANUAL_TOPICS[topic] : undefined;
+  if (retired) {
+    return { text: retired, isError: true };
   }
   const entry = SYSTEM_MANUAL_TOPICS.find((entry) => entry.id === topic);
   if (!entry) {

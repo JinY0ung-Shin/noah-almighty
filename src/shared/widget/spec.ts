@@ -1,8 +1,8 @@
 /**
- * The canvas `widget` component spec — the ONE source for the server's static
- * check (`check.ts`), the client renderer's prop handling (`normalizeProps`)
- * and the manual text (`widgetComponentReference`). Add a component or a prop
- * HERE and all three follow.
+ * The inline UI component spec — the ONE source for the static check
+ * (`check.ts`), the client renderer's prop handling (`normalizeProps`), the
+ * manual text (`widgetComponentReference`) and the prompt's component list
+ * (`guide.ts`). Add a component or a prop HERE and all of them follow.
  */
 import type { Expr } from "./expr.js";
 import { WIDGET_ICON_NAMES, WIDGET_ICON_SIZES } from "./icons.js";
@@ -44,6 +44,8 @@ export interface PropSpec {
   doc?: string;
   /** The manual's wording when it differs from `doc`: shorter, or "" where the reference's legend already says it. */
   ref?: string;
+  /** The manual's name for the type when the generic one would mislead (a chart's `series` is not a table's columns). */
+  refType?: string;
 }
 
 /**
@@ -295,11 +297,31 @@ const LIST: ComponentSpec[] = [
     sortable: { type: BOOL, doc: "headers sort on click — the viewer's own view; your rows and state are untouched" },
     caption: { type: SHORT },
   }),
-  component("chart", "Data", "none", "A Vega-Lite chart.", {
-    spec: { type: { k: "object" }, required: true, doc: "inline data.values only, no url" },
-    height: { type: { k: "number", min: 120, max: 600 }, doc: "px, default 240" },
-    label: { type: SHORT, doc: "accessible name" },
-  }),
+  component(
+    "chart",
+    "Data",
+    "none",
+    "Give `data` (+ type, xKey, series) for the common charts, or a whole Vega-Lite `spec` — exactly one of the two.",
+    {
+      data: { type: { k: "rows" }, doc: "the rows to plot, e.g. [{month: \"Jan\", sales: 12, cost: 7}]", ref: "" },
+      type: { type: { k: "enum", values: ["bar", "line", "area", "pie", "donut"] }, doc: "with `data`; default bar", ref: "default bar" },
+      xKey: { type: SHORT, doc: "row key of the category / x axis (pie: the slice name); default the first non-numeric key", ref: "category key; default the first" },
+      series: {
+        type: { k: "columns" },
+        doc: "the numeric row keys to plot, `[\"sales\", \"cost\"]` or `[{key, label}]`; default every numeric key",
+        ref: "numeric keys; default all",
+        refType: '["key"] | [{key, label}]',
+      },
+      stacked: { type: BOOL, doc: "bar/area: stack the series", ref: "" },
+      horizontal: { type: BOOL, doc: "bar: horizontal bars", ref: "" },
+      unit: { type: { k: "string", max: 20 }, doc: "unit of the values, shown on the value axis", ref: "" },
+      title: { type: SHORT },
+      spec: { type: { k: "object" }, doc: "a whole Vega-Lite spec instead of `data` (inline data.values only, no url)", ref: "Vega-Lite, inline data.values only" },
+      height: { type: { k: "number", min: 120, max: 600 }, doc: "px, default 240" },
+      label: { type: SHORT, doc: "accessible name" },
+    },
+    { oneOf: ["data", "spec"] },
+  ),
   component("details", "Data", "block", "", {
     title: { type: SHORT, required: true },
     open: { type: BOOL },
@@ -429,7 +451,7 @@ export function widgetComponentReference(): string {
     const shape = c.child === "none" ? `<${c.tag} />` : `<${c.tag}>${c.child === "inline" ? "text" : c.child === "svg" ? "SVG elements" : "…"}</${c.tag}>`;
     lines.push(`- ${shape}${c.doc ? ` — ${c.doc}` : ""}`);
     const props = Object.entries(c.props).map(([name, p]) => {
-      const type = typeLabel(p.type);
+      const type = p.refType ?? typeLabel(p.type);
       const note = p.ref ?? p.doc;
       return `${name}${p.required ? "*" : ""}${type === name ? "" : `: ${type}`}${note ? ` (${note})` : ""}`;
     });
@@ -693,7 +715,7 @@ function normalizeOne(type: PropType, v: unknown): unknown {
  * (`{@state pick = null}`, `done[k]` before the box is ever ticked); that must
  * render an empty control, not an error.
  */
-function emptyValue(type: PropType, props: Record<string, unknown>): unknown {
+export function emptyValue(type: PropType, props: Record<string, unknown>): unknown {
   switch (type.k) {
     case "boolean":
       return false;

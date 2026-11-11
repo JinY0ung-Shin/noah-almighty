@@ -4,7 +4,7 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServices } from "../src/server/app.js";
-import { normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
+import { EXPERIMENTAL_FEATURES, EXPERIMENTAL_FEATURE_KEYS, normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
 import logger from "../src/server/logger.js";
 import { normalizeHashtags } from "../src/server/store.js";
 import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
@@ -1346,8 +1346,12 @@ describe("team trust & visibility (single team)", () => {
     ]);
     expect(normalizeExperimentalFeatures({ beta: true }, ["beta"])).toEqual([]);
     expect(normalizeExperimentalFeatures(["canvas"])).toEqual([]);
-    // The canvas `widget` type is the one registered beta feature (2026-11).
-    expect(normalizeExperimentalFeatures(["canvas", "canvasWidget", "canvasWidget"])).toEqual(["canvasWidget"]);
+    // The registry is empty again: `canvasWidget` (the canvas `widget` type,
+    // 2026-11) was retired when inline UI replaced it. Both retired keys are
+    // reserved — a value stored by an old instance normalizes away.
+    expect(EXPERIMENTAL_FEATURES).toEqual([]);
+    expect(EXPERIMENTAL_FEATURE_KEYS).toEqual([]);
+    expect(normalizeExperimentalFeatures(["canvas", "canvasWidget", "canvasWidget"])).toEqual([]);
   });
 
   // ---- per-secret shell exposure ----

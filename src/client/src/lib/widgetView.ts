@@ -1,8 +1,7 @@
-// A canvas `widget` document, EVALUATED into plain data the Svelte components
-// only have to draw.
+// Inline UI, EVALUATED into plain data the Svelte components only have to draw.
 //
-// The whole evaluation happens here, in one pass per state change — not spread
-// over the components' reactive blocks — for three reasons:
+// The whole evaluation happens here, in one pass — not spread over the
+// components' reactive blocks — for three reasons:
 // - budgets: every top-level block gets a fresh step/allocation budget and a
 //   block that blows it becomes ONE error node, which a tree of independently
 //   evaluating components could not attribute;
@@ -13,15 +12,17 @@
 //   `VNode` they are handed.
 //
 // Nothing in a VNode is HTML: text is text, and inline Markdown is a list of
-// styled segments the component assembles from elements. The one exception is a
-// top-level static Markdown block (`k: "md"`), which carries its SOURCE and is
-// sanitized by `renderMarkdown` where it is drawn.
+// styled segments the component assembles from elements. The answer's own
+// top-level Markdown is not a VNode at all: `buildAnswerItems` hands it back as
+// source, for the chat's Markdown renderer.
 import {
   WidgetBudgetError,
   beginRender,
   childScope,
   componentSpec,
   conversationImageRef,
+  emptyValue,
+  simpleChartSpec,
   eachScopes,
   interpolate,
   jsxWhitespace,
@@ -35,6 +36,7 @@ import {
   type Env,
   type Runtime,
   type SvgTree,
+  type AnswerDoc,
   type TNode,
   type WidgetDoc,
 } from "../../../shared/widget/index";
@@ -53,8 +55,6 @@ export interface Seg {
 }
 
 export type VNode =
-  /** Top-level static Markdown (source text; sanitized where it is drawn). */
-  | { k: "md"; key: string; text: string }
   /** Loose inline content inside a block container. */
   | { k: "inline"; key: string; segs: Seg[] }
   | {
@@ -92,7 +92,7 @@ export type ElVNode = Extract<VNode, { k: "el" }>;
 const NODE_ERROR = "이 부분을 표시하지 못했습니다.";
 const BUDGET_ERROR = "계산이 너무 커서 이 부분을 표시하지 못했습니다.";
 const EACH_TRUNCATED = "항목이 많아 일부만 표시했습니다.";
-const OUTPUT_ERROR = "위젯이 그리는 내용이 너무 많아 일부를 표시하지 못했습니다.";
+const OUTPUT_ERROR = "그릴 내용이 너무 많아 일부를 표시하지 못했습니다.";
 const IGNORED_CALL = "렌더 중에 호출된 상태 변경은 무시됩니다.";
 
 /** How a node is named to the avatar. */
@@ -115,6 +115,7 @@ function detailOf(err: unknown): string {
 /* ───────────────────────── inline Markdown ───────────────────────── */
 
 const ESCAPABLE = "\\{}<>`*_~";
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" };
 
 function isWordChar(c: string | undefined): boolean {
   return c !== undefined && /[\p{L}\p{N}]/u.test(c);
@@ -132,7 +133,8 @@ export function parseInlineMarkdown(text: string, base: Omit<Seg, "text"> = {}, 
   const out: Seg[] = [];
   let buf = "";
   const flush = () => {
-    if (buf) out.push({ ...base, text: buf });
+    // The few entities the advice tells an avatar to write (`&lt;` for a literal "<") are text, as in a prop string.
+    if (buf) out.push({ ...base, text: buf.includes("&") ? buf.replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_m, name: string) => ENTITIES[name]) : buf });
     buf = "";
   };
   const n = text.length;
@@ -249,23 +251,32 @@ function inlineSegs(children: TNode[], env: Env, rt: Runtime, out: Seg[] = []): 
       for (const item of scopes) inlineSegs(node.children, item, rt, out);
     } else if (node.t === "el" && node.name === "link") {
       linkSegs(node, scope, rt, out);
+    } else if (node.t === "el" && !componentSpec(node.name)) {
+      // A tag that does not exist (`<b>`, `<span>`): its text still belongs to the sentence.
+      inlineSegs(node.children, scope, rt, out);
     }
-    // Any other element inside inline content has no place to go (the static check rejects it).
+    // A component inside inline content has no place to go (the static check says so).
   }
   return out;
 }
 
-// The conversation the document is being evaluated for (see buildWidgetView):
+// The conversation the document is being evaluated for (see buildAnswerItems):
 // an <image> may only show an image of THIS conversation. Evaluation is
 // synchronous, so one module variable serves the whole walk.
 let viewConversationId: string | null = null;
-// The id namespace of this view's drawings (see buildWidgetView).
+// The id namespace of this view's drawings (see buildAnswerItems).
 let viewSvgNs = "wg";
 
 function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
   const spec = componentSpec(node.name);
   if (!spec) return errorNode(key, node, NODE_ERROR, `unknown component <${node.name}>`);
   const { props, errors } = resolveProps(node, env, rt);
+  if (node.name === "chart" && props.spec === undefined && props.data !== undefined) {
+    // The simple form (`type` + `data`) is drawn through the same Vega-Lite pipeline.
+    const simple = simpleChartSpec(props);
+    props.spec = simple.spec ?? {};
+    for (const problem of simple.problems) errors.push(problem);
+  }
   let segs: Seg[] = [];
   let children: VNode[] = [];
   if (spec.child === "inline") segs = inlineSegs(node.children, env, rt);
@@ -273,7 +284,12 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
   for (const [name, prop] of Object.entries(spec.props)) {
     if (!prop.required || name in props) continue;
     if (name === "label" && spec.labelFromChildren && segs.length) continue;
-    return errorNode(key, node, NODE_ERROR, errors.join("; ") || `<${node.name}> is missing ${name}`);
+    // An answer is already on screen: a prop that was left out draws as its empty
+    // value (an unlabelled slider, a control that does nothing) rather than as an
+    // error in the middle of the layout. Only what has no empty value is one.
+    const fallback = emptyValue(prop.type, props);
+    if (fallback === undefined) return errorNode(key, node, NODE_ERROR, errors.join("; ") || `<${node.name}> is missing ${name}`);
+    props[name] = fallback;
   }
   if (node.name === "image") {
     // The library checked the SHAPE of `src`; whose conversation it names is
@@ -297,7 +313,10 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
 
 function renderNode(node: TNode, env: Env, rt: Runtime, key: string, out: VNode[]): void {
   try {
-    if (node.t === "el") {
+    if (node.t === "el" && !componentSpec(node.name)) {
+      // A tag that does not exist is dropped where it stands; what it holds is still drawn.
+      for (const v of renderChildren(node.children, env, rt, key)) out.push(v);
+    } else if (node.t === "el") {
       out.push(renderEl(node, env, rt, key));
     } else if (node.t === "if") {
       const branch = pickBranch(node, env, rt);
@@ -369,74 +388,6 @@ function passExhausted(rt: Runtime): boolean {
 }
 
 /**
- * Evaluate a document against a root environment (`createRootEnv`). One call is
- * one render PASS: its budgets (total steps, elements and characters put on
- * screen) are refilled here, so walking the same root again — the panel and the
- * fullscreen copy, a re-evaluation — never inherits what an earlier walk spent.
- *
- * Each top-level block gets its own step window out of the pass. A block that
- * exceeds its window, or throws, is replaced by a single error node and the
- * next block still renders. Once the PASS is spent, the walk stops: what was
- * rendered so far stays, and ONE notice at the end says the rest is missing
- * (not one error per remaining block). Never throws.
- */
-export function buildWidgetView(doc: WidgetDoc, root: Env, rt: Runtime, options: { conversationId?: string | null; svgNs?: string } = {}): VNode[] {
-  viewConversationId = options.conversationId || null;
-  // `svgNs`: a prefix unique to the drawn copy (the card and its fullscreen
-  // copy are two), for the ids inside its `<svg>`s.
-  viewSvgNs = options.svgNs || "wg";
-  try {
-    return walkDocument(doc, root, rt);
-  } finally {
-    viewConversationId = null;
-    viewSvgNs = "wg";
-  }
-}
-
-function walkDocument(doc: WidgetDoc, root: Env, rt: Runtime): VNode[] {
-  const out: VNode[] = [];
-  beginRender(rt);
-  for (const node of doc.nodes) {
-    const key = `/${node.s}`;
-    if (node.t === "const") continue;
-    if (node.t === "text") {
-      if (node.block) {
-        if (node.value.trim()) out.push({ k: "md", key, text: node.value });
-      } else if (node.value.trim()) {
-        out.push({ k: "inline", key, segs: parseInlineMarkdown(node.value.trim()) });
-      }
-      continue;
-    }
-    resetBudget(rt);
-    const block: VNode[] = [];
-    try {
-      if (node.t === "expr") {
-        const text = interpolate(node, root, rt);
-        if (text) block.push({ k: "inline", key, segs: [{ text }] });
-      } else if (node.t === "el" && node.name === "link") {
-        // A link on its own line: a one-run paragraph.
-        const segs: Seg[] = [];
-        linkSegs(node, root, rt, segs);
-        if (segs.length) block.push({ k: "inline", key, segs });
-      } else {
-        renderNode(node, root, rt, key, block);
-      }
-      for (const v of block) out.push(v);
-      ignoredCalls(rt, key, node, out);
-    } catch (err) {
-      const budget = err instanceof WidgetBudgetError;
-      if (budget && passExhausted(rt)) {
-        out.push({ k: "error", key: "/output-budget", message: OUTPUT_ERROR, detail: detailOf(err), what: "widget", at: -1 });
-        break;
-      }
-      out.push(errorNode(key, node, budget ? BUDGET_ERROR : NODE_ERROR, detailOf(err)));
-      ignoredCalls(rt, key, node, out);
-    }
-  }
-  return out;
-}
-
-/**
  * A setter or `copy` call made while the block rendered was ignored by the
  * runtime (rendering must not change state); it left a line in `rt.warnings`.
  * Say so under the block — otherwise the widget just silently does nothing.
@@ -491,4 +442,122 @@ export function cellText(v: unknown): string {
   } catch {
     return "";
   }
+}
+
+/* ───────────────────────── an answer ───────────────────────── */
+
+/**
+ * One top-level piece of an ANSWER, in source order: a run of the answer's own
+ * Markdown (drawn by the chat's Markdown renderer, like any answer), or the
+ * evaluated nodes of one UI block. `s`/`e` are offsets into the answer text —
+ * what the attachment anchors are measured in.
+ */
+export type AnswerItem =
+  | { kind: "md"; key: string; s: number; e: number; text: string }
+  | { kind: "ui"; key: string; s: number; e: number; nodes: VNode[] };
+
+/** Evaluated blocks kept between renders of a growing answer. */
+export interface AnswerViewCache {
+  /** What every block's result depends on besides its own source. */
+  scope: string;
+  values: Record<string, unknown> | null;
+  blocks: Map<string, VNode[]>;
+}
+
+export function createAnswerViewCache(): AnswerViewCache {
+  return { scope: "", values: null, blocks: new Map() };
+}
+
+/**
+ * Evaluate an answer (`parseAnswer`) against a root environment
+ * (`createRootEnv`). One call is one render PASS: its budgets (total steps,
+ * elements and characters put on screen) are refilled here. Each top-level
+ * block gets its own step window out of the pass; a block that exceeds its
+ * window, or throws, is replaced by a single error node and the next block
+ * still renders. Once the PASS is spent, the UI blocks that follow are left
+ * out and ONE notice says so (the answer's Markdown still follows). Never
+ * throws. A block whose source, the state values and the
+ * document's declarations are all unchanged since the previous call is NOT
+ * evaluated again and hands back the same nodes — in a streaming answer only
+ * the block being written changes, and the charts above it must not redraw on
+ * every token.
+ */
+export function buildAnswerItems(
+  doc: AnswerDoc,
+  root: Env,
+  rt: Runtime,
+  values: Record<string, unknown>,
+  cache: AnswerViewCache,
+  options: { conversationId?: string | null; svgNs?: string } = {},
+): AnswerItem[] {
+  viewConversationId = options.conversationId || null;
+  viewSvgNs = options.svgNs || "wg";
+  // A `{@const}` or state declared LATER can change what an earlier block shows.
+  const scope = doc.states.map((st) => st.sig).join("\u0001") + "\u0002" + doc.nodes.flatMap((n) => (n.t === "const" ? [n.sig] : [])).join("\u0001");
+  if (cache.scope !== scope || cache.values !== values) {
+    cache.scope = scope;
+    cache.values = values;
+    cache.blocks = new Map();
+  }
+  const kept = new Map<string, VNode[]>();
+  const out: AnswerItem[] = [];
+  try {
+    beginRender(rt);
+    let spent = false;
+    for (const node of doc.nodes) {
+      const key = `/${node.s}`;
+      if (node.t === "const") continue;
+      if (node.t === "text" && node.block) {
+        if (node.value.trim()) out.push({ kind: "md", key, s: node.s, e: node.e, text: node.value });
+        continue;
+      }
+      if (spent) continue;
+      // A block still being written is evaluated every time; a finished one once.
+      const partial = node.t !== "text" && node.t !== "expr" && node.partial === true;
+      const id = `${node.s}:${node.e}:${partial ? "~" : ""}${doc.src.slice(node.s, node.e)}`;
+      let nodes = partial ? undefined : cache.blocks.get(id);
+      if (!nodes) {
+        nodes = [];
+        resetBudget(rt);
+        try {
+          if (node.t === "text") {
+            if (node.value.trim()) nodes.push({ k: "inline", key, segs: parseInlineMarkdown(node.value.trim()) });
+          } else if (node.t === "expr") {
+            const text = interpolate(node, root, rt);
+            if (text) nodes.push({ k: "inline", key, segs: [{ text }] });
+          } else if (node.t === "el" && node.name === "link") {
+            const segs: Seg[] = [];
+            linkSegs(node, root, rt, segs);
+            if (segs.length) nodes.push({ k: "inline", key, segs });
+          } else {
+            renderNode(node, root, rt, key, nodes);
+          }
+          ignoredCalls(rt, key, node, nodes);
+        } catch (err) {
+          const budget = err instanceof WidgetBudgetError;
+          if (budget && passExhausted(rt)) {
+            nodes = [{ k: "error", key: "/output-budget", message: OUTPUT_ERROR, detail: detailOf(err), what: "inline UI", at: -1 }];
+            spent = true;
+          } else {
+            nodes = [errorNode(key, node, budget ? BUDGET_ERROR : NODE_ERROR, detailOf(err))];
+            ignoredCalls(rt, key, node, nodes);
+          }
+        }
+      }
+      if (!partial && !spent) kept.set(id, nodes);
+      if (nodes.length) out.push({ kind: "ui", key, s: node.s, e: node.e, nodes });
+    }
+  } finally {
+    viewConversationId = null;
+    viewSvgNs = "wg";
+  }
+  cache.blocks = kept;
+  return out;
+}
+
+/** Every evaluated node of an answer's UI blocks, in order (its Markdown runs are not nodes). */
+export function answerNodes(items: AnswerItem[]): VNode[] {
+  const out: VNode[] = [];
+  for (const item of items) if (item.kind === "ui") for (const node of item.nodes) out.push(node);
+  return out;
 }

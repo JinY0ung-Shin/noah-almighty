@@ -96,7 +96,7 @@
 
 ## The `local` stub as a scripted demo (`AGENT_RUNTIME=local`)
 The only real runtime is pi-gateway, which this workstation cannot reach, so nothing that needs a run (thinking
-card, tool rows, canvases, the `widget` canvas, mid-turn messages) could be SEEN here. The stub
+card, tool rows, canvases, inline UI, mid-turn messages) could be SEEN here. The stub
 (`agent/localRunner.ts`, scenario data in `agent/localScenarios.ts`) therefore replays scripted runs through the
 run's `AgentEvents`, in the order and shapes `pi/runPiAgent.ts` + `pi/eventAdapter.ts` produce them. It runs no
 model, tool or plugin, uses no network, writes no file and has no randomness.
@@ -117,7 +117,7 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   | `demo thinking` | `onThinking`×N, then `onDelta`×N — never interleaved |
   | `demo tools` | thinking → narration → `onToolStart`/`onToolEnd` for `LS`, `Read`, `Grep` → narration → `Bash` + `Glob` started together (`Bash` ends `ok:false`) → `Edit`, `mcp__skills__read` → the answer. Each start also sets the `실행 중: <label>` status. The two narration blocks are demoted with `onTextFold` at the first delta of the next block, as the adapter does |
   | `demo canvas` | six `mcp__canvas__show` rows, each `onToolStart` → `onCanvas` → `onToolEnd`: markdown (`editable`), vega, mermaid, svg, html, and a markdown with seven `controls` (`interaction: "async"`) |
-  | `demo widget` | three `contentType: "widget"` canvases the same way: a loan calculator (sliders + `<submit>`), a filterable table with a chart (no submit), a checklist on one map state (+ `<submit>`) |
+  | `demo ui` | an ANSWER that holds inline UI, streamed like `demo text` (`onDelta`×N, no tool row, no canvas event): Markdown, a calculator (`{@state}`, sliders, `<button send>`, `<submit>`), a dashboard (stat cards, a bar and a donut `<chart>` in the simple form), tabs with a sortable table, and a fenced tag that must stay source |
   | `demo error` | thinking + a partial answer, then throws `PiTurnFailedError("server_error")` (status 502) — the route keeps the partial and appends its "try another model" notice |
   | `demo long` | 30 lines, one every 600 ms (≈18 s) — for 중지 and mid-turn messages |
   | `demo attachments` | for each image ATTACHED to that message (`request.imageFiles`, the staged workspace copies): a `mcp__file_output__show_file` row around `onFile`, the returned card stamped with its text anchor. No image attached → it asks for one |
@@ -125,13 +125,14 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
 - **Canvas submission echo.** A turn whose agent message is the one the route builds for `canvasSubmission`
   (`On the canvas "<title>" (id: …), The user responded on the canvas:` + `- key: value` lines, and/or
   `The user edited the canvas … content to:`) answers with the received values as a table, so the round trip of a
-  controls form, an `editable` canvas or a widget `<submit>` is visible.
+  controls form or an `editable` canvas is visible. (An inline UI `<submit>` is an ordinary user message: the
+  stub echoes it like any other text.)
 - **Canvases go straight to the events sink** (`events.onCanvas`, the request shape `canvasTools.ts` emits —
-  the test feeds every demo canvas to the REAL tool and compares). So a demo `widget` shows whatever the avatar
-  owner's experimental `canvasWidget` setting is; the real tool's handler refuses the type while it is off.
+  the test feeds every demo canvas to the REAL tool and compares).
   Artifact ids are `local-demo-<conversationId>-<name>`: a repeated demo refines the same canvases in place.
-  A widget request also carries the text `anchor` runCapabilities' emit stamps, so the route's own inline widget
-  card (the `kind: "widget"` attachment it publishes from `onCanvas`) lands where a real run's would.
+- **`demo ui` is only text.** Inline UI has no server step, so the scenario is an answer and nothing else; each
+  UI block and the whole answer pass the shared static check in `tests/agent-local-runner.test.ts`, and
+  `tests/visual/inline-ui.spec.ts` streams the same answer through the real client.
 - **중지** — every wait and every emit checks the run's abort signal and throws `PiGatewayError("aborted")`, the real
   runner's error; the route's cancel path keeps the partial.
 - **Mid-turn messages** use the one inbound channel (`events.steers`) with the real runner's two paths: a message

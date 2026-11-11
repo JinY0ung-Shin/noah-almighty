@@ -48,8 +48,6 @@ export interface LocalDemoCanvas {
   contentType: CanvasContentType;
   controls?: CanvasControl[];
   editable?: boolean;
-  /** Widget only: whether the source has a `<submit>` (what `checkWidget` reports — pinned by the test). */
-  submits?: boolean;
 }
 
 export type LocalDemoText = string | ((state: LocalDemoState) => string);
@@ -104,7 +102,7 @@ const TEXT_ANSWER = `# 로컬 시연: Markdown 스트리밍
 | 생각 과정 | \`thinking\` | \`demo thinking\` |
 | 도구 활동 | \`tool\` / \`tool_end\` | \`demo tools\` |
 | 캔버스 | \`canvas\` | \`demo canvas\` |
-| 위젯 | \`canvas\` (widget) | \`demo widget\` |
+| 인라인 UI | \`delta\` (답변 본문) | \`demo ui\` |
 
 ## 3. 코드 블록
 
@@ -355,110 +353,131 @@ const canvasAnswer = (state: LocalDemoState): string =>
 6번 양식을 채워 **보내기**를 누르면, 제가 받은 값을 그대로 되돌려 드립니다. 같은 대화에서 \`demo canvas\`를 다시 실행하면 새 탭이 쌓이지 않고 같은 캔버스가 갱신됩니다.
 `;
 
-/* ───────────────────────────── demo widget ──────────────────────────── */
+/* ─────────────────────────────── demo ui ────────────────────────────── */
 
 /**
- * Widget sources. Every one must pass `checkWidget` (`src/shared/widget/check.ts`)
- * — `tests/agent-local-runner.test.ts` asserts it, and that `submits` here is
- * what the checker reports.
+ * Inline UI: the avatar writes UI tags in its ANSWER TEXT and the client draws
+ * them in place while the text streams — no tool call, no canvas event. So this
+ * scenario is nothing but an answer, streamed in small slices like every other
+ * demo answer; that is what exercises the client's streaming render.
+ *
+ * The three UI blocks are separate strings so the test can run each — and the
+ * whole answer, which is ONE document with one state scope (hence the unique
+ * state names) — through the static checker (`src/shared/widget/check.ts`).
  */
-const WIDGET_CALCULATOR = `{@state amount = 3000}
+const UI_CALCULATOR = `{@state amount = 3000}
 {@state months = 24}
 {@state rate = 4.5}
 {@const principal = amount * 10000}
 {@const interest = principal * (rate / 100) * (months / 12)}
 {@const monthly = (principal + interest) / months}
+<box border padding={3} gap={3}>
+  <title size="md">대출 계산기</title>
+  <row gap={3} wrap>
+    <slider label="대출 금액" value={amount} onChange={setAmount} min={500} max={10000} step={500} suffix="만원" />
+    <slider label="기간" value={months} onChange={setMonths} min={6} max={60} step={6} suffix="개월" />
+    <slider label="금리(연)" value={rate} onChange={setRate} min={1} max={12} step={0.5} suffix="%" />
+  </row>
+  <row gap={3} wrap>
+    <stat label="월 납입액" value={\`\${Math.round(monthly).toLocaleString()}원\`} />
+    <stat label="총 이자" value={\`\${Math.round(interest).toLocaleString()}원\`} />
+    <stat label="총 상환액" value={\`\${Math.round(principal + interest).toLocaleString()}원\`} />
+  </row>
+  <progress label="원금 비중" value={principal / (principal + interest)} />
+  {#if months > 36}
+    <callout tone="warning" title="우대 금리 제외">36개월을 넘으면 우대 금리가 적용되지 않습니다.</callout>
+  {:else}
+    <callout tone="success">우대 금리 적용 구간입니다.</callout>
+  {/if}
+  <row gap={2} wrap>
+    <submit values={{ amount, months, rate, monthly: Math.round(monthly) }}>이 조건으로 진행</submit>
+    <button send={\`대출 \${amount}만원을 \${months}개월 동안 갚을 때 금리를 낮추는 방법을 알려줘\`} variant="ghost">금리 낮추는 방법 묻기</button>
+  </row>
+</box>`;
 
-값을 바꾸면 아래 숫자가 **바로** 다시 계산됩니다. 계산은 브라우저 안에서만 일어납니다.
+const UI_DASHBOARD = `{@const monthly3q = [{ month: "7월", sales: 120, cost: 80 }, { month: "8월", sales: 150, cost: 90 }, { month: "9월", sales: 175, cost: 95 }, { month: "10월", sales: 160, cost: 110 }]}
+{@const teamShare = [{ team: "플랫폼", share: 45 }, { team: "제품", share: 35 }, { team: "디자인", share: 20 }]}
+<grid columns={4} gap={2}>
+  <grid-item><box border padding={3}><stat label="매출" value="605만원" delta="+12.4%" trend="up" /></box></grid-item>
+  <grid-item><box border padding={3}><stat label="비용" value="375만원" delta="+6.1%" trend="up" hint="전 분기 대비" /></box></grid-item>
+  <grid-item><box border padding={3}><stat label="이익률" value="38%" delta="+3.8%p" trend="up" /></box></grid-item>
+  <grid-item><box border padding={3}><stat label="미처리 요청" value={7} delta="-2" trend="down" /></box></grid-item>
+</grid>
+<grid columns={2} gap={2}>
+  <grid-item>
+    <chart type="bar" data={monthly3q} xKey="month" series={[{ key: "sales", label: "매출" }, { key: "cost", label: "비용" }]} unit="만원" title="월별 매출과 비용" />
+  </grid-item>
+  <grid-item>
+    <chart type="donut" data={teamShare} xKey="team" series={["share"]} unit="%" title="팀별 매출 비중" />
+  </grid-item>
+</grid>`;
 
-<row gap={3} wrap>
-  <slider label="대출 금액(만원)" value={amount} onChange={setAmount} min={500} max={10000} step={500} suffix="만원" />
-  <slider label="기간(개월)" value={months} onChange={setMonths} min={6} max={60} step={6} suffix="개월" />
-  <slider label="금리(연 %)" value={rate} onChange={setRate} min={1} max={12} step={0.5} suffix="%" />
-</row>
-<row gap={3} wrap>
-  <stat label="월 납입액" value={\`\${Math.round(monthly).toLocaleString()}원\`} />
-  <stat label="총 이자" value={\`\${Math.round(interest).toLocaleString()}원\`} />
-  <stat label="총 상환액" value={\`\${Math.round(principal + interest).toLocaleString()}원\`} />
-</row>
-<progress label="원금 비중" value={principal / (principal + interest)} />
-{#if months > 36}
-  <callout tone="warning" title="우대 금리 제외">36개월을 넘으면 우대 금리가 적용되지 않습니다.</callout>
-{:else}
-  <callout tone="success">우대 금리 적용 구간입니다.</callout>
-{/if}
-<submit values={{ amount, months, rate, monthly: Math.round(monthly) }}>이 조건으로 진행</submit>`;
-
-const WIDGET_TABLE = `{@state team = "all"}
-{@state minSales = 0}
+const UI_TABLE = `{@state team = "all"}
 {@state view = "table"}
-{@const rows = [{ team: "플랫폼", month: "7월", sales: 120 }, { team: "플랫폼", month: "8월", sales: 150 }, { team: "플랫폼", month: "9월", sales: 175 }, { team: "제품", month: "7월", sales: 90 }, { team: "제품", month: "8월", sales: 130 }, { team: "제품", month: "9월", sales: 160 }, { team: "디자인", month: "7월", sales: 40 }, { team: "디자인", month: "8월", sales: 65 }, { team: "디자인", month: "9월", sales: 80 }]}
-{@const shown = rows.filter((r) => (team === "all" || r.team === team) && r.sales >= minSales)}
+{@const records = [{ team: "플랫폼", month: "7월", sales: 55 }, { team: "플랫폼", month: "8월", sales: 70 }, { team: "플랫폼", month: "9월", sales: 80 }, { team: "제품", month: "7월", sales: 45 }, { team: "제품", month: "8월", sales: 50 }, { team: "제품", month: "9월", sales: 60 }, { team: "디자인", month: "7월", sales: 20 }, { team: "디자인", month: "8월", sales: 30 }, { team: "디자인", month: "9월", sales: 35 }]}
+{@const shown = records.filter((r) => team === "all" || r.team === team)}
 {@const total = shown.reduce((sum, r) => sum + r.sales, 0)}
-
 <row gap={3} wrap align="end">
   <select label="팀" value={team} onChange={setTeam} options={[{ label: "전체", value: "all" }, { label: "플랫폼", value: "플랫폼" }, { label: "제품", value: "제품" }, { label: "디자인", value: "디자인" }]} />
-  <slider label="최소 매출" value={minSales} onChange={setMinSales} min={0} max={150} step={10} />
-  <tabs label="보기" value={view} onChange={setView} options={[{ label: "표", value: "table" }, { label: "차트", value: "chart" }]} />
+  <tabs label="보기" value={view} onChange={setView} options={[{ label: "표", value: "table" }, { label: "요약", value: "summary" }]} />
 </row>
-{#if shown.length === 0}
-  <callout tone="info">조건에 맞는 행이 없습니다. 필터를 풀어 보세요.</callout>
-{:else if view === "table"}
-  <table caption="월별 매출" columns={[{ key: "team", label: "팀" }, { key: "month", label: "월" }, { key: "sales", label: "매출", align: "end" }]} rows={shown} />
+{#if view === "table"}
+  <table sortable caption="팀별 월 매출(만원)" columns={[{ key: "team", label: "팀" }, { key: "month", label: "월" }, { key: "sales", label: "매출", align: "end" }]} rows={shown} />
 {:else}
-  <chart height={260} label="월별 매출 차트" spec={{ mark: "bar", data: { values: shown }, encoding: { x: { field: "month", type: "nominal", sort: null }, y: { field: "sales", type: "quantitative", aggregate: "sum" }, color: { field: "team", type: "nominal" } } }} />
-{/if}
-<row gap={3}>
-  <stat label="행 수" value={shown.length} />
-  <stat label="합계" value={total} />
-  <stat label="평균" value={shown.length ? Math.round(total / shown.length) : 0} />
-</row>`;
+  <row gap={3} wrap>
+    <stat label="행 수" value={shown.length} />
+    <stat label="합계" value={\`\${total}만원\`} />
+    <stat label="평균" value={\`\${Math.round(total / shown.length)}만원\`} />
+  </row>
+{/if}`;
 
-const WIDGET_CHECKLIST = `{@state done = {}}
-{@state hideDone = false}
-{@const items = [{ id: "spec", label: "요구사항 확인", weight: 2 }, { id: "tests", label: "테스트 작성", weight: 3 }, { id: "review", label: "코드 리뷰 요청", weight: 2 }, { id: "docs", label: "문서 갱신", weight: 1 }, { id: "release", label: "릴리스 노트 초안", weight: 2 }]}
-{@const finished = items.filter((it) => done[it.id])}
-{@const visible = items.filter((it) => !hideDone || !done[it.id])}
-{@const score = finished.reduce((sum, it) => sum + it.weight, 0)}
-{@const full = items.reduce((sum, it) => sum + it.weight, 0)}
+/** The UI blocks of `demo ui`, in answer order (the test checks each, and the whole answer). */
+export const LOCAL_DEMO_UI_BLOCKS: Readonly<Record<"calculator" | "dashboard" | "table", string>> = {
+  calculator: UI_CALCULATOR,
+  dashboard: UI_DASHBOARD,
+  table: UI_TABLE,
+};
 
-<title size="md">배포 전 체크리스트</title>
-<progress label="진행률" value={finished.length / items.length} tone={finished.length === items.length ? "success" : "info"} />
-<switch checked={hideDone} onChange={setHideDone}>완료한 항목 숨기기</switch>
-<col gap={1}>
-  {#each visible as item}
-    <checkbox checked={done[item.id]} onChange={(next) => setDone((prev) => ({ ...prev, [item.id]: next }))}>{item.label} (가중치 {item.weight})</checkbox>
-  {:else}
-    <text color="muted">모든 항목을 완료했습니다.</text>
-  {/each}
-</col>
-<row gap={3}>
-  <stat label="완료" value={\`\${finished.length} / \${items.length}\`} />
-  <stat label="점수" value={\`\${score} / \${full}\`} />
-</row>
-<row gap={2}>
-  <button variant="secondary" onClick={() => setDone({})}>모두 해제</button>
-  <submit values={{ done: finished.map((it) => it.id), score, complete: finished.length === items.length }}>이 상태로 보내기</submit>
-</row>`;
+/** A tag shown AS SOURCE inside a code fence: the client must not draw it. */
+export const LOCAL_DEMO_UI_FENCED_SOURCE = '<stat label="이 태그는" value="그려지지 않습니다" />';
 
-export const LOCAL_DEMO_WIDGETS: readonly LocalDemoCanvas[] = [
-  { id: "widget-calculator", title: "위젯 · 대출 계산기", content: WIDGET_CALCULATOR, contentType: "widget", submits: true },
-  { id: "widget-table", title: "위젯 · 필터 표와 차트", content: WIDGET_TABLE, contentType: "widget", submits: false },
-  { id: "widget-checklist", title: "위젯 · 체크리스트", content: WIDGET_CHECKLIST, contentType: "widget", submits: true },
-];
+/** The whole `demo ui` answer: Markdown with the UI blocks written in it. */
+export const LOCAL_DEMO_UI_ANSWER = `# 로컬 시연: 인라인 UI
 
-const widgetAnswer = (state: LocalDemoState): string =>
-  state.canvasSinkMissing
-    ? "이 실행에는 캔버스를 받을 화면이 없어(`onCanvas` 없음) 위젯을 열지 않았습니다.\n"
-    : `위젯 캔버스 ${state.canvasesShown}개를 열었습니다. 값은 브라우저 안에서 바로 다시 계산되고, 그동안 저는 호출되지 않습니다.
+이 답변은 **본문 안에** UI 태그를 그대로 적은 것입니다. 도구 호출도, 옆 패널도 없습니다. 글자가 흘러오는 동안 태그가 완성되는 대로 그 자리에 그려져야 합니다.
 
-1. **대출 계산기** — 슬라이더 세 개와 \`<submit>\`. **이 조건으로 진행**을 누르면 값이 다음 메시지로 옵니다.
-2. **필터 표와 차트** — 드롭다운·슬라이더로 거르고 탭으로 표/차트를 전환합니다. \`<submit>\`이 없어 아무것도 돌아오지 않습니다.
-3. **체크리스트** — 체크 상태를 하나의 맵 상태(\`done\`)에 담습니다. **이 상태로 보내기**로 완료 목록과 점수를 보냅니다.
+## 1. 계산기
 
-1번이나 3번에서 보내기를 누르면, 제가 받은 값을 그대로 되돌려 드립니다.
+값을 바꾸면 숫자가 **바로** 다시 계산됩니다. 계산은 브라우저 안에서만 일어나고, 그동안 아바타는 호출되지 않습니다.
 
-> 참고: 이 시연은 캔버스 이벤트를 직접 내보내므로 아바타 소유자의 실험 기능(캔버스 위젯) 설정과 무관하게 열립니다. 실제 실행에서는 그 설정이 꺼져 있으면 도구가 \`widget\`을 거절합니다.
+${UI_CALCULATOR}
+
+- **이 조건으로 진행**(\`<submit>\`)을 누르면 버튼 이름과 값이 다음 메시지로 전송됩니다.
+- **금리 낮추는 방법 묻기**(\`<button send>\`)는 버튼에 적어 둔 문장을 다음 메시지로 보냅니다.
+
+## 2. 대시보드
+
+지표 카드 네 개와 차트 두 개입니다. 막대 차트와 도넛 차트 모두 \`data\`만 넘기는 간단한 형식으로 적었습니다.
+
+${UI_DASHBOARD}
+
+차트 아래의 이 문단은 다시 평범한 Markdown입니다. *기울임*과 \`inline code\`, [링크](https://example.com/docs)가 그대로 보여야 합니다.
+
+## 3. 탭과 정렬되는 표
+
+팀을 고르고 탭으로 표와 요약을 오갑니다. 표의 머리글을 누르면 정렬됩니다.
+
+${UI_TABLE}
+
+## 4. 소스로 보여 주기
+
+코드 블록 안에 적은 태그는 **그려지지 않고** 소스 그대로 보여야 합니다.
+
+\`\`\`
+${LOCAL_DEMO_UI_FENCED_SOURCE}
+\`\`\`
+
+끝입니다. 1번의 버튼을 누르면 local 스텁이 받은 메시지를 \`[local] …\`로 되돌려 줍니다.
 `;
 
 /* ────────────────────────── demo error / long ───────────────────────── */
@@ -577,12 +596,12 @@ export const LOCAL_DEMO_SCENARIOS: readonly LocalDemoScenario[] = [
     ],
   },
   {
-    name: "widget",
-    summary: "인터랙티브 위젯 캔버스 3종: 계산기(+보내기)·필터 표/차트·체크리스트(+보내기)",
+    name: "ui",
+    summary: "인라인 UI: 답변 본문 속 계산기(+보내기 버튼)·대시보드(지표, 막대·도넛 차트)·탭과 정렬 표, 코드 블록 속 소스",
     steps: () => [
-      { kind: "text", text: "위젯 캔버스 세 개를 열겠습니다." },
-      ...LOCAL_DEMO_WIDGETS.map((canvas): LocalDemoStep => ({ kind: "canvas", canvas })),
-      { kind: "text", text: widgetAnswer },
+      { kind: "thinking", text: "UI는 도구가 아니라 답변 본문에 직접 적는다. 계산기, 대시보드, 표 순서로 쓰자." },
+      // Slices small enough that a tag is cut mid-way many times over.
+      { kind: "text", text: LOCAL_DEMO_UI_ANSWER, chunk: 9, delayMs: 12 },
     ],
   },
   {
@@ -618,7 +637,8 @@ export function localDemoListing(): string {
     "| --- | --- |",
     ...LOCAL_DEMO_SCENARIOS.map((scenario) => `| \`${LOCAL_DEMO_COMMAND} ${scenario.name}\` | ${scenario.summary} |`),
     "",
-    "- 캔버스 양식이나 위젯에서 **보내기**를 누르면, 받은 값을 그대로 되돌려 보여 줍니다(제출 왕복 확인).",
+    "- 캔버스 양식에서 **보내기**를 누르면, 받은 값을 그대로 되돌려 보여 줍니다(제출 왕복 확인).",
+    "- 인라인 UI의 버튼(`<submit>`, `<button send>`)은 평범한 다음 메시지를 보내므로, 그 문장이 `[local] <메시지>`로 되돌아옵니다.",
     "- 실행 중에 메시지를 더 보내면 흐름에 끼워 넣고 받았다고 알려 줍니다.",
     "- 그 밖의 메시지는 이전과 같이 `[local] <메시지>`로 되돌려 줍니다.",
     "",
@@ -701,7 +721,7 @@ export function parseLocalCanvasSubmission(message: string): LocalCanvasSubmissi
 
 const cell = (value: string): string => value.replace(/\|/g, "\\|").replace(/\n/g, "<br>") || "(빈 값)";
 
-/** The Korean answer that echoes a submission back, so the `<submit>` round trip is visible. */
+/** The Korean answer that echoes a canvas submission back, so the controls round trip is visible. */
 export function localSubmissionEcho(submission: LocalCanvasSubmission): string {
   const name = submission.title ? `**${submission.title}** 캔버스` : "캔버스";
   const lines = [`${name}에서 보낸 내용을 받았습니다. (canvas id: \`${submission.canvasId}\`)`, ""];

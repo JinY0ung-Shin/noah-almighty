@@ -1,15 +1,21 @@
 /**
- * Canvas render reports: what the VIEWER'S BROWSER could not draw of a canvas
- * the avatar showed (a widget block that failed to evaluate, a chart spec the
- * renderer rejected). The server only parses + statically checks a canvas, so a
+ * Render reports: what the VIEWER'S BROWSER could not draw of something the
+ * avatar wrote — a canvas it showed (a chart spec the renderer rejected, a
+ * diagram that failed to lay out) or the inline UI in an answer's text (a block
+ * that failed to evaluate, an exceeded budget). The server parses and
+ * statically checks a canvas and checks an answer's inline UI not at all, so a
  * failure that appears at render time was an error only the user saw — this
  * queue carries it to the avatar on the conversation's NEXT turn
  * (`buildPiTurnPreamble`), once.
  *
- * Process memory on purpose: a report is a hint about the canvas version on
- * screen right now, worthless after a restart (the client reports again when it
- * redraws). Bounded everywhere — per canvas, per conversation, overall, in time —
- * because the reporter is a browser. DB-free: the Store owns the instance and
+ * The Store keeps TWO instances: one keyed by canvas id + version, one for
+ * inline UI keyed by the MESSAGE id (version always 1) — so `canvasId` below is
+ * "the reported thing's id" in the second.
+ *
+ * Process memory on purpose: a report is a hint about what is on screen right
+ * now, worthless after a restart (the client reports again when it redraws).
+ * Bounded everywhere — per canvas, per conversation, overall, in time —
+ * because the reporter is a browser. DB-free: the Store owns the instances and
  * does the ownership/version checks (`store/conversations.ts`).
  */
 

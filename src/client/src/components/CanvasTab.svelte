@@ -3,7 +3,6 @@
   import { onDestroy, onMount } from "svelte";
   import CanvasHtmlFrame from "./CanvasHtmlFrame.svelte";
   import Icon from "./Icon.svelte";
-  import type WidgetViewComponent from "./widget/WidgetView.svelte";
   import { canvasHtmlDocument } from "../lib/canvasHtml";
   import { confirmAction } from "../lib/confirm";
   import { renderMarkdown, timeLabel } from "../lib/format";
@@ -15,7 +14,6 @@
     dismissCanvas,
     fetchCanvasVersions,
     rollbackCanvas,
-    sendWidgetMessage,
     submitCanvas,
     submitCanvasEdit,
   } from "../lib/chat";
@@ -24,28 +22,23 @@
   import { shadowSvg } from "../lib/shadowSvg";
   import { copyText } from "../lib/dom";
   import { copyPng, downloadPng, downloadSvg } from "../lib/canvasExport";
-  import { notify, readState } from "../lib/state";
-  import { createWidgetStateSaver, loadWidgetState, type WidgetStateRecord, type WidgetStateRef } from "../lib/widgetState";
+  import { notify } from "../lib/state";
   import type { ChatPane, PaneCanvas } from "../lib/types";
-  import type { WidgetDoc, WidgetHost } from "../../../shared/widget/index";
 
   type CanvasControl = NonNullable<PaneCanvas["controls"]>[number];
 
   // ONE visual-canvas artifact (#50) as a tab of the side panel (SidePanel):
-  // the avatar-shown content (markdown/svg/html/mermaid/vega/widget — all
+  // the avatar-shown content (markdown/svg/html/mermaid/vega — all
   // sanitized, never executing avatar JS) plus real form controls that post back through
   // /api/chat/respond (blocking) or /api/chat/stream (async). The instance
   // stays mounted while another tab shows, so its form/edit state survives a
   // switch; only the card's DOM is dropped while hidden.
   //
-  // A `widget` canvas is not a panel tab: it is drawn in the chat bubble that
-  // showed it (widget/InlineWidget). That is this same component with `inline`
-  // — one home for a canvas's state, storage, fullscreen, versions, delete,
-  // submit and render report — dressed for a bubble instead of the panel.
+  // Interactive UI is not a canvas: an avatar writes it straight into its answer
+  // (components/widget/AnswerUi). A `widget` canvas an older build stored shows
+  // its source here, with a line saying so.
   export let pane: ChatPane;
   export let canvas: PaneCanvas;
-  /** Drawn inside a chat bubble (a widget), not as a side-panel tab. */
-  export let inline = false;
   /** This tab is the one the panel shows. */
   export let active = false;
 
@@ -104,22 +97,16 @@
   // ONE surface shows the canvas, and only markdown (or a source fallback) is
   // parsed into the app's own DOM: a drawing (svg/vega/mermaid) goes into a
   // shadow root (shadowSvg) and an `html` page into its own sandboxed document
-  // (CanvasHtmlFrame), so neither one's <style> can restyle the app. A `widget`
-  // is drawn by the client's own components from an evaluated document
-  // (WidgetView): what its expressions produce is inserted as text, and its
-  // top-level prose is Markdown reduced to Markdown's own tags with no
-  // class / id / style / href (lib/widgetProse.ts) — never free HTML.
+  // (CanvasHtmlFrame), so neither one's <style> can restyle the app.
   let renderedHtml = "";
   let svgMarkup = "";
   let htmlDoc = "";
-  let widgetDoc: WidgetDoc | null = null;
   // Async renders (vega/mermaid) call this when they land, so the previous surface
   // stays up meanwhile instead of blinking out on every theme flip.
-  function showRendered(surface: { html?: string; svg?: string; doc?: string; widget?: WidgetDoc }): void {
+  function showRendered(surface: { html?: string; svg?: string; doc?: string }): void {
     renderedHtml = surface.html ?? "";
     svgMarkup = surface.svg ?? "";
     htmlDoc = surface.doc ?? "";
-    widgetDoc = surface.widget ?? null;
   }
   let renderError = "";
   // Not a failure of the content: this build cannot draw the canvas at all (an
@@ -234,45 +221,11 @@
       }
       return;
     }
-    if (target.contentType === "widget") {
-      // The widget library and its components load on the first widget shown,
-      // like mermaid and Vega — a chat without one never pays for them. A chunk
-      // that fails to load (offline, a deploy that replaced it) is NOT a broken
-      // widget: it gets its own message and a way to try again.
-      let lib: NonNullable<typeof widgetLib>;
-      try {
-        const [loadedLib, view] = await Promise.all([import("../../../shared/widget/index"), import("./widget/WidgetView.svelte")]);
-        if (token !== renderToken) return; // a newer render won
-        lib = widgetLib = loadedLib;
-        WidgetView = view.default;
-      } catch {
-        if (token !== renderToken) return;
-        renderError = "위젯을 불러오지 못했습니다. 다시 시도하거나 새로고침해 주세요.";
-        renderRetry = true;
-        showRendered({ html: sourceFallback(target.content) });
-        return;
-      }
-      // The server checked this source before showing it; a version stored by an
-      // older build, or one this client's parser reads differently, falls back
-      // to the source like any other failed render.
-      let doc: WidgetDoc | null = null;
-      try {
-        doc = lib.parseWidget(target.content);
-      } catch {
-        doc = null;
-      }
-      if (!doc || doc.problems.length) {
-        renderError = "위젯 소스에 오류가 있어 표시하지 못했습니다.";
-        showRendered({ html: sourceFallback(target.content) });
-        const problems = (doc?.problems ?? []).map((problem) => {
-          const { line, col } = lib.lineCol(target.content, problem.pos);
-          return `widget source error at line ${line}:${col}: ${problem.message}`;
-        });
-        reportRenderProblems(target.content, problems.length ? problems : ["the widget source could not be parsed"]);
-        return;
-      }
-      openWidget(target.id, doc);
-      showRendered({ widget: doc });
+    if ((target.contentType as string) === "widget") {
+      // The retired canvas `widget` type (a row an older build stored): interactive
+      // UI is written in the answer itself now, so only its source is shown.
+      renderNotice = "더 이상 지원하지 않는 위젯 형식의 캔버스입니다. 원본만 표시합니다.";
+      showRendered({ html: sourceFallback(target.content) });
       return;
     }
     if (target.contentType === "mermaid") {
@@ -309,128 +262,6 @@
   function sourceFallback(source: string): string {
     const escaped = source.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] || c));
     return DOMPurify.sanitize(`<pre>${escaped}</pre>`);
-  }
-
-  // ---- widget: an interactive artifact that recomputes HERE ----
-  // The state lives in this tab's script, not in the drawn copy: the panel and
-  // the fullscreen view show the same values, and a hidden tab (whose card DOM
-  // is dropped) keeps them. `widgetStored` holds what the viewer CHANGED, each
-  // value with the declaration it belongs to — the record that carries state
-  // across a refinement in place or a rollback (a variable whose declaration
-  // changed starts over from its new initializer) and that is saved to this
-  // browser's localStorage. The avatar sees none of it; only a pressed <submit>
-  // reaches the conversation.
-  let WidgetView: typeof WidgetViewComponent | null = null;
-  let widgetLib: typeof import("../../../shared/widget/index") | null = null;
-  let widgetValues: Record<string, unknown> = {};
-  let widgetStored: WidgetStateRecord = {};
-  let widgetCanvasId = "";
-  // Set once the viewer confirmed deleting this canvas: nothing is saved for it anymore.
-  let widgetDeleting = false;
-  // A save only ever follows a state change, i.e. after the library loaded; the
-  // fallback (never store) covers the impossible order rather than serializing blind.
-  const widgetSaver = createWidgetStateSaver((value, limit) => (widgetLib ? widgetLib.dataSize(value, limit) : limit + 1));
-
-  // The conversation the widget was opened in. Captured, because by the time
-  // this tab is destroyed the pane may already show another conversation.
-  let widgetConversationId: string | null = null;
-
-  function widgetRef(canvasId = widgetCanvasId || canvas.id): WidgetStateRef {
-    widgetConversationId = widgetConversationId || pane.conversationId || null;
-    return { userId: readState().user?.id, conversationId: widgetConversationId, canvasId };
-  }
-  function canvasStillExists(): boolean {
-    return readState().chatPanes.some((p) => p.id === pane.id && p.canvases.some((c) => c.id === canvas.id));
-  }
-  /** The canvas was removed from the conversation this pane STILL shows — deleted, not navigated away from. */
-  function canvasWasDeleted(): boolean {
-    const shown = readState().chatPanes.find((p) => p.id === pane.id);
-    return Boolean(shown && shown.conversationId === widgetConversationId && !shown.canvases.some((c) => c.id === widgetCanvasId));
-  }
-  // The debounce must not cost the last change: write it when the page is going
-  // away (a reload) or hidden, and when this tab is destroyed (the pane moved to
-  // another conversation or closed) — unless the canvas itself was deleted,
-  // where a write would bring its key back.
-  function flushWidgetState(): void {
-    if (widgetDeleting || canvasWasDeleted()) widgetSaver.cancel();
-    else widgetSaver.flush();
-  }
-  function onVisibilityChange(): void {
-    if (document.visibilityState === "hidden") flushWidgetState();
-  }
-  onMount(() => {
-    window.addEventListener("pagehide", flushWidgetState);
-    document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => {
-      window.removeEventListener("pagehide", flushWidgetState);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  });
-  onDestroy(flushWidgetState);
-
-  // `widgetStored` is NOT pruned to the document being opened: `restoreState`
-  // applies only the entries whose declaration matches, and the rest wait. A
-  // reattach replays a run's whole log, so an OLDER version of this canvas can
-  // pass through here before the current one — pruning then threw away what the
-  // viewer had set under the current version.
-  function openWidget(canvasId: string, doc: WidgetDoc): void {
-    if (!widgetLib) return;
-    if (canvasId !== widgetCanvasId) {
-      widgetCanvasId = canvasId;
-      widgetConversationId = pane.conversationId || null;
-      widgetStored = loadWidgetState(widgetRef()) ?? {};
-      widgetDeleting = false;
-    }
-    widgetValues = { ...widgetLib.restoreState(doc, widgetStored).values };
-  }
-
-  // What goes to storage: the entries that belong to the document on screen
-  // (the others are another version's, kept in memory only for a replay).
-  function storableWidgetState(): WidgetStateRecord {
-    const out: WidgetStateRecord = {};
-    for (const st of widgetDoc?.states ?? []) {
-      const entry = Object.prototype.hasOwnProperty.call(widgetStored, st.name) ? widgetStored[st.name] : undefined;
-      if (entry && entry.sig === st.sig) out[st.name] = entry;
-    }
-    return out;
-  }
-
-  // Pure REASSIGNMENT (see toggleButton below); a setter reads the newest value
-  // through `get`, so chained calls in one handler compose.
-  const widgetHost: WidgetHost = {
-    get: (name) => widgetValues[name],
-    set: (name, value) => {
-      const decl = widgetDoc?.states.find((st) => st.name === name);
-      if (!decl) return;
-      widgetValues = { ...widgetValues, [name]: value };
-      widgetStored = { ...widgetStored, [name]: { sig: decl.sig, value } };
-      if (!widgetDeleting) widgetSaver.schedule(widgetRef(), storableWidgetState());
-    },
-    copy: (text) => {
-      void copyText(text);
-      notify("클립보드에 복사했습니다.", "info");
-    },
-  };
-
-  // A <submit> rides a NEW chat turn (like an async form), so it waits for the
-  // avatar's turn to end; the widget's own inputs keep working meanwhile.
-  $: widgetLocked = Boolean(canvas.submitting || pane.streaming);
-  // Shown by the widget only when it has something to send (a <submit>, a send button).
-  $: widgetLockedReason = canvas.submitting ? "응답을 보내는 중입니다." : "아바타 응답이 끝난 뒤 보낼 수 있습니다.";
-  function onWidgetSubmit(values: Record<string, unknown>): void {
-    if (widgetLocked) return;
-    void submitCanvas(pane.id, canvas.id, values);
-  }
-  // A `<button send>`: its text becomes the viewer's next chat message, exactly
-  // as if typed — except that the composer (its draft, its staged images) is
-  // left alone and a slash command is never run from a widget.
-  function onWidgetSend(text: string): void {
-    if (widgetLocked) return;
-    void sendWidgetMessage(pane.id, text);
-  }
-  // Error nodes, ignored calls, a failed handler or chart of the widget on screen.
-  function onWidgetProblems(problems: string[], source: string): void {
-    reportRenderProblems(source, problems);
   }
 
   // ---- form controls ----
@@ -587,18 +418,7 @@
       { title: "캔버스를 삭제할까요?", confirmLabel: "삭제", tone: "danger" },
     );
     if (!confirmed) return;
-    // From here nothing is saved for this canvas: a pending save, or a change
-    // made while the DELETE is in flight, must not write its state back after
-    // `deleteCanvas` removed it.
-    widgetDeleting = true;
-    widgetSaver.cancel();
     await deleteCanvas(pane.id, canvas.id);
-    // The delete failed and the canvas is still here: saving resumes, starting
-    // with whatever changed meanwhile.
-    if (canvasStillExists()) {
-      widgetDeleting = false;
-      if (widgetDoc) widgetSaver.schedule(widgetRef(), storableWidgetState());
-    }
   }
 
   // ---- version history ----
@@ -672,7 +492,7 @@
 <svelte:window on:keydown={fullscreen ? onFsKey : undefined} />
 
 {#if active}
-  <div class="canvas-card" class:canvas-inline={inline}>
+  <div class="canvas-card">
     <div class="canvas-card-top">
       <div class="canvas-title">{canvas.title}</div>
       <div class="canvas-toolbar">
@@ -718,8 +538,8 @@
       </div>
     {/if}
 
-    <div class="canvas-content" class:md={!widgetDoc} bind:this={contentEl}>
-      {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} onProblems={onWidgetProblems} onSend={onWidgetSend} conversationId={pane.conversationId || null} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} />{:else if svgMarkup}<div class="canvas-svg" data-fit use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+    <div class="canvas-content md" bind:this={contentEl}>
+      {#if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} />{:else if svgMarkup}<div class="canvas-svg" data-fit use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
     </div>
     {#if renderNotice}
       <p class="canvas-render-error" role="alert">{renderNotice}</p>
@@ -888,8 +708,8 @@
         </form>
       {/if}
     {:else if canvas.submittedValues}
-      <!-- A widget's <submit> declares no controls: list what was ACTUALLY sent,
-           by key. The widget stays usable, so sending again is its own button. -->
+      <!-- Values sent on a canvas that declares no controls (a retired `widget`
+           canvas's <submit>): listed by key. -->
       <div class="canvas-answered" role="status">
         <span class="canvas-answered-badge">응답 완료</span>
         <ul>
@@ -915,8 +735,8 @@
     </div>
     <button class="canvas-fs-backdrop" type="button" aria-label="닫기" on:click={() => (fullscreen = false)}></button>
     <div class="canvas-fs-stage">
-      <div class="canvas-fs-content" class:md={!widgetDoc} class:is-html={htmlDoc !== ""} class:is-widget={widgetDoc !== null} style={`transform:scale(${zoom})`}>
-        {#if widgetDoc && WidgetView}<svelte:component this={WidgetView} doc={widgetDoc} values={widgetValues} host={widgetHost} locked={widgetLocked} lockedReason={widgetLockedReason} dark={$theme === "dark"} onSubmit={onWidgetSubmit} onProblems={onWidgetProblems} onSend={onWidgetSend} conversationId={pane.conversationId || null} />{:else if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} />{:else if svgMarkup}<div class="canvas-svg" use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
+      <div class="canvas-fs-content md" class:is-html={htmlDoc !== ""} style={`transform:scale(${zoom})`}>
+        {#if htmlDoc}<CanvasHtmlFrame doc={htmlDoc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} />{:else if svgMarkup}<div class="canvas-svg" use:shadowSvg={svgMarkup}></div>{:else}{@html renderedHtml}{/if}
       </div>
     </div>
   </div>

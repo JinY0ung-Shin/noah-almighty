@@ -124,6 +124,35 @@ describe("avatar task API", () => {
     expect(services.store.listMessages(user.id, task.conversationId)).toHaveLength(4);
   });
 
+  it("never hands an inline UI render report to a task-API turn (its answer is read as text): it waits, and is dropped once that answer is no longer the latest", async () => {
+    const { call, owner, services, user } = await boot();
+    const task = (await call("post", endpoint).send({ message: "표로 정리해 줘" }).expect(202)).body.task;
+    dispatchAvatarTasks(services);
+    await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, task.id)?.status).toBe("succeeded"));
+    const lastAnswer = () => services.store.listMessages(user.id, task.conversationId).filter(m => m.role === "assistant").at(-1)!.id;
+    const report = (errors: string[]) =>
+      owner.post(`/api/conversations/${task.conversationId}/ui-report`).send({ messageId: lastAnswer(), errors }).expect(204);
+    // The owner opens the conversation in the app; the browser cannot draw part of the answer.
+    await report(["<chart>: bad spec"]);
+    // A personal API key is not a session: the report route is not reachable with it.
+    await call("post", `/api/conversations/${task.conversationId}/ui-report`).send({ messageId: lastAnswer(), errors: ["e"] }).expect(401);
+
+    // The next turn is another API submission: no inline UI there, so it is not consumed for it…
+    const next = (await call("post", endpoint).send({ message: "이어서", conversationId: task.conversationId }).expect(202)).body.task;
+    dispatchAvatarTasks(services);
+    await vi.waitFor(() => expect(services.store.getAvatarTask(user.id, next.id)?.status).toBe("succeeded"));
+    expect(H.requests[1]).toMatchObject({ externalTaskApi: true });
+    expect(H.requests[1].inlineUiRenderErrors).toBeUndefined();
+    // …and the owner's own chat turn after it does not hear about an answer that is no longer the previous one.
+    await owner.post("/api/chat/stream").send({ avatarId: user.id, conversationId: task.conversationId, message: "계속" }).expect(200);
+    expect(H.requests[2].externalTaskApi).toBeFalsy();
+    expect(H.requests[2].inlineUiRenderErrors).toBeUndefined();
+    // Control: a report about the newest answer reaches the next interactive turn.
+    await report(["line 2: total is not defined"]);
+    await owner.post("/api/chat/stream").send({ avatarId: user.id, conversationId: task.conversationId, message: "고쳐줘" }).expect(200);
+    expect(H.requests[3].inlineUiRenderErrors).toEqual(["line 2: total is not defined"]);
+  });
+
   it("prevents duplicate execution and rejects changed payloads for an idempotency key", async () => {
     const { call, services, user } = await boot();
     const first = await call("post", endpoint).set("Idempotency-Key", "event-1").send({ message: "do this" }).expect(202);

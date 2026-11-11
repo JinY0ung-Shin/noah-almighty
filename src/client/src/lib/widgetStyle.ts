@@ -1,4 +1,4 @@
-// Inline styles for canvas `widget` components, built ONLY from the shared
+// Inline styles for the inline UI components, built ONLY from the shared
 // library's token tables and clamped numbers — never from a string the avatar
 // wrote. The props reaching these functions are already normalized
 // (`normalizeProps`): an enum is one of its allowed values, a spacing is 0–8.

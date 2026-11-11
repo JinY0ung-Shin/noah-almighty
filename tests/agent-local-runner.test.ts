@@ -12,12 +12,14 @@ import { runLocalAgent, runLocalAgentStream } from "../src/server/agent/localRun
 import {
   LOCAL_DEMO_LONG_STEPS,
   LOCAL_DEMO_SCENARIOS,
-  LOCAL_DEMO_WIDGETS,
+  LOCAL_DEMO_UI_ANSWER,
+  LOCAL_DEMO_UI_BLOCKS,
+  LOCAL_DEMO_UI_FENCED_SOURCE,
   parseLocalCanvasSubmission,
   parseLocalDemoCommand,
 } from "../src/server/agent/localScenarios.js";
 import { buildCanvasTools, formatSubmission } from "../src/server/agent/canvasTools.js";
-import { CANVAS_WIDGET_MANUAL_EXAMPLES } from "../src/server/agent/systemManual.js";
+import { INLINE_UI_MANUAL_EXAMPLES } from "../src/server/agent/systemManual.js";
 import { isRetryableModelError } from "../src/server/agent/runErrors.js";
 import { PiTurnFailedError } from "../src/server/agent/pi/eventAdapter.js";
 import { PiGatewayError } from "../src/server/agent/pi/responsesClient.js";
@@ -162,7 +164,9 @@ describe("local runtime: the default echo", () => {
     expect(parseLocalDemoCommand("demo")).toEqual({ kind: "list" });
     expect(parseLocalDemoCommand("  DEMO  ")).toEqual({ kind: "list" });
     expect(parseLocalDemoCommand("demo help")).toEqual({ kind: "list" });
-    expect(parseLocalDemoCommand("Demo   Widget")).toMatchObject({ kind: "scenario", scenario: { name: "widget" } });
+    expect(parseLocalDemoCommand("Demo   UI")).toMatchObject({ kind: "scenario", scenario: { name: "ui" } });
+    // The retired widget-canvas scenario is gone: its name is just an unknown one now.
+    expect(parseLocalDemoCommand("demo widget")).toEqual({ kind: "unknown", name: "widget" });
     expect(parseLocalDemoCommand("demo nope")).toEqual({ kind: "unknown", name: "nope" });
   });
 });
@@ -180,7 +184,7 @@ describe("local runtime: demo listing", () => {
       "thinking",
       "tools",
       "canvas",
-      "widget",
+      "ui",
       "error",
       "long",
       "attachments",
@@ -309,7 +313,6 @@ describe("local runtime: demo tools", () => {
 async function realCanvasRequest(request: CanvasRequest): Promise<CanvasRequest> {
   let emitted: CanvasRequest | undefined;
   const tools = buildCanvasTools({
-    widgetEnabled: true,
     emitCanvas: async (canvas) => {
       emitted = canvas;
       return { behavior: "shown" };
@@ -340,7 +343,7 @@ describe("local runtime: demo canvas", () => {
       expect(canvas.awaitInput).toBe(false);
       // Accepted by the real tool (size caps, control rules, the mermaid parse) and emitted identically.
       expect(await realCanvasRequest(canvas)).toEqual(canvas);
-      expect("anchor" in canvas).toBe(false); // only a widget is drawn inline
+      expect("anchor" in canvas).toBe(false); // a canvas is a side-panel artifact
     }
     expect(canvases[0]).toMatchObject({ editable: true, controls: undefined, interaction: undefined });
     expect(() => JSON.parse(canvases[1]!.content)).not.toThrow();
@@ -387,61 +390,100 @@ describe("local runtime: demo canvas", () => {
   });
 });
 
-describe("local runtime: demo widget", () => {
-  it("every widget source passes the checker", () => {
-    expect(LOCAL_DEMO_WIDGETS.length).toBeGreaterThanOrEqual(3);
-    for (const widget of LOCAL_DEMO_WIDGETS) {
-      const check = checkWidget(widget.content);
-      expect(check, `${widget.id}: ${check.ok ? "" : check.error}`).toMatchObject({ ok: true });
-      expect(check.ok && check.submits, widget.id).toBe(Boolean(widget.submits));
-      expect(widget.contentType).toBe("widget");
-      expect(widget.controls).toBeUndefined();
-      expect(widget.editable).toBeUndefined();
+describe("local runtime: demo ui (inline UI in the answer text)", () => {
+  it("every UI block, the whole answer and the manual's examples pass the checker", () => {
+    expect(Object.keys(LOCAL_DEMO_UI_BLOCKS)).toEqual(["calculator", "dashboard", "table"]);
+    for (const [name, source] of Object.entries(LOCAL_DEMO_UI_BLOCKS)) {
+      const check = checkWidget(source);
+      expect(check, `${name}: ${check.ok ? "" : check.error}`).toMatchObject({ ok: true });
+      // The answer carries each block verbatim.
+      expect(LOCAL_DEMO_UI_ANSWER).toContain(source);
     }
+    expect(checkWidget(LOCAL_DEMO_UI_BLOCKS.calculator)).toEqual({ ok: true, submits: true });
+    expect(checkWidget(LOCAL_DEMO_UI_BLOCKS.dashboard)).toEqual({ ok: true, submits: false });
+    expect(checkWidget(LOCAL_DEMO_UI_BLOCKS.table)).toEqual({ ok: true, submits: false });
+    // The answer is ONE document (one state scope): prose, the three blocks and
+    // a fenced source together still parse, and no state name repeats.
+    const whole = checkWidget(LOCAL_DEMO_UI_ANSWER);
+    expect(whole, whole.ok ? "" : whole.error).toEqual({ ok: true, submits: true });
+    const states = [...LOCAL_DEMO_UI_ANSWER.matchAll(/^\{@(?:state|const) (\w+) =/gm)].map((match) => match[1]);
+    expect(states.length).toBeGreaterThanOrEqual(10);
+    expect(new Set(states).size).toBe(states.length);
     // The manual's own examples stay valid too (the demo is modelled on them).
-    for (const source of Object.values(CANVAS_WIDGET_MANUAL_EXAMPLES)) {
+    for (const source of Object.values(INLINE_UI_MANUAL_EXAMPLES) as string[]) {
       expect(checkWidget(source)).toMatchObject({ ok: true });
     }
   });
 
-  it("covers a calculator with a slider and submit, a filterable table with a chart, and a map-state checklist", () => {
-    const [calculator, table, checklist] = LOCAL_DEMO_WIDGETS;
-    expect(calculator!.content).toMatch(/<slider /);
-    expect(calculator!.content).toMatch(/<submit values=\{\{/);
-    expect(table!.content).toMatch(/\.filter\(/);
-    expect(table!.content).toMatch(/<table /);
-    expect(table!.content).toMatch(/<chart /);
-    expect(table!.content).not.toMatch(/<submit/);
-    expect(checklist!.content).toMatch(/\{@state done = \{\}\}/);
-    expect(checklist!.content).toMatch(/checked=\{done\[item\.id\]\}/);
-    expect(checklist!.content).toMatch(/\[item\.id\]: next/);
-    expect(checklist!.content).toMatch(/<submit values=\{\{/);
+  it("covers a stateful calculator with both ways back, a dashboard with the simple chart form, tabs + a sortable table, Markdown between them and a fenced source", () => {
+    const { calculator, dashboard, table } = LOCAL_DEMO_UI_BLOCKS;
+    expect(calculator).toMatch(/^\{@state amount = 3000\}/);
+    expect(calculator).toMatch(/<slider /);
+    expect(calculator).toMatch(/<stat /);
+    expect(calculator).toMatch(/<submit values=\{\{/);
+    expect(calculator).toMatch(/<button send=\{`/);
+    expect(calculator).toMatch(/\{#if months > 36\}/);
+    expect(dashboard).toMatch(/<grid columns=\{4\}/);
+    expect(dashboard.match(/<stat /g)).toHaveLength(4);
+    expect(dashboard).toContain('<chart type="bar" data={monthly3q} xKey="month" series={[{ key: "sales", label: "매출" }, { key: "cost", label: "비용" }]}');
+    expect(dashboard).toContain('<chart type="donut" data={teamShare} xKey="team" series={["share"]}');
+    expect(dashboard).not.toContain("spec={"); // the simple form, not a Vega-Lite spec
+    expect(table).toMatch(/<tabs /);
+    expect(table).toMatch(/<table sortable /);
+    expect(table).toMatch(/\{#if view === "table"\}/);
+    expect(table).toMatch(/\.filter\(/);
+    // Ordinary Markdown around the UI: headings, paragraphs, a list, a link.
+    for (const piece of ["# 로컬 시연: 인라인 UI", "## 1. 계산기", "## 2. 대시보드", "## 3. 탭과 정렬되는 표", "## 4. 소스로 보여 주기", "[링크](https://example.com/docs)", "\n- **이 조건으로 진행**"]) {
+      expect(LOCAL_DEMO_UI_ANSWER).toContain(piece);
+    }
+    // A tag shown AS SOURCE: inside a code fence, where the client must not draw it.
+    expect(LOCAL_DEMO_UI_ANSWER).toContain(`\n\`\`\`\n${LOCAL_DEMO_UI_FENCED_SOURCE}\n\`\`\`\n`);
+    expect(LOCAL_DEMO_UI_FENCED_SOURCE.startsWith("<stat ")).toBe(true);
+    // Every tag line of a block starts at the top level (indent ≤ 3 spaces would
+    // still be a tag; none is indented 4+, which Markdown reads as code).
+    for (const source of Object.values(LOCAL_DEMO_UI_BLOCKS)) {
+      expect(source.split("\n")[0]!.startsWith("{@")).toBe(true);
+      expect(source.split("\n").filter((line) => /^(<|\{[#@])/.test(line)).length).toBeGreaterThan(2);
+    }
+    // Visible text is Korean.
+    expect(LOCAL_DEMO_UI_ANSWER).toMatch(/[가-힣]/);
   });
 
-  it("emits the widgets through the canvas event, as the real tool would", async () => {
+  it("streams the answer as plain text deltas in small slices — no canvas event, no tool call, nothing attached", async () => {
     const rec = recorder();
-    const response = await run("demo widget", rec);
-    const canvases = rec.of("canvas").map((entry) => entry.request);
-    expect(canvases).toHaveLength(LOCAL_DEMO_WIDGETS.length);
-    for (const [index, canvas] of canvases.entries()) {
-      const widget = LOCAL_DEMO_WIDGETS[index]!;
-      expect(canvas).toMatchObject({
-        contentType: "widget",
-        title: widget.title,
-        content: widget.content,
-        awaitInput: false,
-        editable: false,
-        controls: undefined,
-        interaction: widget.submits ? "async" : undefined,
-      });
-      // The tool's own request, plus the inline anchor runCapabilities stamps on a widget:
-      // the narration streamed before the calls (not folded yet).
-      const { anchor, ...emitted } = canvas;
-      expect(anchor).toBe("위젯 캔버스 세 개를 열겠습니다.".length);
-      expect(await realCanvasRequest(canvas)).toEqual(emitted);
-    }
-    expect(rec.of("tool").every((entry) => entry.event.name === "mcp__canvas__show")).toBe(true);
-    expect(response.text).toContain("위젯 캔버스 3개");
+    const response = await run("demo ui", rec);
+    expect(response.text).toBe(LOCAL_DEMO_UI_ANSWER.trim());
+    expect(rec.deltas().trim()).toBe(response.text);
+    expect(rec.of("canvas")).toEqual([]);
+    expect(rec.of("tool")).toEqual([]);
+    expect(rec.of("file")).toEqual([]);
+    // Reasoning first, then the answer — which is never folded away (it is the last text block).
+    expect(rec.of("thinking").length).toBeGreaterThan(0);
+    expect(rec.of("fold")).toEqual([]);
+    // Small slices: every tag is cut mid-way many times, which is what the
+    // client's streaming render has to survive.
+    const deltas = rec.of("delta").map((entry) => entry.text);
+    expect(deltas.length).toBeGreaterThan(300);
+    expect(Math.max(...deltas.map((delta) => Array.from(delta).length))).toBeLessThanOrEqual(9);
+    const cut = deltas.filter((delta) => /<[a-z-]*$/.test(delta) || /^[^<]*>/.test(delta));
+    expect(cut.length).toBeGreaterThan(10);
+    expect(rec.log.at(-1)).toEqual({ type: "turn", event: { text: response.text, steerPending: false } });
+  });
+
+  it("needs no canvas sink: a host without one still gets the whole answer", async () => {
+    const rec = recorder({ canvas: false });
+    const response = await run("demo ui", rec);
+    expect(response.text).toBe(LOCAL_DEMO_UI_ANSWER.trim());
+    expect(response.text).not.toContain("캔버스를 열지 않았습니다");
+  });
+
+  it("a button of the demo posts an ordinary next message, which the stub echoes like any other", async () => {
+    // What the client sends for `<submit>`: the label, then one `- key: value` line per value.
+    const message = "이 조건으로 진행\n- amount: 4500\n- months: 36\n- rate: 4.5\n- monthly: 1418750";
+    expect(parseLocalCanvasSubmission(message)).toBeNull(); // not a canvas submission any more
+    expect((await run(message, recorder())).text).toBe(`[local] ${message}`);
+    const send = "대출 4500만원을 36개월 동안 갚을 때 금리를 낮추는 방법을 알려줘";
+    expect((await run(send, recorder())).text).toBe(`[local] ${send}`);
   });
 });
 
@@ -455,8 +497,8 @@ describe("local runtime: canvas submission echo", () => {
     return parts.join("\n\n");
   };
 
-  it("echoes the values a widget <submit> or a controls form sent", async () => {
-    const message = submissionMessage("위젯 · 대출 계산기", "local-demo-conv-1-widget-calculator", {
+  it("echoes the values a controls form sent", async () => {
+    const message = submissionMessage("Controls · 워크숍 일정 정하기", "local-demo-conv-1-controls", {
       amount: 4500,
       months: 36,
       rate: 4.5,
@@ -464,11 +506,11 @@ describe("local runtime: canvas submission echo", () => {
       complete: false,
       note: "",
     });
-    expect(message.startsWith('On the canvas "위젯 · 대출 계산기" (id: local-demo-conv-1-widget-calculator), The user responded on the canvas:')).toBe(true);
+    expect(message.startsWith('On the canvas "Controls · 워크숍 일정 정하기" (id: local-demo-conv-1-controls), The user responded on the canvas:')).toBe(true);
     const rec = recorder();
     const response = await run(message, rec);
-    expect(response.text).toContain("**위젯 · 대출 계산기** 캔버스에서 보낸 내용을 받았습니다");
-    expect(response.text).toContain("local-demo-conv-1-widget-calculator");
+    expect(response.text).toContain("**Controls · 워크숍 일정 정하기** 캔버스에서 보낸 내용을 받았습니다");
+    expect(response.text).toContain("local-demo-conv-1-controls");
     expect(response.text).toContain("| `amount` | 4500 |");
     expect(response.text).toContain("| `months` | 36 |");
     expect(response.text).toContain("| `done` | spec, tests |");

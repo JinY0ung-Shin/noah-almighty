@@ -1,17 +1,31 @@
-// lib/widgetView.ts — a widget document evaluated into plain nodes for the
-// Svelte components: inline Markdown as styled runs (never HTML), one error
-// node per failing node / over-budget block, and keys stable across renders.
+// lib/widgetView.ts — inline UI evaluated into plain nodes for the Svelte
+// components: inline Markdown as styled runs (never HTML), one error node per
+// failing node / over-budget block, keys stable across renders, and finished
+// blocks kept (not evaluated again) while an answer grows.
 import { describe, expect, it } from "vitest";
 
 import {
-  buildWidgetView,
+  answerNodes,
+  buildAnswerItems,
   cellText,
   collectWidgetProblems,
+  createAnswerViewCache,
   parseInlineMarkdown,
+  type AnswerItem,
   type ElVNode,
   type VNode,
 } from "../src/client/src/lib/widgetView.js";
-import { createRootEnv, createRuntime, parseWidget, restoreState } from "../src/shared/widget/index.js";
+import { createRootEnv, createRuntime, parseAnswer, parseWidget, restoreState, type AnswerDoc, type Env, type Runtime, type WidgetDoc } from "../src/shared/widget/index.js";
+
+/** A strictly parsed source as the document the evaluator takes. */
+function asAnswer(doc: WidgetDoc): AnswerDoc {
+  return { ...doc, end: doc.src.length, pending: null, failed: false };
+}
+
+/** The evaluated UI nodes of a document (its top-level Markdown runs are not nodes). */
+function buildWidgetView(doc: WidgetDoc, root: Env, rt: Runtime, options: { conversationId?: string | null; svgNs?: string } = {}): VNode[] {
+  return answerNodes(buildAnswerItems(asAnswer(doc), root, rt, {}, createAnswerViewCache(), options));
+}
 
 function evaluate(source: string, override: Record<string, unknown> = {}): VNode[] {
   const doc = parseWidget(source);
@@ -92,7 +106,78 @@ describe("parseInlineMarkdown", () => {
   });
 });
 
-describe("buildWidgetView", () => {
+describe("entities in a component's text", () => {
+  it("shows the few entities the advice tells an avatar to write as the characters they are", () => {
+    expect(parseInlineMarkdown("a &lt; b &amp; c \\< d &gt; e &quot;f&quot; &amp;lt;")).toEqual([{ text: 'a < b & c < d > e "f" &lt;' }]);
+    // Inside a code span the text is literal.
+    expect(parseInlineMarkdown("`&lt;`")).toEqual([{ text: "&lt;", code: true }]);
+  });
+});
+
+describe("buildAnswerItems", () => {
+  const source = `앞 문단 **굵게**
+
+{@state n = 2}
+<stat label="수" value={n} />
+
+가운데 문단
+
+<text>끝 {n * 2}</text>
+`;
+  const brief = (items: AnswerItem[]) => items.map((item) => (item.kind === "md" ? `md:${item.text.trim()}` : `ui:${item.nodes.map((n) => (n.k === "el" ? n.tag : n.k)).join("+")}`));
+
+  it("hands the answer's Markdown back as source, between the evaluated UI blocks, with their offsets", () => {
+    const doc = parseAnswer(source);
+    const rt = createRuntime();
+    const values = { ...restoreState(doc, null).values };
+    const items = buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: (name) => values[name], set: () => {}, copy: () => {} }), rt, values, createAnswerViewCache());
+    expect(brief(items)).toEqual(["md:앞 문단 **굵게**", "ui:stat", "md:가운데 문단", "ui:text"]);
+    for (const item of items) expect(source.slice(item.s, item.e)).toContain(item.kind === "md" ? item.text : "<");
+    expect(items.map((item) => item.s)).toEqual([...items.map((item) => item.s)].sort((a, b) => a - b));
+  });
+
+  it("does not evaluate a finished block again while the answer grows — until a value or a declaration changes", () => {
+    const rt = createRuntime();
+    const cache = createAnswerViewCache();
+    let values: Record<string, unknown> = { n: 2 };
+    const run = (text: string, streaming: boolean) => {
+      const doc = parseAnswer(text, { streaming });
+      return buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: (name) => values[name], set: () => {}, copy: () => {} }), rt, values, cache);
+    };
+    const cut = source.indexOf("가운데");
+    const first = run(source.slice(0, cut), true);
+    const second = run(source, true);
+    // The stat block is the SAME nodes: a chart above the text being written is not redrawn per token.
+    expect(second[1].kind === "ui" && first[1].kind === "ui" && second[1].nodes === first[1].nodes).toBe(true);
+    // A state change evaluates everything again, with the new value.
+    values = { n: 5 };
+    const third = run(source, false);
+    expect(third[1].kind === "ui" && second[1].kind === "ui" && third[1].nodes !== second[1].nodes).toBe(true);
+    const last = third[3];
+    expect(last.kind === "ui" ? (last.nodes[0] as ElVNode).segs.map((seg) => seg.text).join("") : "").toBe("끝 10");
+    // A declaration that arrives LATER invalidates what was drawn before it (a block may read it).
+    const later = run(source + "{@const extra = 1}\n", false);
+    expect(later[1].kind === "ui" && third[1].kind === "ui" && later[1].nodes !== third[1].nodes).toBe(true);
+  });
+
+  it("an element still open at the end of a streaming answer is evaluated every time, with the children it has", () => {
+    const rt = createRuntime();
+    const cache = createAnswerViewCache();
+    const values = {};
+    const run = (text: string) => {
+      const doc = parseAnswer(text, { streaming: true });
+      return buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt, values, cache);
+    };
+    const one = run("<box>\n  <text>하나</text>\n");
+    const two = run("<box>\n  <text>하나</text>\n  <text>둘</text>\n");
+    const boxOf = (items: AnswerItem[]) => (items[0].kind === "ui" ? (items[0].nodes[0] as ElVNode) : null);
+    expect(boxOf(one)?.children).toHaveLength(1);
+    expect(boxOf(two)?.children).toHaveLength(2);
+    expect(boxOf(two)?.key).toBe(boxOf(one)?.key);
+  });
+});
+
+describe("evaluating UI nodes", () => {
   it("evaluates props, interpolation and control flow into nodes", () => {
     const view = evaluate(`{@state n = 3}
 {@const total = n * 1000}
@@ -111,7 +196,6 @@ describe("buildWidgetView", () => {
   {/each}
 </box>
 `);
-    expect(view[0]).toMatchObject({ k: "md", text: expect.stringContaining("머리말 **문단**") });
     const box = el(view, "box");
     expect(box.props).toMatchObject({ border: true, gap: 4 });
     expect(box.children.map((c) => (c.k === "el" ? `${c.tag}:${c.segs.map((s) => s.text).join("")}` : c.k))).toEqual([
@@ -155,15 +239,19 @@ describe("buildWidgetView", () => {
     expect(Object.keys(el(view, "text").props)).toEqual(["size"]);
   });
 
-  it("isolates a failing node and reports a missing required prop in place", () => {
+  it("isolates a failing node, and draws a control whose required prop was left out with its empty value", () => {
     const doc = parseWidget(`<col>\n  <text>앞</text>\n  <text>{nope(1)}</text>\n  <slider label="x" value={1} />\n  <text>뒤</text>\n</col>\n`);
     const rt = createRuntime();
     const view = buildWidgetView(doc, createRootEnv(doc, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt);
     const kinds = el(view, "col").children.map((c) => c.k);
-    expect(kinds).toEqual(["el", "error", "error", "el"]);
+    // The answer is already on screen: a slider without `onChange` is drawn (it
+    // just does nothing) instead of an error in the middle of the layout.
+    expect(kinds).toEqual(["el", "error", "el", "el"]);
     const errors = el(view, "col").children.filter((c) => c.k === "error");
     expect(errors[0]).toMatchObject({ message: "이 부분을 표시하지 못했습니다.", detail: expect.stringContaining("nope") });
-    expect(errors[1]).toMatchObject({ detail: expect.stringContaining("onChange") });
+    const slider = el(view, "col").children[2];
+    expect(slider).toMatchObject({ k: "el", tag: "slider" });
+    expect(typeof (slider as { props: Record<string, unknown> }).props.onChange).toBe("function");
   });
 
   it("replaces an over-budget block with ONE error and still renders the next block", () => {
@@ -195,7 +283,7 @@ describe("buildWidgetView", () => {
     // …and the reader is told once, not once per remaining block.
     expect(view.at(-1)).toMatchObject({
       k: "error",
-      message: "위젯이 그리는 내용이 너무 많아 일부를 표시하지 못했습니다.",
+      message: "그릴 내용이 너무 많아 일부를 표시하지 못했습니다.",
       detail: expect.stringContaining("output budget"),
     });
 
@@ -274,11 +362,11 @@ describe("buildWidgetView", () => {
     const rt = createRuntime();
     const view = buildWidgetView(doc, createRootEnv(doc, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt);
     const problems = collectWidgetProblems(doc, view);
-    expect(problems).toHaveLength(4);
+    // The slider's missing `onChange` is the static check's to report (`widgetProblems`), not a render failure.
+    expect(problems).toHaveLength(3);
     expect(problems[0]).toMatch(/^line 3:3 <text>: .*nope/);
-    expect(problems[1]).toMatch(/^line 4:3 <slider>: .*onChange/);
-    expect(problems[2]).toMatch(/^line 5:3 <stat>: a prop was dropped — hint: .*nope/);
-    expect(problems[3]).toBe("widget: the widget renders too much (output budget exceeded)");
+    expect(problems[1]).toMatch(/^line 5:3 <stat>: a prop was dropped — hint: .*nope/);
+    expect(problems[2]).toBe("inline UI: too much is rendered (output budget exceeded)");
     // A clean view has nothing to report.
     const clean = parseWidget(`<text>좋음</text>\n`);
     expect(collectWidgetProblems(clean, buildWidgetView(clean, createRootEnv(clean, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt))).toEqual([]);

@@ -65,8 +65,7 @@ import {
 import { effortForModel, isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
 import { readTeamPolicySync } from "../teamBrain.js";
-import { summarizeOwnerState } from "./ownerState.js";
-import { CANVAS_WIDGET_FEATURE_KEY } from "../experimentalFeatures.js";
+import { inlineUiAllowed, summarizeOwnerState } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
   DEFAULT_MCP_TOOL_GROUPS,
@@ -651,13 +650,14 @@ export async function buildRunCapabilities(
   // self-gates nothing because showing UI is harmless). Computed here, before
   // buildSystemServer, so describe_system reports it.
   const canvasActive = canvasToolsEnabled && Boolean(events?.onCanvas);
-  // The canvas `widget` content type is EXPERIMENTAL: on only when the AVATAR
-  // OWNER enabled `canvasWidget` (the owner's flag for every viewer class — a
-  // colleague's canvas turn gets widgets when the avatar they talk to has them).
-  // pi's catalog is static, so `show`'s handler refuses 'widget' on this boolean;
-  // describe_system reports the same value.
-  const widgetEnabled =
-    canvasActive && ownerState.experimentalFeatures.includes(CANVAS_WIDGET_FEATURE_KEY);
+  // Inline UI: tags the avatar writes in its ANSWER TEXT, drawn in place by the
+  // viewer's app while the answer streams. No tool, no tool group, no flag — it
+  // is on for every interactive chat turn a person is watching, for every
+  // viewer class, and off for a headless run, an external-task-API turn and a
+  // consultation (`inlineUiAllowed`, the interactive-only gate). The prompt's
+  // standing section, describe_system's line and the turn preamble's render
+  // report all read this ONE boolean.
+  const inlineUiActive = inlineUiAllowed(request);
   // 할 일 (the owner's persistent work to-do list, `mcp__todo__*`): OWNER-DRIVEN
   // runs only — an interactive own-avatar chat, an owner routine, an
   // external-task-API turn. Never a teammate's chat or a consultation
@@ -874,7 +874,11 @@ export async function buildRunCapabilities(
     todoDeleteEnabled: todoDeleteActive,
     browserEnabled: browserActive,
     canvasEnabled: canvasActive,
-    canvasWidgetEnabled: widgetEnabled,
+    // Inline UI in the answer text (inlineUiActive above), and the consultation
+    // fact its "why not" needs — the other two reasons are `headless` and
+    // `externalTaskApi` below.
+    inlineUiEnabled: inlineUiActive,
+    avatarConsultation: consultationRun,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -1024,13 +1028,8 @@ export async function buildRunCapabilities(
   // (before buildSystemServer) so describe_system reports the same capability.
   const canvasServer = canvasActive
     ? buildCanvasServer({
-        // A widget renders INLINE in the answer, where the avatar called the
-        // tool: stamp the same text anchor the team-brain card and the file
-        // cards carry. Every other content type opens in the side panel and
-        // needs none.
-        emitCanvas: (canvas) =>
-          events!.onCanvas!(canvas.contentType === "widget" ? { ...canvas, anchor: currentTextAnchor() } : canvas),
-        widgetEnabled,
+        // Every canvas opens in the side panel: it carries no answer-text anchor.
+        emitCanvas: (canvas) => events!.onCanvas!(canvas),
       })
     : null;
   // The handler self-gates on `allowed` in addition to `browserActive`:
@@ -1325,7 +1324,7 @@ export async function buildRunCapabilities(
     adminBlockedMcpToolGroups,
     browserActive,
     canvasActive,
-    widgetEnabled,
+    inlineUiActive,
     fileOutputActive,
     shareLinkToolActive,
     // The admins' POLICY.md guidelines ride the propose-capable prompt (frozen with it).
@@ -1403,7 +1402,7 @@ export function stampPromptRequest(
     adminBlockedMcpToolGroups,
     browserActive,
     canvasActive,
-    widgetEnabled,
+    inlineUiActive,
     fileOutputActive,
     shareLinkToolActive,
     teamBrainState,
@@ -1484,11 +1483,12 @@ export function stampPromptRequest(
     // turn (colleagues see canvases too). Experimental-feature self-state is
     // owner-driven only (META-COGNITION), matching describe_system's gating.
     canvasEnabled: canvasActive,
-    // The experimental inline `widget` type, as of THIS prompt's rendering (the
-    // append is frozen per conversation): the standing nudge to use widgets
-    // unprompted is given only where `show` would accept one. For every viewer
-    // class — it is the avatar owner's flag. describe_system stays authoritative.
-    canvasWidgetEnabled: widgetEnabled,
+    // Inline UI (inlineUiActive): the standing `# Inline UI` section is rendered
+    // only where the answer text is drawn — an interactive chat turn — for
+    // every viewer class. The append is frozen per conversation, so a later
+    // unattended turn of the same conversation hears "plain Markdown only" in
+    // its turn preamble; describe_system reports the live value.
+    inlineUiEnabled: inlineUiActive,
     browserEnabled: browserActive,
     fileOutputEnabled: fileOutputActive,
     // Share links: rides ONLY runs that registered create_share_link (the
