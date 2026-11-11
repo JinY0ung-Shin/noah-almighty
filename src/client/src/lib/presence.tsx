@@ -178,11 +178,14 @@ export function Presence({ children }: { children?: ReactNode }): ReactElement {
             // since is `live` again and the next render ignores the mark.
             gone.current.add(key);
             // An exit that ended on its own (a finished animation, a deferred
-            // exit that decided not to play) removes the child NOW, not at
-            // React's next scheduled render — it would otherwise stay on screen,
-            // finished and inert, for up to a frame.
+            // exit that decided not to play) removes the child in this same
+            // turn, not at React's next scheduled render — it would otherwise
+            // stay on screen, finished and inert, for up to a frame. One
+            // microtask later, because an exit can also end inside a commit
+            // (a transition that mounts while its child is already leaving),
+            // where React refuses a synchronous flush.
             if (inCommit) rerender();
-            else flushSync(rerender);
+            else queueMicrotask(() => flushSync(rerender));
           }}
         >
           {elements.get(key)}

@@ -129,6 +129,39 @@ describe("useAction", () => {
 /* lib/presence — when intros play, and exits that outlive the removal */
 /* ------------------------------------------------------------------ */
 
+describe("useAction with an object parameter", () => {
+  it("does not call update() in the commit that mounted the action, and does on every later render", () => {
+    const log: string[] = [];
+    const action = (_node: HTMLElement, param: { n: number }) => {
+      log.push(`mount:${param.n}`);
+      return { update: (next: { n: number }) => log.push(`update:${next.n}`) };
+    };
+    function Probe({ n }: { n: number }) {
+      return <p ref={useAction(action, { n })}>{n}</p>;
+    }
+    const view = render(<Probe n={1} />);
+    expect(log).toEqual(["mount:1"]);
+    view.rerender(<Probe n={1} />); // a new object each render counts as changed
+    view.rerender(<Probe n={2} />);
+    expect(log).toEqual(["mount:1", "update:1", "update:2"]);
+  });
+
+  it("starts over when the element is replaced: mount again, no update for that commit", () => {
+    const log: string[] = [];
+    const action = (node: HTMLElement, param: { n: number }) => {
+      log.push(`mount:${node.tagName}:${param.n}`);
+      return { update: (next: { n: number }) => log.push(`update:${next.n}`), destroy: () => log.push("destroy") };
+    };
+    function Probe({ n, wide }: { n: number; wide: boolean }) {
+      const ref = useAction(action, { n });
+      return wide ? <section ref={ref}>{n}</section> : <p ref={ref}>{n}</p>;
+    }
+    const view = render(<Probe n={1} wide={false} />);
+    view.rerender(<Probe n={2} wide />);
+    expect(log).toEqual(["mount:P:1", "destroy", "mount:SECTION:2"]);
+  });
+});
+
 describe("Presence", () => {
   function animatedElements(): Element[] {
     return [...document.querySelectorAll("[data-row]")];
@@ -274,6 +307,7 @@ describe("Presence — rules found while porting", () => {
     finish?.(); // the delay hold ends → the real exit animation starts
     expect(document.querySelector("[data-row='one']")).not.toBeNull();
     finish?.(); // the exit ends — outside act, outside any React commit
+    await Promise.resolve(); // removed one microtask later: before the next paint, with no scheduled render
     expect(document.querySelector("[data-row='one']")).toBeNull();
     animate.mockRestore();
   });

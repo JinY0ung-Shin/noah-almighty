@@ -115,31 +115,47 @@ export function useAction<E extends Element, P>(action: Action<E, P>, param: P):
   const slot = useRef<{
     handle: void | { update?: (param: P) => void; destroy?: () => void };
     attached: boolean;
+    /** Set when the action has just run: the commit that mounted it is not a parameter change. */
+    fresh: boolean;
+    /** The parameter of the latest render. */
+    latest: P;
+    /** The parameter the action last saw (at its start or in `update`). */
     param: P;
     action: Action<E, P>;
     ref: RefCallback<E> | null;
-  }>({ handle: undefined, attached: false, param, action, ref: null });
+  }>({ handle: undefined, attached: false, fresh: false, latest: param, param, action, ref: null });
   const s = slot.current;
   s.action = action;
 
-  // Before the element exists the action has not run, so the parameter it will
-  // be called with is always the latest one.
-  if (!s.attached) s.param = param;
+  // The action is always started with the parameter of the render being
+  // committed — also when the element is replaced by another one later.
+  s.latest = param;
 
   useLayoutEffect(() => {
-    if (!s.attached || !changed(s.param, param)) return;
+    if (!s.attached) return;
+    if (s.fresh) {
+      // The action ran in this very commit, with this parameter (an object
+      // parameter would otherwise count as "changed" at once).
+      s.fresh = false;
+      s.param = param;
+      return;
+    }
+    if (!changed(s.param, param)) return;
     s.param = param;
     if (s.handle) s.handle.update?.(param);
   });
 
   s.ref ??= (node: E | null) => {
     if (!node) return;
+    s.param = s.latest;
     s.handle = s.action(node, s.param);
     s.attached = true;
+    s.fresh = true;
     return () => {
       if (s.handle) s.handle.destroy?.();
       s.handle = undefined;
       s.attached = false;
+      s.fresh = false;
     };
   };
   return s.ref;
