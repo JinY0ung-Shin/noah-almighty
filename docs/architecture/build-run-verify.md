@@ -94,6 +94,59 @@
 - For visual/layout bugs, inspect the *rendered* state (screenshot + DevTools computed styles),
   don't reason from CSS source alone — collisions/inherited rules aren't visible in the source.
 
+## The `local` stub as a scripted demo (`AGENT_RUNTIME=local`)
+The only real runtime is pi-gateway, which this workstation cannot reach, so nothing that needs a run (thinking
+card, tool rows, canvases, the `widget` canvas, mid-turn messages) could be SEEN here. The stub
+(`agent/localRunner.ts`, scenario data in `agent/localScenarios.ts`) therefore replays scripted runs through the
+run's `AgentEvents`, in the order and shapes `pi/runPiAgent.ts` + `pi/eventAdapter.ts` produce them. It runs no
+model, tool or plugin, uses no network, writes no file and has no randomness.
+
+- **Entry points.** `runAgentStream` calls `runLocalAgentStream(request, events, abortController, deps?)`;
+  `runLocalAgent(request)` is the event-less response (echo, the listing, a submission echo — a scenario only
+  says it needs the event stream). `deps.sleep` is the injectable wait: `tests/agent-local-runner.test.ts` passes
+  an immediate one, so no test sleeps. To watch it: `AGENT_RUNTIME=local npm run dev`, open a chat with your own
+  avatar and type `demo`.
+- **The echo is unchanged.** Any message that is not EXACTLY `demo` / `demo <name>` (case-insensitive, one line)
+  answers `[local] <message>` with one status label and 40-codepoint deltas, no delay — what `app.test.ts` and the
+  e2e harness pin. Commands are plain words on purpose: a `/`-leading message is expanded by the chat route.
+- **Scenarios** (`demo` alone lists them in Korean; text the stub prints is user-facing, so Korean):
+
+  | Command | What it emits, in order |
+  | --- | --- |
+  | `demo text` | `onStatus` → `onDelta`×N (6 codepoints / 20 ms): headings, lists, a table, fenced code, a 130-char unbroken token, mixed Korean/English → `onTurnResult{steerPending:false}` |
+  | `demo thinking` | `onThinking`×N, then `onDelta`×N — never interleaved |
+  | `demo tools` | thinking → narration → `onToolStart`/`onToolEnd` for `LS`, `Read`, `Grep` → narration → `Bash` + `Glob` started together (`Bash` ends `ok:false`) → `Edit`, `mcp__skills__read` → the answer. Each start also sets the `실행 중: <label>` status. The two narration blocks are demoted with `onTextFold` at the first delta of the next block, as the adapter does |
+  | `demo canvas` | six `mcp__canvas__show` rows, each `onToolStart` → `onCanvas` → `onToolEnd`: markdown (`editable`), vega, mermaid, svg, html, and a markdown with seven `controls` (`interaction: "async"`) |
+  | `demo widget` | three `contentType: "widget"` canvases the same way: a loan calculator (sliders + `<submit>`), a filterable table with a chart (no submit), a checklist on one map state (+ `<submit>`) |
+  | `demo error` | thinking + a partial answer, then throws `PiTurnFailedError("server_error")` (status 502) — the route keeps the partial and appends its "try another model" notice |
+  | `demo long` | 30 lines, one every 600 ms (≈18 s) — for 중지 and mid-turn messages |
+  | `demo attachments` | for each image ATTACHED to that message (`request.imageFiles`, the staged workspace copies): a `mcp__file_output__show_file` row around `onFile`, the returned card stamped with its text anchor. No image attached → it asks for one |
+
+- **Canvas submission echo.** A turn whose agent message is the one the route builds for `canvasSubmission`
+  (`On the canvas "<title>" (id: …), The user responded on the canvas:` + `- key: value` lines, and/or
+  `The user edited the canvas … content to:`) answers with the received values as a table, so the round trip of a
+  controls form, an `editable` canvas or a widget `<submit>` is visible.
+- **Canvases go straight to the events sink** (`events.onCanvas`, the request shape `canvasTools.ts` emits —
+  the test feeds every demo canvas to the REAL tool and compares). So a demo `widget` shows whatever the avatar
+  owner's experimental `canvasWidget` setting is; the real tool's handler refuses the type while it is off.
+  Artifact ids are `local-demo-<conversationId>-<name>`: a repeated demo refines the same canvases in place.
+  A widget request also carries the text `anchor` runCapabilities' emit stamps, so the route's own inline widget
+  card (the `kind: "widget"` attachment it publishes from `onCanvas`) lands where a real run's would.
+- **중지** — every wait and every emit checks the run's abort signal and throws `PiGatewayError("aborted")`, the real
+  runner's error; the route's cancel path keeps the partial.
+- **Mid-turn messages** use the one inbound channel (`events.steers`) with the real runner's two paths: a message
+  queued at a step boundary is delivered into the running turn (`noteLifecycle(id, "started")` — a block boundary,
+  so the text before it is folded — and acknowledged in the stream); one still queued when the turn ends, or
+  starting with `/`, becomes ONE follow-up turn (`noteResultBoundary` → `onTurnResult{steerPending:true}` →
+  delivered → the follow-up text → the final `onTurnResult`). The channel is closed on every exit.
+- **Not mirrored:** no pi session exists, so `onModel`, `onSessionId`, `onResumePoint` and `usage` never appear
+  (the context badge, resume and exact rewind stay pi-only). **Not driven:** the 할 일 card (it is drawn from
+  `store/todos.ts` rows re-read when an `mcp__todo__*` row ends; the stub gets no store and must not write the
+  owner's list), download cards (`onShareFile` needs a document file and the stub writes none), AskUserQuestion,
+  subagent cards, team-brain cards, 기억 rows, compaction and the browser bridge.
+- **Reachability.** Only `runAgentStream`'s `config.agentRuntime === "local"` branch calls the stub, and
+  `parseRuntime` (`config.ts`) accepts `pi` | `local` only — a deployment on pi cannot reach any of it.
+
 ## Docker
 - **Layer order is the build-speed contract.** Slow, rarely-changing steps sit ABOVE the app
   `COPY`: apt (+ its soffice/pdftoppm/python self-check) → CA → hex-ssh → `npm install` → deck-font

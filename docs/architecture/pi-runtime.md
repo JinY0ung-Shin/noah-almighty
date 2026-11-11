@@ -5,7 +5,9 @@ Noah as a BFF over a dedicated pi-gateway instance, deployed WITH Noah as one co
 The agent loop runs in pi (`POST /v1/responses`, service key + `user`); files and commands run in the run
 principal's own pi sandbox; Noah's in-process MCP tools are served to pi's broker over HTTP with a per-run token.
 The Claude Agent SDK runner was removed (U8, 2026-10-29); `AGENT_RUNTIME` is `pi` (default) or `local` (the
-deterministic stub for tests and the e2e harness), and any other value (`claude` included) stops the boot. No
+deterministic stub for tests and the e2e harness, which also replays scripted `demo` runs —
+[build-run-verify.md](build-run-verify.md) "The `local` stub as a scripted demo"), and any other value (`claude`
+included) stops the boot. No
 pi-gateway code is changed — everything pi lacks is a Noah-side degrade, stated on BOTH metacognition surfaces.
 
 ## Run classes and the sandbox principal
