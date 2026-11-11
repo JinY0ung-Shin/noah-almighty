@@ -34,6 +34,7 @@
   } from "../../../../shared/widget/index";
   import { answerPieces, type AnswerPiece } from "../../lib/answerLayout";
   import { queueInlineUiReport } from "../../lib/canvasReport";
+  import { continuesEntranceText, enterChildren, noteEntranceText, openEntranceScope, type EntranceRule } from "../../lib/uiEntrance";
   import { sendWidgetMessage } from "../../lib/chat";
   import { copyText, markdownBlocks } from "../../lib/dom";
   import { diagramProblems } from "../../lib/mermaidBlock";
@@ -73,8 +74,16 @@
   export let caret = false;
   /** ChatView's card renderer: `(pane, attachments, source)`. */
   export let cards: Snippet<[ChatPane, MessageAttachment[], MessageAttachment[] | undefined]> | undefined = undefined;
+  /**
+   * A PREVIEW outside a conversation (the 인라인 UI gallery): what a control
+   * would send to the avatar is handed here instead of to the chat, and nothing
+   * is kept in this browser or reported. null in a chat.
+   */
+  export let outbox: ((message: string) => void) | null = null;
 
   const viewId = `ui${++nextViewId}`;
+  // Fixed for the instance's life, like the pane it was mounted for.
+  const preview = outbox !== null;
   const statusId = `${viewId}-status`;
   const rt = createRuntime();
   const cache = createAnswerViewCache();
@@ -111,6 +120,7 @@
   let focusedKey: string | null = null;
 
   function persist(): void {
+    if (preview) return;
     if (messageId) saver.schedule(ref(), storable());
     else setLiveWidgetState(paneId, { conversationId, runId, text: parsedText ?? text, record: stored, focus: focusedKey });
   }
@@ -118,7 +128,9 @@
   // Taken over from the live bubble: stored under the message once the document is parsed.
   let adopted = false;
   let refocus: string | null = null;
-  if (messageId) {
+  if (preview) {
+    // A preview starts from its initializers every time it is opened.
+  } else if (messageId) {
     // What this browser kept for the answer — or, right after its turn ended,
     // what the viewer changed while it was still streaming (only the answer
     // that continues the live text may take that over).
@@ -136,6 +148,24 @@
       refocus = mine.focus ?? null;
     } else clearLiveWidgetState(paneId);
   }
+
+  // Entrances (lib/uiEntrance.ts) are counted per pane: the live bubble and the
+  // stored message it becomes are two instances of ONE answer, and a thing
+  // moves in the first of them only. Previews share one scope: there everything
+  // enters every time (the rule below), so there is nothing to count.
+  const entranceScope = preview ? "preview" : `pane:${paneId}`;
+  if (!preview && !messageId) openEntranceScope(entranceScope, runId);
+  // The stored message of the answer that was just written here: its turn can
+  // end before the last of it was drawn (a chart), and that still enters.
+  const fresh = !preview && Boolean(messageId) && continuesEntranceText(entranceScope, text);
+  // This instance has shown the answer WHILE it was written (the live bubble, a
+  // stored message whose end drained in). Kept once true: a chart is drawn a
+  // moment after its tag arrived (Vega loads lazily), and by then the last of
+  // the text may be in — the chart still appeared now.
+  let written = streaming;
+  // The viewer changed something here: what appears from now on (the tab they
+  // just picked) appears because of them, not because a page loaded.
+  let interacted = false;
 
   // A stopped or failed turn's bubble is mounted under a client-made id and
   // adopts the server's when it arrives: what was stored moves with it.
@@ -157,6 +187,7 @@
       values = { ...values, [name]: value };
       stored = { ...stored, [name]: { sig: decl.sig, value } };
       persist();
+      interacted = true;
       tick += 1;
     },
     copy: (copied) => {
@@ -203,6 +234,7 @@
       }
       // The handover entry names the text it belongs to: keep it the live answer's latest.
       if (!messageId && Object.keys(stored).length > 0) persist();
+      if (!messageId && !preview) noteEntranceText(entranceScope, nextText);
     }
     const items: AnswerItem[] = doc.failed
       ? [{ kind: "md", key: "/0", s: 0, e: nextText.length, text: nextText }]
@@ -215,6 +247,7 @@
     // Read from the arguments: on the update where `streaming` turns false the
     // answer is finished NOW (a mirror set by a later reactive statement still said otherwise).
     streamingNow = nextStreaming;
+    if (nextStreaming) written = true;
     if (!nextStreaming) reportProblems([...staticProblems(doc), ...collectWidgetProblems(doc, drawn), ...knownDiagramIssues()]);
     if (refocus) void restoreFocus();
   }
@@ -371,7 +404,8 @@
   function send(message: string): void {
     // Never a slash command: the control is disabled for one, and this is the second lock.
     if (locked || !message.trim() || message.trim().startsWith("/")) return;
-    void sendWidgetMessage(paneId, message);
+    if (outbox) outbox(message);
+    else void sendWidgetMessage(paneId, message);
   }
 
   function submit(raw: unknown, label: string): void {
@@ -389,7 +423,9 @@
     }
     notice = "";
     const lines = entries.map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
-    void sendWidgetMessage(paneId, `${label.trim() || "보내기"}\n${lines.join("\n")}`, 10_000);
+    const message = `${label.trim() || "보내기"}\n${lines.join("\n")}`;
+    if (outbox) outbox(message);
+    else void sendWidgetMessage(paneId, message, 10_000);
   }
 
   function domId(key: string): string {
@@ -397,7 +433,19 @@
   }
 
   let ctx: WidgetCtx;
-  $: ctx = { fire, submit, send, report: (problem: string) => reportProblems([problem]), locked, statusId, dark: $theme === "dark", domId };
+  let entrance: EntranceRule | null = null;
+  $: entrance = preview || interacted ? { scope: entranceScope, always: true } : written || fresh ? { scope: entranceScope, always: false } : null;
+  $: ctx = {
+    fire,
+    submit,
+    send,
+    report: (problem: string) => reportProblems([problem]),
+    locked,
+    statusId,
+    dark: $theme === "dark",
+    entrance,
+    domId,
+  };
   $: status = notice || (locked && sends ? "아바타 응답이 끝난 뒤 보낼 수 있습니다." : "");
 
   /* ---------- lifetime ---------- */
@@ -432,7 +480,7 @@
     <!-- Only the run that ends the text is still being written, so only it is healed. -->
     <div class="md" use:diagramProblems={onDiagramProblem} use:markdownBlocks={blocks(piece.key, piece.text, streaming && piece.tail)}>{#if caret && piece.tail}<span class="stream-caret" aria-hidden="true"></span>{/if}</div>
   {:else if piece.kind === "ui"}
-    <div class="wg-root answer-ui">
+    <div class="wg-root answer-ui" use:enterChildren={{ rule: entrance, key: `block:${piece.key}` }}>
       {#each piece.nodes as v (v.key)}<WidgetNode {v} {ctx} />{/each}
     </div>
   {:else if piece.kind === "cards"}

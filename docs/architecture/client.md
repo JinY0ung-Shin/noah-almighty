@@ -366,6 +366,14 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `lib/widgetView.ts` and the components only draw it. The UI blocks sit OUTSIDE the answer's `.md`
   containers (`.answer-ui`), so prose rules (`.md p`) do not style them; `.wg-*` lives in
   `styles/25-canvas-widget.css`. Mechanics and the trust boundary: `chat-sse-media.md` § Inline UI.
+  `AnswerUi` also draws the samples of 인라인 UI 갤러리 (`views/UiGalleryView.svelte`, `#/uiGallery`, not in
+  the rail) through its `outbox` prop — a preview that sends, keeps and reports nothing — and what
+  APPEARS in an answer enters: `lib/uiEntrance.ts` decides when (once per answer while it is written, every
+  time the viewer brings something up, never from the history) and plays blocks, stat values, progress bars
+  and table rows; `lib/chartEntrance.ts` plans a `<chart>`'s marks on Vega's own SVG and `lib/mermaidEntrance.ts` the
+  parts of a ```mermaid diagram. Web Animations held
+  until the thing is on screen; the data-sized ones (a chart, a count) run longer than the 120–240 ms UI
+  transitions of DESIGN §2.5.
 - **Selection** = `pane.sideTab`; `null` means the default (`resolveSideTab`: the latest canvas still
   `pending`, else the latest canvas, else the latest file; answering or skipping a default-shown ask pins
   it first, so the panel does not jump once `pending` clears). **What the avatar shows takes the panel while the pane FOLLOWS** (`sideFollow` undefined/true);

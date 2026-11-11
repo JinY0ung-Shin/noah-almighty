@@ -280,6 +280,7 @@ export function setDocumentTitle(): void {
     // EVERY store emission (the knowledge poll included), so a title the view
     // wrote to document.title directly would be gone within a minute.
     share: state.shareTitle || "공유된 PPT",
+    uiGallery: "인라인 UI 갤러리",
   };
   document.title = `${titles[state.view] || "Noah Almighty"} · Noah Almighty`;
 }

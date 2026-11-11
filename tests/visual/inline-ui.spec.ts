@@ -110,6 +110,20 @@ async function mockApp(page: Page, options: { stored?: boolean; storedText?: str
     };
     // `document`, not its root element: an init script runs before there is one.
     new MutationObserver(scan).observe(document, { childList: true, subtree: true, characterData: true });
+    // Every Web Animation started on a mark of a chart: its entrance (lib/chartEntrance.ts).
+    const entrances: string[] = [];
+    (window as unknown as { __entrances: string[] }).__entrances = entrances;
+    // …and on a part of a mermaid diagram (lib/mermaidEntrance.ts).
+    const diagramMoves: string[] = [];
+    (window as unknown as { __diagramMoves: string[] }).__diagramMoves = diagramMoves;
+    const animate = Element.prototype.animate;
+    Element.prototype.animate = function (keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
+      const root = this.getRootNode();
+      if (root instanceof ShadowRoot && root.host.classList.contains("code-diagram")) diagramMoves.push(this.tagName.toLowerCase());
+      const group = this.closest("g.role-mark");
+      if (group) entrances.push(/mark-([a-z]+)/.exec(group.getAttribute("class") ?? "")?.[1] ?? "");
+      return animate.call(this, keyframes, options);
+    };
   });
   await page.route(
     (url) => url.pathname === "/",
@@ -187,6 +201,11 @@ async function openConversation(page: Page): Promise<void> {
   await page.getByRole("button", { name: "대화 열기: 매출 대화" }).click();
 }
 
+const diagramMoves = (page: Page) => page.evaluate(() => (window as unknown as { __diagramMoves: string[] }).__diagramMoves);
+const chartEntrances = (page: Page) => page.evaluate(() => (window as unknown as { __entrances: string[] }).__entrances);
+/** The rendered height of the first bar of the first chart, read through its shadow root. */
+const firstBarHeight = (page: Page) =>
+  page.evaluate(() => document.querySelector(".message.assistant .wg-chart .canvas-svg")?.shadowRoot?.querySelector("g.mark-rect path")?.getBoundingClientRect().height ?? -1);
 const cspViolations = (page: Page) => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
 const leaks = (page: Page) => page.evaluate(() => (window as unknown as { __leaks: string[] }).__leaks);
 
@@ -289,6 +308,54 @@ test("a streaming answer builds its UI as the text arrives and never shows a tag
   await expect.poll(() => leaks(page)).not.toEqual([]);
 });
 
+// A chart ENTERS — its bars grow from their baseline — when it appears now: in
+// an answer that is being written, or because the viewer pressed something. An
+// answer opened from the history, and a redraw of a chart that is already
+// there, are drawn at rest; and the answer's two mounts (the live bubble, then
+// the stored message) play ONE entrance between them.
+test("a chart of an answer opened from the history is drawn at rest; one the viewer brings up enters", async ({ page }) => {
+  await mockApp(page);
+  await openConversation(page);
+  const ui = page.locator(UI).first();
+  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
+  await page.waitForTimeout(400);
+  expect(await chartEntrances(page)).toEqual([]);
+
+  // A redraw (the slider) replaces the drawing at rest.
+  await ui.getByRole("slider", { name: "개월 수" }).fill("3");
+  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(6);
+  await page.waitForTimeout(400);
+  expect(await chartEntrances(page)).toEqual([]);
+
+  // Leaving for the table and coming back mounts the chart anew, because of the viewer: it enters.
+  await ui.getByRole("tab", { name: "표" }).click();
+  await expect(ui.locator(".wg-chart")).toHaveCount(0);
+  await ui.getByRole("tab", { name: "차트" }).click();
+  await expect.poll(() => chartEntrances(page)).toEqual(["rect", "rect", "rect", "rect", "rect", "rect"]);
+  await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
+});
+
+test("a chart of a streaming answer enters once across the live bubble and the stored message", async ({ page }) => {
+  await mockApp(page, { stored: false });
+  await openConversation(page);
+  const composer = page.locator(".composer textarea").first();
+  await composer.fill("매출 대시보드 보여줘");
+  await composer.press("Enter");
+
+  const ui = page.locator(UI).first();
+  await expect(ui.getByRole("button", { name: "요약 요청" })).toBeVisible({ timeout: 15_000 });
+  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  // The whole answer is there and stored; the entrance has run its course and the bars stand.
+  await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
+  await page.waitForTimeout(1200);
+  const played = await chartEntrances(page);
+  // Four bars, animated once — or twice when the stored message took over mid-entrance and
+  // continued it. Never a third time, and never a restart after the entrance was over.
+  expect(played.every((mark) => mark === "rect")).toBe(true);
+  expect([4, 8]).toContain(played.length);
+});
+
 // The `local` demo runtime's `demo ui` answer (what `AGENT_RUNTIME=local` streams), through the real client:
 // the server's own example of inline UI must draw whole, with nothing reported to the avatar.
 test("the demo runtime's inline UI answer draws whole and reports nothing", async ({ page }) => {
@@ -356,6 +423,8 @@ test("a stored answer's mermaid block is drawn in place, with its source one pre
     return svg.getBoundingClientRect().width <= el.getBoundingClientRect().width + 1 && svg.getBoundingClientRect().height > 40;
   });
   expect(fits).toBe(true);
+  // An answer opened from the history: the diagram is simply there, nothing arrives.
+  expect(await diagramMoves(page)).toEqual([]);
 
   // 소스: the source instead of the diagram, and back. 줄바꿈 belongs to the source view.
   const toggle = block.getByRole("button", { name: "소스" });
@@ -417,8 +486,25 @@ test("a streaming answer keeps its mermaid block as code until the fence closes,
   // Drawn only from the whole source — never "drawing"/"drawn" while it was partial.
   expect(states.filter((state) => state.endsWith(":partial") && !state.startsWith("code:"))).toEqual([]);
   expect(states).toContain("drawn:whole");
+  // It was written just now: its parts arrived in order (the nodes, the edges, their labels) —
+  // once, or twice when the stored message took over mid-entrance and continued it.
+  const arrived = await diagramMoves(page);
+  expect(arrived.filter((tag) => tag === "g").length).toBeGreaterThanOrEqual(4);
+  expect(arrived.filter((tag) => tag === "path").length).toBeGreaterThanOrEqual(3);
 
   await page.waitForTimeout(1800);
+  // …and no part was left held or clipped.
+  const rest = await page.evaluate(() => {
+    const hosts = Array.from(document.querySelectorAll(".message.assistant .bubble .code-diagram"));
+    const root = hosts[hosts.length - 1]?.shadowRoot;
+    return {
+      running: root?.getAnimations().length ?? -1,
+      nodes: Array.from(root?.querySelectorAll("g.node") ?? []).map((node) => getComputedStyle(node).opacity),
+    };
+  });
+  expect(rest.running).toBe(0);
+  expect(rest.nodes.length).toBeGreaterThanOrEqual(4);
+  expect(rest.nodes.every((opacity) => opacity === "1")).toBe(true);
   expect(reports).toEqual([]);
   expect(await mermaidLeftovers(page)).toBe(0);
   expect(await cspViolations(page)).toEqual([]);

@@ -142,7 +142,9 @@ export type ViewName =
   /** A PPTX share link's viewer (`#/share/<token>`); not in the rail — only a link opens it. */
   | "share"
   /** The 할 일 tab (`#/todos[/<id>]`). */
-  | "todos";
+  | "todos"
+  /** 인라인 UI 갤러리: everything an avatar can draw in an answer (`#/uiGallery`); not in the rail. */
+  | "uiGallery";
 export type SettingsTab = "profile" | "access" | "knowledge";
 export type AdminTab =
   | "overview"
