@@ -40,6 +40,7 @@
     settings: () => import("./views/SettingsView.svelte"),
     admin: () => import("./views/AdminView.svelte"),
     share: () => import("./views/ShareView.svelte"),
+    uiGallery: () => import("./views/UiGalleryView.svelte"),
   };
   const viewCache = new Map<ViewName, any>();
   const viewLabels: Record<ViewName, string> = {
@@ -54,6 +55,7 @@
     settings: "내 아바타",
     admin: "관리자",
     share: "공유된 PPT",
+    uiGallery: "인라인 UI 갤러리",
   };
 
   async function loadView(view: ViewName): Promise<void> {

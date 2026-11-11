@@ -8,6 +8,7 @@
   // expression produced, is inserted as text.
   import type { VNode } from "../../lib/widgetView";
   import type { WidgetCtx } from "../../lib/widgetCtx";
+  import { enter, fillSteps } from "../../lib/uiEntrance";
   import { cellText } from "../../lib/widgetView";
   import { colorStyle, containerStyle, imageStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
   import { WIDGET_ICON_SIZES, type WidgetColumn } from "../../../../shared/widget/index";
@@ -16,6 +17,7 @@
   import WidgetControl from "./WidgetControl.svelte";
   import WidgetInline from "./WidgetInline.svelte";
   import WidgetNode from "./WidgetNode.svelte";
+  import WidgetStatValue from "./WidgetStatValue.svelte";
   import WidgetSvg from "./WidgetSvg.svelte";
   import WidgetTable from "./WidgetTable.svelte";
 
@@ -107,7 +109,7 @@
 {:else if v.tag === "stat"}
   <div class="stat-card wg-stat">
     <span class="stat-label">{cellText(v.props.label)}</span>
-    <span class="stat-value wg-tabular">{cellText(v.props.value)}</span>
+    <WidgetStatValue text={cellText(v.props.value)} entrance={ctx.entrance} entranceKey={`stat:${v.key}`} />
     {#if typeof v.props.delta === "string" && v.props.delta}
       <span class={`stat-sub wg-trend-${typeof v.props.trend === "string" ? v.props.trend : "flat"}`}>
         {#if typeof v.props.trend === "string"}<span aria-hidden="true">{TREND_MARK[v.props.trend] ?? ""}</span>{/if}
@@ -130,7 +132,7 @@
       aria-valuenow={percent(v.props.value)}
       aria-labelledby={`${ctx.domId(v.key)}-label`}
     >
-      <div class="wg-progress-bar" style={`width:${percent(v.props.value)}%`}></div>
+      <div class="wg-progress-bar" style={`width:${percent(v.props.value)}%`} use:enter={{ rule: ctx.entrance, key: `progress:${v.key}`, steps: fillSteps }}></div>
     </div>
   </div>
 {:else if v.tag === "table"}
@@ -139,6 +141,8 @@
     rows={rowsOf(v.props.rows)}
     sortable={v.props.sortable === true}
     caption={typeof v.props.caption === "string" ? v.props.caption : ""}
+    entrance={ctx.entrance}
+    entranceKey={`table:${v.key}`}
   />
 {:else if v.tag === "image"}
   <!-- An image of THIS conversation only (lib/widgetView.ts rebuilt the address
@@ -160,6 +164,7 @@
     height={typeof v.props.height === "number" ? v.props.height : undefined}
     label={typeof v.props.label === "string" ? v.props.label : ""}
     dark={ctx.dark}
+    entrance={ctx.entrance}
     onProblem={ctx.report}
   />
 {:else if v.tag === "submit"}

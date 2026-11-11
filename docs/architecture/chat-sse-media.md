@@ -717,6 +717,70 @@
 - **A snippet of an answer that cannot draw UI uses `inlineUiPlainText`** (`detect.ts`: the prose with the UI
   source lines left out) — the OS notification body does (`notifyTurnComplete`). A new place that shows part
   of an answer as plain text takes the same helper.
+- **A chart ENTERS when it appears now; a redraw is at rest (2026-11-11, the user's pick over a second
+  chart engine).** Vega draws ONE static SVG string that is written whole into the shadow root, so there is
+  no previous value to tween from: only a chart's first appearance moves (`lib/chartEntrance.ts`). Bars grow
+  from the line they stand on (which way they stand is read from their THICKNESS — bars of one band are
+  equally wide or equally high, whatever is stacked; the line is the edge every category has — the zero
+  line, also for negative and stacked bars; ranged bars with no common line each grow from their own
+  start; one category after the other), a line or an area is wiped in from the left with its points, the
+  slices of a pie arrive in turn while the circle settles, anything else fades; axes, legends and titles
+  stay still. The plan is read off Vega's OUTPUT (`g.role-mark` + `mark-<type>` classes,
+  `aria-roledescription="bar"`, a rectangle's box from its path `d` — no layout read), so a Vega bump that
+  renames one of those draws charts at rest and fails `tests/client-chart-entrance.test.ts`, which plans
+  against real Vega output. Every step is a Web Animations keyframe with `fill: backwards` — the sanitized
+  markup is never edited — created PAUSED in the task that wrote the SVG (no frame of the finished chart
+  first) and released by an IntersectionObserver when ANY part of the chart is on screen (never a share of
+  its height: a faceted chart taller than the window would stay held for good). **When it plays** is
+  shared with every other entrance (`lib/uiEntrance.ts`; `WidgetCtx.entrance`, built by `AnswerUi`): in an instance that showed the answer while it was written (the live
+  bubble, a stored message whose end drained in — latched, because Vega draws a moment after the tag
+  arrived) and in the stored message that continues the live text (`continuesEntranceText` — a turn
+  can end before a chart of its last lines was drawn) a chart enters ONCE per pane and run, however often the answer is mounted
+  (`claimEntrance`: the stored message gets nothing, or the REST of an entrance that is still
+  running — a step that is already over is not created again, since `play()` would rewind it); after the viewer changed something in the answer, every chart they bring up enters (a tab);
+  an answer opened from the history, a state change of a chart that is already there and a theme flip are
+  at rest. 움직임 줄이기 (`prefersReducedMotion()`, read when it starts) draws at rest. The `vega` CANVAS is
+  untouched. No chart library with transitions was adopted for this: a second engine would have split the
+  `spec` form, the theme and the "sanitized SVG in a shadow root" boundary.
+- **The rest of the UI enters by the same rule (2026-11-11, the user's pick of all four).** Each top-level
+  component of a UI block rises in as it appears (`enterChildren` on `.answer-ui`: a MutationObserver names
+  a component by its PLACE in the block, which the live bubble and the stored message share); a `<stat>`
+  value that is ONE number counts up from zero in its own format (`WidgetStatValue` + `countUpFormat` —
+  the final text stays in the layout, hidden, so the card keeps its size; a date, a ratio or a word rises
+  instead); a `<progress>` bar fills (and a CHANGED value glides on a 160 ms CSS transition); the first 12
+  rows of a `<table>` arrive in turn (a sort moves none). A value the viewer changes is simply the new
+  value. Keys are places (`stat:<node key>`), a chart's key is its spec. jsdom has neither Web Animations
+  nor an IntersectionObserver, so component tests see everything at rest; the motion is pinned by
+  `tests/client-ui-entrance.test.ts` and, in a real browser, `tests/visual/ui-gallery.spec.ts`.
+- **A ```mermaid diagram arrives in order (2026-11-12, the user's pick: tailored to the common kinds).**
+  `lib/mermaidEntrance.ts` plans it off mermaid's own SVG, like the chart's: a GRAPH (flowchart, state, ER,
+  class, mindmap share one renderer — `g.clusters`, `g.nodes > g.node`, `g.edgePaths > path`,
+  `g.edgeLabels`) shows its frames, then the nodes one after the other (opacity only — a node is placed by
+  its `transform` attribute), then each edge WIPED from its first point to its arrowhead (a clip along the
+  axis it mostly runs on, so the marker is uncovered last and a dotted edge keeps its dashes) with its label
+  behind it; a SEQUENCE diagram is read top to bottom by each part's smallest `y`/`y1` (participants, each
+  message drawn the way it is sent, notes and loops, the bottom row last); anything else fades its parts in
+  in document order, and more than 160 parts fade as one. The order of a graph is the order mermaid WROTE
+  it, not a walk of the graph. **When**: `lib/mermaidBlock.ts` has no `WidgetCtx` (it is the Markdown's), so
+  its rule is its own — a block that was seen OPEN and then closed notes its source (`written`), and
+  whichever mount of the answer draws that source first claims the entrance (`claimEntrance`, scope
+  `mermaid`, key = the source; `renewEntrance` lets the same diagram enter again in a later answer); under
+  `[data-entrance="always"]` (the gallery's stage) it enters at every mount. History, a theme flip and the 소스
+  toggle are at rest. jsdom cannot lay a diagram out, so the unit test plans against cut-down real output
+  and the real structure is pinned in `tests/visual/ui-gallery.spec.ts`.
+- **A lone Web Animations keyframe is the END, not the start.** `[{ opacity: 0 }]` animates FROM the
+  element's own value TO 0 and then snaps back — a fade-out. Every "from nothing to what it is" step pins
+  its one keyframe with `offset: 0`; the visual spec reads the HELD value (a slice, a node, a progress bar
+  below the fold is at 0) because a keyframe-shape assertion cannot tell the two apart.
+- **The gallery (`#/uiGallery`, `views/UiGalleryView.svelte`) is a client view of SAMPLES, not an endpoint
+  and not a second renderer.** `lib/uiGallery.ts` holds one small answer per thing an avatar can draw and
+  each is drawn by `AnswerUi` itself in its PREVIEW mode (the `outbox` prop): what a `send` button or a
+  `<submit>` would post is handed to the host and shown under the sample, nothing is kept in
+  `localStorage`, nothing is reported, and its charts enter each time it is opened. Every approved user may
+  open it; it is not in the rail (opened by its address). `<image>` is source only — an image belongs to a
+  conversation. `tests/client-ui-gallery.test.ts` fails when a component of the table or a chart type has
+  no sample, or a sample does not pass the static check and the evaluator; **a new component or chart type
+  gets its sample there.** In a real browser: `tests/visual/ui-gallery.spec.ts`.
 - Verified in a real browser by `tests/visual/inline-ui.spec.ts` (the app's CSP on the document, a negative
   control, Vega under it, a reload, and a streaming answer that must never show a tag as text) and in jsdom
   by `tests/svelte-chat-inline-ui.test.ts`; the `local` demo runtime's `demo ui` streams such an answer.

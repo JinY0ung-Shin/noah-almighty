@@ -4,16 +4,23 @@
   // its own shadow root). The spec is recomputed on every state change, so
   // renders are coalesced into one per animation frame, a result that lands
   // after a newer one started is dropped, and an unchanged spec is not redrawn.
+  //
+  // The FIRST drawing of a chart that appears now (in an answer that is being
+  // written, or after the viewer's own press) enters with motion
+  // (lib/chartEntrance.ts); every later drawing replaces it at rest.
   import { onDestroy } from "svelte";
 
   import { dataSize } from "../../../../shared/widget/index";
-  import { shadowSvg } from "../../lib/shadowSvg";
+  import { chartSvg } from "../../lib/chartEntrance";
+  import { claimEntrance, type Entrance, type EntranceRule } from "../../lib/uiEntrance";
   import { renderVegaSvg } from "../../lib/vegaCanvas";
 
   export let spec: unknown;
   export let height: number | undefined = undefined;
   export let label = "";
   export let dark = false;
+  /** How a chart that appears now may play its entrance (`WidgetCtx.entrance`); null draws it at rest. */
+  export let entrance: EntranceRule | null = null;
   /** Told when the chart cannot be drawn: one ENGLISH line for the avatar. */
   export let onProblem: (problem: string) => void = () => {};
 
@@ -27,6 +34,9 @@
   const TOO_BIG = "차트 데이터가 너무 커서 그리지 못했습니다.";
 
   let svg = "";
+  // The entrance the drawing in `svg` is mounted with: set for this instance's first drawing only.
+  let enter: Entrance | null = null;
+  let entered = false;
   let error = "";
   // Nothing to draw: `spec` evaluated to nothing (an unpicked option, `cond ? {…} : null`).
   let empty = false;
@@ -78,6 +88,8 @@
     drawnSig = sig;
     token++;
     svg = "";
+    // The chart is gone: the next one drawn here appears anew (`{cond ? spec : null}` is a tab, too).
+    entered = false;
     error = message;
     empty = isEmpty;
   }
@@ -92,6 +104,9 @@
     try {
       const markup = await renderVegaSvg(target, isDark);
       if (destroyed || mine !== token) return; // a newer render won
+      // The key is the spec without the theme: a chart redrawn for a theme flip is the same chart.
+      enter = entrance ? claimEntrance(entrance, sig.slice(1), !entered) : null;
+      entered = true;
       svg = markup;
       error = "";
       drawnSig = sig;
@@ -117,7 +132,7 @@
 
 <div class="wg-chart">
   {#if svg}
-    <div class="canvas-svg" data-fit role="img" aria-label={label || "차트"} use:shadowSvg={svg}></div>
+    <div class="canvas-svg" data-fit role="img" aria-label={label || "차트"} use:chartSvg={{ markup: svg, enter }}></div>
   {/if}
   {#if error}
     <p class="canvas-render-error" role="alert">{error}</p>

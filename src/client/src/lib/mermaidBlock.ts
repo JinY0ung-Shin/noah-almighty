@@ -18,9 +18,16 @@
 // - Results are cached by (theme, source): one answer is mounted up to three
 //   times (live bubble → drain → stored message), and a cache hit draws in the
 //   same task, so the diagram does not blink back to code at each handover.
+// - A diagram ENTERS (lib/mermaidEntrance.ts) when it appears now: its fence was
+//   seen being written and then closed — once, whichever of the answer's mounts
+//   draws it first — or it sits under `[data-entrance="always"]` (the gallery).
+//   A diagram of an answer opened from the history, a theme flip and the 소스
+//   toggle are at rest.
+import { planMermaidEntrance } from "./mermaidEntrance";
 import { renderMermaidSvg, MermaidLoadError } from "./mermaidRender";
 import { shadowSvg } from "./shadowSvg";
 import { currentTheme, theme } from "./theme";
+import { claimEntrance, playSteps, renewEntrance, type Entrance } from "./uiEntrance";
 
 /** Bubbles from a block whose diagram could not be drawn; `detail.problem` is one English line. */
 export const DIAGRAM_ERROR_EVENT = "diagramerror";
@@ -48,6 +55,25 @@ function clipped(text: string, max: number): string {
 const cache = new Map<string, Outcome>();
 const inflight = new Map<string, Promise<Outcome>>();
 
+// The sources whose fence was seen closing: diagrams that are appearing NOW,
+// in whichever mount of their answer gets to draw them.
+const ENTRANCE_SCOPE = "mermaid";
+const MAX_WRITTEN = 40;
+const written = new Set<string>();
+
+function noteWritten(source: string): void {
+  written.delete(source);
+  written.add(source);
+  if (written.size > MAX_WRITTEN) written.delete(written.values().next().value as string);
+  // The same diagram in a later answer is a new appearance.
+  renewEntrance(ENTRANCE_SCOPE, source);
+}
+
+function entranceOf(wrapper: HTMLElement, source: string): Entrance | null {
+  if (wrapper.closest('[data-entrance="always"]')) return claimEntrance({ scope: ENTRANCE_SCOPE, always: true }, source, true);
+  return written.has(source) ? claimEntrance({ scope: ENTRANCE_SCOPE, always: false }, source, true) : null;
+}
+
 type Phase = "code" | "drawing" | "drawn" | "failed";
 
 interface DiagramView {
@@ -56,6 +82,12 @@ interface DiagramView {
   source: string;
   dark: boolean;
   open: boolean;
+  /** This block was seen while its fence was still being written. */
+  written: boolean;
+  /** A drawing has been put in this block: the next one replaces it at rest. */
+  entered: boolean;
+  /** Puts a running entrance at rest. */
+  stop: () => void;
   /** Guards an async render against a newer one. */
   token: number;
   toggle: HTMLButtonElement;
@@ -155,6 +187,9 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
     source: "",
     dark: false,
     open: true,
+    written: false,
+    entered: false,
+    stop: () => {},
     token: 0,
     toggle,
     host,
@@ -183,6 +218,7 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
 
 function dismantle(wrapper: HTMLElement, view: DiagramView): void {
   view.token += 1;
+  view.stop();
   view.toggle.remove();
   view.host.remove();
   view.note.remove();
@@ -192,10 +228,16 @@ function dismantle(wrapper: HTMLElement, view: DiagramView): void {
 }
 
 function apply(wrapper: HTMLElement, view: DiagramView, outcome: Outcome): void {
+  view.stop();
+  view.stop = () => {};
   if ("svg" in outcome) {
     if (view.shadow) view.shadow.update(outcome.svg);
     else view.shadow = shadowSvg(view.host, outcome.svg);
     setPhase(wrapper, view, "drawn");
+    // In the task that wrote the drawing: its parts are held at their start before a frame shows them.
+    const entrance = view.entered ? null : entranceOf(wrapper, view.source);
+    view.entered = true;
+    if (entrance && view.host.shadowRoot) view.stop = playSteps(view.host, planMermaidEntrance(view.host.shadowRoot), entrance, "0px 0px -40px 0px");
     return;
   }
   // The source stays on screen; a drawing of an older source must not.
@@ -255,6 +297,7 @@ function syncBlock(wrapper: HTMLElement, open: boolean): void {
   const source = (code.textContent ?? "").trim();
   const dark = currentTheme() === "dark";
   view.open = open;
+  if (open) view.written = true;
   if (open || !source) {
     view.token += 1;
     view.source = source;
@@ -264,6 +307,7 @@ function syncBlock(wrapper: HTMLElement, open: boolean): void {
   if (view.phase !== "code" && view.source === source && view.dark === dark) return;
   view.source = source;
   view.dark = dark;
+  if (view.written && !view.entered) noteWritten(source);
   draw(wrapper, view);
 }
 
@@ -333,4 +377,5 @@ export function diagramProblems(node: HTMLElement, handler: (problem: string) =>
 export function resetMermaidBlocks(): void {
   cache.clear();
   inflight.clear();
+  written.clear();
 }

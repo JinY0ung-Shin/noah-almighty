@@ -250,6 +250,19 @@
   height: 100%;
   border-radius: inherit;
   background: var(--wg-tone);
+  /* A value the viewer changes (a slider) glides to its new place. */
+  transition: width 160ms var(--ease-out);
+}
+/* A <stat> value counting up (WidgetStatValue): the final text holds the size,
+   the running number is drawn over it. */
+.wg-count {
+  display: inline-grid;
+}
+.wg-count > * {
+  grid-area: 1 / 1;
+}
+.wg-count-final {
+  visibility: hidden;
 }
 .wg-table-wrap {
   max-width: 100%;
@@ -483,3 +496,91 @@
   animation: none;
 }
 
+
+/* ---- 인라인 UI 갤러리 (views/UiGalleryView.svelte, `#/uiGallery`) ----
+   One column as wide as a chat transcript, so a sample has the room a real
+   answer has. A card is: what it is, the sample drawn, then its source. */
+.ui-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+  max-width: var(--transcript-max);
+  margin: 0 auto;
+}
+.ui-gallery-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.ui-gallery-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  outline: none;
+}
+.ui-gallery-section-head h2 {
+  margin: 0;
+  font-size: var(--t-lg);
+  letter-spacing: -0.01em;
+}
+.ui-gallery-section-head p,
+.ui-gallery-card-head p {
+  margin: var(--s-0-5) 0 0;
+  font-size: var(--t-sm);
+  color: var(--muted);
+}
+.ui-gallery-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--panel);
+}
+.ui-gallery-card-head h3 {
+  margin: 0;
+  font-size: var(--t-base);
+  font-weight: 600;
+}
+.ui-gallery-stage {
+  min-width: 0;
+  font-size: var(--t-base);
+  line-height: 1.5;
+}
+.ui-gallery-stage > .answer-ui + .answer-ui,
+.ui-gallery-stage > .md + .answer-ui,
+.ui-gallery-stage > .answer-ui + .md {
+  margin-top: var(--s-3);
+}
+.ui-gallery-sent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1-5);
+  padding: var(--s-3);
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  font-size: var(--t-sm);
+  color: var(--text-soft);
+}
+.ui-gallery-sent pre {
+  margin: 0;
+  font: inherit;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ui-gallery-source summary {
+  width: fit-content;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.ui-gallery-source summary:hover {
+  color: var(--text);
+}
+.ui-gallery-source > .md {
+  margin-top: var(--s-2);
+}

@@ -19,6 +19,7 @@ import { DIAGRAM_ERROR_EVENT, diagramProblems, resetMermaidBlocks } from "../src
 import { MermaidLoadError } from "../src/client/src/lib/mermaidRender.js";
 import { createStreamMarkdown, renderMarkdownBlocks } from "../src/client/src/lib/streamMarkdown.js";
 import { setThemePref } from "../src/client/src/lib/theme.js";
+import { ENTRANCE_WINDOW_MS, resetEntrances } from "../src/client/src/lib/uiEntrance.js";
 
 const DIAGRAM = 'flowchart LR\n  A["로그인 (SSO)"] --> B{승인됨?}\n  B -->|예| C[홈]';
 const ANSWER = `흐름입니다.\n\n\`\`\`mermaid\n${DIAGRAM}\n\`\`\`\n\n끝.`;
@@ -295,6 +296,141 @@ describe("a ```mermaid block of a live answer (markdownBlocks)", () => {
     // And back: the block is a plain code block again, with nothing of the diagram left.
     action.update(md.render("```text\nflowchart LR\n```\n\n뒤", { heal: true }));
     expect(node.querySelector("[data-diagram], .code-view, .code-diagram, .code-diagram-note")).toBeNull();
+  });
+});
+
+// A diagram ENTERS when it appears now (lib/mermaidEntrance.ts plans what moves):
+// its fence was seen closing — in whichever mount of the answer draws it first —
+// or it is a preview. jsdom has no Web Animations: a recording stand-in shows
+// what would have played.
+describe("a ```mermaid block's entrance", () => {
+  interface Played {
+    state: "paused" | "running" | "cancelled";
+    currentTime: number;
+  }
+  let played: Played[];
+
+  beforeEach(() => {
+    resetEntrances();
+    played = [];
+    (Element.prototype as unknown as { animate: unknown }).animate = () => {
+      const animation: Played & { pause(): void; play(): void; cancel(): void } = {
+        state: "running",
+        currentTime: 0,
+        pause() {
+          this.state = "paused";
+        },
+        play() {
+          this.state = "running";
+        },
+        cancel() {
+          this.state = "cancelled";
+        },
+      };
+      played.push(animation);
+      return animation;
+    };
+    // No IntersectionObserver in jsdom: the entrance is released at once.
+  });
+  afterEach(() => {
+    delete (Element.prototype as unknown as { animate?: unknown }).animate;
+    vi.useRealTimers();
+  });
+
+  function writeLive(): { node: HTMLElement; action: ReturnType<typeof markdownBlocks>; md: ReturnType<typeof createStreamMarkdown> } {
+    const node = document.createElement("div");
+    node.className = "md";
+    document.body.append(node);
+    const md = createStreamMarkdown();
+    const closedAt = ANSWER.indexOf("```\n\n끝.") + 3;
+    const action = markdownBlocks(node, md.render(ANSWER.slice(0, closedAt - 4), { heal: true }));
+    action.update(md.render(ANSWER.slice(0, closedAt), { heal: true }));
+    return { node, action, md };
+  }
+
+  it("does not move a diagram of an answer opened from the history", async () => {
+    const node = mount(ANSWER);
+    enhanceMarkdown(node, ANSWER);
+    await settle();
+    expect(node.querySelector<HTMLElement>(".code-block")!.dataset.diagram).toBe("drawn");
+    expect(played).toEqual([]);
+  });
+
+  it("plays when the fence of a live answer closes — and not again in the stored message", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    writeLive();
+    await settle();
+    expect(played.map((animation) => animation.state)).toEqual(["running"]);
+
+    vi.advanceTimersByTime(ENTRANCE_WINDOW_MS + 1);
+    const stored = mount(ANSWER);
+    enhanceMarkdown(stored, ANSWER);
+    await settle();
+    expect(stored.querySelector<HTMLElement>(".code-block")!.dataset.diagram).toBe("drawn");
+    expect(played).toHaveLength(1);
+  });
+
+  it("lets the stored message continue an entrance that is still running", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    writeLive();
+    await settle();
+    vi.advanceTimersByTime(100);
+    const stored = mount(ANSWER);
+    enhanceMarkdown(stored, ANSWER);
+    await settle();
+    expect(played).toHaveLength(2);
+    expect(played[1]).toMatchObject({ state: "running", currentTime: 100 });
+  });
+
+  it("plays in the stored message when the live bubble was gone before the diagram was drawn", async () => {
+    let land: (svg: string) => void = () => {};
+    render.mockImplementation(() => new Promise<string>((resolve) => (land = resolve)));
+    const { node } = writeLive();
+    await settle();
+    expect(played).toEqual([]);
+    node.remove(); // the turn ended: the live bubble is replaced…
+    const stored = mount(ANSWER);
+    enhanceMarkdown(stored, ANSWER);
+    land("<svg><text>그림</text></svg>"); // …and only now is the diagram ready
+    await settle();
+    expect(stored.querySelector<HTMLElement>(".code-block")!.dataset.diagram).toBe("drawn");
+    expect(played.filter((animation) => animation.state === "running").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("plays again when the same diagram is written in a later answer", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    writeLive();
+    await settle();
+    vi.advanceTimersByTime(60_000);
+    writeLive();
+    await settle();
+    expect(played).toHaveLength(2);
+  });
+
+  it("stays at rest when the palette changes, and puts a running entrance at rest", async () => {
+    const { node } = writeLive();
+    await settle();
+    expect(played).toHaveLength(1);
+    setThemePref("dark");
+    await settle();
+    expect(drawing(node.querySelector(".code-block")!)).toContain('data-theme="dark"');
+    expect(played).toHaveLength(1);
+    expect(played[0].state).toBe("cancelled");
+  });
+
+  it("plays every time under [data-entrance=\"always\"] (the gallery)", async () => {
+    for (let visit = 0; visit < 2; visit += 1) {
+      const stage = document.createElement("div");
+      stage.setAttribute("data-entrance", "always");
+      document.body.append(stage);
+      const node = document.createElement("div");
+      node.className = "md";
+      node.innerHTML = renderMarkdown(ANSWER);
+      stage.append(node);
+      enhanceMarkdown(node, ANSWER);
+      await settle();
+    }
+    expect(played).toHaveLength(2);
   });
 });
 

@@ -7,6 +7,7 @@
   // it), it orders a COPY of the rows the document produced, and it survives a
   // re-evaluation for as long as the columns stay the same.
   import type { WidgetColumn } from "../../../../shared/widget/index";
+  import { enter, rowSteps, type EntranceRule } from "../../lib/uiEntrance";
   import { ariaSort, columnsSignature, nextSort, sortHint, sortRows, type TableSort } from "../../lib/widgetTable";
   import { cellText } from "../../lib/widgetView";
 
@@ -14,6 +15,9 @@
   export let rows: Record<string, unknown>[] = [];
   export let sortable = false;
   export let caption = "";
+  /** How the rows may arrive when the table appears now (`WidgetCtx.entrance`); a sort never moves them. */
+  export let entrance: EntranceRule | null = null;
+  export let entranceKey = "";
 
   let sort: TableSort | null = null;
   let signature = "";
@@ -54,7 +58,7 @@
         {/each}
       </tr>
     </thead>
-    <tbody>
+    <tbody use:enter={{ rule: entrance, key: entranceKey, steps: rowSteps }}>
       {#each shown as row}
         <tr>
           {#each columns as col}<td class={`wg-align-${col.align}`}>{cell(row, col.key)}</td>{/each}
