@@ -628,14 +628,14 @@ export function hasVisibleImages(message: StoredMessage | undefined): boolean {
 type KeyedMessage = StoredMessage & { clientKey?: string };
 
 /**
- * A row's identity for UI state that must survive id adoption — the each-block key,
+ * A row's identity for UI state that must survive id adoption — the list `key`,
  * which cards are open: the id it was born with when the client made it.
  */
 export function stableMessageId(message: StoredMessage): string {
   return (message as KeyedMessage).clientKey || message.id;
 }
 
-/** The transcript's each-block key for a row — stable across id adoption. */
+/** The transcript's list `key` for a row — stable across id adoption. */
 export function messageKey(message: StoredMessage, index: number): string {
   return (
     stableMessageId(message) || `${message.role}-${message.createdAt}-${index}`
@@ -669,7 +669,7 @@ function adoptServerId(row: StoredMessage, serverId: string): void {
 
 /**
  * A re-read of the transcript, applied without disturbing what the pane already
- * shows: rows keep their each-block key (matched by id, which adoption made the
+ * shows: rows keep their list `key` (matched by id, which adoption made the
  * server's), and a row keeps the activity snapshot it rendered — `done` PUTs that
  * snapshot fire-and-forget, so a re-read right after a turn can beat it there.
  */

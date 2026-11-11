@@ -53,7 +53,7 @@ function setDesktopViewport(matches: boolean): void {
 }
 
 // React writes `inert` as the ATTRIBUTE; jsdom does not reflect it to the
-// property the Svelte suite read.
+// `inert` property, so the attribute is what these cases read.
 const isInert = (element: Element): boolean => element.hasAttribute("inert");
 
 beforeEach(() => {

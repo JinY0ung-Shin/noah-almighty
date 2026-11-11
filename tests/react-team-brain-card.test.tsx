@@ -1,6 +1,6 @@
 // TeamBrainCard: a fake /api/team-brain/cards/:id stands in for the server, so
-// every assertion goes through the card's real load / act path. (React port of
-// tests/svelte-team-brain-card.test.ts — vitest "react" project.)
+// every assertion goes through the card's real load / act path. (Runs in the
+// vitest "react" project.)
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

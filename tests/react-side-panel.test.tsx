@@ -1,6 +1,6 @@
-// The side panel (SidePanel + CanvasTab + FileTab + CanvasHtmlFrame) — the
-// React port of the "SidePanel canvas tab" and "SidePanel tabs" suites of
-// tests/svelte-components.test.ts. Runs in the vitest "react" project.
+// The side panel (SidePanel + CanvasTab + FileTab + CanvasHtmlFrame): the
+// "SidePanel canvas tab" and "SidePanel tabs" suites. Runs in the vitest
+// "react" project.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import DOMPurify from "dompurify";
 import { beforeEach, describe, expect, it, vi } from "vitest";

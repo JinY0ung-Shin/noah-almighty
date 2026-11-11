@@ -40,7 +40,7 @@
 | Card lookup over persisted messages | `store.listMessageAttachments` / `store.findCardMessageAttachments` (`store/conversations.ts`) |
 | Avatar host callback | `onShareLink` in `executeChatTurn` (`routes/chat.ts`) |
 | Avatar tool + gates + metacognition | `agent/fileOutputTools.ts` (`create_share_link`), `agent/runCapabilities.ts` (`shareLinkToolActive`), `agent/promptBuilder.ts` (`shareLinkSection`), `agent/systemTools.ts` (describe_system lines), `agent/systemManual.ts` (`files-canvas` topic) |
-| Client | `lib/shareLinks.ts`, `views/ShareView.svelte`, `components/{SlidePresenter,ShareLinkDialog,SettingsShareLinks}.svelte`, entry points in `FileTab.svelte` (the deck's side-panel tab) / `ChatView.svelte` |
+| Client | `lib/shareLinks.ts`, `views/ShareView.tsx`, `components/{SlidePresenter,ShareLinkDialog,SettingsShareLinks}.tsx`, entry points in `FileTab.tsx` (the deck's side-panel tab) / the chat view (`views/ChatView.tsx` mounts the one dialog; `views/chat/controller.tsx` holds its target) |
 
 ## Token, link, viewer tickets
 - **Token** = `base64url(HMAC-SHA256(SESSION_SECRET, "noah-share-link:v2:" + linkId + ":" + token_salt))` —
@@ -271,5 +271,5 @@ card-name cap), `tests/routes-chat.test.ts` (`onShareLink` supply predicate, car
 hidden-cap change), `tests/store.test.ts`
 (migration, corrupt snapshot), `tests/agent-share-link.test.ts` (registration matrix, both lists, handler,
 prompt, describe_system, presentation), `tests/system-manual.test.ts` (prompt budget),
-`tests/client-share-links.test.ts`, `tests/svelte-share-view.test.ts`, `tests/svelte-share-link-dialog.test.ts`,
-`tests/svelte-settings-share-links.test.ts`.
+`tests/client-share-links.test.ts`, `tests/react-share-view.test.tsx`, `tests/react-share-link-dialog.test.tsx`,
+`tests/react-file-tab.test.tsx` (the deck tab's 공유 링크 button), `tests/react-settings-share-links.test.tsx`.

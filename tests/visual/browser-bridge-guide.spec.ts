@@ -4,7 +4,7 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 
 // The browser-bridge install guide modal. Geometry only, no screenshots.
 //
-// This exists because the first version SHIPPED BROKEN and svelte-check stayed
+// This exists because the first version SHIPPED BROKEN and the typecheck stayed
 // green: `.modal-card` pins `width: min(460px, 100%)`, so the guide's
 // `max-width: 44rem` did nothing and the five-step procedure was crammed into
 // the default dialog width. The content also used `.panel-section-head`, a

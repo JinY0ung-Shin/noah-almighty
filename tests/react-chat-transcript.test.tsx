@@ -4,7 +4,7 @@
 // and an ActivityTree mount for EVERY message on load. Both now render on first
 // open. See lib/format.ts renderMarkdownCached for the matching per-token fix.
 //
-// The React port of tests/svelte-chat-transcript.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +16,7 @@ import type { ChatPane } from "../src/client/src/lib/types";
 import type { AvatarDetail, StoredMessage } from "../src/server/types";
 import { PPTX_MEDIA_TYPE } from "../src/shared/shareLinks";
 
-/** Let what a store write or an event scheduled reach the DOM (Svelte's `tick()`). */
+/** Let what a store write or an event scheduled reach the DOM (an empty async `act`). */
 const tick = (): Promise<void> => act(async () => {});
 
 const THINKING = "먼저 요구사항을 정리한다";

@@ -74,7 +74,7 @@ export const ICON_PATHS: Record<string, string> = {
 
 /**
  * The same icon as a standalone `<svg>` string, for the places that build DOM
- * imperatively instead of through a Svelte component. Mirrors the wrapper
+ * imperatively instead of through the `Icon` component. Mirrors the wrapper
  * attributes in `Icon.tsx` — change one, change both.
  */
 export function iconSvg(name: string, size = 18): string {

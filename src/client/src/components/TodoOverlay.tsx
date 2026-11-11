@@ -102,8 +102,8 @@ export interface TodoOverlayProps {
 // viewer's own checkbox, a poll and the first load stay instant. quartOut is
 // the lib/transition curve closest to `--ease-out` (the Toasts precedent).
 // A row (or the section around it) still moves when its whole section or the
-// list goes with it (the originals were `|global`; see `useEntrance` and the
-// rows' section-leaving branch below). Under reduced motion nothing moves: the
+// list goes with it (see `useEntrance` and the rows' section-leaving branch
+// below). Under reduced motion nothing moves: the
 // glide is off, so exits are instant too (a fade would sit on top of the row
 // that already took the slot); arrivals only fade.
 const NONE: TransitionConfig = { duration: 0 };
@@ -404,9 +404,9 @@ class ListSnapshot extends Component<{ sections: unknown; motion: CardMotion }> 
 
 /**
  * An element's entrance, played by hand whenever the element is created — and
- * again when it comes back while it was leaving. The originals' entrances were
- * `|global` (they ran for a row created together with its new section too) and
- * independent of the exit: an exit never took over from a running entrance, and
+ * again when it comes back while it was leaving. The card's entrances have
+ * always run for a row created together with its new section too, and
+ * independently of the exit: an exit never took over from a running entrance, and
  * a return dropped the exit and entered from the start. <Presence> plays an
  * entrance only for a child that arrives after it mounted and treats `in`/`out`
  * as one pair, so these elements give it their exit only. The entrance itself

@@ -287,7 +287,7 @@ export function rowSteps(body: Element): EntranceStep[] {
 }
 
 /**
- * Svelte action: the element enters when it is MOUNTED and `rule` lets the
+ * Action (attached with `useAction`): the element enters when it is MOUNTED and `rule` lets the
  * thing `key` enter. What it does is `steps` (read off the element as mounted);
  * a later change of the element is not an entrance.
  */
@@ -298,7 +298,7 @@ export function enter(node: Element, params: { rule: EntranceRule | null; key: s
 }
 
 /**
- * Svelte action for a block of an answer's UI: each of its top-level components
+ * Action (attached with `useAction`) for a block of an answer's UI: each of its top-level components
  * rises in as it appears — those it is mounted with (a little apart), and each
  * one that is added later, while the answer is still being written or because
  * the viewer changed something. A component is named by its place in the block,

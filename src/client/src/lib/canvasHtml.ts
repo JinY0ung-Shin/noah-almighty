@@ -1,8 +1,8 @@
 // HTML canvas artifacts (#50) render as their own page in a sandboxed iframe.
 //
 // The avatar writes canvas HTML as a PAGE: a leading <style> block, often a whole
-// <!DOCTYPE html> document, resets on `*`/`body`/`:root`. Rendered through
-// {@html} into the app's DOM that broke both ways: DOMPurify's default sanitize
+// <!DOCTYPE html> document, resets on `*`/`body`/`:root`. Injected as html
+// into the app's own DOM that broke both ways: DOMPurify's default sanitize
 // returns only <body>, so every <style> before the content (which the parser puts
 // in <head>) silently vanished, while a later one restyled the WHOLE app. In its
 // own document a page's CSS applies to that page alone. The frame is

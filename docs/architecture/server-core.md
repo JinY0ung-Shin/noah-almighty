@@ -337,9 +337,9 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`
   migration, then mirror it end-to-end
-  (`UserRow`→`toUser`→`updateProfile`→`User` type→`PATCH /api/me`→Svelte settings control in the matching
+  (`UserRow`→`toUser`→`updateProfile`→`User` type→`PATCH /api/me`→settings control in the matching
   per-tab component (`SettingsProfileTab`/`SettingsAccessTab`/`SettingsKnowledgeTab`;
-  `SettingsView.svelte` is just the tab shell)). A NEW table goes in the always-run schema `db.exec()`
+  `SettingsView.tsx` is just the tab shell)). A NEW table goes in the always-run schema `db.exec()`
   block (`CREATE TABLE IF NOT EXISTS`) — `addColumnIfMissing` is ONLY for adding a column to an existing table.
 - **Per-SECRET settings are the exception to that pattern:** they hang off `user_secrets`, not `users`,
   and go through `PATCH /api/me/secrets/:name` rather than `PATCH /api/me` — the value column stays
@@ -362,7 +362,7 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   user-visible changes; ordering comes from array position, never id parsing. Tracking:
   `users.last_seen_release` (NULL = never seen — deliberately NOT backfilled, unlike `onboarded_at`:
   existing accounts are exactly the audience for the one-time notice) → `User.lastSeenRelease`;
-  `createUser` seeds signups with the then-current id so day-one accounts see nothing. Client: `App.svelte`
+  `createUser` seeds signups with the then-current id so day-one accounts see nothing. Client: `App.tsx`
   `enterApp` computes `unseenReleases(user.lastSeenRelease)` (≤`MAX_RELEASES_SHOWN`; an UNKNOWN stored id
   — pruned entry / rollback — counts as never-seen, else it would silence every future note) →
   `WhatsNewModal` (root-mounted next to `OnboardingModal`, which takes precedence) → every dismissal path

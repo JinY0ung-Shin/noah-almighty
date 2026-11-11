@@ -43,7 +43,7 @@ a separate internal corporate server; end by reminding the user to deploy the ta
 
 ```
 npx tsc --noEmit
-npx svelte-check --tsconfig ./tsconfig.client.json
+npx tsc -p tsconfig.client.json --noEmit
 npm test
 npm run build
 ```

@@ -10,7 +10,7 @@
 // which is why no prompt text may appear on this side (guarded separately in
 // agent-core.test.ts).
 //
-// The React port of tests/svelte-chat-tour-cards.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

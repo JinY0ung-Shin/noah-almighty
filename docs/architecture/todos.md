@@ -185,7 +185,7 @@
   the regeneration day. The manual has a `todos` topic, and `sdkToolPresentation.ts` labels the tools
   할 일 조회/추가/수정/삭제.
 
-## Client (`lib/todos.ts`, `views/TodosView.svelte`, `components/TodoOverlay.svelte`)
+## Client (`lib/todos.ts`, `views/TodosView.tsx`, `components/TodoOverlay.tsx`)
 - **One store slice** (`appState.todos` = items + `todayKst` + counts + `loaded`) feeds the rail badge
   (overdue + due today), the 할 일 tab and the chat card, so a checkbox in one is instantly in the
   others. Writes are optimistic with rollback + a Korean toast; every response's `{todayKst, counts}`
@@ -237,7 +237,7 @@
   while Enter and Space each send exactly one PATCH (jsdom cannot turn Enter/Space into a click).
 - **The chat card** mounts once inside the active pane's `.chat-body`, so it can never cover the
   composer and an open canvas/file panel moves it left with the column. A `ResizeObserver` picks the
-  mode (no layout read in `onMount`): pinned from a 1000px chat column — top-right, growing with its list
+  mode (no layout read at mount): pinned from a 1000px chat column — top-right, growing with its list
   down to the composer (`max-height: 100% − 2×12px`, it was a fixed 50% that cut rows mid-line) and then
   scrolling, the list's bottom edge masked to a fade while rows remain below (`.has-more`, read in the
   scroll handler, a list `ResizeObserver`, after a paint plus once more after the motion window whenever
@@ -293,7 +293,7 @@
   counts into `hidden` (the footer's "외 N개"). The folded ids persist per browser
   (`noah.todoOverlayCollapsed`, `lib/layout.ts`, unknown ids and junk read as none). An avatar's
   addition inside a folded section pops that heading's count (`todoSectionArrivalSeq`), not the footer.
-  Both pops play only while `avatarChangeFlushing()` (read when the `{#key}` remounts): the viewer's own
+  Both pops play only while `avatarChangeFlushing()` (read once, when the count's `key={seq}` element — `Pop` — mounts): the viewer's own
   fold or start that moves a still-marked row past the budget never pops anything.
 - **The header sums up the day.** Below the title row, `todoTodayProgress`: 오늘 완료 N (done items whose
   `closedAt` falls on the server's KST day — a listing carries the newest 200 done, so today's are in it)
@@ -333,30 +333,42 @@
   `beginWrite`/`mutate`), and (4) updates the `todoActivity` store (`seq`, per-row `marks`, `pop`);
   everything expires after `TODO_ACTIVITY_MS` (1.6 s), so opening the card later replays nothing, and
   `resetTodoClientState` clears it.
-- **Card motion** (`TodoOverlay.svelte`): one keyed list of sections and rows stays mounted once loaded
-  (the empty state is a sibling), rebuilt only when the items, `todayKst` or folded-sections references change — every
-  reconcile of an `animate:` list measures every row, and the store is written per streamed token.
+- **Card motion** (`TodoOverlay.tsx`): one keyed list of sections and rows stays mounted once loaded
+  (inside `<Presence>`; the empty state is a sibling), rebuilt only when the items, `todayKst` or folded-sections
+  references change (a render-time guard) — every rebuild measures every row for the glide, and the card
+  re-renders on every store write, one per streamed token.
   Added rows rise 6px over 240 ms with a 1.2 s `--accent-soft` wash, staggered 40 ms (cap 7 steps; an
   arrival hidden by the 8-row cap pops the footer's "(외 N개)" instead); edited rows get the wash only;
-  other rows entering during the change fade in (`rowIn`). Departed rows slide 12px and fade over 200 ms
-  through a DEFERRED `out:rowOut|global`; siblings and sections glide with a TRANSLATE-ONLY
-  `animate:glide` (200 ms — Svelte's `flip` would also SCALE a section whose height changed, squashing
-  its text), and an emptied section fades. Exits and row glides start from a PRE-CHANGE snapshot: the
-  `onBeforeAvatarChange` hook records each row's screen top (rows carry `data-todo-id`) before the
-  list is applied, because Svelte measures a section's rows only after the sections above have already
-  moved (under an addition the rows' own `from` rect is a row off). A leaving row's vertical offset is
+  other rows entering during the change fade in (`rowIn`; entrances are played by hand with
+  `runTransition` — `useEntrance` — because `<Presence>` plays none for a child that mounts together with
+  its new section). Departed rows slide 12px and fade over 200 ms through `<Presence>` with a DEFERRED
+  `rowOut` (its geometry is computed a microtask later, once the glides have started); whether a row
+  leaves with motion at all is decided in its layout effect when it STARTS to leave, and a row that does
+  not gets no exit and is out of the DOM with that commit. A row leaving together with its whole section
+  plays the same exit by hand inside the section, which stays mounted until its rows are through.
+  Siblings and sections glide with a hand-written TRANSLATE-ONLY FLIP (`CardMotion`, 200 ms — a scaling
+  FLIP would also SCALE a section whose height changed, squashing its text): `snapshot()` measures every
+  row and section right before the commit touches the DOM (`ListSnapshot`'s `getSnapshotBeforeUpdate`,
+  only when the sections were rebuilt), and `settle()` — the card's layout effect, after its children's —
+  takes leaving elements out of the flow (absolutely positioned, held where they were) and glides the
+  rest from where they were; an emptied section fades. Exits and row glides start from a PRE-CHANGE
+  snapshot: the `onBeforeAvatarChange` hook records each row's screen top (rows carry `data-todo-id`)
+  before the list is applied (`rowsBefore`), so a leaving row exits from exactly there whatever else the
+  same change moved (a parallel addition above can shift it before it is measured), and a staying row
+  glides from there. A leaving row's vertical offset is
   `(snapshot − current) + S·u`, where S is its section's glide offset — counted ONLY for a section that
   is actually gliding (`glideShift` is 0 for a leaving, `inert`/absolutely-held section, whose static
   hold offset is no glide) — so the row fades exactly where it was, in the bottom-anchored popover/sheet
   too and when parallel tool calls land in one re-read. A re-read that changed nothing keeps
-  `todos.items`' identity (`sameTodoItems` in `loadOnce`): any reconcile aborts running glides without
-  restarting them, and an unchanged 60 s poll no longer re-renders anything. Every gate reads non-reactive state when the transition starts, so the
+  `todos.items`' identity (`sameTodoItems` in `loadOnce`): any rebuild of the list cuts running glides
+  short without restarting them (only a new offset starts another), and an unchanged 60 s poll rebuilds
+  and measures nothing. Every gate reads non-reactive state when the transition starts, so the
   viewer's own checkbox stays instant. A PINNED card's list holds its `min-height` for 240 ms per avatar change (pinned is
   top-anchored; the bottom-anchored popover/sheet shrink from the top and need no hold — holding them
   made the rows glide up, then snap back — and nothing is held under reduced motion), and
   `.todo-overlay-body` is positioned with `overflow-x: hidden`, `scrollbar-gutter: stable` and 8px bottom
   padding, so leaving/gliding rows never overflow it (a classic scrollbar would flash and re-ellipsize
-  every title). The composer's `할 일 N` pops via `{#key $todoActivity.pop}` with `todo-count-pop`
+  every title). The composer's `할 일 N` pops via `key={todoActivity.pop}` on its count (`views/chat/Composer.tsx`) with `todo-count-pop`
   (`30-agent-md-composer.css`). The 1.2 s wash and the
   360 ms overshooting pop sit outside DESIGN §2.5 on purpose (the user's choice). Reduced motion: exits
   instant, glide off, arrivals fade + wash, no pops. Real-browser geometry is pinned by the motion cases in

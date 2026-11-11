@@ -44,7 +44,8 @@ import {
 } from "../src/shared/widget/index.js";
 
 // The evaluation model a renderer drives, exercised without a DOM: a tiny text
-// "renderer" walks the document with the same helpers the Svelte layer uses.
+// "renderer" walks the document with the same helpers the client's view layer
+// (lib/widgetView.ts) uses.
 
 interface Mounted {
   doc: WidgetDoc;

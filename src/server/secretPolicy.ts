@@ -6,7 +6,7 @@
 //    hand out push rights;
 //  - SSH material flows exclusively to the app-pinned hex-ssh subprocess.
 //
-// LEAF MODULE on purpose: no imports, so the Svelte client can import it
+// LEAF MODULE on purpose: no imports, so the web client can import it
 // directly (like experimentalFeatures.ts) to hide the per-secret "셸 노출"
 // toggle for reserved names. The two git-token literals mirror
 // INTERNAL/EXTERNAL_GIT_TOKEN_SECRET_NAME in gitCredentials.ts — a unit test

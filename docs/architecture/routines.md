@@ -42,10 +42,11 @@
   that budget; a slow first attempt starves the rest of the chain. There is no Noah-side turn cap any more
   (`MAX_TURNS` left with the SDK runner); pi's own tool-call limit ends a turn as `error_max_turns`.
 - **The deadline doubles as the max hang of the manual-run HTTP request.** `POST /api/me/routines/:id/run`
-  (`routes/routines.ts`) `await`s the entire run and the "지금 실행" button awaits that fetch
-  (`RoutinesView.svelte`), so the practical ceiling on `ROUTINE_RUN_TIMEOUT_MINUTES` is whatever read
-  timeout a fronting reverse proxy allows — past it the button reports a network failure while the run
-  keeps going server-side. Making run-now return 202 + poll is the prerequisite for a much larger value.
+  (`routes/routines.ts`) `await`s the entire run, so for a caller of that route the practical ceiling on
+  `ROUTINE_RUN_TIMEOUT_MINUTES` is whatever read timeout a fronting reverse proxy allows — past it the
+  caller sees a network failure while the run keeps going server-side. (The "지금 실행" button itself no
+  longer calls it: it seeds a normal chat with the routine's prompt — `runFromButton` in
+  `RoutinesView.tsx`.) Making run-now return 202 + poll is the prerequisite for a much larger value.
   Two more costs scale with the deadline: a wedged job stays un-runnable for the whole window (the
   `runningJobs` overlap guard makes the scheduler skip its ticks) while holding one of the scheduler's
   slots, and it holds the active-repo lock, which REFUSES (409) any chat opening the same clone (another

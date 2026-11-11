@@ -226,7 +226,7 @@
   handlers via `isBrainNotePath`) → SSE `memory` (server-minted `id` so reattach replays dedupe) → a
   `kind:"memory"` activity row (label "기억 추가·갱신됨", detail = note path) that persists
   through the normal activity snapshot. **Rendering is summary-line-only:** `ActivityTree` EXCLUDES
-  memory rows from the tree; `ChatView.memoryChip` renders them as a 🧠 chip on the activity
+  memory rows from the tree; the chat view's `memoryChip` (`views/chat/controller.tsx`) renders them as a 🧠 chip on the activity
   disclosure's `<summary>` (live + completed cards), so the capture is visible while COLLAPSED —
   the whole point, since the tool list is folded by default. `raw/` writes stay silent BY DESIGN
   (a brain-ingest capture writes raw + wiki — one notice per capture, not two). Fires on write, not

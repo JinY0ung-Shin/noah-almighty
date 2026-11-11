@@ -607,7 +607,7 @@ npm run build
 ```
 
 `npm test` first runs `pretest` (`npm run build:client -- --mode test`), which builds the
-Svelte/Vite client — a client compile error aborts the run before any Vitest test executes.
+React/Vite client — a client compile error aborts the run before any Vitest test executes.
 
 Smoke test: sign up (first user = admin) → open **내 아바타**, set a name/picture/bio,
 click **아바타가 자동 생성** under 역량 해시태그, add a plugin → sign up a second account and approve

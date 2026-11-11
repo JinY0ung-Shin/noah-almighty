@@ -82,7 +82,7 @@
   trusted teammate (visibility and trust are separate axes) — their avatar just isn't reachable.
 - `listPublishedAvatars`/`searchAvatars` return plain `AvatarSummary` rows: every visible non-own avatar
   is a teammate's, so there is no membership flag. UI: a 2-option `seg-control` (팀 공개 / 비공개) in
-  `SettingsProfileTab.svelte` (`PATCH /api/me {visibility}` silently skips invalid values); admin
+  `SettingsProfileTab.tsx` (`PATCH /api/me {visibility}` silently skips invalid values); admin
   moderation = `PUT /api/admin/users/:id/visibility` (400s invalid values incl. the retired `public` —
   intentional asymmetry, both pinned in tests). Admin stats count `groupAvatars` (was `publicAvatars`);
   `AdminStats.groups` is gone.
@@ -113,7 +113,7 @@
   (grants others access to YOUR repo only — no escalation).
 - `users.hashtags` is a JSON array of bare tags (`normalizeHashtags`/`parseHashtags` in store.ts) wired
   through the per-user settings pattern, surfaced on BOTH `User` and `AvatarSummary`, edited via
-  `HashtagChipEditor.svelte`. Auto-generated like the intro: `POST /api/me/hashtags/generate` mirrors
+  `HashtagChipEditor.tsx`. Auto-generated like the intro: `POST /api/me/hashtags/generate` mirrors
   `/api/me/intro/generate` (headless, read-only, NOT persisted — parses `#tags` out of the agent reply,
   then `normalizeHashtags`). Searchable in 탐색 (client-side filter in `renderExplore`/`matchesAvatarQuery`)
   AND by the all-viewer read-only `mcp__avatars__search_avatars` MCP (`agent/avatarDirectoryTools.ts`,
@@ -141,7 +141,7 @@
   `{ allowedMcpToolGroups: string[] | null }` — `null` clears, `[]` blocks every optional MCP tool group;
   unknown ids are REJECTED (400, not silently dropped) so an admin typo can't change the policy's meaning;
   audited `set_tool_policy` plus a warn log. UI: 관리자 ▸ 도구·스킬 ▸ MCP 도구 정책
-  (`AdminToolPolicyPanel.svelte`, [`client.md`](client.md)). Tests: `tests/routes-admin.test.ts`, `tests/agent-tools.test.ts`.
+  (`AdminToolPolicyPanel.tsx`, [`client.md`](client.md)). Tests: `tests/routes-admin.test.ts`, `tests/agent-tools.test.ts`.
 - Shared (공용) HTTP MCP servers and plugin servers ignore both the composer picker and this policy
   ([`secrets-ssh.md`](secrets-ssh.md)).
 
@@ -152,7 +152,7 @@
   rows the conversion copies in (union across groups = fail closed). Name-keyed anti-evasion: never
   deleted except by an explicit unblock, copied (INSERT OR IGNORE) on rename with the old name's block
   left in place. Moderation is SYSTEM-admin only (group admins are retired); UI: 관리자 ▸ 도구·스킬 ▸
-  공유 스킬 관리 (`AdminSharedSkillsPanel.svelte`). Mechanics, routes
+  공유 스킬 관리 (`AdminSharedSkillsPanel.tsx`). Mechanics, routes
   (`/api/admin/shared-skills*`, incl. `otherBlocks` for blocks with no live listing) and cascades → [`avatar-collab.md`](avatar-collab.md) ("Admin blocks").
   Tests: `tests/skill-share.test.ts`, `tests/routes-admin.test.ts`.
 

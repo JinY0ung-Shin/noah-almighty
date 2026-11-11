@@ -211,7 +211,7 @@
    Gated on `:has(.canvas-panel)` so the plain single-column chat is untouched.
    Width-keyed (not orientation) so a narrow LANDSCAPE window is covered too.
    `.canvas-panel` exists in the DOM only while the side panel has a tab (ChatView
-   `{#if hasSideTabs(pane)}`). ---------------------------------------------- */
+   renders it only when `hasSideTabs(pane)`). -------------------------------- */
 @media (min-width: 861px) and (max-width: 1180px) {
   .chat-layout:has(.canvas-panel) {
     flex-direction: column;

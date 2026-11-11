@@ -405,8 +405,8 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
     void initCy(graph, containerEl);
   }
 
-  // The effects keep the order the original's reactive statements ran in:
-  // (re)init, hidden sections, selection, theme.
+  // The effects are declared in the order they must run (effects run in
+  // declaration order): (re)init, hidden sections, selection, theme.
 
   // (Re)init whenever the container is mounted and the non-empty graph changes.
   // No dependency list: `renderedGraph` is the "did it change" guard, so a

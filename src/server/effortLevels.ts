@@ -17,7 +17,7 @@
  * `labelEn` is the ENGLISH name for model-facing surfaces (`describe_system`) —
  * the same labelKo/labelEn split `mcpToolGroups.ts` uses, so a Korean string
  * never leaks into the agent's English self-state.
- * This module is intentionally dependency-free so BOTH the server and the Svelte
+ * This module is intentionally dependency-free so BOTH the server and the web
  * client can import it (it is listed in `tsconfig.client.json` includes) — the
  * composer renders the same registry, avoiding drift.
  */

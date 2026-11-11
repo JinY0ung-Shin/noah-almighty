@@ -1,8 +1,7 @@
 // The deck tab's (FileTab) 공유 링크 button, which hands the card to ChatView's
-// single dialog instance — the React port of the "FileTab 공유 링크" suite of
-// tests/svelte-share-link-dialog.test.ts (the dialog's own cases live with the
-// dialog's port). The file-level pins of the original apply here too: nothing
-// this tab does may route feedback through confirmAction/notify.
+// single dialog instance (the dialog's own cases are
+// tests/react-share-link-dialog.test.tsx). That file's pins apply here too:
+// nothing this tab does may route feedback through confirmAction/notify.
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

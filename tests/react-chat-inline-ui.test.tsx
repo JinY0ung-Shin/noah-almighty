@@ -5,9 +5,8 @@
 // Runs in the vitest "react" project (jsdom); a real browser covers layout
 // and the streaming feel in tests/visual/inline-ui.spec.ts.
 //
-// The React port of the cases of tests/svelte-chat-inline-ui.test.ts that go
-// through ChatView; the cases that render AnswerUi by itself are
-// tests/react-inline-ui.test.tsx.
+// These are the cases that go through ChatView; the cases that render AnswerUi
+// by itself are tests/react-inline-ui.test.tsx.
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -92,7 +91,7 @@ function pane(messages: StoredMessage[], over: Record<string, unknown> = {}): Ch
   } as unknown as ChatPane;
 }
 
-/** Let what a store write or an event scheduled reach the DOM (Svelte's `tick()`). */
+/** Let what a store write or an event scheduled reach the DOM (an empty async `act`). */
 const tick = (): Promise<void> => act(async () => {});
 
 function show(chatPane: ChatPane) {

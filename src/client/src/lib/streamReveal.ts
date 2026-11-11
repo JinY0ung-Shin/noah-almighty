@@ -128,7 +128,7 @@ export interface RevealController {
   handoff(from: string, to: string, text: string): boolean;
   /** Show everything everywhere (the tab went hidden). */
   flushAll(): void;
-  /** Characters shown for `key` (`undefined` = all) — for tests and callers outside Svelte. */
+  /** Characters shown for `key` (`undefined` = all) — for tests and callers that do not subscribe to the store. */
   peek(key: string): number | undefined;
 }
 
@@ -314,7 +314,7 @@ export function createRevealController(clock: RevealClock | null): RevealControl
 
 const controller = createRevealController(browserRevealClock());
 
-/** `$liveReveal[key]`: characters of that key's text to show; `undefined` = all. */
+/** The store's value at `[key]`: characters of that key's text to show; `undefined` = all. */
 export const liveReveal = controller.shown;
 
 /** Key of the stored message a finished turn's remainder drains on. */

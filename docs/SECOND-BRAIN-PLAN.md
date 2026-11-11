@@ -108,7 +108,7 @@ Zero new MCP servers. Ships via SKILL.md + a `writeRepoTemplate` refactor.
 rtk proxy npx vitest run tests/agent-tools.test.ts
 rtk proxy npx vitest run tests/agent-core.test.ts
 npx tsc --noEmit
-npx svelte-check --tsconfig ./tsconfig.client.json
+npx tsc -p tsconfig.client.json --noEmit
 ```
 
 ## Resolved open decisions (defaults adopted)

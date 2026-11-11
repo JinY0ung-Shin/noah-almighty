@@ -595,8 +595,8 @@ export default function Shell({
   // Rows the viewer just deleted ONE AT A TIME — the only rows that leave with
   // motion. A reorder, a move between date groups, a search filter and 전체 삭제
   // all stay instant: this list is core navigation. Plain Sets on purpose — the
-  // gate is read when the exit STARTS, never by the markup (client.md,
-  // "Conditional motion on a keyed {#each}").
+  // gate is read when the exit STARTS, never by the markup
+  // (docs/architecture/client.md, conditional motion on a keyed list).
   const [deletedConversationIds] = useState(() => new Set<string>());
   // A deletion that empties its date group removes the whole group (heading
   // included). The row's own exit is local to the group's list and does not run

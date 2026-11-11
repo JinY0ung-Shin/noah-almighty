@@ -4,9 +4,9 @@
 // for the backend so every assertion goes through the real store actions
 // (lib/todos.ts).
 //
-// The React port of the `chat overlay` cases of tests/svelte-todos.test.ts (the
-// ones that render ChatView). The rail entry + badge is
-// tests/react-todos-shell.test.tsx, the 할 일 tab tests/react-todos.test.tsx.
+// These are the 할 일 cases that render ChatView (the `chat overlay` suite). The
+// rail entry + badge is tests/react-todos-shell.test.tsx, the 할 일 tab and the
+// card by itself tests/react-todos.test.tsx.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

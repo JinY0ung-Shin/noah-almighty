@@ -1,12 +1,12 @@
 // ChatView's LIVE answer: drawn as markdown blocks whose finished nodes survive
-// every token, revealed up to `$liveReveal`, with a reasoning card that says
+// every token, revealed up to what the `liveReveal` store says, with a reasoning card that says
 // what it is doing without being parsed while closed.
 //
 // jsdom has no animation frames, so the real pacer never runs here; the store
 // it publishes is swapped for one the test writes (the pacing itself is
 // `client-stream-reveal.test.ts`, and a real browser covers the two together).
 //
-// The React port of tests/svelte-chat-stream.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { act, fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

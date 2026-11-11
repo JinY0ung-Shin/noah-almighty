@@ -76,15 +76,20 @@ Each item lists: files · why · risk · effort · breaking.
 - (b) Full zod schemas + Express-5/`asyncHandler` so the central error middleware becomes reachable — **changes error responses**, so it's a behavior change, out of scope for a pure restructure. Defer (b).
 - **risk:** med · **effort:** M · **breaking:** (b) yes
 
-### T3.10 — audit remaining untracked template function calls (Svelte 5 legacy)
-- **Files:** `src/client/src/views/ChatView.svelte` (`canPickModel`). (`Shell.isConversationBusy`/
+### T3.10 — audit remaining untracked template function calls (Svelte 5 legacy) — ✅ RESOLVED by the React move (2026-11-12)
+- **Resolved:** the client is React since 2026-11-12 ([`architecture/client.md`](architecture/client.md)); the
+  whole bug class went with the Svelte compiler. A React component that reads the store through `useAppState()`
+  re-runs its whole render body on every publication, so a helper that reads state in its BODY can no longer
+  render stale. The same move
+  closes the "runes for the chat subtree" follow-up client.md used to point here for.
+- **What it was (history):** `src/client/src/views/ChatView.svelte` (`canPickModel` — a suspect that was
+  never verified, and the helper was already gone from the file before the move). (`Shell.isConversationBusy`/
   `isConversationStreaming` were confirmed and fixed 2026-11-11 — named in the markup with `{@const}`.)
-- Same class as the fixed CONFLUENCE_PAT save-button bug ([`architecture/client.md`](architecture/client.md) §Svelte 5 runtime gotchas):
-  the template calls a helper whose BODY reads reactive state → compiled with `$.untrack` → the attribute
-  goes stale until an unrelated invalidation. These are currently masked by coincident list/store
-  refreshes (unverified). Verify each with a Playwright fixture, then convert to `$:` derived maps the
-  template reads DIRECTLY. Helpers reading only their arguments are fine — leave them.
-- **risk:** low · **effort:** S · **breaking:** no
+  Same class as the fixed CONFLUENCE_PAT save-button bug: a legacy-mode template called a helper whose BODY
+  read reactive state → compiled with `$.untrack` → the attribute went stale until an unrelated
+  invalidation. One more instance surfaced DURING the port and is deliberately not reproduced:
+  `SettingsPluginSelect`'s 선택 저장 never became dirty in the Svelte original (reproduced in jsdom, not
+  checked in a browser); the React port computes it in render and works.
 
 ---
 
@@ -181,8 +186,8 @@ no client change (see [`architecture/pptx-converter.md`](architecture/pptx-conve
 built:
 
 ### PC1 — Client polish for converter previews (none needed for correctness)
-- **Files:** `src/client/src/components/FileTab.svelte`, `panelSlides` (`views/ChatView.svelte`,
-  `lib/bubbleSegments.ts`).
+- **Files:** `src/client/src/components/FileTab.tsx`, `panelSlides` (`lib/bubbleSegments.ts`, called from
+  `views/chat/controller.tsx`).
 - **What (four optional fixes):** (a) append slides that arrive late to an already-open file tab; (b) prefer
   the stamped slides (`parentId` = the card) in `panelSlides`; (c) the status line's handling of hidden
   attachments; (d) empty-state copy when the renders failed.
@@ -228,6 +233,33 @@ built:
   metadata; MicroType Express font compression; a Hanja-only NotoSansKR subset (an OFL Modified Version);
   LibreOffice ≥ 25.8 (embedded-font support in previews); decks over 60 slides in one build; background
   (`run_in_background`) conversions.
+
+## React client (2026-11-12) — deferred follow-ups
+
+The client moved from Svelte 5 to React 19 on 2026-11-12 as a 1:1 port (see
+[`architecture/client.md`](architecture/client.md)). Recorded, not built:
+
+### RC1 — Lift the "state + always-current ref" hook into `lib/hooks.ts`
+- **Files:** ten local copies — `useLiveState` in `components/Shell.tsx`, `views/RoutinesView.tsx`,
+  `components/Settings{Profile,Access,Knowledge}Tab.tsx`; `useLive` in `views/AdminView.tsx`,
+  `components/AdminUserRow.tsx`, `components/AdminToolPolicyPanel.tsx`, `components/AdminTeamBrainPanel.tsx`,
+  `views/chat/controller.tsx`. Plus `useTick` (the `await tick()` stand-in: resolves from the layout effect
+  of the commit that holds the state set so far) in `components/SettingsKnowledgeTab.tsx` only.
+- **What:** every copy is "a value that is rendered AND read later (after an `await`, in a timer, in a
+  listener registered once)": state for the render, a ref the setter writes first. Lift ONE into
+  `lib/hooks.ts` next to `useLatest` and replace the copies.
+- **Why deferred:** the copies are NOT interchangeable, so a mechanical swap changes behaviour:
+  - *tuple order* — Shell returns `[value, ref, set]`, the other nine `[value, set, ref]`;
+  - *lazy initial value* — Shell, RoutinesView and SettingsAccessTab accept `T | (() => T)`; the four admin
+    copies and the Profile/Knowledge tabs hand `initial` straight to `useState` (the admin ones also seed the
+    ref from `initial`, not from the state, so a function initial would diverge);
+  - *a function stored as the value* — `views/chat/controller.tsx` (`useState(() => initial)`,
+    `setValue(() => next)`) and Shell (`setValue(() => next)`) store a function AS the value; the others
+    would have React call it as an initializer/updater;
+  - *functional updater* — only SettingsAccessTab's setter takes `(previous) => next`, resolved against the
+    ref (not React's queued state).
+  The shared hook has to pick one answer for each (or take options), and every call site must be re-read.
+- **risk:** low–med · **effort:** S–M · **breaking:** no
 
 ## Recommended order when picking this up
 1. Cheap + independent: the two coverage-gap tests, T3.9(a).

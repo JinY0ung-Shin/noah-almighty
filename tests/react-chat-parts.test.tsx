@@ -1,6 +1,5 @@
 // React component tests for the chat's cards and prompts — PromptModal,
-// ActivityTree and WhatsNewModal, ported with their components from
-// tests/svelte-components.test.ts (vitest "react" project; see
+// ActivityTree and WhatsNewModal (vitest "react" project; see
 // tests/react-foundation.test.tsx for the conventions).
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";

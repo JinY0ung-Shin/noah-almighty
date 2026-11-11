@@ -5,9 +5,8 @@
 // Runs in the vitest "react" project (jsdom); a real browser covers layout
 // and the streaming feel in tests/visual/inline-ui.spec.ts.
 //
-// The React port of the cases of tests/svelte-chat-inline-ui.test.ts that
-// render AnswerUi by itself; the cases that go through ChatView move with
-// ChatView.
+// These are the cases that render AnswerUi by itself; the cases that go
+// through ChatView are tests/react-chat-inline-ui.test.tsx.
 import { act, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

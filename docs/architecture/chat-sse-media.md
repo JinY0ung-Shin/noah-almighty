@@ -206,7 +206,7 @@
 
 ## Image attachments
 - The user message can carry images. The composer stages images (`ChatPane.pendingImages`, downscaled to
-  ≤1568px + base64 in `ChatView.svelte`), POSTs them on `images: [{id, data}]`. `routes/chat.ts`
+  ≤1568px + base64 in the chat view's `views/chat/controller.tsx`), POSTs them on `images: [{id, data}]`. `routes/chat.ts`
   validates/decodes up front (`chatImages.ts` → `decodeChatImages`, before SSE), writes bytes to
   `dataDir/chat-images/<conversationId>/<id>.<ext>` (NOT in SQLite — only `MessageAttachment` metadata
   persists via `messages.attachments_json`), and feeds the model `AgentRequest.images` THIS turn. Served
@@ -338,7 +338,7 @@
   per-run fact with its reason), pi's system prompt (`scripts/pi-system-prompt.md`) and the manual's `chat`
   topic. The shared sentences live in `agent/ownerState.ts` (`DOCUMENT_UPLOADS_SENTENCE` and friends).
 
-- **Client: three ways in, one staging path.** `ChatView.addFiles` is the single entrance for the attach button
+- **Client: three ways in, one staging path.** The chat view's `addFiles` (`views/chat/controller.tsx`) is the single entrance for the attach button
   (its `accept` widened; the input is `sr-only`, so it is keyboard reachable), a PASTE of files copied in the OS
   file manager, and a DROP on the pane (file drags are told apart from the conversation drag by
   `dataTransfer.types`; while the chat view is mounted a file dropped outside the target no longer navigates
@@ -418,7 +418,7 @@
   (`docker/pi-sandbox`, [`pptx-converter.md`](pptx-converter.md)).
 - **draw.io viewer (.drawio share): preview is CLIENT-side, not a deckRender format.** `drawio` sits in
   the `chatFiles.ts` allowlist (mediaType `application/vnd.jgraph.mxfile`, no magic — text like csv/md/txt)
-  but deliberately NOT in `PREVIEWABLE_EXTENSIONS`: `FileTab.svelte` (a tab of the side panel) fetches the file and renders
+  but deliberately NOT in `PREVIEWABLE_EXTENSIONS`: `FileTab.tsx` (a tab of the side panel) fetches the file and renders
   it with the **vendored draw.io viewer** (`src/client/public/drawio/`, pinned upstream tag — see its
   README for provenance/upgrade). The ~4 MB global script is NOT in the Vite bundle; `lib/drawioViewer.ts`
   injects a same-origin `<script>` on first use. **Verified under the app CSP: no `unsafe-eval`, no
@@ -464,12 +464,13 @@
   parked the frame handler pins the status line to `캔버스 응답을 기다리는 중…`. The curated MCP tool labels live in `shared/sdkToolPresentation.ts`
   (`MCP_TOOL_LABELS`) so server status line and client activity rows agree.
   Artifacts persist on `AgentResponse.canvases` and rebuild
-  on reload (`canvasesFromMessages`); live via SSE `canvas` event → a `CanvasTab.svelte` tab of the side
-  panel (`SidePanel.svelte`, shared with opened files — [client.md](client.md) § Side panel). **Refine-in-place:**
+  on reload (`canvasesFromMessages`); live via SSE `canvas` event → a `CanvasTab.tsx` tab of the side
+  panel (`SidePanel.tsx`, shared with opened files — [client.md](client.md) § Side panel). **Refine-in-place:**
   `show` takes an optional `canvasId`; reusing it UPDATES that artifact (client `handleCanvas` +
   `canvasesFromMessages` AND server `record()` all upsert by id, latest-wins). **Size-cap:** `canvasTools.ts`
   rejects over-`MAX_CANVAS_CONTENT_CHARS` content (it rides the session's context on every later turn).
-- **`html` is a PAGE in its own sandboxed document, never `{@html}`.** `CanvasHtmlFrame` renders
+- **`html` is a PAGE in its own sandboxed document, never injected into the app document
+  (`dangerouslySetInnerHTML`).** `CanvasHtmlFrame` renders
   `canvasHtmlDocument` (`lib/canvasHtml.ts`: DOMPurify `WHOLE_DOCUMENT`, a theme base sheet first in `<head>`)
   as `<iframe sandbox="allow-same-origin" srcdoc>` — NEVER `allow-scripts`; same-origin alone lets the panel
   measure the page and load same-origin images, and the inherited CSP still blocks remote loads. Why: the
@@ -485,7 +486,8 @@
   viewport a viewport-filling page keeps; a shorter page shrinks the frame, a longer one grows it, and growth
   that only chases the viewport (`min-height: 100vh` + padding) stops. Fullscreen forwards the page's wheel
   (zoom) and keydown (Escape) — events inside the frame never reach the app's DOM. Links inside don't open.
-- **A drawing (`svg`/`vega`/`mermaid`) renders in its own SHADOW ROOT, never `{@html}`.** An `<svg><style>` is
+- **A drawing (`svg`/`vega`/`mermaid`) renders in its own SHADOW ROOT, never injected into the app
+  document (`dangerouslySetInnerHTML`).** An `<svg><style>` is
   a stylesheet for the whole document, so in the app's DOM an avatar's drawing restyled the app (in Chromium a
   `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasTab) keeps the drawing's own
   sheet — mermaid's id-scoped one included — inside the drawing, gives each copy (panel/fullscreen) its own id
@@ -519,7 +521,7 @@
   resolve time, so a parked ask is NOT in the canvas tables yet; returning to the conversation rebuilds the
   form purely from the journal's `canvas` frame (`tests/routes-chat-canvas-park.test.ts` +
   `tests/client-canvas-park.test.ts` pin both halves). To keep that return possible at all,
-  `selectConversation`/`addConversationToSplit`/ChatView-onMount fire `attachActiveRun` WITHOUT awaiting it —
+  `selectConversation`/`addConversationToSplit`/the chat view's mount effect (`views/chat/controller.tsx`) fire `attachActiveRun` WITHOUT awaiting it —
   it resolves only at RUN end, and awaiting it held the sidebar's per-conversation busy lock (disabled
   button) for the whole park; pane-REPLACING navigations abort the dropped panes' reader loops
   (client-side only — the run stays reattachable). Split view mounts the SAME side panel (`SidePanel`
@@ -606,8 +608,8 @@
   later on its line is inline code (as `detect.ts` reads it). `tests/widget-template.test.ts` parses EVERY
   prefix of a sample answer and requires zero problems, and pins each of these.
 - **`containsInlineUi` (`detect.ts`) decides per answer, cheaply** — a line scan for a component tag or a
-  directive at the start of a line, outside fenced code. ChatView runs it on every answer (verdict cached
-  for long texts) and lazy-loads `components/widget/AnswerUi.svelte` (the parser, interpreter and
+  directive at the start of a line, outside fenced code. The chat view (`views/chat/controller.tsx`) runs it on every answer (verdict cached
+  for long texts) and lazy-loads `components/widget/AnswerUi.tsx` (the parser, interpreter and
   components) on the first yes; until the chunk arrives the answer's place shows a placeholder, never raw
   tags, and a failed load falls back to plain Markdown. A false "maybe" costs nothing: `AnswerUi` draws an
   answer without UI through the same block renderer as any answer.
@@ -694,7 +696,7 @@
   root updated in place (`lib/widgetSvg.ts`, `shadowSvg`). Ids are namespaced per view and node. ≤ 500
   elements and 60 000 characters per `<svg>`, charged to the render's output budget. Left out on purpose:
   `use`, `marker-mid`, filters, animation, `image`, `a`, `style`/`class`/`href`/`on*`, nested `svg`,
-  `font-family`. Icons are an enum of the names `Icon.svelte` draws (`icons.ts`; a test fails on drift).
+  `font-family`. Icons are an enum of the names `Icon.tsx` draws (`icons.ts`; a test fails on drift).
 - **State is per ANSWER and stays in the viewer's browser.** A stored message's values are mirrored to
   `localStorage` under `noah:inline-ui:<userId>:<conversationId>:<messageId>` (`lib/widgetState.ts`: only
   setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a 200 000-char cap measured with
@@ -710,8 +712,8 @@
   — the avatar cannot read it; only a pressed `send`/`<submit>` reaches the conversation. Keys of the retired
   canvas type (`noah:canvas-widget…`) are swept once per page load.
 - **Evaluation is one pass, in one place** (`lib/widgetView.ts`), and the `components/widget/*` components
-  only draw the view model — no component reads state inside a helper, which is what keeps Svelte's
-  legacy-mode stale reads out. Re-evaluation is deferred until a running handler returns (evaluating puts
+  only draw the view model — they read nothing but the `VNode` they are handed, which is what keeps the
+  budgets and the error isolation per top-level block. Re-evaluation is deferred until a running handler returns (evaluating puts
   the runtime back in its render phase, where setters do nothing). A control whose handler refuses or clamps
   the value is written back to the STATE value after the handler, so what the user sees is what is sent.
 - **A snippet of an answer that cannot draw UI uses `inlineUiPlainText`** (`detect.ts`: the prose with the UI
@@ -772,7 +774,7 @@
   element's own value TO 0 and then snaps back — a fade-out. Every "from nothing to what it is" step pins
   its one keyframe with `offset: 0`; the visual spec reads the HELD value (a slice, a node, a progress bar
   below the fold is at 0) because a keyframe-shape assertion cannot tell the two apart.
-- **The gallery (`#/uiGallery`, `views/UiGalleryView.svelte`) is a client view of SAMPLES, not an endpoint
+- **The gallery (`#/uiGallery`, `views/UiGalleryView.tsx`) is a client view of SAMPLES, not an endpoint
   and not a second renderer.** `lib/uiGallery.ts` holds one small answer per thing an avatar can draw and
   each is drawn by `AnswerUi` itself in its PREVIEW mode (the `outbox` prop): what a `send` button or a
   `<submit>` would post is handed to the host and shown under the sample, nothing is kept in
@@ -783,4 +785,5 @@
   gets its sample there.** In a real browser: `tests/visual/ui-gallery.spec.ts`.
 - Verified in a real browser by `tests/visual/inline-ui.spec.ts` (the app's CSP on the document, a negative
   control, Vega under it, a reload, and a streaming answer that must never show a tag as text) and in jsdom
-  by `tests/svelte-chat-inline-ui.test.ts`; the `local` demo runtime's `demo ui` streams such an answer.
+  by `tests/react-chat-inline-ui.test.tsx` (in the chat view) and `tests/react-inline-ui.test.tsx` (`AnswerUi` across
+  the end of a turn); the `local` demo runtime's `demo ui` streams such an answer.

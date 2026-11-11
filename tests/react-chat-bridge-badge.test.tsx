@@ -9,7 +9,7 @@
 // `current` — it works right now, so it is tempting to call it healthy — which
 // is why it gets its own pin on BOTH its distinguishing text and its button.
 //
-// The React port of tests/svelte-chat-bridge-badge.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

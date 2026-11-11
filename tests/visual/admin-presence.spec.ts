@@ -7,7 +7,7 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 // grid whose rows size to the WIDEST row, and it is its own scroll container, so
 // a long display name that can't shrink widens every row and pushes the
 // timestamps outside the rail with nothing to reveal them. Only measured boxes
-// catch it — svelte-check and the component tests stay green throughout.
+// catch it — the typecheck and the component tests stay green throughout.
 // Verified to fail: drop `overflow: hidden` from .rail-presence-name and the
 // long row's timestamp lands 133px past the list's right edge.
 
@@ -35,8 +35,9 @@ const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString(
 /**
  * One mock for both tests. Every endpoint the boot path touches must be answered
  * with its real shape — an unhandled route falls through to `{}` and App.tsx
- * throws on `$appState.knowledgeRequests.filter`, which shows up as a passing
- * test with a Svelte error in the log.
+ * throws on `state.knowledgeRequests.filter` while it renders — and a render
+ * error in App leaves only the AppBoundary's fallback screen
+ * (components/ErrorBoundary.tsx), not the rail these tests look at.
  */
 async function mockApp(page: Page, { isAdmin }: { isAdmin: boolean }): Promise<void> {
   await page.route("**/api/**", async (route) => {

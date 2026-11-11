@@ -11,7 +11,7 @@
   Wired through the per-user-setting pattern: `users.experimental_features` JSON column →
   `toUser`/`getExperimentalFeatures` → `updateProfile` (normalizes to KNOWN keys) →
   `User.experimentalFeatures` → `PATCH /api/me {experimentalFeatures}` → "실험 기능" card in
-  `SettingsAccessTab.svelte`. Self-state in BOTH `buildPrompt` (owner/routine `experimentalFeaturesSection`)
+  `SettingsAccessTab.tsx`. Self-state in BOTH `buildPrompt` (owner/routine `experimentalFeaturesSection`)
   AND `describe_system` (via `OwnerState.experimentalFeatures`). Gate a feature on
   `ownerState.experimentalFeatures.includes(key)`.
 

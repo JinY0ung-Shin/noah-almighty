@@ -1,8 +1,8 @@
 // 설정 ▸ 프로필 (SettingsProfileTab) and the hashtag chip editor it embeds.
 //
-// The first block is the SettingsProfileTab half of
-// tests/svelte-onboarding-tours.test.ts (the settings card that re-opens the
-// welcome modal). The rest pins what a port is most likely to break: the tab is
+// The first block is the settings card that re-opens the welcome modal (the
+// arming half of the one-shot flag; App draining it is
+// tests/react-onboarding.test.tsx). The rest pins what is easiest to break: the tab is
 // ALWAYS MOUNTED and gates only its markup on `active`, every card saves in
 // place without wiping the text typed into the others, a late answer is merged
 // into the form as it is THEN, and the chip editor's keyboard handling.

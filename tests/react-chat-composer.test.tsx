@@ -11,7 +11,7 @@
 // unresized passthrough, the honest notice, and the type/size gate that keeps
 // the payload inside what the server accepts.
 //
-// The React port of tests/svelte-chat-composer.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -149,8 +149,8 @@ describe("composer image attach in file mode", () => {
       return images![0];
     });
     // Byte-identical to the file the user picked: no canvas downscale in file mode.
-    // btoa (not Buffer): this file is checked by svelte-check under the CLIENT
-    // tsconfig, which has no node types.
+    // btoa (not Buffer): this file is typechecked under the CLIENT tsconfig
+    // (`tsc -p tsconfig.client.json`), which has no node types.
     expect(staged.dataUrl).toBe(`data:image/png;base64,${btoa(String.fromCharCode(...PNG_BYTES))}`);
     expect(staged.mediaType).toBe("image/png");
     expect(staged.name).toBe("shot.png");

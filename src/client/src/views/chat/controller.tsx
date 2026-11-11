@@ -1,5 +1,5 @@
-// The chat view's state and handlers — everything ChatView.tsx kept in its
-// <script>. ONE instance per mounted ChatView (`useChatController`), read by
+// The chat view's state and handlers — the logic behind ChatView.tsx's
+// markup. ONE instance per mounted ChatView (`useChatController`), read by
 // the pane components (Transcript.tsx, Composer.tsx) as `ctx`.
 //
 // The app state is mutated in place (lib/hooks.ts): everything derived from it
@@ -861,8 +861,8 @@ export function useChatController() {
 
   const browserBridgeSelected =
     !adminBlockedMcpToolGroupSet.has("browser") && state.chatPanes.some((p) => selectedMcpToolGroups(p).includes("browser"));
-  // Before the mount effect below, as the original's reactive statement ran
-  // before its onMount: the probe's request goes out first.
+  // Declared before the mount effect below, so it runs first (effects run in
+  // declaration order): the probe's request goes out before the mount's loads.
   useEffect(() => {
     if (browserBridgeSelected && !inst.bridgeCompatStarted) {
       inst.bridgeCompatStarted = true;
@@ -1467,8 +1467,8 @@ export function useChatController() {
   }
 
   // Drop the renderers and open-card marks of bubbles that are gone (a turn
-  // ended, a drain finished) — before anything below is drawn, as the
-  // original's reactive statement ran before its markup.
+  // ended, a drain finished) — in the render body, before anything below is
+  // drawn.
   let openLiveThinking = openLiveThinkingState;
   if (inst.streamRenderers.size || openLiveThinking.size) {
     for (const key of [...inst.streamRenderers.keys()]) {

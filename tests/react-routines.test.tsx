@@ -2,8 +2,7 @@
 // @vitejs/plugin-react + @testing-library/react; see vitest.config.ts).
 //
 // The routines screens: the create/edit modal's schedule builder and the
-// routines view's grouping + status chips. Ported from the `RoutineModal` and
-// `RoutinesView` blocks of tests/svelte-components.test.ts.
+// routines view's grouping + status chips.
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

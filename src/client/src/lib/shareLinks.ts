@@ -1,8 +1,8 @@
 // Client side of PPTX share links (`src/shared/shareLinks.ts` is the contract):
 // the recipient viewer's status-aware open call, the owner's list / create /
 // revoke calls, and the display rules the link dialog, the settings list and
-// the viewer share. No Svelte here, so tests/client-share-links.test.ts pins it
-// directly.
+// the viewer share. No component code here, so tests/client-share-links.test.ts
+// pins it directly.
 import { api, ApiError } from "./api";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,

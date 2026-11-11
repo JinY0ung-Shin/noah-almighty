@@ -5,8 +5,8 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 
 // Inline UI: an avatar writes component tags straight into its ANSWER TEXT and
 // the chat draws them in place — no canvas, no side panel. What jsdom cannot
-// show is checked here in a real browser: Svelte legacy mode leaving a stale
-// value on screen (jsdom masks it), the app's CSP (no eval / Function anywhere
+// show is checked here in a real browser: a value on screen that does not
+// follow the state (a stale render), the app's CSP (no eval / Function anywhere
 // in the render path — the interpreter and Vega's AST evaluator), the chart
 // following the state, the values kept in this browser coming back after a
 // reload, and a STREAMING answer never showing its tags as raw text.

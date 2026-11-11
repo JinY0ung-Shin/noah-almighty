@@ -11,7 +11,7 @@
 // visible modal and clears it again. (The settings button that sets it is
 // SettingsProfileTab's — its case lives with that component's React tests.)
 //
-// React port of tests/svelte-onboarding-tours.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

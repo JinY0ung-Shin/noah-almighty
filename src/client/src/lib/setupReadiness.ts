@@ -12,7 +12,7 @@ import type { User } from "./types";
  * somewhere, which is what the step promises. A stricter "all of them" reading
  * would leave the item permanently red for people who only ever need one.
  *
- * Callers pass whatever they hold — `$appState.user` (nullable) or a `User` prop
+ * Callers pass whatever they hold — the app state's `user` (nullable) or a `User` prop
  * — so every predicate accepts null and answers false for a signed-out state.
  */
 export type ReadinessUser = Pick<

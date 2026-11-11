@@ -4,7 +4,7 @@
 // be the only one; the chips; where documents are NOT offered (a colleague's
 // avatar); and the cards of a sent / stored message.
 //
-// The React port of tests/svelte-chat-documents.test.ts (vitest "react" project).
+// Runs in the vitest "react" project.
 import { act, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

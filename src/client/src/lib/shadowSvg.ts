@@ -6,7 +6,7 @@
 const SVG_HOST_SHEET =
   "<style>:host { display: block; } :host([data-fit]) svg { max-width: 100%; height: auto; }</style>";
 
-/** Svelte action: draw already-SANITIZED svg markup in the node's shadow root. */
+/** Action (attached with `useAction`): draw already-SANITIZED svg markup in the node's shadow root. */
 export function shadowSvg(node: HTMLElement, markup = "") {
   const root = node.shadowRoot ?? node.attachShadow({ mode: "open" });
   let drawn = markup;

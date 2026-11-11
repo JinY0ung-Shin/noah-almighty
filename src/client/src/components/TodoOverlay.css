@@ -210,7 +210,7 @@
   color: var(--warn);
 }
 /* Positioned: a row or section the avatar removes is held in place
-   (`animate:` fixes it absolutely) while it leaves, and must stay inside —
+   (the card's FLIP, `CardMotion.hold`, fixes it absolutely) while it leaves, and must stay inside —
    and scroll with — this list. No horizontal overflow: the leaving row's
    sideways slide must never flash a scrollbar. The fleet's classic scrollbars
    take width when they appear, so the gutter is reserved: a list growing
@@ -432,7 +432,8 @@
    purpose: a highlight that lingers long enough to be found is the USER's
    choice for this card (2026-10-10) — not a motion-audit fix target.
    Fill `backwards` (end = resting styles): a finished animation leaves
-   getAnimations(), so `animate:` can still fix and glide this row at once. */
+   getAnimations(), so the card's FLIP (`CardMotion.hold`, which skips an
+   element that has animations) can still fix and glide this row at once. */
 .todo-overlay-item:is(.cmp-todo-overlay, .cmp-todo-overlay *)::before {
   content: "";
   position: absolute;

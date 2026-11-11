@@ -1,10 +1,9 @@
 // 설정 ▸ 지식·플러그인 (SettingsKnowledgeTab) and the plugin picker it embeds
-// (SettingsPluginSelect). Neither had a Svelte component test; these pin what a
-// port is most likely to break: the tab is ALWAYS MOUNTED and gates only its
-// markup on `active`, each card saves in place without wiping the text typed
-// into the others, the DOM work that used to follow `await tick()` runs once
-// the panel it needs is rendered, and the picker re-seeds from the saved
-// selection.
+// (SettingsPluginSelect). These pin what is easiest to break: the tab is
+// ALWAYS MOUNTED and gates only its markup on `active`, each card saves in
+// place without wiping the text typed into the others, the DOM work that
+// follows the tab's `await tick()` (its `useTick`) runs once the panel it needs
+// is rendered, and the picker re-seeds from the saved selection.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
