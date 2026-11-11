@@ -1,0 +1,162 @@
+/* AvatarCapabilitiesModal's own styles. The scope class
+   `cmp-avatar-capabilities-modal` sits on the modal card.
+   `:where(:not(.ai-intro *))` keeps every rule OUT of the rendered intro: its HTML is
+   the avatar owner's markdown and may carry class names, and before the React move a
+   component style never matched it. `:where` adds no specificity. */
+/* Scoped here rather than in the global sheets: nothing else renders this
+   content, and the card class is the only selector the Modal needs to see. */
+.avatar-intro-card {
+  width: min(560px, calc(100vw - 2 * var(--s-4)));
+}
+
+.ai-sub:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+
+/* The avatar's self-introduction blurb, above the capability sections. */
+.ai-intro:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  margin-top: var(--s-1);
+  padding: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-elevated);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--text-soft);
+}
+
+.ai-tags:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1-5);
+}
+
+.ai-section:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2-5);
+}
+.ai-section-title:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  margin: 0;
+  font-size: var(--t-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ai-section-body:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.ai-skill-list:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+.ai-skill:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+/* The head is a full-width toggle button (name + optional source badge). */
+.ai-skill-head:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.ai-skill-head[disabled]:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  cursor: default;
+}
+.ai-skill-head:not([disabled]):hover:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  background: var(--panel);
+}
+.ai-skill-caret:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  transition: transform 0.15s var(--ease-out);
+}
+.ai-skill.open:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) .ai-skill-caret {
+  transform: rotate(90deg);
+}
+.ai-skill-name:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-skill-src:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  flex: none;
+  font-size: var(--t-2xs);
+  color: var(--muted);
+  background: var(--panel-strong);
+  border-radius: var(--r-pill);
+  padding: 1px var(--s-2);
+}
+/* Description is hidden until the skill is expanded. */
+.ai-skill-desc:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: none;
+  margin: 0;
+  padding: 0 var(--s-3) var(--s-3);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--text-soft);
+}
+.ai-skill.open:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) .ai-skill-desc {
+  display: block;
+}
+
+.ai-plugin:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--s-1) 0;
+}
+.ai-plugin-name:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  font-size: var(--t-sm);
+  color: var(--text);
+}
+.ai-plugin-repo:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  font-size: var(--t-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.ai-note:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  margin: 0;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.ai-error:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.ai-error:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) .linkish.small {
+  margin-top: 0;
+  padding: 0;
+}
+
+.ai-actions:is(.cmp-avatar-capabilities-modal, .cmp-avatar-capabilities-modal *):where(:not(.ai-intro *)) {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--s-2);
+}

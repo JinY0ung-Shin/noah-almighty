@@ -38,6 +38,7 @@ import {
   type Ref,
   type RefObject,
 } from "react";
+import { flushSync } from "react-dom";
 import { runTransition, type TransitionFn, type TransitionResult, type TransitionRun } from "./transition";
 
 interface ExitTicket {
@@ -68,7 +69,8 @@ function PresenceChild({
 }: {
   present: boolean;
   mounted: RefObject<boolean>;
-  onExited: () => void;
+  /** `inCommit`: called from a layout effect (React is committing) rather than from a finished animation. */
+  onExited: (inCommit: boolean) => void;
   children: ReactNode;
 }): ReactElement {
   // Fixed at first render: did this child arrive after its <Presence> mounted?
@@ -78,6 +80,16 @@ function PresenceChild({
   presentRef.current = present;
   const exitedRef = useRef(onExited);
   exitedRef.current = onExited;
+  // True from the render that drops this child until its own layout effect:
+  // the window in which the transitions inside take their exit tickets. An
+  // exit that finishes inside that window (nothing to play) must not remove
+  // the child yet — a sibling transition may still be about to take a ticket.
+  const collecting = useRef(false);
+  const wasPresent = useRef(present);
+  if (wasPresent.current !== present) {
+    wasPresent.current = present;
+    collecting.current = !present;
+  }
 
   const value = useMemo<PresenceValue>(
     () => ({
@@ -90,7 +102,7 @@ function PresenceChild({
           if (!open) return;
           open = false;
           exits.current -= 1;
-          if (leave && exits.current === 0 && !presentRef.current) exitedRef.current();
+          if (leave && exits.current === 0 && !presentRef.current && !collecting.current) exitedRef.current(false);
         };
         return { done: () => settle(true), cancel: () => settle(false) };
       },
@@ -101,7 +113,8 @@ function PresenceChild({
   // Children's layout effects ran before this one, so every transition that
   // wants to play an exit has taken its ticket by now. None taken: leave at once.
   useLayoutEffect(() => {
-    if (!present && exits.current === 0) exitedRef.current();
+    collecting.current = false;
+    if (!present && exits.current === 0) exitedRef.current(true);
   }, [present]);
 
   return <PresenceContext.Provider value={value}>{children}</PresenceContext.Provider>;
@@ -160,11 +173,16 @@ export function Presence({ children }: { children?: ReactNode }): ReactElement {
           key={key}
           present={live.has(key)}
           mounted={mounted}
-          onExited={() => {
+          onExited={(inCommit) => {
             // Called only while the child is not wanted; a child that came back
             // since is `live` again and the next render ignores the mark.
             gone.current.add(key);
-            rerender();
+            // An exit that ended on its own (a finished animation, a deferred
+            // exit that decided not to play) removes the child NOW, not at
+            // React's next scheduled render — it would otherwise stay on screen,
+            // finished and inert, for up to a frame.
+            if (inCommit) rerender();
+            else flushSync(rerender);
           }}
         >
           {elements.get(key)}
@@ -230,9 +248,16 @@ export function useTransition<E extends HTMLElement>(ref: RefObject<E | null>, s
         s.outro = undefined;
         return;
       }
-      if (!reversible) s.intro?.abort();
-      if (!reversible) s.options = undefined;
-      s.intro = runTransition(node, optionsFor(introFn), s.outro, 1, () => {
+      if (!reversible) {
+        // `in` and `out` given separately are two independent transitions: the
+        // arrival starts from the far end, and an exit still running is dropped.
+        s.intro?.abort();
+        s.outro?.abort();
+        s.outro?.reset();
+        s.outro = undefined;
+        s.options = undefined;
+      }
+      s.intro = runTransition(node, optionsFor(introFn), reversible ? s.outro : undefined, 1, () => {
         s.intro?.abort();
         s.intro = undefined;
         s.options = undefined;
@@ -249,7 +274,7 @@ export function useTransition<E extends HTMLElement>(ref: RefObject<E | null>, s
     }
     node.inert = true;
     if (!reversible) s.options = undefined;
-    s.outro = runTransition(node, optionsFor(outroFn), s.intro, 0, () => ticket?.done());
+    s.outro = runTransition(node, optionsFor(outroFn), reversible ? s.intro : undefined, 0, () => ticket?.done());
     return () => ticket?.cancel();
   }, [present, playIntro, ref]);
 

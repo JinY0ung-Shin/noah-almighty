@@ -1,0 +1,6 @@
+/* The remove affordance is an Icon SVG, not a `×` glyph — the shared `.chip-x`
+   rule centres it by inline text metrics, so lay it out as a box instead. */
+.chip-x:is(.cmp-hashtag-chip-editor, .cmp-hashtag-chip-editor *) {
+  display: inline-flex;
+  align-items: center;
+}

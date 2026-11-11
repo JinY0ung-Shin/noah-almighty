@@ -1,0 +1,64 @@
+/* ShareView's own styles (were its <style> block), scoped to .cmp-share-view. */
+.share-meta:is(.cmp-share-view, .cmp-share-view *) {
+  display: block;
+  margin-top: var(--s-0-5);
+  color: var(--muted);
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+.share-actions:is(.cmp-share-view, .cmp-share-view *) {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-2);
+}
+/* A 16:9 render reads best at a comfortable column width, not stretched
+   across an ultra-wide window. */
+.share-slides:is(.cmp-share-view, .cmp-share-view *),
+.share-note:is(.cmp-share-view, .cmp-share-view *),
+.share-empty:is(.cmp-share-view, .cmp-share-view *) {
+  max-width: 960px;
+  margin-inline: auto;
+}
+.share-note:is(.cmp-share-view, .cmp-share-view *) {
+  margin-block: 0 var(--s-4);
+}
+.share-slides:is(.cmp-share-view, .cmp-share-view *) {
+  display: grid;
+  gap: var(--s-5);
+  margin-block: 0;
+  padding: 0;
+  list-style: none;
+}
+.share-slide-open:is(.cmp-share-view, .cmp-share-view *) {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: zoom-in;
+}
+.share-slide-error:is(.cmp-share-view, .cmp-share-view *) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  aspect-ratio: 16 / 9;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  color: var(--muted);
+  font-size: var(--t-sm);
+}
+.share-state:is(.cmp-share-view, .cmp-share-view *) {
+  display: grid;
+  justify-items: center;
+  gap: var(--s-3);
+  max-width: 460px;
+  margin: var(--s-6) auto 0;
+  text-align: center;
+}
+.share-state:is(.cmp-share-view, .cmp-share-view *) p {
+  margin: 0;
+}

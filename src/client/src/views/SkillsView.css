@@ -1,0 +1,245 @@
+/* SkillsView's own styles. The scope class `cmp-skills-view` sits on every
+   top-level element the view renders (header, body, and the two modal cards). */
+/* Explore-family layout (docs/DESIGN.md §3): content column capped like the
+   search bar, sections directly on the canvas (no card-in-card), grid density
+   tokens matching .avatar-grid — card padding --s-5, grid gap --s-4. */
+.skills-content:is(.cmp-skills-view, .cmp-skills-view *) {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.skill-section:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-top: var(--s-6);
+}
+.skill-section:first-of-type:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-top: 0;
+}
+.skill-section-head:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  margin: 0 0 var(--s-3);
+}
+.skill-section-head:is(.cmp-skills-view, .cmp-skills-view *) h2 {
+  margin: 0;
+  font-size: var(--t-md);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.skill-count:is(.cmp-skills-view, .cmp-skills-view *) {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.skill-grid:is(.cmp-skills-view, .cmp-skills-view *) {
+  --pad-card: var(--s-5);
+  --gap-stack: var(--s-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--gap-stack);
+  align-items: stretch;
+}
+.skill-card:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2-5);
+  padding: var(--pad-card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  min-width: 0;
+}
+.skill-card.busy:is(.cmp-skills-view, .cmp-skills-view *) {
+  opacity: 0.7;
+}
+.sk-head:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.sk-name:is(.cmp-skills-view, .cmp-skills-view *) {
+  font-size: var(--t-md);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  word-break: break-all;
+}
+.sk-desc:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--text-soft);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Owner row is anchored to the card bottom so short cards keep their
+   attribution + actions aligned across the grid row. */
+.sk-owner:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1-5);
+  margin-top: auto;
+  padding-top: var(--s-1);
+  font-size: var(--t-xs);
+  color: var(--muted);
+  min-width: 0;
+}
+.sk-owner-name:is(.cmp-skills-view, .cmp-skills-view *) {
+  font-weight: 600;
+  font-size: var(--t-sm);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sk-owner-handle:is(.cmp-skills-view, .cmp-skills-view *) {
+  white-space: nowrap;
+}
+.sk-time:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.sk-actions:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+
+.sk-mine-search:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-bottom: var(--s-2);
+}
+.sk-mine-search:is(.cmp-skills-view, .cmp-skills-view *) input {
+  width: min(320px, 100%);
+}
+.skill-mine-panel:is(.cmp-skills-view, .cmp-skills-view *) {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  overflow: hidden;
+}
+.skill-mine-row:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+}
+.skill-mine-row:is(.cmp-skills-view, .cmp-skills-view *) + .skill-mine-row {
+  border-top: 1px solid var(--line-soft);
+}
+.sk-mine-meta:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--s-0-5);
+  min-width: 0;
+}
+.sk-mine-title:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-size: var(--t-base);
+}
+.sk-mine-desc:is(.cmp-skills-view, .cmp-skills-view *) {
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.sk-mine-actions:is(.cmp-skills-view, .cmp-skills-view *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-shrink: 0;
+}
+.sk-share-hint:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: var(--s-2) var(--s-1) 0;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+
+.sk-preview-owner:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: var(--s-1) 0 0;
+  padding-top: 0;
+}
+.sk-preview-desc:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: var(--s-2) 0 0;
+}
+.sk-preview-content:is(.cmp-skills-view, .cmp-skills-view *) {
+  max-height: 320px;
+  margin-top: var(--s-3);
+  overflow: auto;
+  padding: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  font-size: var(--t-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* 전수되는 파일 목록: SKILL.md 본문 바로 아래, 같은 폭의 종속 정보로 붙는다. */
+.sk-files:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-top: var(--s-3);
+}
+.sk-files-head:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: 0;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--text-soft);
+}
+.sk-file-list:is(.cmp-skills-view, .cmp-skills-view *) {
+  max-height: 160px;
+  margin: var(--s-1-5) 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.sk-file-list:is(.cmp-skills-view, .cmp-skills-view *) li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  padding: var(--s-1) var(--s-2-5);
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.sk-file-list:is(.cmp-skills-view, .cmp-skills-view *) li + li {
+  border-top: 1px solid var(--line-soft);
+}
+.sk-file-path:is(.cmp-skills-view, .cmp-skills-view *) {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-soft);
+  word-break: break-all;
+}
+.sk-file-size:is(.cmp-skills-view, .cmp-skills-view *) {
+  white-space: nowrap;
+}
+.sk-files-note:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: var(--s-1-5) 0 0;
+  font-size: var(--t-xs);
+  color: var(--warn);
+}
+
+.sk-intro-help:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin: var(--s-2) 0 0;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+/* 되돌리기는 파괴적이지 않지만 되돌아가는 동작이라 확인 버튼들과 떼어 둔다. */
+.sk-intro-revert:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-right: auto;
+}
+.sk-rename-field:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-top: var(--s-3);
+}
+.sk-preview-actions:is(.cmp-skills-view, .cmp-skills-view *) {
+  margin-top: var(--s-4);
+}
+.skill-preview-card {
+  width: min(680px, calc(100vw - 2 * var(--s-4)));
+}

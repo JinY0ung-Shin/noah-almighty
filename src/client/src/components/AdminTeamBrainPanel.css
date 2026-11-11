@@ -1,0 +1,17 @@
+.team-brain-admin-stats:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--s-3); margin-bottom: var(--s-4); }
+.team-brain-admin-hint:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: 0 0 var(--s-4); padding: var(--s-2) var(--s-2-5); border: 1px solid var(--info-line); border-radius: var(--r-sm); background: var(--info-soft); color: var(--info); font-size: var(--t-xs); }
+.team-brain-admin-backlog:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { color: var(--warn); }
+.team-brain-admin-sub:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: var(--s-2) 0 var(--s-1); font-size: var(--t-sm); }
+.team-brain-admin-actions:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-2); }
+.team-brain-admin-label:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { display: block; margin: var(--s-3) 0 var(--s-1); color: var(--text-soft); font-size: var(--t-xs); font-weight: 600; }
+.team-brain-policy-note:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: 0 0 var(--s-2); font-size: var(--t-xs); }
+.team-brain-policy-problems:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: 0 0 var(--s-2); }
+.team-brain-policy-problems:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) ul { margin: var(--s-1) 0 0; padding-left: var(--s-4); }
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) th,
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) td { padding: var(--s-1-5) var(--s-2); border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; }
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) th { width: 50%; color: var(--text-soft); font-weight: 500; }
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) td { font-variant-numeric: tabular-nums; }
+.team-brain-policy-table:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) .tag { margin-left: var(--s-1-5); }
+.team-brain-policy-guidelines:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: 0; max-height: 320px; overflow: auto; padding: var(--s-2) var(--s-2-5); border-radius: var(--r-sm); background: var(--bg-subtle); font-family: var(--font-mono); font-size: var(--t-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.team-brain-policy-history:is(.cmp-admin-team-brain-panel, .cmp-admin-team-brain-panel *) { margin: 0; padding-left: var(--s-4); font-size: var(--t-xs); display: flex; flex-direction: column; gap: var(--s-1); overflow-wrap: anywhere; }

@@ -1,3 +1,7 @@
+// First, before any component module: the dev server's Fast Refresh preamble,
+// loaded as a module because the app's CSP allows no inline script (see
+// vite.config.ts). Empty in a production build.
+import "@vitejs/plugin-react/preamble";
 import "./styles.css";
 import { createRoot } from "react-dom/client";
 import App from "./App";

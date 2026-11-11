@@ -1,0 +1,2 @@
+.key-reveal:is(.cmp-settings-avatar-api-keys, .cmp-settings-avatar-api-keys *) { margin-block: var(--s-3); }
+pre:is(.cmp-settings-avatar-api-keys, .cmp-settings-avatar-api-keys *) { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--t-xs); }

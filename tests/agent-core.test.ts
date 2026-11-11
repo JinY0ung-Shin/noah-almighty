@@ -270,7 +270,7 @@ describe("chat slash commands", () => {
       fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) return readClientRecursive(full);
-        return /\.(ts|svelte)$/.test(entry.name)
+        return /\.(tsx?|svelte)$/.test(entry.name)
           ? [fs.readFileSync(full, "utf8")]
           : [];
       });

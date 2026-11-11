@@ -1,0 +1,8 @@
+.pic-paste-hint:is(.cmp-settings-profile-tab, .cmp-settings-profile-tab *) {
+  font-size: var(--t-xs);
+  text-align: center;
+  max-width: 140px;
+  line-height: 1.35;
+}
+/* .shared-account-item / .shared-account-meta moved to
+   styles/60-settings-admin.css (global). */

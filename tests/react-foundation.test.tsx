@@ -225,6 +225,89 @@ describe("Presence", () => {
   });
 });
 
+describe("Presence — rules found while porting", () => {
+  it("waits for every transition inside a child, even when the first has nothing to play", async () => {
+    function Pair() {
+      const plain = useRef<HTMLSpanElement | null>(null);
+      const fading = useRef<HTMLSpanElement | null>(null);
+      useTransition(plain, {}); // no exit of its own: finishes inside the commit
+      useTransition(fading, { out: (node) => fade(node, { duration: 50 }) });
+      return (
+        <p data-row="pair">
+          <span ref={plain}>가</span>
+          <span ref={fading}>나</span>
+        </p>
+      );
+    }
+    function Host({ open }: { open: boolean }) {
+      return <Presence>{open && <Pair key="pair" />}</Presence>;
+    }
+    const view = render(<Host open />);
+    view.rerender(<Host open={false} />);
+    expect(document.querySelector("[data-row='pair']")).not.toBeNull();
+    await waitFor(() => expect(document.querySelector("[data-row='pair']")).toBeNull());
+  });
+
+  it("removes a child in the same turn its exit ends — no wait for a scheduled render", async () => {
+    let finish: (() => void) | undefined;
+    const animate = vi.spyOn(Element.prototype, "animate").mockImplementation(function (this: Element) {
+      const animation = { cancel() {}, effect: null, currentTime: 0, playState: "running", onfinish: null as null | (() => void) };
+      const previous = finish;
+      finish = () => animation.onfinish?.();
+      void previous;
+      return animation as unknown as Animation;
+    });
+    function Host({ open }: { open: boolean }) {
+      return (
+        <Presence>
+          {open && (
+            <Transition key="k" tag="div" data-row="one" out={(node) => fade(node, { duration: 50 })}>
+              하나
+            </Transition>
+          )}
+        </Presence>
+      );
+    }
+    const view = render(<Host open />);
+    view.rerender(<Host open={false} />);
+    finish?.(); // the delay hold ends → the real exit animation starts
+    expect(document.querySelector("[data-row='one']")).not.toBeNull();
+    finish?.(); // the exit ends — outside act, outside any React commit
+    expect(document.querySelector("[data-row='one']")).toBeNull();
+    animate.mockRestore();
+  });
+
+  it("treats separate in and out as independent: coming back mid-exit drops the exit and arrives afresh", async () => {
+    const started: string[] = [];
+    function Box() {
+      const ref = useRef<HTMLDivElement | null>(null);
+      useTransition(ref, {
+        in: (node) => (started.push("in"), fade(node, { duration: 50 })),
+        out: (node) => (started.push("out"), fade(node, { duration: 50 })),
+      });
+      return (
+        <div ref={ref} data-row="box">
+          상자
+        </div>
+      );
+    }
+    function Host({ open }: { open: boolean }) {
+      return <Presence>{open && <Box key="box" />}</Presence>;
+    }
+    const view = render(<Host open={false} />);
+    view.rerender(<Host open />);
+    view.rerender(<Host open={false} />);
+    view.rerender(<Host open />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(started).toEqual(["in", "out", "in"]);
+    const box = document.querySelector<HTMLElement>("[data-row='box']");
+    expect(box).not.toBeNull();
+    expect(box?.inert).toBe(false);
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* Toggle — accessible switch whose visual state follows the SAVE      */
 /* ------------------------------------------------------------------ */
