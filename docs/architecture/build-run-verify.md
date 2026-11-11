@@ -196,6 +196,28 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   README "Data volume ownership" repair → `setup-host.sh` `ok`, Noah healthy, `backups/` created when retired
   data is present. Tear the dind and its volume down
   afterwards; leave `noahpi-dind` (the pi e2e instance) alone.
+  **Recipe notes from the 2026-11-11 runs (pi `100a63d`, then `7e8e3d6` — the pin that was committed; all
+  checks PASS; scripts, a one-shot `run-all.sh` and evidence in `~/.noah-work/boot-test-2026-11-11b/`):** give the dind a NAMED volume and a fixed address (`-v
+  noahcompose-dind-data:/var/lib/docker --ip 10.217.0.2`) — without `-v` the volume is anonymous and "tear the
+  volume down" needs `docker rm -v`, and the published port is reached from the host at the dind's network
+  IP; `home/` and `secrets/` need not be made by hand — `bash docker/pi/setup-host.sh </dev/null` inside the
+  dind creates them (close stdin: pi's setup-host asks for a git token with `read`; it also PRINTS the new
+  admin/api keys, so filter a saved log; what it creates is owned by root/10001, so clean up inside the dind);
+  a cold build took 188 s on this box, not ~10 min; `~/.noah-work/pi-e2e/` (RUNBOOK, build-images.sh,
+  compose.override.yml) is for the STANDALONE pi e2e instance — only `fake-llm.mjs` is reusable here, with
+  `--host 0.0.0.0`; registering the fake LLM with `PUT /admin/api/llm` needs only `defaultModel` — with no
+  `falcon` tier an owner turn runs on pi's default model (checked); `security-check/run.mjs --internal …`
+  REPLACES pi's default internal targets (gateway/sandboxd/mcp-broker), so run it once more without
+  arguments; a mutating `/admin/api` call needs `X-Admin-Request: 1` plus same-origin evidence
+  (`Sec-Fetch-Site: same-origin` or Noah's own `Origin`) — `Referer` may be absent, but if present must be
+  under `/admin`. **Per-bump model-driven checks worth repeating** (scripts `30-`…`40-` there): a document
+  turn (`files` → `/workspace/uploads/<name>` byte-identical in the OWNER's sandbox, pi's `[Attached file: …]`
+  markers plus Noah's preamble line in the model's request, the colleague refusal, a regenerate re-sending),
+  the tool list (`Agent`/`SendMessage` present), a scripted `Agent` call (Noah's SSE frames are `agent` …
+  `agent_end`, nested tools carry the `agentId`), the same-origin gate with and without `TRUSTED_ORIGINS`, and —
+  when pi's System One (the optional `mcp_search` decision model) matters — that `mcp_search` returns Noah
+  tools in the model's order, falls back to BM25 when it is removed or fails, and that
+  `/admin/api/systemone/calls` is admin-only through Noah's proxy.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
