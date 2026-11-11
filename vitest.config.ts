@@ -6,8 +6,10 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      // index.ts is the process entrypoint; types.ts is types-only.
-      exclude: ["src/server/index.ts", "src/server/types.ts"],
+      // index.ts is the process entrypoint; types.ts is types-only. Components
+      // (.tsx) stay out, as the Svelte components did: counting them would sink
+      // the totals below the floor until component tests broaden.
+      exclude: ["src/server/index.ts", "src/server/types.ts", "src/**/*.tsx"],
       reporter: ["text", "text-summary"],
       // Regression floor, a hair under the achieved coverage (2026-08: ~94/86/95/93).
       // Raise as coverage grows; don't lower to admit untested code.
