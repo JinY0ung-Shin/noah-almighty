@@ -196,13 +196,16 @@ describe("confluence tools — request + attachment plumbing", () => {
     expect(cloudPath).toBe("/wiki/rest/api/content/search");
   });
 
-  it("search surfaces an HTTP error (truncated body) and a network failure", async () => {
-    // Non-2xx with a long non-JSON body → JSON.parse fallback + truncated detail.
+  it("search surfaces an HTTP error (a short quote of the body) and a network failure", async () => {
+    // Non-2xx with a long non-JSON body → a classified message quoting its first
+    // 200 characters, never the raw dump (confluenceErrors.ts; the classes are
+    // covered in agent-confluence-read.test.ts).
     stubFetch(() => new Response("x".repeat(1200), { status: 502 }));
     const httpErr = await callTool(buildConfluenceTools(ctx()), "search", { text: "auth" });
     expect(httpErr.isError).toBe(true);
     expect(httpErr.content[0].text).toContain("Confluence HTTP 502");
-    expect(httpErr.content[0].text).toContain("[truncated");
+    expect(httpErr.content[0].text).toContain(`"${"x".repeat(200)}…"`);
+    expect(httpErr.content[0].text!.length).toBeLessThan(500);
 
     // fetch itself rejects → the request-failed catch.
     stubFetch(() => {
@@ -224,7 +227,7 @@ describe("confluence tools — request + attachment plumbing", () => {
     expect(res.content[0].text).toContain("CONFLUENCE_URL format is invalid");
   });
 
-  it("get_page returns metadata, labels, ancestors and a truncated body", async () => {
+  it("get_page returns metadata, labels, ancestors and a capped body", async () => {
     stubFetch(() =>
       json({
         id: "42",
@@ -244,7 +247,14 @@ describe("confluence tools — request + attachment plumbing", () => {
     expect(payload.title).toBe("Runbook");
     expect(payload.labels).toEqual(["ops", "oncall"]);
     expect(payload.ancestors).toEqual([{ id: "1", title: "Root" }]);
-    expect(payload.body_storage).toContain("[truncated");
+    // The default body is the TEXT form, capped after conversion; what was cut
+    // is said in body_note, not inside the body.
+    expect(payload.body_format).toBe("text");
+    expect(payload.body_text).toBe("A".repeat(10));
+    expect(payload.body_note).toBe(
+      "Showing 10 of 50 characters of the text body (characters 0-10). Call get_page again with offset: 10 to read the next part.",
+    );
+    expect(payload.body_storage).toBeUndefined();
   });
 
   it("get_attachment: needs an argument, and errors when metadata lacks a download URL", async () => {

@@ -25,8 +25,11 @@ First, if needed, check status with `mcp__confluence__describe_config`.
 - Download an attachment: `mcp__confluence__get_attachment`
 - Extract image / draw.io references from a page body: `mcp__confluence__extract_page_assets`
 
-For search, use raw CQL or combine the `space`, `title`, `text`, and `label` conditions. If you have
-a page URL or ID, resolve the ID and read it with `get_page`.
+For search, use raw CQL or combine the `space`, `title`, `text`, and `label` conditions; add
+`since_days` to keep only pages modified in the last N days. If you have a page URL or ID, resolve
+the ID and read it with `get_page`. `get_page` returns the body as readable text by default
+(`format: "text"`); a long page says how much was shown — call again with the `offset` it names to
+read the rest. Pass `format: "storage"` only when you need the raw Confluence markup.
 
 When you need an image or draw.io diagram, first use `extract_page_assets` to find the `ac:image`,
 `ri:attachment`, and `ac:structured-macro ac:name="drawio"` references in the page storage body, then

@@ -8,7 +8,7 @@ Agent orchestration + in-process MCP tool servers. Companion to the agent-area p
 
 ## How a run is assembled
 pi-gateway is the only agent runtime (`AGENT_RUNTIME=pi`, the default; `local` is the deterministic stub for tests
-and the e2e harness; any other value, `claude` included, stops the boot). `runAgentStream` (`agent/index.ts`) sends
+and the e2e harness, with scripted `demo` runs — [build-run-verify.md](build-run-verify.md); any other value, `claude` included, stops the boot). `runAgentStream` (`agent/index.ts`) sends
 every non-local run to `runPiAgent` (`agent/pi/runPiAgent.ts`); the sandbox principal is `piRunPrincipal(request)`
 (`viewerUserId ?? avatar.id`). Runner, session, sandbox and endpoint mechanics → [pi-runtime.md](pi-runtime.md).
 - `runCapabilities.ts` — **the ONE capability plan** (design N1): `buildRunCapabilities` (tool access
@@ -296,6 +296,62 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   `buildSystemServer`). It hands that boolean, with `scratchWorkspaceDir`, to `SystemToolsContext`, and returns
   the boolean (not the path, which only describe_system names) on the capabilities for the prompt stamp
   (`AgentRequest.confluenceSaveToWorkspace`).
+- **Confluence `get_page` returns the body as TEXT by default (2026-11-11).** The raw `body.storage` XML spent
+  the 20,000-character cap on markup and lost the tail of long pages, so `get_page` now takes
+  `format: "text" | "storage"` (default `"text"`) and `offset` (0 … 10,000,000, a character offset in the
+  chosen format). `confluenceStorageText.ts` (`confluenceStorageToText`) converts storage format to compact
+  Markdown-like text: ONE tolerant tokenizer builds a small tree, one walker renders it (mixed content →
+  blocks, so "a list in a table cell in a panel" needs no special case) — no parser dependency (`jsdom` is
+  test-only; `parse5`/`saxes` are only transitive). Conventions the tool description names: `[image: file.png]`
+  / `[attachment: file.pdf]` (the filename `get_attachment` takes with `page_id`), `[page: Title (space KEY)]`,
+  `[user mention]` (a `ri:userkey`/`ri:account-id` is NEVER printed; only an explicit `ri:username` becomes
+  `@name`), `[status: …]`, `[jira: KEY]`, `[drawio diagram: name]`, `[macro name: k=v, …]` for a body-less
+  macro (≤ 8 parameters × 120 chars), `> **Info: title**` quote blocks for body macros (info/note/warning/tip/
+  panel/expand/details; an unknown one is `> **Macro name** (params)` with its plain-text body fenced), fenced
+  blocks for `code`/`noformat`/`<pre>` (fence longer than any backtick run), Markdown tables (cell content on
+  one line with ` ⏎ ` for breaks and `\|` for pipes; merged cells become `(←)`/`(↑)` markers plus a one-line
+  legend; a header-less table gets an empty header; ≤ 60 columns). `section`/`column`/`excerpt` are
+  transparent; `<script>`/`<style>`/comments are dropped; an unknown element keeps its children. Contract:
+  NEVER throws (a failed walk falls back to a tag strip), linear in the input (a tag scan stops at the next
+  `<`; nesting deeper than 64 is flattened into its ancestor), entities and CDATA decoded exactly once
+  (`decodeXmlEntities`, the full XHTML set; `&#x110000;` → U+FFFD — `extractAssetReferences` now uses it too,
+  the old decoder threw there), no markup passes through. The cap (`max_body_chars`, default 20,000, `0` =
+  metadata only) is applied AFTER the conversion; the payload carries `body_format`, `body_chars` (the whole
+  body's length in that format), `body_text` | `body_storage` (never both) and, when not everything is shown,
+  `body_note` ("Showing N of M characters … Call get_page again with offset: X …"). A text cut snaps back to
+  the last line break in the second half of the window and never splits a surrogate pair; the offset is into
+  the CONVERTED text, stable for one page version. `extract_page_assets` still reads the storage form
+  (`pageBody`) untouched. Not converted, by choice: user keys are not resolved to names (one more GET per
+  mention), a draw.io macro is only named (`extract_page_assets` matches it to attachments), cell colours /
+  alignment / indentation / `ac:layout` columns are dropped, and Cloud's `ac:adf-extension` is rendered from
+  its node content (unverified against a live Cloud page).
+- **Confluence request failures say what to do (`confluenceErrors.ts`, 2026-11-11).** `requestJson` /
+  `requestBinary` no longer return `Confluence HTTP <status>: <raw 500 chars>` / `Confluence request failed:
+  fetch failed`. A rejected `fetch` is classified from the codes down its `cause`/`errors` chain (or named in
+  a message): certificate not trusted → an operator adds the corporate CA (`NODE_EXTRA_CA_CERTS`) and
+  restarts; expired / host-name mismatch / other TLS; undici's `Proxy response (403) !== 200 when HTTP
+  Tunneling` → the egress policy (관리자 → 가입·접근 → 외부 통신 차단); DNS, refused/reset, timeout (our own
+  30 s abort included) → the Noah server's network, not the chat. A non-2xx keeps the `Confluence HTTP
+  <status>:` prefix and is read by status: 401 token (owner replaces `CONFLUENCE_PAT`), 403 account
+  permission, 404 wrong id OR no permission, 429 with `Retry-After`, 400 with the parser's message, 5xx. The
+  body only adds a short quote: the message fields of a JSON error (`message`, `errorMessages`,
+  `error_description`, `data.errors[].message`, else `reason`; ≤ 300 chars), the `<title>` of an HTML page, or
+  the first 200 chars of plain text. **A 2xx that is not JSON is now a FAILURE** (it used to become an empty
+  result — "No Confluence spaces found" on an SSO login page): HTML → "almost certainly an SSO/login page".
+  Every network-sourced string passes `safeDetail` (the PAT itself, `Authorization`/`Bearer`/`Basic` values
+  and URL userinfo removed). Each message ends with the fix and who can apply it; none offers a route (the
+  tools cannot know whether the browser relay is on). `requestBinary` cannot tell a login page from a real
+  `.html` attachment on a 2xx, so a download is classified only when it is non-2xx.
+- **Confluence `search`: `since_days`, literal escaping, trimming (2026-11-11).** `since_days` (1 … 3650) adds
+  `lastmodified >= now("-Nd")`: alone, with the field conditions, or on top of raw `cql` as
+  `(<cql>) AND lastmodified >= … [ORDER BY …]` (`orderByIndex` finds the clause quote-aware). `cqlQuote`
+  escapes `\` and `"` — the only characters that can end a CQL string literal — and turns control characters
+  into a space; `tests/agent-confluence-read.test.ts` strips the literals back out and asserts the query
+  STRUCTURE is unchanged for a list of break-out attempts. Lucene operators inside a `~` value (`*`, `?`, `~`)
+  are deliberately NOT escaped: `text`/`title` are documented as fuzzy search and escaping would change what
+  they mean. Results carry `lastModified` (`version.when`), `totalSize` when the server reports it, and a
+  `note` naming the next `start`; a list over 20,000 characters loses whole results from the END (the note
+  says "Showing N of M results fetched by this call").
 - **The `/mcp` gate is per CALL, not per viewer**, so every tool MUST self-gate in its handler. The endpoint's
   `allowCall` admits only this run's `mcpAllowedTools`, but pi lists a session's tools once from the static
   catalog and one conversation can carry runs of different classes (and live state changes mid-session); the
