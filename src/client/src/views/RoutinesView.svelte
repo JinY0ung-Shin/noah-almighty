@@ -29,7 +29,7 @@
     routineTitle,
   } from "../lib/format";
   import { loadRoutineMessages, loadRoutinesData } from "../lib/loaders";
-  import { prefersReducedMotion } from "../lib/motion";
+  import { scrollToStart } from "../lib/motion";
   import { openSeededChat, selectConversation } from "../lib/chat";
   import { appState, notify, readState, replaceState, updateState } from "../lib/state";
   import type { RoutineJob, RoutinePreset, StoredMessage } from "../lib/types";
@@ -361,7 +361,7 @@
   function revealResultWhenStacked(): void {
     if (typeof window === "undefined" || !resultEl) return;
     if (!window.matchMedia?.("(max-width: 980px)").matches) return;
-    resultEl.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    scrollToStart(resultEl);
   }
 
   async function selectResult(routine: RoutineJob) {

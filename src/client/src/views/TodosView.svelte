@@ -11,7 +11,7 @@
   import { openSeededChat, selectConversation } from "../lib/chat";
   import { confirmAction } from "../lib/confirm";
   import { relativeDayTimeLabel } from "../lib/format";
-  import { prefersReducedMotion } from "../lib/motion";
+  import { scrollToStart } from "../lib/motion";
   import { goView, syncHash } from "../lib/nav";
   import { appState, notify, updateState } from "../lib/state";
   import {
@@ -273,7 +273,7 @@
   function revealDetailWhenStacked(): void {
     if (typeof window === "undefined" || !detailEl) return;
     if (!window.matchMedia?.("(max-width: 980px)").matches) return;
-    detailEl.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+    scrollToStart(detailEl);
   }
 
   async function select(item: TodoItem) {

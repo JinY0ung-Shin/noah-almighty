@@ -319,10 +319,8 @@
       display: none;
     }
   }
-  @media (prefers-reduced-motion: reduce) {
-    .slide-presenter {
-      animation: none;
-    }
+  :global(:root[data-motion="reduce"]) .slide-presenter {
+    animation: none;
   }
   @keyframes slide-presenter-in {
     from {

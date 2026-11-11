@@ -974,21 +974,17 @@
   .todo-overlay-section-toggle[aria-expanded="false"] :global(svg) {
     transform: rotate(-90deg);
   }
-  @media (prefers-reduced-motion: no-preference) {
-    .todo-overlay-section-toggle :global(svg) {
-      transition: transform 160ms var(--ease-out);
-    }
+  :global(:root:not([data-motion="reduce"])) .todo-overlay-section-toggle :global(svg) {
+    transition: transform 160ms var(--ease-out);
   }
   .todo-overlay-section-count {
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     opacity: 0.8;
   }
-  @media (prefers-reduced-motion: no-preference) {
-    .todo-overlay-section-count.is-popping {
-      display: inline-block;
-      animation: todo-count-pop 360ms var(--ease-out);
-    }
+  :global(:root:not([data-motion="reduce"])) .todo-overlay-section-count.is-popping {
+    display: inline-block;
+    animation: todo-count-pop 360ms var(--ease-out);
   }
   .todo-overlay-section ul {
     margin: 0;
@@ -1155,10 +1151,8 @@
   .todo-overlay-item[data-arrival="added"] {
     animation: todo-row-fade 240ms var(--ease-out) var(--todo-arrival-delay, 0ms) backwards;
   }
-  @media (prefers-reduced-motion: no-preference) {
-    .todo-overlay-item[data-arrival="added"] {
-      animation-name: todo-row-rise;
-    }
+  :global(:root:not([data-motion="reduce"])) .todo-overlay-item[data-arrival="added"] {
+    animation-name: todo-row-rise;
   }
   @keyframes todo-row-rise {
     from {
@@ -1254,16 +1248,12 @@
   /* The avatar added an item past the visible rows: its count pops (the
      composer count's `todo-count-pop`, 30-agent-md-composer.css — its 360 ms
      overshoot is the user's choice, see there). */
-  @media (prefers-reduced-motion: no-preference) {
-    .todo-overlay-more.is-popping {
-      display: inline-block;
-      animation: todo-count-pop 360ms var(--ease-out);
-    }
+  :global(:root:not([data-motion="reduce"])) .todo-overlay-more.is-popping {
+    display: inline-block;
+    animation: todo-count-pop 360ms var(--ease-out);
   }
-  @media (prefers-reduced-motion: no-preference) {
-    .todo-overlay {
-      animation: todo-overlay-in 160ms var(--ease-out) both;
-    }
+  :global(:root:not([data-motion="reduce"])) .todo-overlay {
+    animation: todo-overlay-in 160ms var(--ease-out) both;
   }
   @keyframes todo-overlay-in {
     from {

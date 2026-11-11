@@ -21,8 +21,10 @@ macOS 화면을 복제하지 않는다. 콘텐츠(대화·지식·작업)가 주
   불투명 표면을 기본으로 한다. 유리 표면을 겹쳐 가독성을 떨어뜨리지 않는다.
 - **모션은 현재 화면 값에서 이어진다.** 눌림은 pointer-down에 즉시 반응하고, 제스처 기반
   요소는 손가락을 1:1 추적하며 release velocity를 스프링으로 넘긴다.
-- **접근성은 동일한 피드백의 다른 표현이다.** reduced motion은 cross-fade,
+- **접근성은 동일한 피드백의 다른 표현이다.** 움직임 줄이기는 cross-fade,
   reduced transparency는 불투명 표면, increased contrast는 강한 경계로 대체한다.
+  움직임 줄이기는 **앱 자체 설정**(설정 > 프로필, 기본 꺼짐)이며 운영체제의 애니메이션 설정을
+  따르지 않는다 — 시스템 애니메이션이 꺼진 PC에서도 앱의 모션은 그대로다.
 - **장식보다 위계.** 대비·여백·타이포 weight로 정보 위계를 만든다. 박스·배경색·아이콘을
   덧대서 위계를 만들지 않는다.
 
@@ -126,6 +128,12 @@ macOS 화면을 복제하지 않는다. 콘텐츠(대화·지식·작업)가 주
 - 드로어·시트·직접 조작 요소는 고정 duration 대신 스프링을 사용한다. 기본은 damping ratio
   `1.0`, response `0.3~0.4s`; 사용자의 flick momentum이 있을 때만 damping `~0.8`을 허용한다.
 - transform/opacity 중심으로 합성하고 진행 중인 모션도 다시 잡고 반전할 수 있어야 한다.
+- **모션은 OS 설정을 읽지 않는다.** `prefers-reduced-motion` 미디어 쿼리는 금지다. 줄인 상태의
+  규칙은 `:root[data-motion="reduce"]`, JS는 `prefersReducedMotion()`(`lib/motion.ts`)으로 판단한다.
+  끝이 있는 새 CSS 애니메이션은 전역 규칙이 자동으로 멈추지만, `infinite` 애니메이션은 멈추지
+  않으므로 `:root[data-motion="reduce"]`에서 `animation: none`을 따로 준다.
+- 작은 표면(팝오버·첨부 칩·떠 있는 버튼·오버레이)은 **진입만** 애니메이션하고 닫힘은 즉시 한다.
+  키보드로 여는 요소(슬래시 메뉴)와 핵심 내비게이션(화면·탭 전환)은 애니메이션하지 않는다.
 
 ---
 
@@ -253,7 +261,7 @@ backdrop을 토큰·베이스로 통일.**
 
 5. **Apple-inspired 계층** — system blue, platform typography, material hierarchy, 전체 화면 surface,
    press feedback, modal/popover materialization을 `80-apple-design.css`에서 제공한다.
-6. **접근성 재질 변형** — reduced motion/transparency와 increased contrast를 지원한다.
+6. **접근성 재질 변형** — 움직임 줄이기(앱 설정), reduced transparency, increased contrast를 지원한다.
 7. **확인 흐름 통합** — 브라우저 기본 confirm 대신 공용 `ConfirmationDialog`를 사용한다.
 8. **직접 조작** — 모바일 레일은 pointer capture, rubber-banding, velocity projection, spring settle을 사용한다.
 9. **일관성 일제 수정(2026-08-04)** — 5축 감사(색·토큰 / 간격·타이포 / 컴포넌트 / 언어 / 인터랙션)
@@ -290,4 +298,4 @@ backdrop을 토큰·베이스로 통일.**
 - [ ] 버튼/칩/카드/오버레이는 §4 베이스 패밀리 사용 (새 일회성 클래스 지양)
 - [ ] 밀도는 화면 컨텍스트 토큰으로 (하드코딩 패딩 금지)
 - [ ] `prefers-color-scheme: dark`에서 확인 (별칭 스왑만으로 동작하는지)
-- [ ] reduced motion/transparency와 increased contrast에서 의미와 조작성이 유지되는지 확인
+- [ ] 움직임 줄이기(설정 > 프로필), reduced transparency, increased contrast에서 의미와 조작성이 유지되는지 확인

@@ -758,10 +758,14 @@ test("an avatar's change moves rows inside the card; the viewer's own checkbox m
   const rows = page.locator("#todo-overlay .todo-overlay-item");
 
   // 1) Motion on, pinned (top-anchored): the avatar completes the first of 다음's three rows.
-  await page.emulateMedia({ reducedMotion: "no-preference" });
+  // Motion is the APP's setting (lib/motion.ts, default on), never the operating
+  // system's — so this stage runs with the OS reporting "reduce", the state of a
+  // PC whose system animations are off, and the rows still glide.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await openCard(page, { width: 1680, height: 1000 });
   await expect(page.locator("#todo-overlay")).toHaveAttribute("data-mode", "pinned");
-  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(false);
+  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.dataset.motion ?? null)).toBeNull();
   server.nextTurn(() => server.complete("todo-3"));
   await startSampling(page);
   await sendWithEnter(page, "온보딩 문서는 끝났어");
@@ -792,8 +796,10 @@ test("an avatar's change moves rows inside the card; the viewer's own checkbox m
   // 3) Reduced motion: the avatar completes 다음's last row and adds one for today —
   // the exit is instant, the arrival only fades (and washes), nothing pops, and
   // the layout changes once (no held height to release later).
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
+  // The viewer's own 움직임 줄이기 — what 설정 writes — with the OS now saying
+  // "no preference": only the app's attribute decides.
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.evaluate(() => (document.documentElement.dataset.motion = "reduce"));
   server.nextTurn(() => {
     server.complete("todo-5");
     server.add(todo("todo-6", "아바타가 넣은 회의 준비", { dueDate: TODAY, source: "avatar" }));
@@ -815,7 +821,6 @@ test("in the bottom-anchored popover an avatar's change settles once: no row mov
   const server = await mockAvatarTurns(page);
   const card = page.locator("#todo-overlay");
   const rows = page.locator("#todo-overlay .todo-overlay-item");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   await openCard(page, { width: 1024, height: 768 });
   await expect(card).toHaveAttribute("data-mode", "popover");
 
@@ -863,7 +868,6 @@ test("in the bottom-anchored popover an avatar's change settles once: no row mov
 test("with a parallel addition above, the pinned card's leaving row still leaves from where it was", async ({ page }) => {
   const server = await mockAvatarTurns(page);
   const rows = page.locator("#todo-overlay .todo-overlay-item");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   await openCard(page, { width: 1680, height: 1000 });
   await expect(page.locator("#todo-overlay")).toHaveAttribute("data-mode", "pinned");
   // Two parallel tool calls, one re-read: an overdue item lands at the top (every
@@ -893,7 +897,6 @@ test("in-progress items lead the card in their own 진행 중 section; the avata
   const card = page.locator("#todo-overlay");
   // An overdue item already in progress sits in 진행 중 — not 마감 지남 — with its red due date.
   server.start("todo-1");
-  await page.emulateMedia({ reducedMotion: "no-preference" });
   await openCard(page, { width: 1680, height: 1000 });
   await expect(card).toHaveAttribute("data-mode", "pinned");
   expect(await sectionLabels(page)).toEqual(["진행 중", "오늘", "다음"]);

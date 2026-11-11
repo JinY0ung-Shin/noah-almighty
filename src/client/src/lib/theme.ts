@@ -1,4 +1,5 @@
 import { writable } from "svelte/store";
+import { prefersReducedMotion } from "./motion";
 
 const THEME_KEY = "noah-theme";
 
@@ -101,7 +102,7 @@ export function applyTheme(pref = getThemePref()): ThemePref {
 }
 
 function applyThemeWithTransition(pref: ThemePref): void {
-  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+  const reduced = prefersReducedMotion();
   const documentWithTransitions = document as Document & {
     startViewTransition?: (update: () => void) => { finished: Promise<void> };
   };
@@ -110,8 +111,11 @@ function applyThemeWithTransition(pref: ThemePref): void {
     return;
   }
   if (!reduced) {
-    document.documentElement.classList.add("theme-changing");
-    window.setTimeout(() => document.documentElement.classList.remove("theme-changing"), 220);
+    // Hold the element, not the global: the timer can outlive the document it was
+    // started in (a test environment torn down inside the 220 ms).
+    const root = document.documentElement;
+    root.classList.add("theme-changing");
+    window.setTimeout(() => root.classList.remove("theme-changing"), 220);
   }
   applyTheme(pref);
 }

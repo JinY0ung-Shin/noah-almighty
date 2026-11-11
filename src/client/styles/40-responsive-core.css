@@ -260,29 +260,32 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
-  .stream-caret {
-    animation: none;
-    opacity: 0.7;
-  }
-  /* Loading spinners signal "in progress" — they must keep rotating even with
-     reduced motion (the global rule above would otherwise freeze them). Re-enable
-     the spin only while actually running, so the settled check/✕ glyphs stay
-     static. The agent selector uses a direct-child chain (`> .agent-head >`):
-     `.agent-node` nests, and the "main" node stays "running" through the whole
-     stream, so a plain descendant selector would force-spin every DONE
-     sub-agent's ✓ checkmark nested under it. */
-  .stream-status .spinner,
-  .tool-row[data-status="running"] .tool-spinner,
-  .task-row[data-status="running"] .task-spinner,
-  .routine-spinner,
-  .agent-node[data-status="running"] > .agent-head > .agent-spinner {
-    animation: spin 0.7s linear infinite !important;
-  }
+/* 움직임 줄이기 — the APP's own setting (`lib/motion.ts` writes
+   `<html data-motion="reduce">`), never the OS's `prefers-reduced-motion`: a PC
+   whose system animations are off must not silently lose the app's motion. Every
+   reduced-motion rule keys on this attribute. */
+:root[data-motion="reduce"],
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}
+:root[data-motion="reduce"] .stream-caret {
+  animation: none;
+  opacity: 0.7;
+}
+/* Loading spinners signal "in progress" — they must keep rotating even with
+   reduced motion (the global rule above would otherwise freeze them). Re-enable
+   the spin only while actually running, so the settled check/✕ glyphs stay
+   static. The agent selector uses a direct-child chain (`> .agent-head >`):
+   `.agent-node` nests, and the "main" node stays "running" through the whole
+   stream, so a plain descendant selector would force-spin every DONE
+   sub-agent's ✓ checkmark nested under it. */
+:root[data-motion="reduce"] .stream-status .spinner,
+:root[data-motion="reduce"] .tool-row[data-status="running"] .tool-spinner,
+:root[data-motion="reduce"] .task-row[data-status="running"] .task-spinner,
+:root[data-motion="reduce"] .routine-spinner,
+:root[data-motion="reduce"] .agent-node[data-status="running"] > .agent-head > .agent-spinner {
+  animation: spin 0.7s linear infinite !important;
 }
