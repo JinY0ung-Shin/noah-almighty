@@ -2,6 +2,7 @@ import { api } from "./api";
 import { agentTitle } from "./agentCards";
 import { confirmAction } from "./confirm";
 import { loadConversations, loadMessages } from "./loaders";
+import { takeConversationLoad } from "./conversationPrefetch";
 import { syncHash } from "./nav";
 import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
@@ -316,6 +317,12 @@ async function findConversationSummary(
  * selections. Deliberately touches no global state — not `view`, not
  * `chatPanes`, not the hash — so the caller places the pane itself.
  * Returns null, having toasted, when the conversation is gone.
+ *
+ * The fetch itself is `takeConversationLoad` (lib/conversationPrefetch.ts): the
+ * rail may have STARTED it already on hover/press/focus, and this open then
+ * reuses that request instead of issuing a second one. Only the raw result is
+ * shared — the pane is built and applied HERE, at open time, for a prefetched
+ * and a cold load alike (this is the one applier for both open paths).
  */
 async function loadPaneForConversation(
   conversationId: string,
@@ -325,14 +332,9 @@ async function loadPaneForConversation(
     notify("대화를 찾을 수 없습니다.", "warn");
     return null;
   }
-  const [loaded, avatarRes] = await Promise.all([
-    loadMessages(conversationId),
-    api<{ avatar: AvatarDetail }>(
-      `/api/avatars/${encodeURIComponent(conv.avatarUserId)}`,
-    ),
-  ]);
+  const { loaded, avatar } = await takeConversationLoad(conv);
   const pane = makePane(
-    avatarRes.avatar,
+    avatar,
     conversationId,
     loaded.messages,
     loaded.canvases,
@@ -398,24 +400,9 @@ export async function addConversationToSplit(
     notify("분할 대화는 최대 4개까지 가능합니다.", "warn");
     return;
   }
-  const conv = await findConversationSummary(conversationId);
-  if (!conv) {
-    notify("대화를 찾을 수 없습니다.", "warn");
-    return;
-  }
-  const [loaded, avatarRes] = await Promise.all([
-    loadMessages(conversationId),
-    api<{ avatar: AvatarDetail }>(
-      `/api/avatars/${encodeURIComponent(conv.avatarUserId)}`,
-    ),
-  ]);
-  const pane = makePane(
-    avatarRes.avatar,
-    conversationId,
-    loaded.messages,
-    loaded.canvases,
-  );
-  applyLoadedConversation(pane, loaded);
+  // The SAME load-and-apply as selectConversation (prefetch reuse included).
+  const pane = await loadPaneForConversation(conversationId);
+  if (!pane) return;
   updateState((s) => {
     if (s.chatPanes.length >= MAX_CHAT_PANES) return;
     s.chatPanes.push(pane);

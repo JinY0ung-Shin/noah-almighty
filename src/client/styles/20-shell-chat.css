@@ -354,6 +354,34 @@
   line-height: 1.5;
 }
 
+/* Date groups (오늘 / 어제 / 지난 7일 / 지난 30일 / 그 이전): a heading over its own
+   list of rows. The heading is text only — never a control. */
+.conv-group {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0-5);
+  min-width: 0;
+}
+.conv-group + .conv-group {
+  margin-top: var(--s-2);
+}
+.conv-group-label {
+  margin: 0;
+  padding: var(--s-1) var(--s-2-5) var(--s-0-5);
+  font-size: var(--t-2xs);
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.008em;
+  color: var(--rail-muted);
+}
+.conv-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0-5);
+  min-width: 0;
+}
+
 .conv-item {
   position: relative;
   display: flex;

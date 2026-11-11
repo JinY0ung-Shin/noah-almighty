@@ -5,6 +5,9 @@
   import { api } from "../lib/api";
   import { confirmAction } from "../lib/confirm";
   import { addConversationToSplit, clearChatHistory, forgetConversationWidgets, newChat, selectConversation, startNewChat } from "../lib/chat";
+  import { groupConversationsByDate, localDayStart, msUntilNextLocalDay } from "../lib/conversationGroups";
+  import type { ConversationGroup } from "../lib/conversationGroups";
+  import { createIntentDwell, prefetchConversation, PREFETCH_DWELL_MS } from "../lib/conversationPrefetch";
   import { timeLabel } from "../lib/format";
   import { loadConversations, stopKnowledgeWatch } from "../lib/loaders";
   import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
@@ -78,13 +81,37 @@
   $: activeConversationId =
     $appState.chatPanes.find((pane) => pane.id === $appState.activePaneId)?.conversationId ?? null;
   $: conversationTokens = conversationQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  $: railConversations = $appState.conversations
-    .filter((conversation) => !conversation.isRoutine)
-    .filter((conversation) => {
-      if (!conversationTokens.length) return true;
-      const hay = [conversation.title, conversation.avatarDisplayName].filter(Boolean).join(" ").toLowerCase();
-      return conversationTokens.every((token) => hay.includes(token));
-    });
+  // Both steps hand back the SAME array while their inputs are the ones it was
+  // built from: `$appState` re-emits on every store write (token-rate while a run
+  // streams), and the list only changes when the conversations array is replaced
+  // or the query is. Every writer replaces the array — never edit a row in place.
+  let railFilterMemo: { source: ConversationSummary[]; tokens: string[]; list: ConversationSummary[] } | null = null;
+  function filterRailConversations(source: ConversationSummary[], tokens: string[]): ConversationSummary[] {
+    if (railFilterMemo && railFilterMemo.source === source && railFilterMemo.tokens === tokens) return railFilterMemo.list;
+    const list = source
+      .filter((conversation) => !conversation.isRoutine)
+      .filter((conversation) => {
+        if (!tokens.length) return true;
+        const hay = [conversation.title, conversation.avatarDisplayName].filter(Boolean).join(" ").toLowerCase();
+        return tokens.every((token) => hay.includes(token));
+      });
+    railFilterMemo = { source, tokens, list };
+    return list;
+  }
+  $: railConversations = filterRailConversations($appState.conversations, conversationTokens);
+
+  // Date groups (오늘 / 어제 / 지난 7일 / 지난 30일 / 그 이전). `groupNow` moves only
+  // when the LOCAL DATE does (the midnight timer below, or the tab coming back),
+  // so an app left open overnight regroups without a reload.
+  let groupNow = Date.now();
+  let groupMemo: { list: ConversationSummary[]; now: number; groups: ConversationGroup<ConversationSummary>[] } | null = null;
+  function groupRailConversations(list: ConversationSummary[], now: number): ConversationGroup<ConversationSummary>[] {
+    if (groupMemo && groupMemo.list === list && groupMemo.now === now) return groupMemo.groups;
+    const groups = groupConversationsByDate(list, now);
+    groupMemo = { list, now, groups };
+    return groups;
+  }
+  $: conversationGroups = groupRailConversations(railConversations, groupNow);
   $: chatConversationCount = $appState.conversations.filter((conversation) => !conversation.isRoutine).length;
   $: conversationResultStatus = conversationsLoading
     ? "대화 목록을 불러오는 중입니다."
@@ -105,8 +132,28 @@
       }
     };
     desktopRailMedia?.addEventListener?.("change", syncRailLayout);
+    // The date groups follow the local date: a timer for the next midnight, plus
+    // a re-check whenever the tab comes back (a sleeping laptop runs no timers).
+    let dayTimer: ReturnType<typeof setTimeout> | null = null;
+    const followLocalDay = () => {
+      const now = Date.now();
+      if (localDayStart(now) !== localDayStart(groupNow)) groupNow = now;
+      if (dayTimer !== null) clearTimeout(dayTimer);
+      dayTimer = setTimeout(followLocalDay, msUntilNextLocalDay(now) + 50);
+    };
+    const onTabBack = () => {
+      if (!document.hidden) followLocalDay();
+    };
+    followLocalDay();
+    document.addEventListener("visibilitychange", onTabBack);
+    window.addEventListener("focus", onTabBack);
     return () => {
       desktopRailMedia?.removeEventListener?.("change", syncRailLayout);
+      if (dayTimer !== null) clearTimeout(dayTimer);
+      document.removeEventListener("visibilitychange", onTabBack);
+      window.removeEventListener("focus", onTabBack);
+      hoverIntent.cancel();
+      focusIntent.cancel();
       if (railOpen) onMobileRailOpenChange(false);
     };
   });
@@ -159,10 +206,6 @@
     return busyConversationIds.has(id) || renamingBusyId === id;
   }
 
-  function isConversationStreaming(id: string): boolean {
-    return $appState.chatPanes.some((pane) => pane.conversationId === id && pane.streaming);
-  }
-
   // Live-run badge text from the last conversation-list load ("" = idle).
   function activeRunLabel(conversation: ConversationSummary): string {
     return conversation.activeRun ? "응답 생성 중" : "";
@@ -201,9 +244,13 @@
         method: "PATCH",
         body: JSON.stringify({ title }),
       });
+      // A NEW array, never an in-place edit: the rail's filtered/grouped list and
+      // the prefetch cache (which drops everything on a list change) both key on
+      // the list's identity.
       updateState((state) => {
-        const target = state.conversations.find((c) => c.id === conversation.id);
-        if (target) target.title = updated?.title || title;
+        state.conversations = state.conversations.map((c) =>
+          c.id === conversation.id ? { ...c, title: updated?.title || title } : c,
+        );
       });
       notify("대화 이름을 변경했습니다.", "ok");
       renamingId = "";
@@ -504,6 +551,35 @@
     }
   }
 
+  // ---- Prefetch on intent ---------------------------------------------------
+  // Hover (after a short dwell), a press, or keyboard focus on a row starts the
+  // SAME fetch the click would, and the click reuses it (lib/conversationPrefetch.ts
+  // — which also owns every guard and invalidation). Purely an optimization: a
+  // touch tap, or a click that beats the dwell, just loads as before.
+  function prefetchRow(id: string): void {
+    if (renamingId === id || isConversationBusy(id)) return;
+    // Looked up when the dwell ENDS, so the run state is the list's current one.
+    const conversation = $appState.conversations.find((item) => item.id === id);
+    if (conversation) prefetchConversation(conversation);
+  }
+  const hoverIntent = createIntentDwell(prefetchRow, PREFETCH_DWELL_MS);
+  const focusIntent = createIntentDwell(prefetchRow, PREFETCH_DWELL_MS);
+
+  function onRowPointerEnter(event: PointerEvent, id: string): void {
+    // Touch has no hover — its pointerenter is the start of a tap or a scroll.
+    if (event.pointerType === "touch") return;
+    hoverIntent.arm(id);
+  }
+
+  // A press on the open / split button needs no dwell. Not for touch: there a
+  // press is as often the start of a list scroll, and tap → click leaves no gap
+  // to win.
+  function onRowPress(event: PointerEvent, id: string): void {
+    if (event.pointerType === "touch" || event.button) return;
+    hoverIntent.cancel(id);
+    prefetchRow(id);
+  }
+
   function conversationTitle(conversation: ConversationSummary) {
     return conversation.title || conversation.avatarDisplayName || "제목 없는 대화";
   }
@@ -726,12 +802,9 @@
         {/if}
       </div>
       <div id="rail-conversation-status" class="sr-only" role="status" aria-live="polite">{conversationResultStatus}</div>
-      <div
-        id="rail-conversation-list"
-        class="conv-list scroll-thin"
-        role={!conversationsLoading && !conversationsError && railConversations.length ? "list" : undefined}
-        aria-label={!conversationsLoading && !conversationsError && railConversations.length ? "내 대화 목록" : undefined}
-      >
+      <!-- No list role here: each date group below is its own list, labelled by
+           its heading. -->
+      <div id="rail-conversation-list" class="conv-list scroll-thin">
         {#if conversationsLoading}
           <div class="conv-empty" role="status">불러오는 중…</div>
         {:else if conversationsError}
@@ -742,8 +815,18 @@
         {:else if !railConversations.length}
           <div class="conv-empty">{conversationQuery ? "검색 결과가 없습니다." : "아직 저장된 대화가 없습니다."}</div>
         {:else}
-          {#each railConversations as conversation (conversation.id)}
+          {#each conversationGroups as group (group.id)}
+          <div class="conv-group">
+            <!-- A real heading, not a control: never focusable or clickable. -->
+            <h3 class="conv-group-label" id={`rail-conversation-group-${group.id}`}>{group.label}</h3>
+            <div class="conv-group-list" role="list" aria-labelledby={`rail-conversation-group-${group.id}`}>
+          {#each group.items as conversation (conversation.id)}
             {@const liveLabel = activeRunLabel(conversation)}
+            <!-- Named HERE, not read inside a helper the markup calls: legacy mode
+                 tracks only what the expression names, and the lock would otherwise
+                 stay drawn until some unrelated store write. -->
+            {@const rowBusy = busyConversationIds.has(conversation.id) || renamingBusyId === conversation.id}
+            {@const rowStreaming = $appState.chatPanes.some((pane) => pane.conversationId === conversation.id && pane.streaming)}
             {@const openLabel = liveLabel
               ? `대화 열기: ${conversationTitle(conversation)} · ${liveLabel}`
               : `대화 열기: ${conversationTitle(conversation)}`}
@@ -752,11 +835,15 @@
               class="conv-item"
               class:active={conversation.id === activeConversationId}
               class:editing={renamingId === conversation.id}
-              class:busy={isConversationBusy(conversation.id)}
-              aria-busy={isConversationBusy(conversation.id) ? "true" : "false"}
+              class:busy={rowBusy}
+              aria-busy={rowBusy ? "true" : "false"}
               role="listitem"
-              draggable={renamingId !== conversation.id && !isConversationBusy(conversation.id)}
+              draggable={renamingId !== conversation.id && !rowBusy}
               on:dragstart={(event) => onConvDragStart(event, conversation)}
+              on:pointerenter={(event) => onRowPointerEnter(event, conversation.id)}
+              on:pointerleave={() => hoverIntent.cancel(conversation.id)}
+              on:focusin={() => focusIntent.arm(conversation.id)}
+              on:focusout={() => focusIntent.cancel(conversation.id)}
             >
               {#if renamingId === conversation.id}
                 <div class="conv-edit-wrap">
@@ -801,7 +888,8 @@
                   title={openLabel}
                   aria-label={openLabel}
                   aria-current={conversation.id === activeConversationId ? "true" : undefined}
-                  disabled={isConversationBusy(conversation.id)}
+                  disabled={rowBusy}
+                  on:pointerdown={(event) => onRowPress(event, conversation.id)}
                   on:click={() => openConversation(conversation)}
                 >
                   <span class="conv-name">{conversationTitle(conversation)}</span>
@@ -822,7 +910,8 @@
                     type="button"
                     aria-label={`분할 대화에 추가: ${conversationTitle(conversation)}`}
                     title={paneCount >= 4 ? "분할 대화는 최대 4개" : "분할 대화에 추가"}
-                    disabled={paneCount >= 4 || isConversationBusy(conversation.id)}
+                    disabled={paneCount >= 4 || rowBusy}
+                    on:pointerdown={(event) => onRowPress(event, conversation.id)}
                     on:click={(event) => addToSplit(conversation, event)}
                   >
                     <Icon name="columns" size={15} />
@@ -832,7 +921,7 @@
                     type="button"
                     aria-label={`대화 이름 바꾸기: ${conversationTitle(conversation)}`}
                     title="이름 바꾸기"
-                    disabled={isConversationBusy(conversation.id)}
+                    disabled={rowBusy}
                     on:click={(event) => startRename(conversation, event)}
                   >
                     <Icon name="edit" size={15} />
@@ -841,8 +930,8 @@
                     class="conv-act danger"
                     type="button"
                     aria-label={`대화 삭제: ${conversationTitle(conversation)}`}
-                    title={isConversationStreaming(conversation.id) ? "응답 중인 대화는 삭제할 수 없습니다" : "삭제"}
-                    disabled={isConversationBusy(conversation.id) || isConversationStreaming(conversation.id)}
+                    title={rowStreaming ? "응답 중인 대화는 삭제할 수 없습니다" : "삭제"}
+                    disabled={rowBusy || rowStreaming}
                     on:click={(event) => deleteConversation(conversation, event)}
                   >
                     <Icon name="trash" size={15} />
@@ -850,6 +939,9 @@
                 </div>
               {/if}
             </div>
+          {/each}
+            </div>
+          </div>
           {/each}
         {/if}
       </div>
