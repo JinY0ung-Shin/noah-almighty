@@ -305,7 +305,11 @@
   `#/teamBrain`)** — the old single 지식 그래프 item with in-view tabs is gone. Both render `BrainView`
   (`scope` prop); 팀 브레인 goes through the thin `TeamBrainView.tsx` wrapper so switching between them
   REMOUNTS (`App.tsx` renders the active view in one place, and React keeps an instance whose component
-  type did not change — `BrainView` rendered for both would keep its state). The team
+  type did not change — `BrainView` rendered for both would keep its state). The reading pane's width is
+  ONE device-local value for both brains (`localStorage["noah.brainNoteWidth"]`, px; absent = the CSS
+  default `min(51%, 720px)`), dragged on the `.brain-splitter` between graph and pane (arrow keys; Home /
+  double-click = back to the default) and applied as `--brain-note-w`; the CSS clamp keeps both the pane
+  and the graph at 320px or more whatever is stored, and the splitter is hidden once the panes stack. The team
   view's side panel (no node selected) lists 내 제안 (status + rejection reason) and, for admins, 검토 대기
   with a **검토 시작** button per row: `openSeededChat` → a new chat with the admin's OWN avatar, the composer
   pre-filled (not sent) with a review request naming ONLY the proposal id — never the teammate-written

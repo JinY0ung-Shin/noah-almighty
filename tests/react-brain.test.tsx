@@ -144,3 +144,106 @@ describe("BrainView team proposals", () => {
     expect(readState().chatPanes[0]?.messages ?? []).toHaveLength(0);
   });
 });
+
+describe("BrainView note pane width", () => {
+  const KEY = "noah.brainNoteWidth";
+  // jsdom lays nothing out: a 1400px body, and a pane that is as wide as its dragged width (700px by default).
+  const BODY = 1400;
+  const DEFAULT = 700;
+
+  beforeEach(() => {
+    localStorage.clear();
+    replaceState({ user, view: "teamBrain" });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const body = String(input) === "/api/team-brain/graph" ? { graph: { nodes: [], edges: [] } } : { proposals: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const width = this.classList.contains("brain-body")
+        ? BODY
+        : this.classList.contains("brain-note")
+          ? parseFloat(this.style.getPropertyValue("--brain-note-w")) || DEFAULT
+          : 0;
+      return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  function parts(): { splitter: HTMLElement; note: HTMLElement } {
+    return {
+      splitter: screen.getByRole("separator", { name: "노트 패널 너비 조절" }),
+      note: screen.getByRole("complementary", { name: "노트 내용" }),
+    };
+  }
+  const widthOf = (note: HTMLElement) => note.style.getPropertyValue("--brain-note-w");
+
+  it("leaves the CSS default alone until a width is stored, and applies a stored one", () => {
+    const first = render(<BrainView scope="team" />);
+    expect(widthOf(parts().note)).toBe("");
+    first.unmount();
+
+    localStorage.setItem(KEY, "640");
+    render(<BrainView scope="team" />);
+    expect(widthOf(parts().note)).toBe("640px");
+    expect(parts().splitter.getAttribute("aria-valuenow")).toBe("640");
+  });
+
+  it("ignores a stored width that is not a usable number", () => {
+    localStorage.setItem(KEY, "12");
+    render(<BrainView scope="team" />);
+    expect(widthOf(parts().note)).toBe("");
+  });
+
+  it("widens and narrows from the keyboard, bounded by what the graph can spare, and resets on Home", () => {
+    render(<BrainView scope="team" />);
+    const { splitter, note } = parts();
+
+    fireEvent.keyDown(splitter, { key: "ArrowLeft" });
+    expect(widthOf(note)).toBe(`${DEFAULT + 16}px`);
+    expect(localStorage.getItem(KEY)).toBe(String(DEFAULT + 16));
+
+    fireEvent.keyDown(splitter, { key: "ArrowRight", shiftKey: true });
+    expect(widthOf(note)).toBe(`${DEFAULT + 16 - 48}px`);
+
+    fireEvent.keyDown(splitter, { key: "End" });
+    expect(widthOf(note)).toBe(`${BODY - 320 - 16}px`);
+    fireEvent.keyDown(splitter, { key: "ArrowLeft" });
+    expect(widthOf(note)).toBe(`${BODY - 320 - 16}px`);
+
+    fireEvent.keyDown(splitter, { key: "Home" });
+    expect(widthOf(note)).toBe("");
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("follows a drag (left = wider), never under the minimum, and stores the width on release", () => {
+    render(<BrainView scope="team" />);
+    const { splitter, note } = parts();
+
+    fireEvent.pointerDown(splitter, { clientX: 600, pointerId: 1 });
+    expect(document.body.classList.contains("col-resizing")).toBe(true);
+    fireEvent.pointerMove(splitter, { clientX: 500, pointerId: 1 });
+    expect(widthOf(note)).toBe(`${DEFAULT + 100}px`);
+    expect(localStorage.getItem(KEY)).toBeNull();
+    fireEvent.pointerMove(splitter, { clientX: 1300, pointerId: 1 });
+    expect(widthOf(note)).toBe("320px");
+    fireEvent.pointerUp(splitter, { pointerId: 1 });
+    expect(document.body.classList.contains("col-resizing")).toBe(false);
+    expect(localStorage.getItem(KEY)).toBe("320");
+
+    fireEvent.doubleClick(splitter);
+    expect(widthOf(note)).toBe("");
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
+  it("stores nothing for a press that never moves", () => {
+    render(<BrainView scope="team" />);
+    const { splitter, note } = parts();
+    fireEvent.pointerDown(splitter, { clientX: 600, pointerId: 1 });
+    fireEvent.pointerUp(splitter, { pointerId: 1 });
+    expect(widthOf(note)).toBe("");
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+});

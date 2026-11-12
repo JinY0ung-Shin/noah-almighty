@@ -69,11 +69,11 @@
   line-height: 1.6;
 }
 
+/* No gap: the splitter between the two panes is as wide as the gap was. */
 .brain-body:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: var(--s-4);
 }
 .brain-graph:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
   flex: 1 1 auto;
@@ -114,9 +114,44 @@
   margin-left: var(--s-2);
 }
 
-/* The reading pane: an opaque surface (DESIGN §1 — reading content is never glass). */
+/* Vertical drag handle between the graph and the reading pane (the `.routine-splitter` pattern,
+   DESIGN §2): a short centered grip, painted with the focus ring when focused. */
+.brain-splitter:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
+  flex: none;
+  align-self: stretch;
+  width: var(--s-4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.brain-splitter-grip:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
+  width: 3px;
+  height: 40px;
+  border-radius: var(--r-pill);
+  background: var(--line);
+  opacity: 0;
+  transition: opacity 0.12s var(--ease-out), background 0.12s var(--ease-out);
+}
+.brain-splitter:hover:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) .brain-splitter-grip {
+  opacity: 1;
+}
+.brain-splitter:focus-visible:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) .brain-splitter-grip {
+  opacity: 1;
+  height: 100%;
+  background: var(--focus-ring);
+}
+.brain-splitter:focus-visible:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
+  outline: none;
+}
+
+/* The reading pane: an opaque surface (DESIGN §1 — reading content is never glass).
+   Width: the splitter's `--brain-note-w` (px) when the user dragged one, else half the body up to
+   720px. The clamp is the backstop — never under 320px, never leaving the graph under 320px. */
 .brain-note:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  flex: 0 0 clamp(320px, 34%, 480px);
+  flex: 0 0 clamp(320px, var(--brain-note-w, min(51%, 720px)), calc(100% - 320px - var(--s-4)));
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -360,7 +395,12 @@
 @media (max-width: 960px) {
   .brain-body:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
     flex-direction: column;
+    gap: var(--s-4);
     overflow-y: auto;
+  }
+  /* Stacked: the pane is full width, so there is nothing to drag. */
+  .brain-splitter:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
+    display: none;
   }
   .brain-graph:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
     flex: none;

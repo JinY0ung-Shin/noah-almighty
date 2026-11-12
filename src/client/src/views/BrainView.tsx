@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import GraphCanvas from "../components/GraphCanvas";
 import Icon from "../components/Icon";
 import { api } from "../lib/api";
@@ -49,6 +57,31 @@ function startReview(p: ProposalRow): void {
     `팀 브레인 제안 ${p.id} 를 검토해줘. team-brain-curate 절차대로 내용을 확인하고 위키 페이지로 정리한 뒤, 승인·보완 요청·반려 중 무엇을 추천하는지 이유와 함께 알려줘.`,
     "입력창에 검토 요청을 준비했습니다. 보내기를 누르면 아바타가 검토를 시작해요.",
   );
+}
+
+// The reading pane's width. Nothing stored = the CSS default (`min(51%, 720px)`); a dragged width is px,
+// bounded here to what the graph can spare and again by the CSS clamp, so a stale value (a smaller
+// window, another monitor) can never squeeze the graph out.
+const NOTE_MIN = 320;
+const GRAPH_MIN = 320;
+const SPLITTER_WIDTH = 16; // `.brain-splitter` (--s-4)
+const NOTE_WIDTH_KEY = "noah.brainNoteWidth";
+
+function loadNoteWidth(): number | null {
+  try {
+    const n = Number(window.localStorage.getItem(NOTE_WIDTH_KEY) ?? NaN);
+    return Number.isFinite(n) && n >= NOTE_MIN ? n : null;
+  } catch {
+    return null;
+  }
+}
+function storeNoteWidth(width: number | null): void {
+  try {
+    if (width === null) window.localStorage.removeItem(NOTE_WIDTH_KEY);
+    else window.localStorage.setItem(NOTE_WIDTH_KEY, String(width));
+  } catch {
+    /* private mode: the width just won't persist */
+  }
 }
 
 function dotStyle(section: string): CSSProperties {
@@ -133,6 +166,91 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
   // 뒤로 returns to the note you came from; a pick on the canvas starts afresh.
   const [noteHistory, setNoteHistory] = useState<KnowledgeGraphNode[]>([]);
   const noteEl = useRef<HTMLElement | null>(null);
+
+  // One width for both brains (personal and team share this view). `null` = the CSS default.
+  const bodyEl = useRef<HTMLDivElement | null>(null);
+  const [noteWidth, setNoteWidthState] = useState<number | null>(loadNoteWidth);
+  const noteWidthRef = useRef(noteWidth); // the same width, for a drag's pointer listeners
+  // What the layout actually gave the pane and the most it may take — the splitter's aria values.
+  const [measured, setMeasured] = useState({ width: 0, max: 0 });
+
+  function noteMax(): number {
+    const body = bodyEl.current?.getBoundingClientRect().width ?? 0;
+    return Math.max(NOTE_MIN, body - GRAPH_MIN - SPLITTER_WIDTH);
+  }
+  /** The width on screen: the default is CSS-sized, so it has to be measured. */
+  function shownNoteWidth(): number {
+    return noteEl.current?.getBoundingClientRect().width || noteWidthRef.current || NOTE_MIN;
+  }
+  function setNoteWidth(width: number | null): void {
+    const next = width === null ? null : Math.round(Math.min(noteMax(), Math.max(NOTE_MIN, width)));
+    noteWidthRef.current = next;
+    setNoteWidthState(next);
+  }
+  function saveNoteWidth(width: number | null): void {
+    setNoteWidth(width);
+    storeNoteWidth(noteWidthRef.current);
+  }
+  function onSplitterPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startW = shownNoteWidth();
+    const handle = event.currentTarget;
+    // Captured, so the drag keeps its pointer over the graph canvas and outside the window.
+    handle.setPointerCapture?.(event.pointerId);
+    document.body.classList.add("col-resizing");
+    const onMove = (ev: PointerEvent) => {
+      // The pane sits at the right edge → dragging left (smaller clientX) widens it.
+      setNoteWidth(startW + (startX - ev.clientX));
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.classList.remove("col-resizing");
+      // A press without a move leaves the default in place.
+      if (noteWidthRef.current !== null) storeNoteWidth(noteWidthRef.current);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+  function onSplitterKeydown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    const step = event.shiftKey ? 48 : 16;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      saveNoteWidth(shownNoteWidth() + step);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      saveNoteWidth(shownNoteWidth() - step);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      saveNoteWidth(null);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      saveNoteWidth(noteMax());
+    }
+  }
+
+  useEffect(() => {
+    // Never strand the drag cursor/user-select lock if the view unmounts mid-resize.
+    return () => document.body.classList.remove("col-resizing");
+  }, []);
+
+  useEffect(() => {
+    if (!showGraph || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const next = { width: shownNoteWidth(), max: noteMax() };
+      setMeasured((prev) => (prev.width === next.width && prev.max === next.max ? prev : next));
+    });
+    if (noteEl.current) observer.observe(noteEl.current);
+    if (bodyEl.current) observer.observe(bodyEl.current);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showGraph]);
+
+  const splitterNow = Math.round(measured.width || noteWidth || NOTE_MIN);
+  const splitterMax = Math.round(Math.max(measured.max, splitterNow));
 
   const stats = graph
     ? { notes: graph.nodes.filter((n) => !n.dangling).length, links: graph.edges.length, dangling: graph.nodes.filter((n) => n.dangling).length }
@@ -305,7 +423,7 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
           </button>
         </section>
       ) : (
-        <div className="brain-body">
+        <div className="brain-body" ref={bodyEl}>
           <div id="brain-graph-panel" className="brain-graph" aria-busy={loading ? "true" : "false"}>
             {loading ? (
               <div className="brain-state brain-graph-state muted" role="status">
@@ -355,7 +473,34 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
             ) : null}
           </div>
 
-          <aside className="brain-note" aria-label="노트 내용" ref={noteEl}>
+          {/* Drag to resize the reading pane; double-click (or Home) returns to the default.
+              role="separator" + tabindex + arrow keys IS the WAI-ARIA window-splitter pattern. */}
+          <div
+            className="brain-splitter"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="노트 패널 너비 조절"
+            aria-controls="brain-note-panel"
+            aria-valuenow={splitterNow}
+            aria-valuemin={NOTE_MIN}
+            aria-valuemax={splitterMax}
+            aria-valuetext={`${splitterNow}px`}
+            tabIndex={0}
+            title="드래그해서 너비 조절 · 더블클릭으로 초기화"
+            onPointerDown={onSplitterPointerDown}
+            onKeyDown={onSplitterKeydown}
+            onDoubleClick={() => saveNoteWidth(null)}
+          >
+            <span className="brain-splitter-grip" aria-hidden="true"></span>
+          </div>
+
+          <aside
+            id="brain-note-panel"
+            className="brain-note"
+            aria-label="노트 내용"
+            ref={noteEl}
+            style={noteWidth === null ? undefined : ({ "--brain-note-w": `${noteWidth}px` } as CSSProperties)}
+          >
             {selected ? (
               <>
                 <div className="brain-note-nav">
