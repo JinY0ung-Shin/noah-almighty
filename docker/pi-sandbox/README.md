@@ -14,10 +14,11 @@ migration, design §6 N8.
 | Chromium | Debian `chromium-headless-shell` 156.0.8078.47 (`/usr/lib/chromium/chromium-headless-shell`) + `fontconfig` |
 | playwright-core | 1.61.1 = `package.json`'s pin, in `/usr/local/lib/node_modules` (+ link in `/usr/local/lib/node`) |
 | Python set | `converter/requirements.txt` (python-pptx 1.0.2, lxml 6.1.3, Pillow 12.3.0, …) for CPython 3.12 |
+| Python extras | `docker/pi-sandbox/requirements.txt` — `requests`, `urllib3` (version RANGES: whatever the pip mirror carries), for the avatar's own scripts. They leave through the sandbox's egress proxy like curl does, so `SANDBOX_EGRESS_ALLOW` still decides what they reach |
 | fonts | the converter's Pretendard ×4, Gothic A1 ×2, Selawik ×2 in `/usr/local/share/fonts/noah-deck` (`60-noah-deck-fonts.conf`, same 맑은 고딕 aliases as the main image) + `fonts-nanum` |
 | tools | `poppler-utils` (pdftotext, pdftoppm), uv/uvx 0.8.17, git (base) |
 | self-test record | `/usr/local/share/noah-almighty/deck-selftest.json` — the probe's default path |
-| env | `NOAH_PPTX_MAX_CONCURRENT=1` (see "Concurrency") — nothing else |
+| env | `NOAH_PPTX_MAX_CONCURRENT=1` (see "Concurrency") and `REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt` (requests ignores the system store; this makes it trust `CA_CERT_FILE` like curl/git do) — nothing else |
 
 **Not in the image:** the skill tree (Noah supplies it at runtime), LibreOffice (its approximate previews
 stay on the Noah side), any secret. Image content 439 MB compressed (base 140 MB), 1.63 GB unpacked.

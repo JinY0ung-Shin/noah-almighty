@@ -209,6 +209,15 @@ export const DOCUMENT_TYPES_PHRASE = CHAT_DOCUMENT_EXTENSIONS.join(", ");
 export const DOCUMENT_LIBRARIES_PHRASE = "pypdf, python-docx, python-pptx, openpyxl, pandas";
 
 /**
+ * The HTTP libraries Noah's sandbox image adds for the avatar's own scripts
+ * (`docker/pi-sandbox/requirements.txt`), ONE sentence for the prompt append
+ * and describe_system. Said only when `PiRuntimeFacts.httpLibraries` holds.
+ * They are no way around the egress allowlist, and the sentence says so.
+ */
+export const SANDBOX_HTTP_LIBRARIES_SENTENCE =
+  "Python in your shell has `requests` and `urllib3` for HTTP(S) calls: they leave through the same egress proxy and allowlist as curl (a refused destination is the same `407`), and verify TLS against the sandbox's system CA bundle.";
+
+/**
  * A text attachment's encoding is not checked at intake (the fleet's Excel
  * exports are often CP949/EUC-KR), so every place that tells the avatar to read
  * an attached file carries this clause.

@@ -832,6 +832,8 @@ export async function buildRunCapabilities(
         nonInteractive,
         // The same function the chat route's refusal reads.
         documentAttachments: documentAttachmentsAllowed(request),
+        // requests/urllib3 come with Noah's sandbox image, and need a shell to be of use.
+        httpLibraries: Boolean(config.pi?.deckSandbox) && !readOnlyBuiltins,
         mcpProxies: piMcpProxies.facts,
         asyncAskAvatar: piAsyncAsk,
         ...(runOptions.piConversationDir ? { conversationDir: runOptions.piConversationDir } : {}),

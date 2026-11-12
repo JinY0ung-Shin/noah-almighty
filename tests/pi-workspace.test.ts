@@ -710,6 +710,8 @@ describe("run capabilities on pi", () => {
     );
     expect(offCaps.mcpAllowedTools).toContain(GIT_REPO_PI_COMMIT_TOOL_NAME);
     expect(offCaps.mcpAllowedTools).not.toContain("mcp__skills__read");
+    // requests/urllib3 come with Noah's sandbox image: without the flag nothing is promised.
+    expect(offCaps.piRuntimeFacts?.httpLibraries).toBe(false);
     off.store.close();
     services = undefined;
 
@@ -737,6 +739,19 @@ describe("run capabilities on pi", () => {
     expect(buildSystemPromptAppend(stamped)).not.toContain("Your working copy is");
     expect(buildPiTurnPreamble(stamped)).toContain(`Your working copy is \`${piRepoCopySandboxPath(on.owner.id, "app")}/\``);
     expect(piSandboxDeckToolchain({ defaultPluginsDir: "", pi: undefined }).converter).toBe(false);
+    // The same flag says the image has requests/urllib3 — on BOTH surfaces, in one sentence.
+    expect(caps.piRuntimeFacts?.httpLibraries).toBe(true);
+    expect(buildSystemPromptAppend(stamped)).toContain("Python in your shell has `requests` and `urllib3`");
+    const describeOn = (await callServerTool(caps.inProcessMcpServers.system, "describe_system", {})).content[0]!.text;
+    expect(describeOn).toContain("Python in your shell has `requests` and `urllib3`");
+    // A colleague's session is read-only (no shell): the libraries are of no use there.
+    const asMate = { viewerUserId: on.mate.id, viewerIsOwner: false, elevated: true };
+    const mateCaps = await buildRunCapabilities(request(on.owner, asMate), [], on.config, on.store, undefined, undefined, () => 0, {});
+    expect(mateCaps.piRuntimeFacts?.readOnlyBuiltins).toBe(true);
+    expect(mateCaps.piRuntimeFacts?.httpLibraries).toBe(false);
+    expect(buildSystemPromptAppend(stampPromptRequest(request(on.owner, asMate), mateCaps, on.config, undefined))).not.toContain(
+      "`requests` and `urllib3`",
+    );
   });
 
   it("a colleague's run with a repo open has no copy path and is pointed at the read tools on every surface (review #11)", async () => {

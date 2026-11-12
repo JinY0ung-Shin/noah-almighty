@@ -1823,6 +1823,16 @@ describe("buildPrompt", () => {
     expect(bare).not.toContain("ALL local avatars and server tools, including Bash/curl/Python");
   });
 
+  it("names requests/urllib3 only on a run whose sandbox image has them, and never as a way past the allowlist", () => {
+    const base = { conversationDir: "/workspace/c/x", readOnlyBuiltins: false, shellSecretNames: [] };
+    const withLibraries = buildSystemPromptAppend(req({ piRuntime: { ...base, httpLibraries: true } }));
+    expect(withLibraries).toContain("Python in your shell has `requests` and `urllib3` for HTTP(S) calls");
+    expect(withLibraries).toContain("same egress proxy and allowlist as curl");
+    // Not Noah's sandbox image (PI_DECK_SANDBOX off), or a read-only session: nothing is promised.
+    expect(buildSystemPromptAppend(req({ piRuntime: base }))).not.toContain("`requests` and `urllib3`");
+    expect(buildSystemPromptAppend(req({ piRuntime: { ...base, httpLibraries: false } }))).not.toContain("`requests` and `urllib3`");
+  });
+
   it("omits prompt guidance for disabled MCP tool groups", () => {
     const p = buildPrompt(
       req({

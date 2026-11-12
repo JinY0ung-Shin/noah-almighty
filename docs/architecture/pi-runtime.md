@@ -198,6 +198,14 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
   openpyxl matplotlib` (pi `images/sandbox/Dockerfile`). Noah's deployed pi prompt
   (`scripts/pi-system-prompt.md`), the frozen append's **Attached documents** note, the per-turn documents line
   and describe_system name them, so the avatar reads an attached file instead of asking for a paste.
+- **Noah's image adds `requests` and `urllib3`** (`docker/pi-sandbox/requirements.txt`, 2026-11-12; version
+  RANGES so the build takes whatever the pip mirror carries, installed AFTER the converter's pinned set so
+  its pins stand). They are for the avatar's own scripts and open NOTHING: they leave through the same egress
+  proxy and `SANDBOX_EGRESS_ALLOW` as curl. The image sets `REQUESTS_CA_BUNDLE` to the system bundle, because
+  requests otherwise trusts only certifi's roots and would refuse an internal host signed by `CA_CERT_FILE`
+  that curl accepts. State on both surfaces: `PiRuntimeFacts.httpLibraries` (= `PI_DECK_SANDBOX` AND a
+  shell, i.e. not a `read_only` session) → `SANDBOX_HTTP_LIBRARIES_SENTENCE` (`ownerState.ts`). A further
+  library goes into that file, the Dockerfile's import check and — if the avatar should know — that sentence.
 - **Built-in subagents.** pi now ALWAYS offers `Agent` / `SendMessage` with a built-in `general-purpose`
   subagent (`agent/subagents.ts`; before, only when a plugin shipped an agent). A subagent is a child pi
   session in the SAME sandbox with the parent's tools minus `Agent`, `SendMessage`, `AskUserQuestion`,

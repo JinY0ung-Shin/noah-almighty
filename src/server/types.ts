@@ -228,6 +228,14 @@ export interface PiRuntimeFacts {
    */
   documentAttachments?: boolean;
   /**
+   * Python in this run's shell has `requests` and `urllib3`: the sandbox image
+   * is Noah's own (`PI_DECK_SANDBOX`, the operator's flag that `SANDBOX_IMAGE`
+   * is the `docker/pi-sandbox` image — never a probe) AND the run has a shell
+   * (not a `read_only` session). Both surfaces say it with
+   * `SANDBOX_HTTP_LIBRARIES_SENTENCE`.
+   */
+  httpLibraries?: boolean;
+  /**
    * The Noah MCP tools THIS run registered (`mcpAllowedTools`), full names —
    * describe_system's live "callable now" line. Set by the capability plan.
    */

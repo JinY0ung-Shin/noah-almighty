@@ -1,0 +1,11 @@
+# General-purpose Python libraries Noah adds to the sandbox image, on top of pi's own set
+# (numpy, pandas, openpyxl, matplotlib, pypdf, python-docx, python-pptx — pi images/sandbox/Dockerfile)
+# and the deck converter's pinned set (default-skills/skills/pptx/converter/requirements.txt).
+#
+# RANGES, not exact pins, on purpose: these are for the avatar's own scripts, nothing in Noah depends on
+# an exact version, and the build must go through with whatever release the pip mirror carries
+# (PIP_INDEX_URL). The upper bound only keeps a future major version from arriving unannounced.
+# A new library here also goes into SANDBOX_HTTP_LIBRARIES_SENTENCE-style wording if the avatar should
+# know about it (src/server/agent/ownerState.ts) and into the Dockerfile's import check.
+requests>=2.31,<3
+urllib3>=1.26,<3

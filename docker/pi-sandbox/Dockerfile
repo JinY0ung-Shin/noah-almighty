@@ -8,6 +8,8 @@
 #   Python set (converter/requirements.txt), the vendored deck fonts + fonts-nanum, poppler-utils
 #   (pdftotext/pdftoppm), uv/uvx, an optional corporate CA, and the build-time self-test record the
 #   converter's probe reports. LibreOffice is NOT here: its approximate previews stay on the Noah side.
+# It also carries the general-purpose Python libraries Noah adds for the avatar's own scripts
+# (docker/pi-sandbox/requirements.txt: requests, urllib3).
 #
 # The skill tree itself is NOT baked in — Noah supplies it at runtime (docker/pi-sandbox/README.md). Build
 # from the Noah repository root (the ignore file next to this Dockerfile trims the context):
@@ -81,6 +83,19 @@ RUN if [ -n "$PIP_INDEX_URL" ]; then \
   && rm -f /tmp/deck-requirements.txt \
   && python3 -c "import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter"
 
+# General-purpose libraries for the avatar's own scripts (docker/pi-sandbox/requirements.txt: requests,
+# urllib3). AFTER the converter's set, so its pins stand: pip adds only what is missing (their
+# dependencies are certifi, idna and charset-normalizer, none of which the converter pins).
+COPY docker/pi-sandbox/requirements.txt /tmp/sandbox-requirements.txt
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+      pip3 install --no-cache-dir --root-user-action=ignore --index-url "$PIP_INDEX_URL" ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} -r /tmp/sandbox-requirements.txt; \
+    else \
+      pip3 install --no-cache-dir --root-user-action=ignore -r /tmp/sandbox-requirements.txt; \
+    fi \
+  && rm -f /tmp/sandbox-requirements.txt \
+  && python3 -c "import requests, urllib3; import pptx, lxml, PIL, fontTools, defusedxml, openpyxl, xlsxwriter" \
+  && test -s /etc/ssl/certs/ca-certificates.crt
+
 # playwright-core, the SAME pin as Noah's package.json (tests/pi-sandbox-image.test.ts keeps them equal).
 # The converter resolves it with createRequire(import.meta.url) from the skill's own directory. The skill
 # lives OUTSIDE any node_modules tree here (under /workspace or /opt/plugins), so it is found through
@@ -149,6 +164,13 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
 # (NOAH_PPTX_SLOT_WAIT_SECONDS, default 150 s) instead. `deck.sh probe` reports the value.
 ARG DECK_MAX_CONCURRENT=1
 ENV NOAH_PPTX_MAX_CONCURRENT=${DECK_MAX_CONCURRENT}
+
+# requests verifies TLS against certifi's own bundle, never the system store — so it would refuse an
+# internal HTTPS host signed by the corporate CA that CA_CERT_FILE put into the system bundle above,
+# while curl and git in the same sandbox accept it. Point it at the system bundle (Debian's public
+# roots + that CA). Set here, after every build step, so nothing in this build depends on it; the
+# runtime pip the avatar may run reads the same variable and gains the same trust.
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 USER 1000:1000
 WORKDIR /workspace

@@ -6,6 +6,7 @@ import { kstDateTimeString } from "../routineSchedule.js";
 import {
   DOCUMENT_ENCODING_CLAUSE,
   DOCUMENT_LIBRARIES_PHRASE,
+  SANDBOX_HTTP_LIBRARIES_SENTENCE,
   DOCUMENT_TYPES_PHRASE,
   DOCUMENT_UPLOADS_SENTENCE,
   GROUP_REPOS_RETIRED_SENTENCE,
@@ -854,6 +855,7 @@ function piRuntimeSection(request: AgentRequest): string | null {
     "A refused call says why: do not retry it or look for a shell workaround. " +
     "The user cannot see files in the sandbox, so put the content in your reply or publish the file with the file-output tools when they are available. " +
     "There is no web-search tool and no web-fetch tool on this runtime: read a page from your shell when you have one and the destination is on the pi operator's allowlist, or with the browser tools when this run has them; otherwise say you cannot open it and ask the user to paste the content. " +
+    (pi.httpLibraries ? `${SANDBOX_HTTP_LIBRARIES_SENTENCE} ` : "") +
     piRelayedMcpSentence(pi) +
     piAsyncToolsSentence(request) +
     PI_EFFORT_CLAMP_SENTENCE +

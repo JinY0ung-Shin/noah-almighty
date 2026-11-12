@@ -45,8 +45,12 @@ describe("pi sandbox image", () => {
       for (const i of ins.filter((x) => x.includes(helper) && !x.startsWith("CMD "))) expect(i).toMatch(/^RUN .*test -[xf] /);
     }
     expect(dockerfile).not.toMatch(/^\s*ENV\s+.*(TOKEN|SECRET|PASSWORD|API_KEY)/im);
-    // The only ENV is the per-sandbox conversion slot count (proxy env would break derived builds).
-    expect(ins.filter((i) => i.startsWith("ENV "))).toEqual(["ENV NOAH_PPTX_MAX_CONCURRENT=${DECK_MAX_CONCURRENT}"]);
+    // The only ENVs are the per-sandbox conversion slot count and the CA bundle requests reads
+    // (proxy env would break derived builds).
+    expect(ins.filter((i) => i.startsWith("ENV "))).toEqual([
+      "ENV NOAH_PPTX_MAX_CONCURRENT=${DECK_MAX_CONCURRENT}",
+      "ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt",
+    ]);
     expect(ins).toContain("ARG DECK_MAX_CONCURRENT=1");
   });
 
@@ -64,6 +68,31 @@ describe("pi sandbox image", () => {
       expect(dockerfile).toMatch(new RegExp(`apt-get install[^\\n]*\\n(?:[^\\n]*\\n)*?\\s+${pkg}\\b`));
     }
     expect(dockerfile).toContain("/usr/lib/chromium/chromium-headless-shell --version");
+  });
+
+  it("adds the general-purpose Python libraries after the converter's pinned set, and makes requests trust the system CA bundle", () => {
+    const extras = read(`${DIR}/requirements.txt`)
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+    // Ranges on purpose (the build takes what the pip mirror carries); never an exact pin.
+    expect(extras.map((line) => line.split(/[<>=!~ ]/)[0])).toEqual(["requests", "urllib3"]);
+    for (const line of extras) expect(line).not.toContain("==");
+    expect(ins).toContain(`COPY ${DIR}/requirements.txt /tmp/sandbox-requirements.txt`);
+    const order = (needle: string) => ins.findIndex((i) => i.includes(needle));
+    // After the converter's set (pip then adds only what is missing, so its pins stand)…
+    expect(order("/tmp/sandbox-requirements.txt")).toBeGreaterThan(order("-r /tmp/deck-requirements.txt"));
+    // …honouring the same mirror arguments, and proven importable in the build.
+    const install = ins.find((i) => i.startsWith("RUN ") && i.includes("-r /tmp/sandbox-requirements.txt"))!;
+    expect(install).toContain('--index-url "$PIP_INDEX_URL"');
+    expect(install).toContain('${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"}');
+    expect(install).toContain('python3 -c "import requests, urllib3;');
+    expect(install).toContain("test -s /etc/ssl/certs/ca-certificates.crt");
+    // The CA variable comes after every build step, so no step of this build depends on it.
+    const env = order("ENV REQUESTS_CA_BUNDLE=");
+    expect(ins.slice(env + 1).some((i) => i.startsWith("RUN "))).toBe(false);
+    // The context still admits the file.
+    expect(read(`${DIR}/Dockerfile.dockerignore`).split("\n")).toContain("!docker/pi-sandbox/");
   });
 
   it("bakes every converter font face except the rejected variable font, where fontconfig looks", () => {
