@@ -517,7 +517,7 @@ function deckPythonInterpreter(t: DeckToolchainState | undefined): string {
  * artifact — so the avatar does not open one for something to look at.
  */
 export function canvasCapabilityLine(ctx: Pick<SystemToolsContext, "canvasEnabled">): string {
-  return `- Visual canvas (mcp__canvas__show): ${ctx.canvasEnabled ? "available — a SIDE-PANEL artifact worked on with the user (a document to edit, a mockup, a diagram, a chart to refine or export, or when the user asks for the side panel); contentType markdown | vega | mermaid | svg | html. A chart, table or calculator the user only needs to see or operate in the answer is inline UI (next line), not a canvas, and a diagram they only need to see is a ```mermaid fenced code block in the answer; for a plain question or simple choice use AskUserQuestion instead of a canvas" : "unavailable in this run — it needs the canvas tool group enabled for this conversation and an interactive chat turn"}`;
+  return `- Visual canvas (mcp__canvas__show): ${ctx.canvasEnabled ? "available — a SIDE-PANEL artifact worked on with the user (a document to edit, a mockup, a diagram, a chart to refine or export, or when the user asks for the side panel); contentType markdown | mermaid | svg | html (a side-panel chart is a mermaid xychart-beta / pie; 'vega' is retired). A chart, table or calculator the user only needs to see or operate in the answer is inline UI (next line), not a canvas, and a diagram they only need to see is a ```mermaid fenced code block in the answer; for a plain question or simple choice use AskUserQuestion instead of a canvas" : "unavailable in this run — it needs the canvas tool group enabled for this conversation and an interactive chat turn"}`;
 }
 
 /**

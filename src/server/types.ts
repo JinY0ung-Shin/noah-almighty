@@ -999,17 +999,18 @@ export interface CanvasControl {
 /**
  * Supported visual-canvas content kinds. All are rendered client-side WITHOUT
  * executing avatar-authored JS: markdown/svg/html are sanitized (DOMPurify),
- * mermaid is rendered from text by the bundled mermaid library, and `vega` is a
- * compact Vega-Lite JSON spec rendered to SVG via the CSP-safe Vega expression
- * interpreter (no `Function` constructor) — so the strict same-origin CSP stays
- * unchanged (#50). `vega` lets the avatar declare a chart in a tiny spec instead
- * of hand-authoring verbose SVG, which is far cheaper in tokens.
+ * and mermaid is rendered from text by the bundled mermaid library — so the
+ * strict same-origin CSP stays unchanged (#50).
  */
 export type CanvasContentType =
   | "markdown"
   | "svg"
   | "html"
   | "mermaid"
+  // RETIRED (2026-11-12): `mcp__canvas__show` refuses it and nothing writes it
+  // any more — the Vega renderer is gone; a chart is an inline `<chart>` in the
+  // answer. Kept in the type so a stored canvas row still reads (the client
+  // shows its source); the name is reserved.
   | "vega"
   // RETIRED (2026-11-11): `mcp__canvas__show` refuses it and nothing writes it
   // any more — interactive UI is written in the answer text (inline UI,

@@ -96,13 +96,15 @@ describe("official system manual", () => {
     expect(page).not.toContain("pass `wait:false`");
     // A side-panel artifact with five content types; what the user only sees
     // or operates is inline UI — routed to its own topic, not restated here.
-    expect(page).toContain("(`markdown` | `vega` | `mermaid` | `svg` | `html`).");
+    expect(page).toContain("(`markdown` | `mermaid` | `svg` | `html`).");
     expect(page).toContain("Use it for an ARTIFACT you work out WITH the user in the side panel");
     expect(page).toContain(
       "A chart, table, calculator or dashboard the user only needs to SEE or operate in the answer is NOT a canvas: write it in your answer text as inline UI (topic `inline-ui`; describe_system says whether this run has it).",
     );
     expect(page).toContain("The former contentType `widget` is retired — `show` refuses it");
-    expect(page).toContain("For a side-panel DATA CHART use `vega`");
+    expect(page).toContain("A DATA CHART belongs in the answer as an inline `<chart>`");
+    expect(page).toContain("use `mermaid` with a mermaid chart — `xychart-beta` for bars and lines, `pie` for shares");
+    expect(page).toContain("The former contentType `vega` is retired");
     // A diagram to look at is written in the answer; the canvas type is the side-panel one.
     expect(page).toContain("A DIAGRAM the user only needs to SEE is not a canvas either: write it in your answer as a ```mermaid fenced code block");
     expect(page).toContain("For a side-panel flow/sequence/graph DIAGRAM use `mermaid`");

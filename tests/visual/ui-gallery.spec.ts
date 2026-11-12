@@ -37,9 +37,10 @@ const APP_CSP = [
   "object-src 'none'",
 ].join("; ");
 
-interface Entrance {
-  mark: string;
-  property: string;
+interface ChartRun {
+  id: string;
+  shapes: number;
+  bar: number;
 }
 
 async function mockApp(page: Page, options: { reduceMotion?: boolean } = {}): Promise<{ sent: string[] }> {
@@ -51,17 +52,45 @@ async function mockApp(page: Page, options: { reduceMotion?: boolean } = {}): Pr
     document.addEventListener("securitypolicyviolation", (event) => {
       seen.push(`${event.violatedDirective} ${event.blockedURI}`);
     });
-    // Every Web Animation started on a mark of a chart (its group names the mark).
-    const entrances: { mark: string; property: string }[] = [];
-    (window as unknown as { __entrances: unknown[] }).__entrances = entrances;
+
+    // Every chart drawing on the page (one entry per mounted chart, in the order
+    // they appeared), and how many distinct shapes its marks went through since
+    // they were first there. A chart drawn at rest shows one shape (two after a
+    // redraw); one that ENTERED went through a whole run of them. The chart
+    // library animates by writing attributes frame by frame, so this is read off
+    // the marks themselves — bars, slices, a line's dash, an area's reveal clip.
+    const runs = new Map<Element, { id: string; shapes: Set<string>; bar: number }>();
+    (window as unknown as { __chartRuns: () => unknown[] }).__chartRuns = () => [...runs.values()].map((run) => ({ id: run.id, shapes: run.shapes.size, bar: run.bar }));
+    const shapeOf = (host: Element): string => {
+      const marks = host.querySelectorAll(".recharts-bar-rectangle path, .recharts-pie-sector path, .recharts-line-curve, .recharts-area-area");
+      if (!marks.length) return "";
+      const parts: string[] = [];
+      marks.forEach((mark) => {
+        const box = mark.getBoundingClientRect();
+        parts.push(`${Math.round(box.width)}x${Math.round(box.height)}:${mark.getAttribute("stroke-dasharray") ?? ""}:${(mark.getAttribute("d") ?? "").length}`);
+      });
+      host.querySelectorAll("clipPath rect").forEach((clip) => parts.push(`clip${clip.getAttribute("width")}x${clip.getAttribute("height")}`));
+      return parts.join(";");
+    };
+    const watchCharts = () => {
+      for (const host of document.querySelectorAll(".wg-chart")) {
+        const shape = shapeOf(host);
+        if (!shape) continue;
+        let run = runs.get(host);
+        if (!run) runs.set(host, (run = { id: host.closest("[data-sample]")?.getAttribute("data-sample") ?? "", shapes: new Set(), bar: 0 }));
+        run.shapes.add(shape);
+        run.bar = host.querySelector(".recharts-bar-rectangle path")?.getBoundingClientRect().height ?? 0;
+      }
+      requestAnimationFrame(watchCharts);
+    };
+    requestAnimationFrame(watchCharts);
     const animate = Element.prototype.animate;
-    // …and on a plain element of the UI: "<sample>/<what>" (a table row, or its first class).
+    // Every Web Animation started on a plain element of the UI: "<sample>/<what>" (a table row, or its first class).
     const moves: string[] = [];
     (window as unknown as { __moves: string[] }).__moves = moves;
     const diagrams: string[] = [];
     (window as unknown as { __diagrams: string[] }).__diagrams = diagrams;
     Element.prototype.animate = function (keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
-      const group = this.closest("g.role-mark");
       const first = Array.isArray(keyframes) ? keyframes[0] : null;
       // …and on a part of a mermaid diagram: "<what it is>:<the property that moves>".
       const root = this.getRootNode();
@@ -69,8 +98,7 @@ async function mockApp(page: Page, options: { reduceMotion?: boolean } = {}): Pr
         const kind = this.closest("g.node") ? "node" : this.closest("g.edgePaths") ? "edge" : this.closest("g.edgeLabels") ? "label" : /messageLine/.test(this.getAttribute("class") ?? "") ? "message" : "part";
         diagrams.push(`${kind}:${Object.keys(first)[0]}`);
       }
-      if (group && first) entrances.push({ mark: /mark-([a-z]+)/.exec(group.getAttribute("class") ?? "")?.[1] ?? "", property: Object.keys(first)[0] });
-      else if (this instanceof HTMLElement && this.closest(".ui-gallery-stage")) {
+      if (this instanceof HTMLElement && this.closest(".ui-gallery-stage")) {
         const sample = this.closest(".ui-gallery-card")?.getAttribute("data-sample") ?? "";
         moves.push(`${sample}/${this.tagName === "TR" ? "tr" : this.classList[0] ?? this.tagName.toLowerCase()}`);
       }
@@ -108,13 +136,16 @@ async function openGallery(page: Page): Promise<void> {
 const card = (page: Page, id: string) => page.locator(`.ui-gallery-card[data-sample="${id}"]`);
 const diagrams = (page: Page) => page.evaluate(() => (window as unknown as { __diagrams: string[] }).__diagrams);
 const moves = (page: Page) => page.evaluate(() => (window as unknown as { __moves: string[] }).__moves);
-const entrances = (page: Page) => page.evaluate(() => (window as unknown as { __entrances: Entrance[] }).__entrances);
-/** The rendered height of a chart's first bar, read through the shadow root. */
+/** Every chart that was mounted (see the sampler in mockApp); `of` picks a sample's, in the order they mounted. */
+const chartRuns = (page: Page, of?: string) =>
+  page.evaluate((sample) => (window as unknown as { __chartRuns: () => ChartRun[] }).__chartRuns().filter((run) => !sample || run.id === sample), of);
+/** A chart that went through a run of shapes ENTERED; one drawn at rest shows one shape, two after a redraw. */
+const entered = (run: ChartRun | undefined): boolean => Boolean(run && run.shapes >= 6);
+/** The drawing of a sample's chart (the library's own <svg>). */
+const drawing = (page: Page, id: string) => card(page, id).locator('.wg-chart svg[role="application"]');
+/** The rendered height of a chart's first bar. */
 const firstBarHeight = (page: Page, id: string) =>
-  page.evaluate((sample) => {
-    const host = document.querySelector(`.ui-gallery-card[data-sample="${sample}"] .wg-chart .canvas-svg`);
-    return host?.shadowRoot?.querySelector("g.mark-rect path")?.getBoundingClientRect().height ?? -1;
-  }, id);
+  page.evaluate((sample) => document.querySelector(`.ui-gallery-card[data-sample="${sample}"] .wg-chart .recharts-bar-rectangle path`)?.getBoundingClientRect().height ?? -1, id);
 
 test("every sample of the gallery draws, under the app's CSP", async ({ page }) => {
   await mockApp(page);
@@ -124,9 +155,12 @@ test("every sample of the gallery draws, under the app's CSP", async ({ page }) 
   await expect(page.locator(".ui-gallery-card")).toHaveCount(samples.length);
   for (const section of UI_GALLERY) await expect(page.getByRole("heading", { name: section.title, exact: true })).toBeVisible();
 
-  // Every chart went through Vega (the state sample starts on its table).
+  // Every chart is drawn once it is on screen (the state sample starts on its table).
   const charts = samples.filter((sample) => sample.source.includes("<chart") && sample.id !== "chart-state");
-  for (const sample of charts) await expect(card(page, sample.id).locator(".wg-chart .canvas-svg")).toHaveCount(1, { timeout: 20_000 });
+  for (const sample of charts) {
+    await card(page, sample.id).scrollIntoViewIfNeeded();
+    await expect(drawing(page, sample.id)).toHaveCount(1, { timeout: 20_000 });
+  }
   // Every diagram was drawn by mermaid.
   await expect(page.locator('.ui-gallery-card .code-block[data-diagram="drawn"]')).toHaveCount(2, { timeout: 20_000 });
   // Nothing fell back to an error or to a tag shown as text.
@@ -178,47 +212,42 @@ test("a chart enters when it is on screen: bars grow, a line is wiped in, slices
   await mockApp(page);
   await openGallery(page);
 
-  // The first chart is in view: its bars were animated from their baseline and end at full height.
-  await expect.poll(async () => (await entrances(page)).filter((e) => e.mark === "rect" && e.property === "transform").length).toBeGreaterThanOrEqual(8);
+  // The first chart is in view: its bars grew from their baseline and end at full height.
+  await expect.poll(async () => entered((await chartRuns(page, "chart-bar"))[0])).toBe(true);
   await expect.poll(() => firstBarHeight(page, "chart-bar")).toBeGreaterThan(20);
 
-  // A chart far below the fold is held at its start until it is scrolled to.
-  await expect(card(page, "chart-donut").locator(".wg-chart .canvas-svg")).toHaveCount(1, { timeout: 20_000 });
-  const held = () =>
-    page.evaluate(() => {
-      const host = document.querySelector('.ui-gallery-card[data-sample="chart-donut"] .wg-chart .canvas-svg');
-      return (host?.shadowRoot?.getAnimations() ?? []).map((animation) => animation.playState);
-    });
-  expect(await held()).toContain("paused");
-  // Held at its START: the slices are not there yet (a fade that ran the wrong way round would show them).
-  const slices = () =>
-    page.evaluate(() => {
-      const host = document.querySelector('.ui-gallery-card[data-sample="chart-donut"] .wg-chart .canvas-svg');
-      return Array.from(host?.shadowRoot?.querySelectorAll("g.mark-arc > path") ?? []).map((slice) => getComputedStyle(slice).opacity);
-    });
-  expect(await slices()).toEqual(["0", "0", "0", "0"]);
-  await card(page, "chart-donut").scrollIntoViewIfNeeded();
-  await expect.poll(async () => (await held()).filter((state) => state === "paused")).toEqual([]);
+  // A chart far below the fold is not drawn yet — its entrance is not spent off screen — and its place is held.
+  const donut = card(page, "chart-donut");
+  await expect(donut.locator(".wg-chart-plot")).toHaveCount(1);
+  expect(await donut.locator(".wg-chart-plot").evaluate((el) => Math.round(el.getBoundingClientRect().height))).toBe(240);
+  await expect(donut.locator(".recharts-pie-sector")).toHaveCount(0);
+  expect(await chartRuns(page, "chart-donut")).toEqual([]);
+  // Scrolled to: the slices arrive, with motion.
+  await donut.scrollIntoViewIfNeeded();
+  await expect(donut.locator(".recharts-pie-sector")).toHaveCount(4, { timeout: 20_000 });
+  await expect.poll(async () => entered((await chartRuns(page, "chart-donut"))[0])).toBe(true);
 
-  await expect.poll(slices).toEqual(["1", "1", "1", "1"]);
-
-  const kinds = await entrances(page);
-  expect(kinds.some((e) => e.mark === "line" && e.property === "clipPath")).toBe(true);
-  expect(kinds.some((e) => e.mark === "area" && e.property === "clipPath")).toBe(true);
-  expect(kinds.some((e) => e.mark === "arc" && e.property === "opacity")).toBe(true);
-  expect(kinds.some((e) => e.mark === "arc" && e.property === "transform")).toBe(true);
+  // The other kinds enter the same way when they come on screen.
+  for (const id of ["chart-line", "chart-area", "chart-pie", "chart-bar-horizontal"]) {
+    await card(page, id).scrollIntoViewIfNeeded();
+    await expect(drawing(page, id)).toHaveCount(1, { timeout: 20_000 });
+    await expect.poll(async () => entered((await chartRuns(page, id))[0]), { message: `${id} enters` }).toBe(true);
+  }
 
   // A chart that appears because the viewer pressed something enters too; a redraw of it does not.
   const state = card(page, "chart-state");
   await state.scrollIntoViewIfNeeded();
-  const before = (await entrances(page)).length;
+  expect(await chartRuns(page, "chart-state")).toEqual([]);
   await state.getByRole("tab", { name: "차트" }).click();
-  await expect.poll(async () => (await entrances(page)).length).toBe(before + 4);
+  await expect.poll(async () => entered((await chartRuns(page, "chart-state"))[0])).toBe(true);
   await expect.poll(() => firstBarHeight(page, "chart-state")).toBeGreaterThan(20);
+  await page.waitForTimeout(900); // the arrival has played out
+  const settled = (await chartRuns(page, "chart-state"))[0].shapes;
   await state.getByRole("radio", { name: "천원" }).click();
-  await expect(state.locator(".wg-chart .canvas-svg")).toHaveCount(1);
-  await page.waitForTimeout(400);
-  expect((await entrances(page)).length).toBe(before + 4);
+  await expect(drawing(page, "chart-state")).toHaveCount(1);
+  await page.waitForTimeout(500);
+  // The redraw landed at rest: at most one new shape (the new values), not another run of them.
+  expect((await chartRuns(page, "chart-state"))[0].shapes - settled).toBeLessThanOrEqual(1);
 });
 
 test("figures, bars, rows and blocks enter when they are on screen", async ({ page }) => {
@@ -336,10 +365,12 @@ test("a mermaid diagram arrives in order: nodes, then edges drawn to their arrow
 test("움직임 줄이기 draws every chart at rest", async ({ page }) => {
   await mockApp(page, { reduceMotion: true });
   await openGallery(page);
-  await expect(card(page, "chart-bar").locator(".wg-chart .canvas-svg")).toHaveCount(1, { timeout: 20_000 });
+  await expect(drawing(page, "chart-bar")).toHaveCount(1, { timeout: 20_000 });
   await expect.poll(() => firstBarHeight(page, "chart-bar")).toBeGreaterThan(20);
-  await page.waitForTimeout(400);
-  expect(await entrances(page)).toEqual([]);
+  // Nothing waits for the screen either: a chart far below the fold is already drawn.
+  await expect(card(page, "chart-donut").locator(".recharts-pie-sector")).toHaveCount(4, { timeout: 20_000 });
+  await page.waitForTimeout(500);
+  expect((await chartRuns(page)).filter(entered)).toEqual([]);
   // …and everything else: no block rises, no number counts.
   await card(page, "stat").scrollIntoViewIfNeeded();
   await expect(card(page, "stat").locator(".stat-value").first()).toHaveText("605만원");

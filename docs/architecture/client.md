@@ -123,7 +123,7 @@ Companion to the client-area philosophy in [`../../src/client/CLAUDE.md`](../../
   `renderMarkdown` forbids it (`FORBID_TAGS`; inline `style=""` stays). DOMPurify's default only LOOKED like
   it stripped one: it drops a `<style>` that LEADS the input (the parser hoists it into `<head>`, and only
   `<body>` is returned) but keeps one after content. Canvas `html` pages get their own document and drawings
-  (`svg`/`vega`/`mermaid`) their own shadow root instead ([chat-sse-media.md](chat-sse-media.md) § Visual canvas).
+  (`svg`/`mermaid`) their own shadow root instead ([chat-sse-media.md](chat-sse-media.md) § Visual canvas).
 
 ## React client rules and gotchas
 The rules every component was ported under (2026-11-12). `tsc` catches none of them; most show only in a
@@ -280,15 +280,14 @@ pane's controller (`tests/react-chat-stick.test.tsx`).
   `open` flips (spec behavior, jsdom matches) — a test must await a macrotask, not just a flushed render. Trade-off accepted:
   Chrome's find-in-page can no longer reach inside an unopened card.
 
-- **An inline `<chart>` holds its place** (`components/widget/WidgetChart.tsx`, 2026-11-12). Drawing is
-  asynchronous (the Vega chunk on first use, then the render), and a chart with no height let the text that
-  FOLLOWS it be painted in its place and pushed down when the drawing landed; at the end of a turn — the
-  stored message replacing the live bubble — every chart blinked out and back. Now the chart reserves a
-  height while nothing is drawn (the measured height when the same chart was drawn before, else an
-  estimate from the spec's size plus the axes, fitted to the width it has), and a small module cache of the
-  last drawings (by theme + spec signature) lets a chart that MOUNTS with a spec drawn a moment ago show in
-  its first frame without a second render. The cache is only read by an instance that has nothing drawn
-  yet; `forgetDrawnCharts()` clears it for tests (`tests/react-widget-chart.test.tsx`).
+- **An inline `<chart>` holds its place** (`components/widget/WidgetChart.tsx`, 2026-11-12). The frame has
+  the plot's height (the `height` prop, default 240 px) from its first frame — before the chart chunk is
+  loaded, and while a chart that will enter waits to come on screen — so the text that FOLLOWS a chart is
+  never painted in its place and pushed down. (Under Vega the chart had no height until its asynchronous
+  render landed, and blinked out and back when the stored message replaced the live bubble.) The drawing is
+  `ChartDrawing.tsx` (Recharts), its own lazy chunk: keep Recharts out of every other module. Mechanics and
+  the entrance rule: `chat-sse-media.md` § Inline UI. jsdom lays nothing out and the library sizes itself
+  from its container's measured box, so `tests/react-widget-chart.test.tsx` gives that container a size.
 - **Conditional motion on a keyed list is gated INSIDE the transition/animation function, on NON-reactive
   state read when it starts** (the 할 일 card animates only the avatar's changes; `components/TodoOverlay.tsx`).
   A removed row is frozen by `<Presence>` with its LAST props, so the gate reads plain module state
@@ -430,7 +429,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   second iframe/svg to the panel. It renders only while it (or its fullscreen view) shows and only when
   type/content/theme changed (`renderIfChanged`, a ref-guarded layout effect): the `canvas` prop cannot be
   compared — the state is mutated in place and the tab re-renders on EVERY store write — so an unguarded
-  render ran DOMPurify — or all of mermaid/Vega — per keystroke for
+  render ran DOMPurify — or all of mermaid — per keystroke for
   every tab. A refinement in place re-seeds an UNTOUCHED edit draft (an edited one stays) and adds defaults
   for new control ids while re-used ids keep what was typed (a SENT draft counts as untouched, so the
   avatar's reply version replaces it). **The fullscreen stage is portaled to `<body>`** (`createPortal`; its React events therefore bubble into
@@ -445,7 +444,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **Inline UI is not a canvas: `components/widget/AnswerUi.tsx` draws an answer that holds UI tags, in
   the bubble.** ChatView decides with `containsInlineUi` (`src/shared/widget/detect.ts`, imports nothing)
   and lazy-loads the component, parser and interpreter on the first such answer (a dynamic `import()` then
-  `setState`, like mermaid/Vega — not `React.lazy`; `AnswerUi` does not subscribe to the store, its parent
+  `setState`, like mermaid — not `React.lazy`; `AnswerUi` does not subscribe to the store, its parent
   re-renders it); the
   live bubble and the stored message are two instances, and what the viewer set mid-stream is handed from
   one to the other (`lib/widgetState.ts`). Its state is per message, next to nothing else: the side panel,
@@ -459,7 +458,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   the rail) through its `outbox` prop — a preview that sends, keeps and reports nothing — and what
   APPEARS in an answer enters: `lib/uiEntrance.ts` decides when (once per answer while it is written, every
   time the viewer brings something up, never from the history) and plays blocks, stat values, progress bars
-  and table rows; `lib/chartEntrance.ts` plans a `<chart>`'s marks on Vega's own SVG and `lib/mermaidEntrance.ts` the
+  and table rows; a `<chart>` enters with its library's own motion (`ChartDrawing.tsx`) and `lib/mermaidEntrance.ts` plans the
   parts of a ```mermaid diagram. Web Animations held
   until the thing is on screen; the data-sized ones (a chart, a count) run longer than the 120–240 ms UI
   transitions of DESIGN §2.5.
@@ -661,7 +660,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `Modal.tsx`/`PromptModal.tsx`/`CanvasTab.tsx`(canvas-fs)가 공용. PromptModal 루트
   인스턴스는 Escape=거부·백드롭 닫기 없음(의도), pane 인스턴스는 non-modal(aria-modal/inert 없음).
 - **테마 반응성:** `lib/theme.ts`의 `theme` 스토어는 `applyTheme()`만 발행하는 single-writer.
-  캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 Vega/mermaid)는 이 스토어를
+  캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 mermaid)는 이 스토어를
   구독해 재스타일한다 — `data-theme`을 init에서 한 번만 읽는 패턴으로 되돌리면 토글 시 색이 낡는다.
 - **차단 이벤트는 2채널:** `BlockedEvent.uiReason`(한국어, UI 표시용) vs `reason`(영어, 진단용).
   클라이언트 `lib/chat.ts`는 `uiReason` 우선. 모델에 가는 영어 텍스트를 한국어로 바꾸지 말 것(반대도 금지).

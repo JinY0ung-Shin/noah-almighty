@@ -30,12 +30,12 @@ describe("the inline UI gallery", () => {
     expect(missing).toEqual([]);
   });
 
-  it("has a sample for every chart type, the Vega-Lite form and a diagram", () => {
+  it("has a sample for every chart type and a diagram — and none of the retired Vega-Lite form", () => {
     const type = WIDGET_COMPONENTS.chart.props.type.type;
     const types = type.k === "enum" ? type.values : [];
     expect(types.length).toBeGreaterThan(0);
     for (const name of types) expect(allSource).toContain(`<chart type="${name}"`);
-    expect(allSource).toContain("spec={{");
+    expect(allSource).not.toContain("spec={");
     expect(allSource).toContain("```mermaid");
   });
 

@@ -15,7 +15,6 @@ import type { WidgetCtx } from "../../lib/widgetCtx";
 import { colorStyle, containerStyle, imageStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
 import { cellText, type ElVNode, type VNode } from "../../lib/widgetView";
 import Icon from "../Icon";
-import LazyRechart from "./LazyRechart";
 import WidgetChart from "./WidgetChart";
 import WidgetControl from "./WidgetControl";
 import WidgetInline from "./WidgetInline";
@@ -218,25 +217,14 @@ function element(v: ElVNode, ctx: WidgetCtx): ReactNode {
   }
   if (v.tag === "svg") return <WidgetSvg tree={v.svg} label={typeof v.props.label === "string" ? v.props.label : ""} />;
   if (v.tag === "chart") {
-    if (ctx.chartEngine === "recharts" && v.props.simple) {
-      return (
-        <LazyRechart
-          model={v.props.simple as SimpleChartModel}
-          height={typeof v.props.height === "number" ? v.props.height : undefined}
-          label={typeof v.props.label === "string" ? v.props.label : ""}
-          dark={ctx.dark}
-          entrance={ctx.entrance}
-        />
-      );
-    }
     return (
       <WidgetChart
-        spec={v.props.spec}
+        model={(v.props.simple as SimpleChartModel | undefined) ?? null}
+        retired={v.props.retiredSpec === true}
         height={typeof v.props.height === "number" ? v.props.height : undefined}
         label={typeof v.props.label === "string" ? v.props.label : ""}
         dark={ctx.dark}
         entrance={ctx.entrance}
-        onProblem={ctx.report}
       />
     );
   }

@@ -20,7 +20,6 @@ import {
 } from "../lib/chat";
 import { queueCanvasRenderReport } from "../lib/canvasReport";
 import { renderMermaidSvg } from "../lib/mermaidRender";
-import { renderVegaSvg } from "../lib/vegaCanvas";
 import { shadowSvg } from "../lib/shadowSvg";
 import { copyText } from "../lib/dom";
 import { copyPng, downloadPng, downloadSvg } from "../lib/canvasExport";
@@ -30,7 +29,7 @@ import type { ChatPane, PaneCanvas } from "../lib/types";
 type CanvasControl = NonNullable<PaneCanvas["controls"]>[number];
 
 // ONE visual-canvas artifact (#50) as a tab of the side panel (SidePanel):
-// the avatar-shown content (markdown/svg/html/mermaid/vega — all
+// the avatar-shown content (markdown/svg/html/mermaid — all
 // sanitized, never executing avatar JS) plus real form controls that post back through
 // /api/chat/respond (blocking) or /api/chat/stream (async). The instance
 // stays mounted while another tab shows, so its form/edit state survives a
@@ -66,12 +65,8 @@ function controlDefaults(controls: NonNullable<PaneCanvas["controls"]>): Record<
 function errorDetail(err: unknown): string {
   return err instanceof Error && err.message ? err.message : "no detail";
 }
-// Wrap a raw (English) vega/mermaid library message in a Korean sentence,
+// Wrap a raw (English) mermaid library message in a Korean sentence,
 // keeping the detail — a bare English message reads as a crash in the KO UI.
-function vegaRenderError(err: unknown): string {
-  const detail = err instanceof Error ? err.message : "";
-  return detail ? `Vega 차트 렌더링에 실패했습니다 (상세: ${detail})` : "Vega 차트 렌더링에 실패했습니다.";
-}
 function mermaidRenderError(err: unknown): string {
   const detail = err instanceof Error ? err.message : "";
   return detail ? `mermaid 렌더링에 실패했습니다 (상세: ${detail})` : "mermaid 렌더링에 실패했습니다.";
@@ -111,7 +106,7 @@ function numericValue(raw: string): number | null {
 
 // ---- export ----
 const isImageType = (c: PaneCanvas): boolean =>
-  c.contentType === "svg" || c.contentType === "vega" || c.contentType === "mermaid";
+  c.contentType === "svg" || c.contentType === "mermaid";
 
 /** A surface container holds EITHER the sanitized html (markdown, a source fallback) OR one child. */
 function surfaceContent(child: ReactNode, html: string): { children: ReactNode } | { dangerouslySetInnerHTML: { __html: string } } {
@@ -178,10 +173,10 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
 
   // ---- content rendering (CSP-safe: no avatar-authored JS ever runs) ----
   // ONE surface shows the canvas, and only markdown (or a source fallback) is
-  // parsed into the app's own DOM: a drawing (svg/vega/mermaid) goes into a
+  // parsed into the app's own DOM: a drawing (svg/mermaid) goes into a
   // shadow root (shadowSvg) and an `html` page into its own sandboxed document
   // (CanvasHtmlFrame), so neither one's <style> can restyle the app.
-  // Async renders (vega/mermaid) set this when they land, so the previous surface
+  // Async renders (mermaid) set this when they land, so the previous surface
   // stays up meanwhile instead of blinking out on every theme flip.
   const [surface, setSurface] = useState<Surface>({ html: "", svg: "", doc: "" });
   function showRendered(next: { html?: string; svg?: string; doc?: string }): void {
@@ -240,17 +235,17 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
   }, [active, fullscreen]);
 
   const contentRef = useRef<HTMLDivElement | null>(null); // so export can read the rendered <svg>
-  // Token guards async (mermaid/vega) renders so a stale result can't overwrite a newer one.
+  // Token guards async (mermaid) renders so a stale result can't overwrite a newer one.
   const renderToken = useRef(0);
 
   // Rendered while the tab (or its fullscreen view) shows, and only when what
   // it shows changed: this component renders again on EVERY store write (the
   // `canvas` object is mutated in place, so it can never say whether it
-  // changed), and a sanitize — or a whole mermaid/Vega render — per keystroke
+  // changed), and a sanitize — or a whole mermaid render — per keystroke
   // or streamed token adds up. A hidden tab renders again when it shows. The
-  // theme is a real dependency, not decoration: mermaid and Vega bake their
+  // theme is a real dependency, not decoration: mermaid bakes its
   // colors into the SVG at build time, so a theme flip has to re-render or the
-  // chart stays on the old palette.
+  // diagram stays on the old palette.
   const rendered = useRef<{ type: string; content: string | null; theme: string }>({ type: "", content: null, theme: "" });
   function renderIfChanged(target: PaneCanvas, resolvedTheme: ResolvedTheme): void {
     const last = rendered.current;
@@ -283,16 +278,11 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
       return;
     }
     if (target.contentType === "vega") {
-      try {
-        const svg = await renderVegaSvg(JSON.parse(target.content), resolvedTheme === "dark");
-        if (token !== renderToken.current) return; // a newer render won
-        showRendered({ svg });
-      } catch (err) {
-        if (token !== renderToken.current) return;
-        setRenderError(vegaRenderError(err));
-        showRendered({ html: sourceFallback(target.content) });
-        reportRenderProblems(target.content, [`the vega chart did not render: ${errorDetail(err)}`]);
-      }
+      // RETIRED 2026-11-12 (a canvas an older build stored): the app no longer
+      // carries a Vega renderer, so only the spec's source is shown. A chart is
+      // an inline <chart> of the answer now; `mcp__canvas__show` refuses 'vega'.
+      setRenderNotice("더 이상 지원하지 않는 Vega 차트 형식의 캔버스입니다. 원본만 표시합니다.");
+      showRendered({ html: sourceFallback(target.content) });
       return;
     }
     if ((target.contentType as string) === "widget") {

@@ -14,12 +14,17 @@ export const CANVAS_SERVER_NAME = "canvas";
 export const CANVAS_TOOL_NAMES = ["mcp__canvas__show"] as const;
 
 /**
- * The content types `show` accepts. `widget` is NOT one of them any more
- * (retired 2026-11-11): interactive UI is written in the answer text as inline
- * UI (`src/shared/widget/guide.ts`), never shown as a canvas. The name stays
- * reserved — see {@link WIDGET_RETIRED_ERROR}.
+ * The content types `show` accepts. Two names are NOT among them any more and
+ * stay reserved:
+ * - `widget` (retired 2026-11-11): interactive UI is written in the answer text
+ *   as inline UI (`src/shared/widget/guide.ts`), never shown as a canvas — see
+ *   {@link WIDGET_RETIRED_ERROR}.
+ * - `vega` (retired 2026-11-12): the app no longer carries a Vega renderer. A
+ *   chart is an inline `<chart>` in the answer (drawn by the client's chart
+ *   components); on a canvas it is a mermaid chart or an svg — see
+ *   {@link VEGA_RETIRED_ERROR}.
  */
-export const CANVAS_SHOW_CONTENT_TYPES = ["markdown", "vega", "mermaid", "svg", "html"] as const;
+export const CANVAS_SHOW_CONTENT_TYPES = ["markdown", "mermaid", "svg", "html"] as const;
 export type CanvasShowContentType = (typeof CANVAS_SHOW_CONTENT_TYPES)[number];
 
 function isCanvasShowContentType(value: string): value is CanvasShowContentType {
@@ -64,7 +69,22 @@ export const WIDGET_RETIRED_ERROR =
   "contentType 'widget' is retired: interactive UI is no longer a canvas. It is now written directly in your answer text " +
   `(inline UI) and the user's app draws it in place — read mcp__system__read_manual topic \`${INLINE_UI_MANUAL_TOPIC}\`, ` +
   "then write the tags in your answer; there is no tool to call for it. " +
-  "(mcp__system__describe_system says whether inline UI is available in this run; where it is not, use 'vega' for a chart or 'markdown'.) " +
+  "(mcp__system__describe_system says whether inline UI is available in this run; where it is not, use 'mermaid' for a chart — `xychart-beta` or `pie` — or 'markdown'.) " +
+  "Nothing was shown.";
+
+/**
+ * Agent-facing redirect for the RETIRED `vega` content type, for the same
+ * reason as {@link WIDGET_RETIRED_ERROR}: a conversation that started before
+ * the retirement has a frozen prompt (and a frozen tool schema) that still says
+ * "use 'vega' for a chart", so that call must come back with where charts went.
+ */
+export const VEGA_RETIRED_ERROR =
+  "contentType 'vega' is retired: the app no longer has a Vega-Lite renderer. " +
+  "A chart the user only needs to see or hover goes directly in your answer text as inline UI — " +
+  '`<chart type="bar" data={[…rows]} xKey="…" series={["…"]} />` (bar, line, area, pie, donut; ' +
+  `read mcp__system__read_manual topic \`${INLINE_UI_MANUAL_TOPIC}\`; mcp__system__describe_system says whether inline UI is available in this run). ` +
+  "For a chart on a canvas, or where inline UI is not available, call show again with contentType 'mermaid' and a mermaid chart " +
+  "(`xychart-beta` for bars and lines, `pie` for shares), or 'svg' for a bespoke drawing, or give the numbers as a 'markdown' table. " +
   "Nothing was shown.";
 
 /** Agent-facing refusal for a content type that never existed. */
@@ -161,7 +181,7 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
       "show",
       "Show a visual canvas in the chat side panel: an ARTIFACT you work on WITH the user — a document to edit, a page mockup or layout, a diagram, an option comparison, a chart that will be refined, exported or needs controls — or anything the user asks to see in the side panel. " +
         "It is NOT for repeating text the chat already renders, and NOT for a chart, table, calculator or dashboard the user only needs to SEE or operate in the answer: that is inline UI, written directly in your answer text with no tool call (manual topic `inline-ui`; `mcp__system__describe_system` says whether this run has it). " +
-        "Set contentType to one of: 'markdown' (rich text), 'vega' (a chart — pass ONLY a compact Vega-Lite JSON spec as content; far cheaper in tokens than hand-drawn SVG — inline the data, keep it small, no remote data URLs), 'mermaid' (a flow/sequence/graph diagram — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams Vega/mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
+        "Set contentType to one of: 'markdown' (rich text), 'mermaid' (a flow/sequence/graph diagram, or a simple chart as `xychart-beta` / `pie` — pass ONLY the diagram source as content; double-quote every node/edge label that contains punctuation such as ( ) [ ] { } | : ; or #, e.g. A[\"Login (SSO)\"] -->|\"POST /api (json)\"| B — the source is syntax-checked before display and a parse error comes back to you to fix), 'svg' (an inline <svg> for bespoke diagrams mermaid can't express), or 'html' (a static page in its own sandboxed frame: its <style> applies there only, scripts never run, links don't open). " +
         "Never include scripts or executable JS in content; it is sanitized away. " +
         "To collect a decision ANCHORED TO the artifact on screen (choosing between the mockups shown, tuning a value against the chart, marking up the content), pass `controls`: 'buttons' (a few choices as cards, single or multiSelect), 'select' (a dropdown when there are many options), 'slider'/'number' (a numeric value, with min/max/step), 'date' (a calendar date), and/or 'text' inputs. Each control is required by default — set `required:false` to make it optional. " +
         "For a plain question or a simple choice with no visual content to show, use the built-in AskUserQuestion tool instead — never open a canvas just to ask something. " +
@@ -173,12 +193,12 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         title: z.string().describe("Short title shown atop the canvas panel."),
         content: z.string().describe("The artifact body, interpreted per contentType."),
         // A plain string whose LISTED schema carries the enum (`meta`), checked
-        // in the handler: a zod enum would turn the retired 'widget' into a bare
-        // "Input validation error" before WIDGET_RETIRED_ERROR could redirect.
+        // in the handler: a zod enum would turn the retired 'widget' / 'vega' into a
+        // bare "Input validation error" before their redirects could answer.
         contentType: z
           .string()
           .meta({ enum: [...CANVAS_SHOW_CONTENT_TYPES] })
-          .describe("How to render content. For a side-panel chart use 'vega' (a Vega-Lite spec) and for a diagram 'mermaid' — both render rich visuals from a tiny token-cheap source."),
+          .describe("How to render content. For a side-panel diagram or simple chart use 'mermaid' — it renders a rich visual from a tiny token-cheap source."),
         controls: z.array(controlSchema).optional().describe("Optional interactive controls to collect a response."),
         canvasId: z
           .string()
@@ -204,13 +224,16 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
         if (contentType === "widget") {
           return text(WIDGET_RETIRED_ERROR, true);
         }
+        if (contentType === "vega") {
+          return text(VEGA_RETIRED_ERROR, true);
+        }
         if (!isCanvasShowContentType(contentType)) {
           return text(unknownContentTypeError(contentType), true);
         }
         if (args.content.length > MAX_CANVAS_CONTENT_CHARS) {
           return text(
             `Canvas content is too large (${args.content.length} chars; limit ${MAX_CANVAS_CONTENT_CHARS}). ` +
-              "Compact it: for a chart prefer a 'vega' Vega-Lite spec over hand-written SVG, drop inline data you don't need, or split it across smaller canvases — then call show again.",
+              "Compact it: for a chart prefer a mermaid `xychart-beta` / `pie` over hand-written SVG, drop inline data you don't need, or split it across smaller canvases — then call show again.",
             true,
           );
         }

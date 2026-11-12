@@ -32,7 +32,7 @@ const resolvedTheme = writable<ResolvedTheme>(currentTheme());
 
 /**
  * Resolved theme as a subscribable store. Canvas-style renderers (cytoscape,
- * Vega, mermaid) read their colors imperatively at build time, so a `data-theme`
+ * mermaid, the charts) read their colors imperatively at build time, so a `data-theme`
  * flip alone leaves them stranded on the old palette — they subscribe here and
  * re-derive. `applyTheme` is the single writer.
  */

@@ -336,7 +336,7 @@ describe("local runtime: demo canvas", () => {
     const rec = recorder();
     const response = await run("demo canvas", rec);
     const canvases = rec.of("canvas").map((entry) => entry.request);
-    expect(canvases.map((canvas) => canvas.contentType)).toEqual(["markdown", "vega", "mermaid", "svg", "html", "markdown"]);
+    expect(canvases.map((canvas) => canvas.contentType)).toEqual(["markdown", "mermaid", "mermaid", "svg", "html", "markdown"]);
     expect(new Set(canvases.map((canvas) => canvas.artifactId)).size).toBe(6);
     for (const canvas of canvases) {
       expect(canvas.artifactId.startsWith("local-demo-conv-1-")).toBe(true);
@@ -347,7 +347,7 @@ describe("local runtime: demo canvas", () => {
       expect("anchor" in canvas).toBe(false); // a canvas is a side-panel artifact
     }
     expect(canvases[0]).toMatchObject({ editable: true, controls: undefined, interaction: undefined });
-    expect(() => JSON.parse(canvases[1]!.content)).not.toThrow();
+    expect(canvases[1]!.content.startsWith("xychart-beta")).toBe(true); // a chart on a canvas is a mermaid chart (it passed the real parse above)
     expect(canvases[4]!.content).toContain("<style>");
     const form = canvases[5]!;
     expect(form.interaction).toBe("async");

@@ -445,11 +445,10 @@
 
 ## Visual canvas (`mcp__canvas__show`)
 - CSP-SAFE port of Superpowers' visual companion: the avatar DECLARES content
-  (`markdown`/`vega`/`mermaid`/`svg`/`html`) + optional
+  (`markdown`/`mermaid`/`svg`/`html`) + optional
   `controls` (buttons/text); the CLIENT renders
-  sanitized content (DOMPurify; mermaid `securityLevel: strict`; **`vega` = a compact Vega-Lite spec
-  compiled+rendered to an SVG STRING via the CSP-safe `vega-interpreter` AST evaluator — no `Function`
-  ctor, so `script-src` needs no widening**; all lazy-loaded with a source-`<pre>` fallback) + real form
+  sanitized content (DOMPurify; mermaid `securityLevel: strict`; lazy-loaded with a source-`<pre>`
+  fallback) + real form
   controls — no avatar JS runs, CSP unchanged. `canvasTools.ts` (NOT self-gated — registration is the
   boundary) is registered (runCapabilities' `canvasActive`) whenever the conversation's canvas tool group is on AND
   `events.onCanvas` exists — always-on since 2026-10, when it graduated from the experimental `canvas` flag
@@ -486,7 +485,7 @@
   viewport a viewport-filling page keeps; a shorter page shrinks the frame, a longer one grows it, and growth
   that only chases the viewport (`min-height: 100vh` + padding) stops. Fullscreen forwards the page's wheel
   (zoom) and keydown (Escape) — events inside the frame never reach the app's DOM. Links inside don't open.
-- **A drawing (`svg`/`vega`/`mermaid`) renders in its own SHADOW ROOT, never injected into the app
+- **A drawing (`svg`/`mermaid`) renders in its own SHADOW ROOT, never injected into the app
   document (`dangerouslySetInnerHTML`).** An `<svg><style>` is
   a stylesheet for the whole document, so in the app's DOM an avatar's drawing restyled the app (in Chromium a
   `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasTab) keeps the drawing's own
@@ -539,7 +538,7 @@
   attachment draws nothing.
 - **A render failure in the browser reaches the avatar on the NEXT turn** (`lib/canvasReport.ts` →
   `POST /api/canvases/:canvasId/render-report` → `CanvasRenderReportQueue`, in memory on the store →
-  `buildPiTurnPreamble`, once): vega/mermaid render errors. Reports are tied to the canvas version, merged
+  `buildPiTurnPreamble`, once): mermaid render errors. Reports are tied to the canvas version, merged
   per version, dropped when a new version is shown or the canvas/conversation is deleted, kept for a turn
   whose canvas is off; every miss is ONE 404. (Inline UI has the same loop over its own route.)
 - **Questions default to AskUserQuestion, not canvas controls** — controls are for decisions ANCHORED to
@@ -571,7 +570,7 @@
   manual and the redirecting errors. The brief is NOT in the 18 000-char standing-prompt tripwire
   (`tests/system-manual.test.ts`); its own size is pinned in `tests/widget-guide.test.ts`. The brief also says where: the FINAL answer text —
   text written before a tool call is folded into the reasoning view (`text_fold`), where tags are not drawn.
-  A chart the user only needs to SEE goes here too (`<chart>`), not on a `vega` canvas; the canvas is for a
+  A chart the user only needs to SEE goes here too (`<chart>`), not on a canvas; the canvas is for a
   side-panel artifact worked on together.
 - **Never executed code.** The browser walks an AST (`interp.ts` — no `eval`/`Function`, `script-src`
   unchanged); every native call is CHARGED (a callback wrapper ticks per call, array/string methods spend
@@ -653,12 +652,23 @@
   is the structured way back: it posts the label followed by `- key: value` lines as the viewer's next
   message through the same path (`normalizeSubmitValues` caps it) — it no longer rides `canvasSubmission`.
   Still absent on purpose: remote or `data:` images, `Math.random`, anything that loads.
-- **`<chart>` has two forms and ONE pipeline.** `type` + `data` (+ `xKey`, `series`, `stacked`,
-  `horizontal`, `unit`, `title`) is the short form for bar/line/area/pie/donut — `simpleChartSpec`
-  (`src/shared/widget/chart.ts`) turns it into a Vega-Lite spec; `spec` takes a whole Vega-Lite spec for
-  anything else; exactly one of the two (`oneOf`). Both go through `renderVegaSvg` (inline data only, AST
-  evaluator, sanitized SVG in a shadow root), re-rendered per animation frame behind a token guard and
-  skipped when the spec is unchanged.
+- **`<chart>` has ONE form, drawn by React chart components (2026-11-12, the user's pick: Recharts adopted,
+  Vega removed).** `type` + `data` (+ `xKey`, `series`, `stacked`, `horizontal`, `unit`, `title`) for
+  bar/line/area/pie/donut — these five are every chart there is. `simpleChartModel`
+  (`src/shared/widget/chart.ts`) reads the props into a `SimpleChartModel` (which columns, parsed numbers,
+  the problems for the avatar); `components/widget/WidgetChart.tsx` is the frame (its height is there from
+  the first frame, the chart chunk is loaded on demand) and `ChartDrawing.tsx` the drawing, with Recharts.
+  The library brings what the old static picture lacked: a tooltip under the pointer, the hovered bar, a
+  legend whose hovered entry singles its series out. Text is rendered by React — nothing is injected as
+  markup, so there is no sanitizing step and no shadow root for a chart.
+  **RETIRED with Vega, names reserved:** the `<chart spec={…}>` prop (a whole Vega-Lite spec) and the canvas
+  content type `vega`. No data is destroyed: an old answer that wrote `spec` draws a notice in the chart's
+  place and its avatar is told `CHART_SPEC_RETIRED` (the static check says the same for the prop), a stored
+  `vega` canvas shows a notice and its source (`CanvasTab`), and `mcp__canvas__show` answers
+  `contentType: 'vega'` with `VEGA_RETIRED_ERROR` — a conversation whose prompt was frozen before the
+  retirement still asks for it. What the avatar is told instead: a chart goes in the answer as `<chart>`;
+  on a canvas, or where inline UI is not available, a mermaid chart (`xychart-beta`, `pie`) or an svg; a
+  shape outside the five (scatter, heatmap) is a `<table>`.
 - **A DIAGRAM is a ` ```mermaid ` code block of the answer, not a tag (2026-11-11, the user's pick over a
   `<mermaid>` component).** It is the form a model writes anyway, so it also works in a conversation whose
   frozen prompt predates it, and the component table and the `inline-ui` manual page are untouched (mermaid's
@@ -719,31 +729,28 @@
 - **A snippet of an answer that cannot draw UI uses `inlineUiPlainText`** (`detect.ts`: the prose with the UI
   source lines left out) — the OS notification body does (`notifyTurnComplete`). A new place that shows part
   of an answer as plain text takes the same helper.
-- **A chart ENTERS when it appears now; a redraw is at rest (2026-11-11, the user's pick over a second
-  chart engine).** Vega draws ONE static SVG string that is written whole into the shadow root, so there is
-  no previous value to tween from: only a chart's first appearance moves (`lib/chartEntrance.ts`). Bars grow
-  from the line they stand on (which way they stand is read from their THICKNESS — bars of one band are
-  equally wide or equally high, whatever is stacked; the line is the edge every category has — the zero
-  line, also for negative and stacked bars; ranged bars with no common line each grow from their own
-  start; one category after the other), a line or an area is wiped in from the left with its points, the
-  slices of a pie arrive in turn while the circle settles, anything else fades; axes, legends and titles
-  stay still. The plan is read off Vega's OUTPUT (`g.role-mark` + `mark-<type>` classes,
-  `aria-roledescription="bar"`, a rectangle's box from its path `d` — no layout read), so a Vega bump that
-  renames one of those draws charts at rest and fails `tests/client-chart-entrance.test.ts`, which plans
-  against real Vega output. Every step is a Web Animations keyframe with `fill: backwards` — the sanitized
-  markup is never edited — created PAUSED in the task that wrote the SVG (no frame of the finished chart
-  first) and released by an IntersectionObserver when ANY part of the chart is on screen (never a share of
-  its height: a faceted chart taller than the window would stay held for good). **When it plays** is
-  shared with every other entrance (`lib/uiEntrance.ts`; `WidgetCtx.entrance`, built by `AnswerUi`): in an instance that showed the answer while it was written (the live
-  bubble, a stored message whose end drained in — latched, because Vega draws a moment after the tag
-  arrived) and in the stored message that continues the live text (`continuesEntranceText` — a turn
-  can end before a chart of its last lines was drawn) a chart enters ONCE per pane and run, however often the answer is mounted
-  (`claimEntrance`: the stored message gets nothing, or the REST of an entrance that is still
-  running — a step that is already over is not created again, since `play()` would rewind it); after the viewer changed something in the answer, every chart they bring up enters (a tab);
-  an answer opened from the history, a state change of a chart that is already there and a theme flip are
-  at rest. 움직임 줄이기 (`prefersReducedMotion()`, read when it starts) draws at rest. The `vega` CANVAS is
-  untouched. No chart library with transitions was adopted for this: a second engine would have split the
-  `spec` form, the theme and the "sanitized SVG in a shadow root" boundary.
+- **A chart ENTERS when it appears now; a redraw is at rest.** The motion is the chart library's own
+  (bars grow, a line is drawn, an area is revealed, slices sweep in — `ChartDrawing.tsx`, 700 ms); WHEN it
+  plays is the app's rule, shared with every other entrance (`lib/uiEntrance.ts`; `WidgetCtx.entrance`,
+  built by `AnswerUi`): in an instance that showed the answer while it was written (the live bubble, a
+  stored message whose end drained in — latched, because a chart is drawn a moment after its tag arrived)
+  and in the stored message that continues the live text (`continuesEntranceText`) a chart enters ONCE per
+  pane and run (`claimEntrance`); after the viewer changed something in the answer, every chart they bring
+  up enters (a tab); an answer opened from the history, a state change of a chart that is already there
+  and a theme flip are at rest. 움직임 줄이기 (`prefersReducedMotion()`, read when the chart mounts) draws
+  at rest. Three things keep that rule true with a library that animates on mount:
+  - a chart that WILL enter is not mounted until its frame is on screen (`onScreen` in `WidgetChart`), so
+    the entrance is seen instead of being spent below the fold — its place is held meanwhile. Only when a
+    whole entrance is there to wait for (`wouldEnterAfresh`): the stored message's chart, whose entrance
+    the live bubble already played, is drawn in its first frame — waiting would blank it at the turn's end;
+  - animation is switched on only for the arrival (`entering`, off again after it has played): a redraw
+    follows the slider at once instead of trailing it;
+  - an entrance already under way in the live bubble is NOT continued by the stored message that replaces
+    it (the library cannot be started mid-way): that chart is simply drawn at rest. This is the one thing
+    the hand-written Vega entrance (`lib/chartEntrance.ts`, removed) did that the library does not.
+  History: until 2026-11-12 charts were a static sanitized Vega SVG with that hand-written entrance, chosen
+  on 2026-11-11 over a second chart engine. The move to React made a component chart library the cheaper
+  way to get pointer reactions, and the user picked it over keeping Vega for the `spec` form.
 - **The rest of the UI enters by the same rule (2026-11-11, the user's pick of all four).** Each top-level
   component of a UI block rises in as it appears (`enterChildren` on `.answer-ui`: a MutationObserver names
   a component by its PLACE in the block, which the live bubble and the stored message share); a `<stat>`
@@ -784,6 +791,6 @@
   no sample, or a sample does not pass the static check and the evaluator; **a new component or chart type
   gets its sample there.** In a real browser: `tests/visual/ui-gallery.spec.ts`.
 - Verified in a real browser by `tests/visual/inline-ui.spec.ts` (the app's CSP on the document, a negative
-  control, Vega under it, a reload, and a streaming answer that must never show a tag as text) and in jsdom
+  control, a chart drawn under it, a reload, and a streaming answer that must never show a tag as text) and in jsdom
   by `tests/react-chat-inline-ui.test.tsx` (in the chat view) and `tests/react-inline-ui.test.tsx` (`AnswerUi` across
   the end of a turn); the `local` demo runtime's `demo ui` streams such an answer.

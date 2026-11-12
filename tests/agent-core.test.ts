@@ -3010,7 +3010,7 @@ describe("buildPrompt", () => {
     expect(on).toContain(
       "A chart, table, calculator or dashboard the user only needs to SEE or operate belongs in your answer text as inline UI (the Inline UI section), NOT on a canvas. " +
         "A diagram the user only needs to SEE goes in the answer as well, as a ```mermaid fenced code block the app draws in place. " +
-        "On a canvas use vega for charts and mermaid for diagrams",
+        "On a canvas use mermaid for diagrams and for a simple chart (xychart-beta, pie)",
     );
     expect(on).toContain("NEVER open a canvas just to ask the user something.");
     // Nothing of the retired canvas widget is left in the standing text.
@@ -3032,7 +3032,7 @@ describe("buildPrompt", () => {
     const off = buildSystemPromptAppend(req({ viewerIsOwner: true, canvasEnabled: true }) as unknown as AgentRequest);
     expect(off).not.toContain("# Inline UI");
     expect(off).not.toContain("the Inline UI section");
-    expect(off).toContain("On a canvas use vega for charts and mermaid for diagrams");
+    expect(off).toContain("On a canvas use mermaid for diagrams and for a simple chart (xychart-beta, pie)");
     expect(off).toContain("NEVER open a canvas just to ask the user something.");
   });
 

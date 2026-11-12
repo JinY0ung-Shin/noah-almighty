@@ -7,7 +7,7 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 // the chat draws them in place — no canvas, no side panel. What jsdom cannot
 // show is checked here in a real browser: a value on screen that does not
 // follow the state (a stale render), the app's CSP (no eval / Function anywhere
-// in the render path — the interpreter and Vega's AST evaluator), the chart
+// in the render path — the interpreter), the chart
 // following the state, the values kept in this browser coming back after a
 // reload, and a STREAMING answer never showing its tags as raw text.
 
@@ -110,18 +110,45 @@ async function mockApp(page: Page, options: { stored?: boolean; storedText?: str
     };
     // `document`, not its root element: an init script runs before there is one.
     new MutationObserver(scan).observe(document, { childList: true, subtree: true, characterData: true });
-    // Every Web Animation started on a mark of a chart: its entrance (lib/chartEntrance.ts).
-    const entrances: string[] = [];
-    (window as unknown as { __entrances: string[] }).__entrances = entrances;
-    // …and on a part of a mermaid diagram (lib/mermaidEntrance.ts).
+
+    // Every chart drawing on the page (one entry per mounted chart, in the order
+    // they appeared), and how many distinct shapes its marks went through since
+    // they were first there. A chart drawn at rest shows one shape (two after a
+    // redraw); one that ENTERED went through a whole run of them. The chart
+    // library animates by writing attributes frame by frame, so this is read off
+    // the marks themselves — bars, slices, a line's dash, an area's reveal clip.
+    const runs = new Map<Element, { id: string; shapes: Set<string>; bar: number }>();
+    (window as unknown as { __chartRuns: () => unknown[] }).__chartRuns = () => [...runs.values()].map((run) => ({ id: run.id, shapes: run.shapes.size, bar: run.bar }));
+    const shapeOf = (host: Element): string => {
+      const marks = host.querySelectorAll(".recharts-bar-rectangle path, .recharts-pie-sector path, .recharts-line-curve, .recharts-area-area");
+      if (!marks.length) return "";
+      const parts: string[] = [];
+      marks.forEach((mark) => {
+        const box = mark.getBoundingClientRect();
+        parts.push(`${Math.round(box.width)}x${Math.round(box.height)}:${mark.getAttribute("stroke-dasharray") ?? ""}:${(mark.getAttribute("d") ?? "").length}`);
+      });
+      host.querySelectorAll("clipPath rect").forEach((clip) => parts.push(`clip${clip.getAttribute("width")}x${clip.getAttribute("height")}`));
+      return parts.join(";");
+    };
+    const watchCharts = () => {
+      for (const host of document.querySelectorAll(".wg-chart")) {
+        const shape = shapeOf(host);
+        if (!shape) continue;
+        let run = runs.get(host);
+        if (!run) runs.set(host, (run = { id: host.closest("[data-sample]")?.getAttribute("data-sample") ?? "", shapes: new Set(), bar: 0 }));
+        run.shapes.add(shape);
+        run.bar = host.querySelector(".recharts-bar-rectangle path")?.getBoundingClientRect().height ?? 0;
+      }
+      requestAnimationFrame(watchCharts);
+    };
+    requestAnimationFrame(watchCharts);
+    // Every Web Animation started on a part of a mermaid diagram (lib/mermaidEntrance.ts).
     const diagramMoves: string[] = [];
     (window as unknown as { __diagramMoves: string[] }).__diagramMoves = diagramMoves;
     const animate = Element.prototype.animate;
     Element.prototype.animate = function (keyframes: Keyframe[] | PropertyIndexedKeyframes | null, options?: number | KeyframeAnimationOptions) {
       const root = this.getRootNode();
       if (root instanceof ShadowRoot && root.host.classList.contains("code-diagram")) diagramMoves.push(this.tagName.toLowerCase());
-      const group = this.closest("g.role-mark");
-      if (group) entrances.push(/mark-([a-z]+)/.exec(group.getAttribute("class") ?? "")?.[1] ?? "");
       return animate.call(this, keyframes, options);
     };
   });
@@ -202,10 +229,18 @@ async function openConversation(page: Page): Promise<void> {
 }
 
 const diagramMoves = (page: Page) => page.evaluate(() => (window as unknown as { __diagramMoves: string[] }).__diagramMoves);
-const chartEntrances = (page: Page) => page.evaluate(() => (window as unknown as { __entrances: string[] }).__entrances);
-/** The rendered height of the first bar of the first chart, read through its shadow root. */
+interface ChartRun {
+  id: string;
+  shapes: number;
+  bar: number;
+}
+/** Every chart that was mounted, in order (see the sampler in mockApp). */
+const chartRuns = (page: Page) => page.evaluate(() => (window as unknown as { __chartRuns: () => ChartRun[] }).__chartRuns());
+/** A chart that went through a run of shapes ENTERED; one drawn at rest shows one shape, two after a redraw. */
+const entered = (run: ChartRun): boolean => run.shapes >= 6;
+/** The rendered height of the first bar of the first chart. */
 const firstBarHeight = (page: Page) =>
-  page.evaluate(() => document.querySelector(".message.assistant .wg-chart .canvas-svg")?.shadowRoot?.querySelector("g.mark-rect path")?.getBoundingClientRect().height ?? -1);
+  page.evaluate(() => document.querySelector(".message.assistant .wg-chart .recharts-bar-rectangle path")?.getBoundingClientRect().height ?? -1);
 const cspViolations = (page: Page) => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
 const leaks = (page: Page) => page.evaluate(() => (window as unknown as { __leaks: string[] }).__leaks);
 
@@ -223,15 +258,15 @@ test("a stored answer draws its UI in the bubble, recomputes locally and keeps t
   // Nothing opened beside the chat.
   await expect(page.locator(".canvas-panel")).toHaveCount(0);
 
-  // 2. The simple-form chart went through Vega under the app's CSP: 2 months × 2 series.
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  // 2. The chart was drawn under the app's CSP: 2 months × 2 series.
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(4);
   await expect(ui.locator(".wg-stat .stat-value").first()).toHaveText("30만원");
 
   // 3. An input recomputes everything that reads it — no stale value left on screen.
   await ui.getByRole("slider", { name: "개월 수" }).fill("4");
   await expect(ui.locator(".wg-stat .stat-value").first()).toHaveText("100만원");
   await expect(ui.locator(".wg-stat .stat-value").nth(1)).toHaveText("4");
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(8);
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(8);
 
   // 4. A tab swaps the chart for the table, and back.
   await ui.getByRole("tab", { name: "표" }).click();
@@ -293,7 +328,7 @@ test("a streaming answer builds its UI as the text arrives and never shows a tag
   // The stored message replaces the live bubble with the same UI, whole.
   const ui = page.locator(UI).first();
   await expect(ui.getByRole("button", { name: "요약 요청" })).toBeVisible({ timeout: 15_000 });
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(4);
   await expect(page.locator(".message.assistant .bubble > .md").last()).toContainText("원하는 기간으로 바꿔 보세요.");
   await expect(page.locator(".message.assistant .bubble > .widget-slot-pending")).toHaveCount(0);
   await expect(page.locator(".canvas-panel")).toHaveCount(0);
@@ -317,22 +352,22 @@ test("a chart of an answer opened from the history is drawn at rest; one the vie
   await mockApp(page);
   await openConversation(page);
   const ui = page.locator(UI).first();
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(4);
   await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
-  await page.waitForTimeout(400);
-  expect(await chartEntrances(page)).toEqual([]);
+  await page.waitForTimeout(500);
+  expect((await chartRuns(page)).map(entered)).toEqual([false]);
 
   // A redraw (the slider) replaces the drawing at rest.
   await ui.getByRole("slider", { name: "개월 수" }).fill("3");
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(6);
-  await page.waitForTimeout(400);
-  expect(await chartEntrances(page)).toEqual([]);
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(6);
+  await page.waitForTimeout(500);
+  expect((await chartRuns(page)).map(entered)).toEqual([false]);
 
   // Leaving for the table and coming back mounts the chart anew, because of the viewer: it enters.
   await ui.getByRole("tab", { name: "표" }).click();
   await expect(ui.locator(".wg-chart")).toHaveCount(0);
   await ui.getByRole("tab", { name: "차트" }).click();
-  await expect.poll(() => chartEntrances(page)).toEqual(["rect", "rect", "rect", "rect", "rect", "rect"]);
+  await expect.poll(async () => (await chartRuns(page)).map(entered)).toEqual([false, true]);
   await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
 });
 
@@ -345,15 +380,16 @@ test("a chart of a streaming answer enters once across the live bubble and the s
 
   const ui = page.locator(UI).first();
   await expect(ui.getByRole("button", { name: "요약 요청" })).toBeVisible({ timeout: 15_000 });
-  await expect(ui.locator(".wg-chart .canvas-svg .mark-rect path")).toHaveCount(4);
+  await expect(ui.locator(".wg-chart .recharts-bar-rectangle")).toHaveCount(4);
   // The whole answer is there and stored; the entrance has run its course and the bars stand.
   await expect.poll(() => firstBarHeight(page)).toBeGreaterThan(5);
   await page.waitForTimeout(1200);
-  const played = await chartEntrances(page);
-  // Four bars, animated once — or twice when the stored message took over mid-entrance and
-  // continued it. Never a third time, and never a restart after the entrance was over.
-  expect(played.every((mark) => mark === "rect")).toBe(true);
-  expect([4, 8]).toContain(played.length);
+  // Two mounts (the live bubble's chart, then the stored message's) and ONE entrance between them:
+  // the stored message's chart never plays it a second time.
+  const runs = await chartRuns(page);
+  expect(runs.length).toBeGreaterThanOrEqual(1);
+  expect(runs.filter(entered).length).toBeLessThanOrEqual(1);
+  expect(entered(runs[runs.length - 1]) && runs.length > 1).toBe(false);
 });
 
 // The `local` demo runtime's `demo ui` answer (what `AGENT_RUNTIME=local` streams), through the real client:
@@ -366,8 +402,8 @@ test("the demo runtime's inline UI answer draws whole and reports nothing", asyn
   await composer.press("Enter");
 
   const bubble = page.locator(".message.assistant .bubble").last();
-  await expect(bubble.locator(".wg-chart .canvas-svg .mark-rect path").first()).toBeVisible({ timeout: 20_000 });
-  await expect(bubble.locator(".wg-chart .canvas-svg .mark-arc path").first()).toBeVisible();
+  await expect(bubble.locator(".wg-chart .recharts-bar-rectangle").first()).toBeVisible({ timeout: 20_000 });
+  await expect(bubble.locator(".wg-chart .recharts-pie-sector").first()).toBeVisible();
   await expect(bubble.getByRole("slider").first()).toBeVisible();
   await expect(bubble.locator("pre code").filter({ hasText: LOCAL_DEMO_UI_FENCED_SOURCE })).toHaveCount(1);
   // The ```mermaid block of the demo is a diagram; the fenced tag above stays a plain code block.

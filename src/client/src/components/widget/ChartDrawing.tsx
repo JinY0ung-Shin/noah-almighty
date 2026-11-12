@@ -1,13 +1,16 @@
-// SPIKE (2026-11-12): an inline `<chart>` in the simple form, drawn by Recharts
-// instead of Vega (lib/chartEngine.ts). The library brings what the Vega path
-// lacks or hand-builds: a tooltip under the pointer, the hovered mark and the
-// hovered legend entry standing out, and the entrance. Text is rendered by
-// React (nothing is injected as markup), so there is no sanitizing step.
+// The drawing of a widget's <chart>, with Recharts: bar / stacked / horizontal
+// / line / area / pie / donut from the model shared/widget/chart.ts reads out of
+// the avatar's props. The library brings the tooltip under the pointer, the
+// hovered mark and the hovered legend entry standing out, and the entrance.
+// Text is rendered by React (nothing is injected as markup), so there is no
+// sanitizing step. Loaded on demand by WidgetChart.tsx — keep Recharts out of
+// every other module.
 //
-// Kept from the Vega path: the app's own motion setting decides (never the
-// OS), an entrance plays once per answer while it is written and whenever the
+// The app's rules it keeps: the motion setting is the app's own (never the
+// OS's); an entrance plays once per answer while it is written and whenever the
 // viewer brings a chart up, never for an answer opened from the history
-// (lib/uiEntrance.ts), and the chart's box has its height from the first frame.
+// (lib/uiEntrance.ts). An entrance already under way in the live bubble is not
+// replayed when the stored message takes over: that chart is drawn at rest.
 import { useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
@@ -15,17 +18,17 @@ import type { SimpleChartModel } from "../../../../shared/widget/index";
 import { prefersReducedMotion } from "../../lib/motion";
 import { cssToken } from "../../lib/theme";
 import { claimEntrance, type EntranceRule } from "../../lib/uiEntrance";
+import { chartKey } from "./WidgetChart";
 
-export interface WidgetRechartProps {
+export interface ChartDrawingProps {
   model: SimpleChartModel;
-  height?: number;
-  label?: string;
+  /** The plot's height in px. */
+  height: number;
   dark?: boolean;
   entrance?: EntranceRule | null;
 }
 
-const DEFAULT_HEIGHT = 240;
-// The category colours Vega-Lite draws the same charts with, so switching engines does not recolour an answer.
+// The category colours these charts have always had (Vega-Lite's defaults), so an old answer keeps its colours.
 const PALETTE = ["#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b", "#eeca3b", "#b279a2", "#ff9da6", "#9d755d", "#bab0ac"];
 const ENTRANCE_MS = 700;
 
@@ -47,8 +50,8 @@ function wide(model: SimpleChartModel): Wide[] {
   return [...rows.values()];
 }
 
-export default function WidgetRechart({ model, height = undefined, label = "", dark = false, entrance = null }: WidgetRechartProps) {
-  const sig = useMemo(() => JSON.stringify(model), [model]);
+export default function ChartDrawing({ model, height, dark = false, entrance = null }: ChartDrawingProps) {
+  const sig = useMemo(() => chartKey(model), [model]);
   // Decided once, when the chart mounts: does it arrive with motion?
   const [intro] = useState(() => {
     if (!entrance || prefersReducedMotion()) return false;
@@ -58,10 +61,16 @@ export default function WidgetRechart({ model, height = undefined, label = "", d
     claimed.started();
     return true;
   });
-  // After the first frame: a change the viewer makes (a slider, a tab) moves the marks; history stays at rest.
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const animate = !prefersReducedMotion() && (mounted ? entrance !== null : intro);
+  // Only the ARRIVAL moves. Once it has played, a redraw of the chart that is
+  // already there (a slider, a new row) lands at rest — values that follow the
+  // pointer must not lag behind it.
+  const [entering, setEntering] = useState(intro);
+  useEffect(() => {
+    if (!intro) return;
+    const timer = window.setTimeout(() => setEntering(false), ENTRANCE_MS + 120);
+    return () => window.clearTimeout(timer);
+  }, [intro]);
+  const animate = entering && !prefersReducedMotion();
 
   // The legend entry under the pointer: its series stands out, the others step back.
   const [hot, setHot] = useState<string | null>(null);
@@ -100,8 +109,6 @@ export default function WidgetRechart({ model, height = undefined, label = "", d
     />
   );
   const measureLabel = multi ? unit : unit ? `${names[0]} (${unit})` : names[0];
-  const box = { width: "100%" as const, height: height ?? DEFAULT_HEIGHT };
-
   let chart;
   if (type === "pie" || type === "donut") {
     // Largest slice first, as before.
@@ -173,9 +180,8 @@ export default function WidgetRechart({ model, height = undefined, label = "", d
   }
 
   return (
-    <div className="wg-chart wg-chart-rc" role="group" aria-label={label || model.title || "차트"}>
-      {model.title ? <p className="wg-chart-title">{model.title}</p> : null}
-      <ResponsiveContainer {...box}>{chart}</ResponsiveContainer>
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      {chart}
+    </ResponsiveContainer>
   );
 }

@@ -491,7 +491,7 @@ function canvasSection(request: AgentRequest): string | null {
       ? "A chart, table, calculator or dashboard the user only needs to SEE or operate belongs in your answer text as inline UI (the Inline UI section), NOT on a canvas. " +
         "A diagram the user only needs to SEE goes in the answer as well, as a ```mermaid fenced code block the app draws in place. "
       : "") +
-    "On a canvas use vega for charts and mermaid for diagrams (double-quote mermaid labels that contain punctuation); no scripts/JS. Reuse the SAME canvasId to refine an artifact. " +
+    "On a canvas use mermaid for diagrams and for a simple chart (xychart-beta, pie) — double-quote mermaid labels that contain punctuation; no scripts/JS. Reuse the SAME canvasId to refine an artifact. " +
     "Controls collect a decision ANCHORED TO the artifact on screen. For a plain question use AskUserQuestion — NEVER open a canvas just to ask the user something."
   );
 }

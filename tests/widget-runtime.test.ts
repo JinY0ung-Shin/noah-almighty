@@ -345,17 +345,17 @@ describe("widget props normalization", () => {
       { key: "c", label: "c", align: "start", sortable: true },
     ]);
     expect(table.rows).toEqual([{ id: 1, v: undefined }, { id: 2, nested: { deep: [1, undefined] } }]);
-    const spec = { mark: "bar", data: { values: [{ a: 1 }] }, fn };
-    const chart = normalizeProps("chart", { spec, height: 9999 }).props;
-    expect(chart.spec).toEqual({ mark: "bar", data: { values: [{ a: 1 }] }, fn: undefined });
-    expect(chart.spec).not.toBe(spec); // a copy: the renderer never holds interpreter values
-    expect(chart.height).toBe(600);
-    expect(normalizeProps("chart", { spec: [1] }).props.spec).toEqual({}); // required and written: empty, not missing
+    const values = { mark: "bar", data: { values: [{ a: 1 }] }, fn };
+    const submit = normalizeProps("submit", { values }).props;
+    expect(submit.values).toEqual({ mark: "bar", data: { values: [{ a: 1 }] }, fn: undefined });
+    expect(submit.values).not.toBe(values); // a copy: the renderer never holds interpreter values
+    expect(normalizeProps("chart", { data: [], height: 9999 }).props.height).toBe(600);
+    expect(normalizeProps("submit", { values: [1] }).props.values).toEqual({}); // required and written: empty, not missing
     // data too large to copy is dropped and reported, never passed through
     const dag = Array.from({ length: 40 }).reduce<unknown[]>((a) => [a, a], [0]);
-    const huge = normalizeProps("chart", { spec: { data: dag } });
-    expect(huge.props.spec).toBe(undefined);
-    expect(huge.errors[0]).toMatch(/^spec: value is too large/);
+    const huge = normalizeProps("submit", { values: { data: dag } });
+    expect(huge.props.values).toBe(undefined);
+    expect(huge.errors[0]).toMatch(/^values: value is too large/);
   });
 });
 
@@ -576,7 +576,7 @@ describe("widget props: a prop that is written but empty is not a missing prop",
         '<progress label="p" value={pick} />',
         "<switch checked={pick} onChange={none}>on</switch>",
         "<table columns={none} rows={none} />",
-        "<chart spec={none} />",
+        "<chart data={none} />",
         "<submit values={none}>go</submit>",
         '<details title={none}><text>x</text></details>',
         "<button onClick={none}>b</button>",
@@ -594,7 +594,7 @@ describe("widget props: a prop that is written but empty is not a missing prop",
     expect(by("progress").value).toBe(0);
     expect(by("switch")).toMatchObject({ checked: false, onChange: NOOP_HANDLER });
     expect(by("table")).toMatchObject({ columns: [], rows: [] });
-    expect(by("chart").spec).toEqual({});
+    expect(by("chart").data).toEqual([]);
     expect(by("submit").values).toEqual({});
     expect(by("details").title).toBe("");
     expect(by("button").onClick).toBe(NOOP_HANDLER);
@@ -633,15 +633,15 @@ describe("widget data that leaves the interpreter is bounded in characters", () 
     expect((options[0].value as string).length).toBe(2000);
   });
 
-  it("table rows, a chart spec and stored state cannot carry a string a thousand times", () => {
+  it("table rows, a submit's values and stored state cannot carry a string a thousand times", () => {
     const s = "x".repeat(100_000);
     const row = Object.fromEntries(Array.from({ length: 38 }, (_, i) => [`c${i}`, s]));
     const table = normalizeProps("table", { columns: ["c0"], rows: new Array(500).fill(row) }); // 1.9e9 chars reachable before
     expect("rows" in table.props).toBe(false);
     expect(table.errors).toEqual(["rows: value is too large"]);
-    const chart = normalizeProps("chart", { spec: { mark: "bar", data: { values: new Array(9990).fill(s) }, title: s } });
-    expect("spec" in chart.props).toBe(false);
-    expect(chart.errors).toEqual(["spec: value is too large"]);
+    const submit = normalizeProps("submit", { values: { mark: "bar", data: { values: new Array(9990).fill(s) }, title: s } });
+    expect("values" in submit.props).toBe(false);
+    expect(submit.errors).toEqual(["values: value is too large"]);
     // state: the handler fails and the old value stays
     const doc = parseWidget('{@state x = 0}\n<button onClick={() => setX(Array.from({length: 5000}).fill("x".repeat(100000)))}>go</button>');
     const rt = createRuntime();

@@ -1,4 +1,3 @@
-import type { ChartEngine } from "./chartEngine";
 import type { EntranceRule } from "./uiEntrance";
 
 // What the inline UI components need from the view that hosts them. A new
@@ -18,7 +17,7 @@ export interface WidgetCtx {
   locked: boolean;
   /** The id of the status line that says why, for `aria-describedby`. */
   statusId: string;
-  /** Dark theme in effect — charts bake their colors in. */
+  /** Dark theme in effect — a chart resolves its colors when it is drawn. */
   dark: boolean;
   /**
    * How a thing that appears NOW may play its entrance (lib/uiEntrance.ts): set
@@ -27,8 +26,6 @@ export interface WidgetCtx {
    * from the history — draws everything at rest.
    */
   entrance: EntranceRule | null;
-  /** Which engine draws a simple-form `<chart>` (lib/chartEngine.ts — a spike switch). */
-  chartEngine: ChartEngine;
   /** A DOM id unique to this view for a node key (two answers on one page must not collide). */
   domId(key: string): string;
 }

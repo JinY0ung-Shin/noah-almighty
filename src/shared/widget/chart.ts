@@ -1,29 +1,27 @@
 /**
- * `<chart>` in its simple form (`type` + `data` + `xKey` + `series`) → the
- * Vega-Lite spec the renderer draws. One chart pipeline: the simple form is
- * only a shorter way to write the common charts, so an avatar does not spell a
- * whole spec (and a streaming answer has less to get wrong) for a bar chart.
+ * `<chart>` (`type` + `data` + `xKey` + `series`), read and checked: which
+ * columns are plotted, in which shape, with the numbers already parsed. The
+ * client's chart components draw this model (components/widget/WidgetChart).
  *
  * Pure data in, pure data out — nothing here is evaluated, and the rows are the
  * avatar's own inline values (already sanitized by `normalizeProps`).
+ *
+ * RETIRED (2026-11-12): `<chart spec={…}>`, a whole Vega-Lite spec. The app no
+ * longer carries Vega; the prop is not in the grammar any more, an answer that
+ * still writes it gets {@link CHART_SPEC_RETIRED} back, and the name stays
+ * reserved.
  */
+/** English, for the avatar: what to write instead of a Vega-Lite `spec`. */
+export const CHART_SPEC_RETIRED =
+  "A Vega-Lite `spec` is retired: the app no longer draws one. Write the chart as type + data (+ xKey, series) — bar, line, area, pie or donut — or give the numbers as a <table>.";
+
 export const MAX_CHART_ROWS = 500;
 export const MAX_CHART_SERIES = 8;
 
 export type SimpleChartType = "bar" | "line" | "area" | "pie" | "donut";
 
-export interface SimpleChart {
-  /** The Vega-Lite spec, or null when there is nothing to draw (no rows). */
-  spec: Record<string, unknown> | null;
-  /** English, for the avatar: why the chart is not what was asked for. */
-  problems: string[];
-}
-
 /**
- * The simple form, read and checked, before any chart engine sees it: which
- * columns are plotted, in which shape, with the numbers already parsed. Both
- * the Vega-Lite spec and a component-based renderer are built from this, so
- * they cannot disagree about what the avatar asked for.
+ * What a `<chart>` asks for, ready to draw.
  */
 export interface SimpleChartModel {
   type: SimpleChartType;
@@ -140,49 +138,4 @@ export function simpleChartModel(props: Record<string, unknown>): SimpleChartRea
     },
     problems,
   };
-}
-
-/** The Vega-Lite spec of a read simple form. */
-export function simpleChartVegaSpec(model: SimpleChartModel): Record<string, unknown> {
-  const { type, unit, names, stacked, horizontal, numericX } = model;
-  const title = model.title ? { title: model.title } : {};
-
-  if (type === "pie" || type === "donut") {
-    const values = model.values.map((v) => ({ x: v.x as string, value: v.value }));
-    return {
-      ...title,
-      data: { values },
-      mark: { type: "arc", ...(type === "donut" ? { innerRadius: 60 } : {}) },
-      encoding: {
-        theta: { field: "value", type: "quantitative", stack: true },
-        color: { field: "x", type: "nominal", title: null, sort: null, scale: { domain: values.map((v) => v.x) } },
-        order: { field: "value", type: "quantitative", sort: "descending" },
-      },
-      view: { stroke: null },
-    };
-  }
-
-  const multi = names.length > 1;
-  const category = { field: "x", type: numericX ? "quantitative" : type === "bar" ? "nominal" : "ordinal", title: null, ...(numericX ? {} : { sort: null, axis: { labelAngle: 0 } }) };
-  const measure = {
-    field: "value",
-    type: "quantitative",
-    title: multi ? unit || null : unit ? `${names[0]} (${unit})` : names[0],
-    stack: stacked ? "zero" : null,
-  };
-  const color = multi ? { color: { field: "series", type: "nominal", title: null, sort: null, scale: { domain: names } } } : {};
-  const offset = multi && type === "bar" && !stacked ? { [horizontal ? "yOffset" : "xOffset"]: { field: "series", type: "nominal", sort: null, scale: { domain: names } } } : {};
-  const mark = type === "bar" ? { type: "bar" } : type === "line" ? { type: "line", point: true } : { type: "area", line: true, ...(multi && !stacked ? { opacity: 0.5 } : {}) };
-  return {
-    ...title,
-    data: { values: model.values },
-    mark,
-    encoding: { ...(horizontal ? { y: category, x: measure } : { x: category, y: measure }), ...color, ...offset },
-  };
-}
-
-/** `props` are a `<chart>`'s NORMALIZED props (`normalizeProps`). */
-export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
-  const { model, problems } = simpleChartModel(props);
-  return { spec: model ? simpleChartVegaSpec(model) : null, problems };
 }

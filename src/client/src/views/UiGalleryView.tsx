@@ -10,10 +10,9 @@
 import { useMemo, useRef, useState, type SyntheticEvent } from "react";
 
 import AnswerUi from "../components/widget/AnswerUi";
-import { chartEngine as chartEngineStore, setChartEngine, type ChartEngine } from "../lib/chartEngine";
 import { enhanceMarkdown } from "../lib/dom";
 import { renderMarkdown } from "../lib/format";
-import { cx, useAction, useStore } from "../lib/hooks";
+import { useAction } from "../lib/hooks";
 import { scrollToStart } from "../lib/motion";
 import type { ChatPane } from "../lib/types";
 import { UI_GALLERY, gallerySourceMarkdown } from "../lib/uiGallery";
@@ -45,16 +44,6 @@ export default function UiGalleryView() {
     if (event.currentTarget.open) setOpened((before) => (before[id] ? before : { ...before, [id]: true }));
   }
 
-  // SPIKE: which engine draws the simple-form charts. Vega / Recharts set this
-  // browser's switch (real answers follow it); 나란히 only lays the two out here.
-  const engine = useStore(chartEngineStore);
-  const [compare, setCompare] = useState(false);
-  const engineChoice: ChartEngine | "both" = compare ? "both" : engine;
-  function pickEngine(next: ChartEngine | "both"): void {
-    setCompare(next === "both");
-    if (next !== "both") setChartEngine(next);
-  }
-
   const sections = useRef<Record<string, HTMLElement | null>>({});
   function jump(id: string): void {
     const target = sections.current[id];
@@ -69,19 +58,6 @@ export default function UiGalleryView() {
         <div>
           <h1>인라인 UI 갤러리</h1>
           <p>아바타가 답변 본문에 그릴 수 있는 것 {sampleCount}가지 — 실제 답변과 같은 방식으로 그려집니다</p>
-        </div>
-        <div className="seg-control ui-gallery-engine" role="group" aria-label="차트 엔진 (시험)">
-          {(
-            [
-              ["vega", "Vega (현재)"],
-              ["recharts", "Recharts (시험)"],
-              ["both", "나란히 비교"],
-            ] as const
-          ).map(([value, text]) => (
-            <button key={value} type="button" className={cx("seg-btn", engineChoice === value && "active")} aria-pressed={engineChoice === value} onClick={() => pickEngine(value)}>
-              {text}
-            </button>
-          ))}
         </div>
       </header>
 
@@ -118,22 +94,9 @@ export default function UiGalleryView() {
                   {!sample.sourceOnly ? (
                     <>
                       {/* `data-entrance`: a diagram of a preview enters every time, like its charts (lib/mermaidBlock.ts). */}
-                      {compare && section.id === "charts" ? (
-                        <div className="ui-gallery-compare">
-                          {(["vega", "recharts"] as const).map((each) => (
-                            <figure key={each}>
-                              <figcaption>{each === "vega" ? "Vega (현재)" : "Recharts (시험)"}</figcaption>
-                              <div className="ui-gallery-stage" data-entrance="always">
-                                <AnswerUi pane={pane} text={sample.source} outbox={outboxOf(sample.id)} chartEngine={each} />
-                              </div>
-                            </figure>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="ui-gallery-stage" data-entrance="always">
-                          <AnswerUi pane={pane} text={sample.source} outbox={outboxOf(sample.id)} />
-                        </div>
-                      )}
+                      <div className="ui-gallery-stage" data-entrance="always">
+                        <AnswerUi pane={pane} text={sample.source} outbox={outboxOf(sample.id)} />
+                      </div>
                       {outgoing[sample.id] ? (
                         <div className="ui-gallery-sent" role="status">
                           <span>대화에서는 이 내용이 다음 메시지로 전송됩니다. 갤러리에서는 보내지 않습니다.</span>

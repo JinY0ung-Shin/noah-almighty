@@ -2143,7 +2143,7 @@ describe("system tools (avatar system management)", () => {
     // The canvas is a side-panel artifact: the line names its types and sends
     // what the user only looks at or operates to inline UI. No `widget` type.
     expect(on).toContain("a SIDE-PANEL artifact worked on with the user");
-    expect(on).toContain("contentType markdown | vega | mermaid | svg | html.");
+    expect(on).toContain("contentType markdown | mermaid | svg | html (a side-panel chart is a mermaid xychart-beta / pie; 'vega' is retired).");
     expect(on).toContain("A chart, table or calculator the user only needs to see or operate in the answer is inline UI (next line), not a canvas");
     expect(on).toContain("a diagram they only need to see is a ```mermaid fenced code block in the answer");
     expect(on).not.toContain("widget");
@@ -3889,7 +3889,7 @@ describe("canvas tools (#50)", () => {
     expect(res.content[0].text).toContain("shown");
   });
 
-  it("passes a vega (Vega-Lite) chart spec through to the canvas sink", async () => {
+  it("refuses a vega (Vega-Lite) chart spec — the type is retired — and shows nothing", async () => {
     let captured: CanvasRequest | null = null;
     const tools = buildCanvasTools({
       emitCanvas: async (req): Promise<CanvasResult> => {
@@ -3899,9 +3899,10 @@ describe("canvas tools (#50)", () => {
     });
     const spec = '{"mark":"bar","data":{"values":[{"a":"A","b":3}]},"encoding":{"x":{"field":"a"},"y":{"field":"b"}}}';
     const res = await callTool(tools, "show", { title: "차트", content: spec, contentType: "vega" });
-    expect(res.isError).toBeFalsy();
-    expect(captured!.contentType).toBe("vega");
-    expect(captured!.content).toBe(spec);
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("contentType 'vega' is retired");
+    expect(res.content[0].text).toContain("`xychart-beta` for bars and lines, `pie` for shares");
+    expect(captured).toBeNull();
   });
 
   it("reuses a provided canvasId so the artifact can be refined in place", async () => {

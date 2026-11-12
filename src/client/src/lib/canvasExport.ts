@@ -1,5 +1,5 @@
 // CSP-safe canvas export helpers (#50). Everything here operates on the ALREADY
-// DOMPurify-sanitized rendered SVG (for svg/vega/mermaid) or the source text (for
+// DOMPurify-sanitized rendered SVG (for svg/mermaid) or the source text (for
 // markdown/html). No avatar-authored JS ever runs: we serialize an existing <svg>
 // element, draw it through an <img> with a `data:` URL (allowed by `img-src 'self'
 // data:` in app.ts), and read the pixels back off a 2D canvas — no `Function`

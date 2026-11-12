@@ -132,6 +132,18 @@ export function continuesEntranceText(scope: string, text: string): boolean {
  * remembered so. Under `rule.always` a first drawing enters whatever was shown
  * before.
  */
+/**
+ * Would a FRESH entrance of `key` play under `rule` — from its beginning — if
+ * it were claimed now? A look, not a claim: for something that cannot join an
+ * entrance mid-way (a chart drawn by a library) and so only waits to be on
+ * screen when there is a whole entrance to wait for.
+ */
+export function wouldEnterAfresh(rule: EntranceRule, key: string): boolean {
+  if (rule.always) return true;
+  const record = scopeOf(rule.scope).shown.get(digest(key));
+  return !record || record.startedAt === null;
+}
+
 export function claimEntrance(rule: EntranceRule, key: string, first: boolean): Entrance | null {
   const { shown } = scopeOf(rule.scope);
   const id = digest(key);

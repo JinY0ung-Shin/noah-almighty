@@ -42,6 +42,37 @@ function el(nodes: VNode[], tag: string): ElVNode {
   return found;
 }
 
+describe("a <chart> in the view", () => {
+  function chartOf(text: string): { chart: ElVNode; problems: string[] } {
+    const doc = parseAnswer(text);
+    const rt = createRuntime();
+    const values = { ...restoreState(doc, null).values };
+    const items = buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: (name) => values[name], set: () => {}, copy: () => {} }), rt, values, createAnswerViewCache());
+    const view = answerNodes(items);
+    return { chart: el(view, "chart"), problems: collectWidgetProblems(doc, view) };
+  }
+
+  it("carries the read model for the chart components, and no Vega spec", () => {
+    const { chart, problems } = chartOf('<chart type="donut" data={[{ kind: "버그", count: 12 }, { kind: "기능", count: 21 }]} xKey="kind" title="요청 유형" />');
+    expect(problems).toEqual([]);
+    expect(chart.props.simple).toMatchObject({ type: "donut", title: "요청 유형", names: ["count"] });
+    expect("spec" in chart.props).toBe(false);
+    expect(chart.props.retiredSpec).toBeUndefined();
+  });
+
+  it("marks an answer that still writes the retired Vega-Lite `spec`, and tells the avatar what to write instead", () => {
+    const { chart, problems } = chartOf('<chart spec={{ mark: "bar", data: { values: [{ a: "x", b: 1 }] } }} />');
+    expect(chart.props.simple).toBeUndefined();
+    expect(chart.props.retiredSpec).toBe(true);
+    expect(problems.join("\n")).toContain("A Vega-Lite `spec` is retired: the app no longer draws one.");
+    // With rows next to it the chart is drawn from the rows, and the avatar still hears about the prop.
+    const both = chartOf('<chart data={[{ a: "x", b: 1 }]} spec={{ mark: "bar" }} />');
+    expect(both.chart.props.simple).toMatchObject({ type: "bar" });
+    expect(both.chart.props.retiredSpec).toBeUndefined();
+    expect(both.problems.join("\n")).toContain("A Vega-Lite `spec` is retired");
+  });
+});
+
 describe("parseInlineMarkdown", () => {
   it("styles bold, italic, code and strike-through", () => {
     expect(parseInlineMarkdown("a **b** *c* _d_ `e` ~~f~~ g")).toEqual([
@@ -302,7 +333,7 @@ describe("evaluating UI nodes", () => {
   <checkbox checked={done[k]} onChange={(c) => setDone({ ...done, [k]: c })}>{k}</checkbox>
 {/each}
 <select label="선택" value={pick} onChange={setPick} options={null} />
-<chart spec={pick ? { mark: "bar" } : null} />
+<chart data={pick ? [{ a: "x", b: 1 }] : null} />
 <submit values={pick}>보내기</submit>
 `);
     expect(view.filter((n) => n.k === "error")).toEqual([]);
@@ -312,7 +343,8 @@ describe("evaluating UI nodes", () => {
       [false, ""],
     ]);
     expect(el(view, "select").props).toMatchObject({ value: "", options: [] });
-    expect(el(view, "chart").props.spec).toEqual({});
+    expect(el(view, "chart").props.data).toEqual([]);
+    expect(el(view, "chart").props.simple).toBeUndefined(); // nothing to plot: no model for the chart components
     expect(el(view, "submit").props.values).toEqual({});
   });
 
