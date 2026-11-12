@@ -247,6 +247,10 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // Lets onboarding show the Confluence PAT field only when the deployment
       // has a Confluence host configured (the PAT is useless otherwise).
       confluenceConfigured: Boolean(config.confluenceUrl),
+      // The attach button opens the upload relay's page instead of this
+      // browser's own file dialog (a fleet whose DRM agent only decrypts
+      // uploads to a registered address).
+      uploadRelay: Boolean(config.uploadRelay),
       // Per-conversation model picker: the models pi-gateway offers right now.
       // A pick is a pi model id; none (or one pi stopped offering) runs the
       // default model (pi's `falcon` tier, else pi-gateway's own default). Image input is pi's own per-model setting

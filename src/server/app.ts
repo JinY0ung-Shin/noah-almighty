@@ -20,6 +20,7 @@ import { teamBrainStoreLimits } from "./teamBrain.js";
 import { createSkillShareRouter } from "./routes/skillShare.js";
 import { createSharedMcpRouter } from "./routes/sharedMcp.js";
 import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
+import { createUploadRelayRouter } from "./routes/uploadRelay.js";
 import { createAdminRouter } from "./routes/admin.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
@@ -187,6 +188,7 @@ export function createApp(services = createServices()) {
   app.use(createSkillShareRouter(deps));
   app.use(createSharedMcpRouter(deps));
   app.use(createChatRouter(deps));
+  app.use(createUploadRelayRouter(deps));
   // PPT share links: owner create/list/revoke + the signed-in recipient routes.
   app.use(createShareLinksRouter(deps));
   app.use(createBrowserExtensionRouter(deps));

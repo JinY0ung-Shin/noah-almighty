@@ -388,6 +388,8 @@ export interface BootstrapInfo {
   githubHost: string;
   signupMode: import("../../../server/types.js").SignupMode;
   confluenceConfigured: boolean;
+  /** The attach button opens the upload relay's page (absent on an older server = off). */
+  uploadRelay?: boolean;
   /**
    * Per-conversation model picker config: pi-gateway's live model list. Empty
    * under the local stub or when pi is unreachable (the picker is hidden).

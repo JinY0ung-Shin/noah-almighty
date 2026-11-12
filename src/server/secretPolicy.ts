@@ -34,12 +34,14 @@ export const SSH_MCP_SECRET_ENV_NAMES = [
  * Server-only secrets read from the environment at boot. SESSION_SECRET is the
  * AES-256-GCM master key for every user's at-rest secrets; PI_GATEWAY_API_KEY is
  * the pi-gateway service key, which lets its holder run turns AS any user
- * (`user` is trusted on a service-key request). No agent-adjacent
+ * (`user` is trusted on a service-key request); UPLOAD_RELAY_SECRET signs the
+ * upload relay's tickets and server-to-server requests (its holder can collect
+ * any file waiting on the relay). No agent-adjacent
  * process may ever hold them: `piProxyBaseEnv` strips them per relay spawn, and the
  * server deletes them from its own `process.env` once the config has read them, so
  * no child process it starts afterwards (git, converters, MCP relays) inherits them (#71).
  */
-export const SERVER_ONLY_SECRET_ENV_NAMES = ["SESSION_SECRET", "PI_GATEWAY_API_KEY"] as const;
+export const SERVER_ONLY_SECRET_ENV_NAMES = ["SESSION_SECRET", "PI_GATEWAY_API_KEY", "UPLOAD_RELAY_SECRET"] as const;
 
 /** Delete {@link SERVER_ONLY_SECRET_ENV_NAMES} from `env` in place. */
 export function scrubServerOnlySecretEnv(env: Record<string, string | undefined>): void {

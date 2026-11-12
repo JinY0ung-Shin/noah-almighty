@@ -186,6 +186,7 @@ export function Composer({ ctx, item, compact, index }: { ctx: ChatController; i
                 multiple
                 aria-label={attachHint(item, state)}
                 disabled={item.streaming}
+                onClick={(event) => ctx.onAttachClick(event, item)}
                 onChange={(event) => void ctx.onPickFiles(event, item)}
               />
             </label>{" "}

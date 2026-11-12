@@ -18,6 +18,16 @@ export interface AgentOwner {
   alias?: string;
 }
 
+/** The upload relay as this server uses it (`parseUploadRelayConfig`). */
+export interface UploadRelayConfig {
+  /** The relay's address in the USER's browser (an origin) — where the upload page opens. */
+  url: string;
+  /** Where THIS server reaches the relay's service (no trailing slash). */
+  apiUrl: string;
+  /** Shared with the relay; signs tickets and server-to-server requests. Server-only. */
+  secret: string;
+}
+
 export interface AppConfig {
   /** Operator-configured policy controller, never a user-selected URL. */
   egressControlUrl?: string;
@@ -49,6 +59,13 @@ export interface AppConfig {
    * is user-scoped and stored as a `CONFLUENCE_PAT` secret.
    */
   confluenceUrl?: string;
+  /**
+   * The upload relay (env `UPLOAD_RELAY_URL` + `UPLOAD_RELAY_SECRET`): where
+   * the composer's attach button sends a file on a fleet whose DRM agent only
+   * decrypts uploads to a registered address. Absent = off (the button keeps
+   * the browser's own file dialog). See `uploadRelay.ts`.
+   */
+  uploadRelay?: UploadRelayConfig;
   /**
    * Deployment-wide DEFAULT browser-control allowlist (env
    * `BROWSER_ALLOWED_ORIGINS`, comma-separated hostnames / `*.wildcards`).

@@ -105,6 +105,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   set_egress_policy: "외부 통신 차단 정책 적용",
   egress_policy_failed: "외부 통신 차단 정책 적용 실패",
   set_tool_policy: "MCP 도구 정책 변경",
+  upload_relay_receive: "업로드 중계 파일 수신",
   skill_block: "공유 스킬 차단",
   skill_unblock: "공유 스킬 차단 해제",
   single_team_suspend: "단일 팀 전환으로 정지",

@@ -353,6 +353,80 @@
   The bubble's card is a DOWNLOAD of the viewer's own file through the existing file route (`<a download>`),
   never an inline render or a side-panel preview; a regenerate/edit sends no `files` — the server re-sends its
   stored copy.
+## Upload relay (the attach button on a DRM fleet, 2026-11-12)
+- **Why.** On the fleet a DRM agent decrypts a file only while it is uploaded to a REGISTERED address, and
+  Noah's is not one: a file picked in Noah's own dialog arrives encrypted (and fails `BAD_FORMAT`). With
+  `UPLOAD_RELAY_URL` + `UPLOAD_RELAY_SECRET` set (both or neither — half stops the boot,
+  `parseUploadRelayConfig` in `config.ts`; `bootstrap.uploadRelay`), the attach BUTTON opens the relay's page
+  — UniBridge, `<url>/upload-relay` — in a popup; the file is uploaded THERE and comes back through Noah's
+  server. User decisions (2026-11-12): the relay page requires an APPROVED UniBridge account (a Keycloak sign-in that holds an app role — a
+  pending, role-less account cannot upload; so every Noah user who attaches files needs one); the button
+  ALWAYS goes to the relay (documents and image files alike) while paste and drop stay direct; UniBridge
+  cannot reach Noah, so **Noah PULLS**; both sides log every file.
+- **Contract v1 (shared with UniBridge's `upload-relay` router; `src/server/uploadRelay.ts`).** The TICKET is
+  `v1.<base64url JSON>.<base64url HMAC-SHA256(secret, "noah-upload-relay-ticket:v1." + payload)>` with
+  `{tid, user, name, exp, accept, maxBytes, maxFiles}` (10 min, 20 MiB a file, 10 files; `accept` = images,
+  plus the document extensions when the pane takes documents — `src/shared/uploadRelay.ts`). It rides the
+  popup URL's FRAGMENT. Every server-to-server call carries `X-Noah-Relay-Timestamp` +
+  `X-Noah-Relay-Signature` = hex HMAC over `"noah-upload-relay-request:v1\n" + METHOD + "\n" + path + "\n" +
+  timestamp` (path as UniBridge's service sees it): `GET /upload-relay/tickets/{tid}/files`,
+  `GET /upload-relay/files/{id}`, `POST /upload-relay/files/{id}/ack {outcome, reason?}`. So the browser-held
+  ticket can upload but can never read a file back. `tests/routes-upload-relay.test.ts` re-derives both
+  signatures from these words against a fake relay; UniBridge pins the same strings on its side.
+- **Routes (`routes/uploadRelay.ts`, session-only, 404 when the relay is off):**
+  `POST /api/chat/upload-relay/tickets {documents}` → `{ticket, url, expiresAt, ttlSeconds}`; `…/poll {ticket}`
+  → `{files:[{id,name,size}]}`; `…/fetch {ticket, fileId}` → the bytes; `…/confirm {ticket, fileId}` →
+  `{ok}`. A ticket is collectable only by the user it was minted for (its id ends in a keyed tag of that
+  user's id — no server-side ticket table, so a restart loses no ticket) until expiry + 15 min; a file id is
+  honoured only when the relay lists it under THAT ticket. `fetch` judges before it sends a byte
+  (`judgeUploadRelayFile`): type on the ticket's `accept`, not empty, ≤ 8 MiB for a document / 20 MiB for an
+  image (the composer downscales images), the SHA-256 the relay listed, and the bytes are what the name says
+  (`chatDocumentContentMatches`; magic bytes for images) — **the check that catches a file the DRM agent did
+  NOT decrypt**. A refusal is final at `fetch`: 422 `{error, problem}`, an error audit row, a `refused` ack.
+  One user has at most two fetches in flight (429) — each holds up to 20 MiB.
+- **SENT is not RECEIVED — the hand-over is `confirm`.** A response that left the server is not a file that
+  arrived (a closed tab, a buffering proxy: `finish` fires either way — reproduced in review, 2026-11-12).
+  So `fetch` only remembers what it sent (a router-scoped table, 15 min, keyed user + ticket + file), and
+  the browser calls `confirm` once it holds the whole body; only THEN is the "received" audit row written
+  and the relay told `delivered` (the ack is retried twice; a lost one leaves the relay's trail saying
+  "collected, not acknowledged"). Never confirmed → the file stays on the relay and the next poll fetches it
+  again; a confirmation the server no longer remembers (restart, window passed, repeated) is a 404 and the
+  client fetches again. **Do not move the audit or the ack back into `fetch`.**
+- **Audit.** Every hand-over and refusal is an `audit` row, action `upload_relay_receive` (status
+  `success` / `error`): file name (control characters replaced), bytes, SHA-256, the relay's uploader
+  account, the ticket id — plus a log line with the same fields. UniBridge writes its own
+  `admin_audit_logs` rows (`upload_relay`: upload / collect / deliver / refuse / expire).
+- **What keeps it narrow.** Noah fetches from ONE operator-configured origin (ids are pattern-checked before
+  they enter a path, `redirect: "error"`); nothing a user types becomes a URL — this is NOT a "fetch this
+  link" feature and must not grow into one. The bytes live here only for the request that sends them to the
+  owner's browser (nothing is written on this path; the attachment's ordinary copies are made later by the
+  ordinary send). `UPLOAD_RELAY_SECRET` is in `SERVER_ONLY_SECRET_ENV_NAMES`. The request signature covers
+  method, path and time, not the body, and has no nonce: transport security is the control — use HTTPS for
+  `UPLOAD_RELAY_API_URL` unless it is a same-host/compose-network address. A ticket's `user`/`name` are cut
+  by code point and never carry half a surrogate pair (`ticketText`; the relay cannot encode one).
+- **Client (`lib/uploadRelay.ts`).** The attach control stays the `<label>` + hidden file input; with a relay
+  its `click` is cancelled (`onAttachClick`) and `startUploadRelay` opens `about:blank` SYNCHRONOUSLY in the
+  click (a popup opened after an `await` is blocked), sets `popup.opener = null` (the relay page gets no
+  handle on Noah's tab; our handle and its `closed` are unaffected), mints the ticket and navigates the
+  popup. It then polls every 2 s; each new file is fetched, **confirmed**, and only then wrapped as a `File`
+  (media type from the extension) and passed to `addFiles` — the same intake as a pick, paste or drop, so
+  every composer rule applies unchanged. A step that failed without a final answer (network, 5xx, a body
+  that broke off, a failed confirmation) is tried again on later polls, three times per file; a 422 or 404
+  is final. After the popup is seen closed the session keeps polling every 5 s for 2 min — a file uploaded
+  as the window closed still arrives, and so does one uploaded in a popup the page merely lost sight of (a
+  sign-in page that sets `Cross-Origin-Opener-Policy` makes `closed` read true). The ticket's lifetime is
+  taken as a DURATION (`ttlSeconds`), never by comparing the PC clock with `expiresAt`. A new press reuses
+  the popup by name and ends the previous session after one last look at what its ticket still holds. The
+  session never rejects (the caller does not await it).
+- **Known gaps (accepted 2026-11-12).** The ticket carries ONE byte cap (20 MiB), so a 15 MB document is
+  accepted by the relay page and refused here (`TOO_LARGE`, audited); the composer's own limits (a name over
+  255 bytes, a vision-off image over 5 MB, the per-message totals) apply AFTER the hand-over was audited.
+- **Not verified here:** a machine with the DRM agent (does it decrypt for a `fetch` + FormData upload from
+  the registered page?), Keycloak's redirect inside the popup on the deployment (and whether anything there
+  sets COOP), and the Noah → UniBridge network path and certificate trust. Verified locally (2026-11-12):
+  Noah's real app against UniBridge's real service (ticket, signed list/fetch/ack, both audit trails), and
+  the attach button in Chromium (no file dialog, popup at the relay address, chip within one poll).
+
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
 - **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (the only way IN is a user's
   document attachment, above): `mcp__file_output__share_file` → `onShareFile` (routes/chat.ts) → `publishWorkspaceFile`

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentRuntime, AppConfig, PiRuntimeConfig } from "./types.js";
+import type { AgentRuntime, AppConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { assertProcFdPinning } from "./pinnedFs.js";
@@ -185,6 +185,47 @@ export function loadTrustedOrigins(): { origins: string[]; invalid: string[] } {
   return parseTrustedOrigins(env("TRUSTED_ORIGINS"));
 }
 
+/**
+ * `UPLOAD_RELAY_URL` + `UPLOAD_RELAY_SECRET` → the relay block, or undefined
+ * when neither is set (the feature is off and the attach button keeps the
+ * browser's own file dialog). Half a configuration, a URL that is not a plain
+ * http(s) origin or a short secret stops the boot: a typo must not silently
+ * leave the fleet on a button that uploads encrypted files.
+ * `UPLOAD_RELAY_API_URL` is where THIS SERVER reaches the relay's service when
+ * that differs from the browser's address (default `<url>/_api`).
+ */
+export function parseUploadRelayConfig(values: { url: string; apiUrl: string; secret: string }): UploadRelayConfig | undefined {
+  const { url, apiUrl, secret } = values;
+  if (!url && !secret && !apiUrl) return undefined;
+  if (!url || !secret) {
+    throw new Error("The upload relay needs both UPLOAD_RELAY_URL and UPLOAD_RELAY_SECRET (set both, or neither to turn it off).");
+  }
+  if (secret.length < 32) throw new Error("UPLOAD_RELAY_SECRET must be at least 32 characters.");
+  const origin = parseHttpUrl(url, "UPLOAD_RELAY_URL");
+  if (origin.pathname !== "/" || origin.search || origin.hash) {
+    throw new Error("UPLOAD_RELAY_URL must be an origin only (scheme://host[:port], no path).");
+  }
+  const api = apiUrl ? parseHttpUrl(apiUrl, "UPLOAD_RELAY_API_URL") : null;
+  if (api && (api.search || api.hash)) throw new Error("UPLOAD_RELAY_API_URL must not carry a query or fragment.");
+  return {
+    url: origin.origin,
+    apiUrl: api ? `${api.origin}${api.pathname.replace(/\/+$/, "")}` : `${origin.origin}/_api`,
+    secret,
+  };
+}
+
+function parseHttpUrl(value: string, name: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} must be an absolute http(s) URL.`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error(`${name} must be an http(s) URL.`);
+  if (parsed.username || parsed.password) throw new Error(`${name} must not carry credentials.`);
+  return parsed;
+}
+
 export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const isProduction = process.env.NODE_ENV === "production";
   const dataDir = overrides.dataDir ?? env("APP_DATA_DIR", path.join(process.cwd(), "data"));
@@ -197,6 +238,14 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   }
 
   const agentRuntime = overrides.agentRuntime ?? parseRuntime(process.env.AGENT_RUNTIME ?? "");
+  // An override (tests) supplies its own relay block; only the env path validates.
+  const uploadRelay =
+    overrides.uploadRelay ??
+    parseUploadRelayConfig({
+      url: env("UPLOAD_RELAY_URL"),
+      apiUrl: env("UPLOAD_RELAY_API_URL"),
+      secret: env("UPLOAD_RELAY_SECRET"),
+    });
 
   return {
     // `|| 48787` guards a typo'd PORT (NaN would ERR_SOCKET_BAD_PORT at boot).
@@ -212,6 +261,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     ...(agentRuntime === "pi" && !overrides.pi ? { pi: loadPiRuntimeConfig() } : {}),
     githubHost,
     confluenceUrl: env("CONFLUENCE_URL") || undefined,
+    // Off unless both the URL and the secret are set; half a configuration
+    // stops the boot (parseUploadRelayConfig).
+    ...(uploadRelay ? { uploadRelay } : {}),
     // Default browser-control allowlist, seeded into browsers whose extension
     // allowlist is still empty (see AppConfig). Normalized here once; the
     // self-host filtering happens per request, where Noah's host is known.

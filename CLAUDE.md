@@ -115,6 +115,12 @@ These are the invariants the project is built around. New work should reinforce 
   server cannot bypass, never-quoted/always-redacted. An older extension simply never receives the value —
   never raise the compat floor for it. One-time codes and payment details stay off-limits.
   → `browser-bridge/actions.md`, `secrets-ssh.md`.
+- **The upload relay is a PULL from ONE operator-configured address — never a "fetch this link".** On a
+  DRM fleet the attach button opens the relay's page (UniBridge) and Noah's server collects the file with a
+  ticket bound to its user; no user-supplied URL is ever fetched, the browser-held ticket can upload but
+  not read back, the bytes are judged (a non-decrypted file fails) and audited on BOTH sides, and nothing
+  is stored on the way. SENT is not RECEIVED: the "received" row and the relay's delete wait for the
+  browser's `confirm`. Paste and drop stay direct. → `chat-sse-media.md` ("Upload relay").
 - **An external HTTP MCP server gets a user's secret only because THAT USER bound it — and only through
   Noah's bridge.** Admin servers declare slots, users bind their own secrets (origin-bound); relaying IS
   the gate. → `secrets-ssh.md`.

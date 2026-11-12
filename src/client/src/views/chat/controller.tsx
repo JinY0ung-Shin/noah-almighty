@@ -45,6 +45,7 @@ import {
 } from "../../lib/browserBridge";
 import { copyText, downscaleImageToDataUrl, readFileAsDataUrl } from "../../lib/dom";
 import { documentsReading, isFileDrag, splitAttachFiles, stageDocuments } from "../../lib/composerDocuments";
+import { startUploadRelay } from "../../lib/uploadRelay";
 import { loadAvatars, loadConversations } from "../../lib/loaders";
 import { goView, routeFromHash } from "../../lib/nav";
 import { createStreamMarkdown, type StreamBlock, type StreamMarkdown } from "../../lib/streamMarkdown";
@@ -341,8 +342,11 @@ export function attachHint(item: ChatPane, state: ClientState): string {
 
 // The tooltip also names the two ways in that need no file dialog: on the
 // fleet a security agent can refuse the picker, and nothing else would say so.
+// With an upload relay the button opens the relay's page, and the title says
+// so before the press (a window appearing unannounced reads as a fault).
 export function attachTitle(item: ChatPane, state: ClientState): string {
-  return `${attachHint(item, state)} · 붙여넣기(Ctrl+V)나 끌어다 놓기로도 첨부할 수 있어요`;
+  const how = state.bootstrap?.uploadRelay ? " (업로드 창이 열립니다)" : "";
+  return `${attachHint(item, state)}${how} · 붙여넣기(Ctrl+V)나 끌어다 놓기로도 첨부할 수 있어요`;
 }
 
 // The disabled send button's title enumerates what WOULD make it sendable —
@@ -1035,6 +1039,22 @@ export function useChatController() {
     ]);
   }
 
+  // On a deployment with an upload relay the button never opens THIS page's
+  // file dialog (the fleet's DRM agent decrypts only what is uploaded to a
+  // registered address): the click is cancelled and the relay's page opens in
+  // a popup — synchronously, inside the click, or the browser blocks it. What
+  // is uploaded there comes back through `addFiles` like any other file.
+  // Paste and drop are untouched.
+  function onAttachClick(event: MouseEvent<HTMLInputElement>, item: ChatPane) {
+    if (!readState().bootstrap?.uploadRelay) return;
+    event.preventDefault();
+    void startUploadRelay({
+      documents: paneTakesDocuments(item, readState()),
+      onFiles: (files) => addFiles(item, files),
+      notify,
+    });
+  }
+
   async function onPickFiles(event: ChangeEvent<HTMLInputElement>, item: ChatPane) {
     const input = event.currentTarget;
     await addFiles(item, input.files);
@@ -1554,6 +1574,7 @@ export function useChatController() {
     bridgeCompat,
     submit,
     onPickFiles,
+    onAttachClick,
     onComposerPaste,
     onComposerKeydown,
     onComposerInput,
