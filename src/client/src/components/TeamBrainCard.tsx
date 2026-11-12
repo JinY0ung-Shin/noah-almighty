@@ -33,8 +33,8 @@ import {
 } from "../../../shared/teamBrain";
 import { collapseUnchanged, diffLines, type DiffHunkItem } from "../../../shared/lineDiff";
 import { reportTeamBrainCardPress } from "../lib/chat";
-import { cx, useDocumentEvent } from "../lib/hooks";
-import { refreshTeamBrainStatus } from "../lib/teamBrain";
+import { cx, useDocumentEvent, useLatest } from "../lib/hooks";
+import { onTeamBrainCardsChanged, refreshTeamBrainStatus, teamBrainCardsChanged, teamBrainDraftCardMounted } from "../lib/teamBrain";
 
 export interface TeamBrainCardProps {
   proposalId: string;
@@ -222,14 +222,17 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
     setBusyState(next);
   }
 
-  async function load(): Promise<void> {
+  async function load(): Promise<TeamBrainCardView | null> {
     try {
-      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}`));
+      const next = await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}`);
+      setView(next);
       setLoadError("");
+      return next;
     } catch (err) {
       const status = (err as { status?: number }).status;
       if (status === 404) setGone(true);
       else setLoadError((err as Error).message);
+      return null;
     }
   }
 
@@ -241,10 +244,21 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
    */
   function tellAvatar(paneId: string | undefined, action: TeamBrainCardPressAction, pressed: TeamBrainCardView, ok: boolean): void {
     if (!paneId) return;
-    void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(action, pressed.proposal, ok));
+    // 초안 모두 제출: the number on the button (the server stores the number it really sent).
+    const count = action === "submit_all" ? pressed.actions.submitAll || undefined : undefined;
+    void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(action, pressed.proposal, ok, count));
   }
 
-  async function act(action: "submit" | "withdraw" | "apply"): Promise<void> {
+  // Another card changed the conversation's drafts (a press, a saved 출처 정보, a new
+  // draft card): a draft card re-reads — its status after 초안 모두 제출, or whether
+  // it now carries that button and for how many.
+  const onOtherCardPressed = useLatest(() => {
+    if (view?.proposal.status === "draft" && !busyRef.current) void load();
+  });
+  const cardListener = useRef(() => onOtherCardPressed.current());
+  useEffect(() => onTeamBrainCardsChanged(cardListener.current), []);
+
+  async function act(action: "submit" | "submit_all" | "withdraw" | "apply"): Promise<void> {
     if (busyRef.current || !view) return;
     const pressed = view;
     // The pane is read NOW, at the press: a card drafted in the turn still being
@@ -254,8 +268,12 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
     setBusy(true);
     setActionError("");
     try {
-      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${action}`, { method: "POST" }));
+      const route = action === "submit_all" ? "submit-all" : action;
+      // 초안 모두 제출 names the number on the button: the server sends that many or nothing.
+      const body = action === "submit_all" ? { body: JSON.stringify({ count: pressed.actions.submitAll ?? 0 }) } : {};
+      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${route}`, { method: "POST", ...body }));
       void refreshTeamBrainStatus();
+      teamBrainCardsChanged(cardListener.current);
       if (action !== "withdraw") tellAvatar(paneId, action, pressed, true);
     } catch (err) {
       setActionError((err as Error).message);
@@ -315,6 +333,8 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
         }),
       );
       setEditing(false);
+      // A filled-in 출처 정보 makes this draft ready: the other cards' 모두 제출 count moves.
+      teamBrainCardsChanged(cardListener.current);
     } catch (err) {
       setFormError((err as Error).message);
     } finally {
@@ -348,7 +368,10 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   }
 
   useEffect(() => {
-    void load();
+    void load().then((first) => {
+      // A new submission draft on screen: the other draft cards re-read their 모두 제출 count.
+      if (first?.proposal.kind === "propose" && first.proposal.status === "draft") teamBrainDraftCardMounted();
+    });
     // Once, on mount (the listener below always calls the latest `onVisible`).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -794,6 +817,17 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
           {view.actions.submit ? (
             <button className="primary" type="button" disabled={busy || provenanceBlocked} onClick={() => void act("submit")}>
               관리자에게 제출
+            </button>
+          ) : null}
+          {view.actions.submitAll ? (
+            <button
+              className="primary"
+              type="button"
+              disabled={busy || provenanceBlocked}
+              title="이 대화에 있는 제출 전 제안 카드를 한 번에 모두 관리자에게 보냅니다."
+              onClick={() => void act("submit_all")}
+            >
+              {teamBrainCardButtonLabel("submit_all", view.proposal, view.actions.submitAll)}
             </button>
           ) : null}
           {view.actions.apply ? (

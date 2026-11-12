@@ -133,6 +133,60 @@ describe("a team-brain card press is told to the avatar", () => {
     expect(H.requests).toHaveLength(1);
   });
 
+  it("초안 N건 모두 제출: ONE press sends every ready draft of the conversation, and the report names each", async () => {
+    const s = await boot();
+    s.store.touchConversation(s.mateUser.id, "conv-batch", s.mateUser.id, "선별");
+    s.store.touchConversation(s.mateUser.id, "conv-other", s.mateUser.id, "다른 대화");
+    const inConv = { conversationId: "conv-batch" };
+    const first = draft(s.store, s.mateUser.id, { ...inConv, title: "배포" });
+    await new Promise((r) => setTimeout(r, 5));
+    const noOrigin = draft(s.store, s.mateUser.id, {
+      ...inConv,
+      title: "출처 없는 메모",
+      intake: { ...INTAKE, answers: { ...INTAKE.answers, source: "" } },
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    const last = draft(s.store, s.mateUser.id, { ...inConv, title: "장애 대응 연락망" });
+    const elsewhere = draft(s.store, s.mateUser.id, { conversationId: "conv-other", title: "다른 대화의 초안" });
+
+    // Only the NEWEST ready draft carries the button, with the number of drafts it sends.
+    const view = async (id: string) => (await s.mate.get(`/api/team-brain/cards/${id}`).expect(200)).body.actions.submitAll ?? 0;
+    expect(await view(last.id)).toBe(2);
+    expect(await view(first.id)).toBe(0);
+    expect(await view(noOrigin.id)).toBe(0);
+    expect(await view(elsewhere.id)).toBe(0);
+
+    // Someone else cannot press it; a draft without its provenance cannot carry the press.
+    await s.admin.post(`/api/team-brain/cards/${last.id}/submit-all`).send({ count: 2 }).expect(404);
+    await s.mate.post(`/api/team-brain/cards/${noOrigin.id}/submit-all`).send({ count: 2 }).expect(409);
+    // The press names the number on its button: a missing one is malformed, a stale one sends nothing.
+    await s.mate.post(`/api/team-brain/cards/${last.id}/submit-all`).expect(400);
+    const stale = await s.mate.post(`/api/team-brain/cards/${last.id}/submit-all`).send({ count: 3 }).expect(409);
+    expect(stale.body.error).toContain("2건으로 바뀌었습니다");
+    expect(s.store.peekTeamBrainCardPress(s.mateUser.id, last.id)?.agentText).toContain("its button said 3, 2 are ready now. Nothing was sent");
+    expect(s.store.getTeamBrainProposal(first.id)?.status).toBe("draft");
+
+    const pressed = await s.mate.post(`/api/team-brain/cards/${last.id}/submit-all`).send({ count: 2 }).expect(200);
+    expect(pressed.body.proposal.status).toBe("pending");
+    expect(pressed.body.actions.submitAll).toBeUndefined();
+    const status = (p: TeamBrainProposal) => s.store.getTeamBrainProposal(p.id)?.status;
+    expect([first, noOrigin, last, elsewhere].map(status)).toEqual(["pending", "draft", "pending", "draft"]);
+
+    await s.mate
+      .post("/api/chat/stream")
+      .send({ avatarId: s.mateUser.id, conversationId: "conv-batch", teamBrainCardPress: { proposalId: last.id } })
+      .expect(200);
+    const told = H.requests[0].message;
+    expect(told).toContain(`The user pressed "초안 2건 모두 제출" on the team-brain submission card "장애 대응 연락망" (draft ${last.id}).`);
+    expect(told).toContain(`DONE: 2 sources are now in the admins' review queue (status pending): "배포" (draft ${first.id}), "장애 대응 연락망" (draft ${last.id}).`);
+    expect(told).toContain(`NOT sent — still drafts: "출처 없는 메모" (draft ${noOrigin.id}; provenance incomplete: source)`);
+    expect(told).not.toContain("다른 대화의 초안");
+    expect(userRows(s.store, s.mateUser.id, "conv-batch").map((m) => m.content)).toEqual(["팀 브레인 제안 2건을 모두 관리자에게 제출했습니다."]);
+
+    // Pressed again: nothing left to send — refused, and nothing is sent twice.
+    await s.mate.post(`/api/team-brain/cards/${last.id}/submit-all`).send({ count: 2 }).expect(409);
+  });
+
   it("a refused press is told too, with the reason and whose fix it is", async () => {
     const s = await boot();
     await seedTeamVault(s.config, [{ path: PAGE_PATH, content: teamPage({ title: "배포" }) }]);

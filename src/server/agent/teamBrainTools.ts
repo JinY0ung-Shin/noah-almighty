@@ -536,14 +536,14 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
     tools.push(
       tool(
         "propose_team_note",
-        `Submit a SOURCE to the TEAM brain (shared with every teammate): the user's own words plus the intake facts. Call this ONLY after the user said yes to sharing it in this conversation and you ran the intake (asked ONCE, in one message, only for the facts the conversation does not already answer). It shows the user a confirmation card and returns at once; NOTHING is shared until THEY press the card's button, and then an admin's avatar compiles the source into wiki pages and the admin approves it, asks for more information, or rejects it. Never write wiki pages yourself. Required facts per type — ${REQUIRED_FACTS}. The provenance facts (source_kind, source, author, authored_at) describe the ORIGINAL (who wrote or said it, and when), not the submission; the user can correct them on the card before submitting. Before calling, search the team brain (scope "team") so the summary can say what the source adds or changes. The source must pass all four team-knowledge tests (useful to others, durable, settled, safe to share). Admins compile their own knowledge with prepare_team_changes instead.`,
+        `Submit a SOURCE to the TEAM brain (shared with every teammate): the user's own words plus the intake facts. Call this ONLY after the user said yes to sharing it in this conversation — or asked for a selection pass over their own notes (SELECTING FOR THE TEAM in the Brain policy), which is their yes to draft — and you ran the intake (asked ONCE, in one message, only for the facts the conversation, or in a pass the note, does not already answer). It shows the user a confirmation card and returns at once; NOTHING is shared until THEY press the card's button, and then an admin's avatar compiles the source into wiki pages and the admin approves it, asks for more information, or rejects it. Never write wiki pages yourself. Required facts per type — ${REQUIRED_FACTS}. The provenance facts (source_kind, source, author, authored_at) describe the ORIGINAL (who wrote or said it, and when), not the submission; the user can correct them on the card before submitting. Before calling, search the team brain (scope "team") so the summary can say what the source adds or changes. The source must pass all four team-knowledge tests (useful to others, durable, settled, safe to share). Admins compile their own knowledge with prepare_team_changes instead.`,
         {
           type: z.enum(TEAM_PAGE_TYPES).describe("The page type this source is mainly about."),
           title: z.string().describe("Short title (shown on the card)."),
           summary: z.string().describe("One sentence for the reviewer: what this adds or changes."),
           source: z
             .string()
-            .describe(`The user's words / pasted material, VERBATIM and in their language (not your rewrite); at most ${TEAM_BRAIN_MAX_CONTENT_BYTES / 1024} KB.`),
+            .describe(`The user's words / pasted material — in a selection pass, the passage of their personal note — VERBATIM and in their language (not your rewrite); at most ${TEAM_BRAIN_MAX_CONTENT_BYTES / 1024} KB.`),
           answers: answersShape,
           personalNotes: personalNotesShape,
         },

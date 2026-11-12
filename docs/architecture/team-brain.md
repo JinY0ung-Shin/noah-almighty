@@ -39,6 +39,13 @@
   core stay in code. Approved submissions record the personal notes they came from; nothing ever writes
   the personal repo for it (forcing was rejected: it makes conflict handling harder).
   Decisions: `~/.noah-work/brain-policy-2026-11-10/decisions.md`.
+- **Selecting personal notes for the team (user, 2026-11-12):** the `brain-share` skill picks what in the
+  personal brain is worth sharing — "너무 세부적인 정보는 말고" became `TEAM_SHARE_LEVEL_RULE`, which gates the
+  everyday offer too — and drafts at most `TEAM_SHARE_PASS_MAX` (3) cards per pass. Full auto-submission was
+  considered and NOT taken (it would send personal notes to an admin unseen, and break "every state change
+  is a human press"): the drafts go with ONE press, 초안 N건 모두 제출. A declined note is remembered
+  (`team_share: no`). Rules → [`repo-knowledge.md`](repo-knowledge.md) "Brain policy"; the press → "Cards and
+  routes" below.
 - Designs + rejected alternatives: `~/.noah-work/team-brain-2026-11-06/design.md`,
   `~/.noah-work/team-brain-wiki-2026-11-06/design.md` (+ `research/`: Karpathy gist, follow-ups).
 
@@ -139,6 +146,9 @@
   the notes that state the same fact. `TEAM_OFFER_TO_SHARE` (intake) and `TEAM_ADMIN_FLOW` point at it by
   name (`BRAIN_LINK_CHECK_NAME`), the `personalNotes` parameter description repeats the trigger, and the
   curate skill refers to it. A server-side candidate detector is the next step only if this still misses.
+- A note marked `team_share: no` (`isKeptPersonalNote` — also `false`, quoted, or with a trailing comment; the
+  owner's KEPT PERSONAL decision) is refused as a
+  `personalNotes` entry, and the refusal says not to submit what it says without the link either.
 - `listTeamBrainPersonalLinks(owner)` = approved propose rows (pages from their applied approve review) and
   applied direct rows that recorded notes. brainTools marks them at READ time: personal `get_note` prepends
   `PROMOTED: … canonical version is the team page … has / HAS CHANGED since it was submitted` (+ the
@@ -252,6 +262,23 @@
   approved + commit of target raw + changeset; reject → rejected; ask → target `needs_info` with the
   questions). Apply claims first, writes, and RELEASES the claim on a failed write (409 stale/invalid with a
   Korean message / 500). Each press is audited (`team_brain_submit|withdraw|direct|approve|reject|ask`).
+- **초안 N건 모두 제출 (`POST …/submit-all` → `submitAllTeamBrainProposals`, 2026-11-12):** ONE press sends
+  every submission draft of the pressed card's CONVERSATION that is the presser's own and has complete
+  provenance (`conversationSubmissionDrafts` — each is a card the user can see there; no batch id, no new
+  table). Each row is its own compare-and-set and its own `team_brain_submit` audit row; a draft with
+  incomplete provenance stays a draft and is named in the report. The view's `actions.submitAll` is the
+  number the press would send — set only on the NEWEST ready draft and only from
+  `TEAM_BRAIN_SUBMIT_ALL_MIN` (2), so a run of cards ends with one such button. It is a press action
+  (`submit_all`, through `pressTeamBrainCard`): ONE report keyed to the pressed card lists every source sent
+  and every draft held (`TeamBrainCardPressBatch`, `batchDoneText`). **The press names the number on its
+  button** (body `{ count }`, 400 without one): when the ready drafts are a different number now — a card
+  drafted or filled in after this one was read — it is a 409 that sends NOTHING and the card re-reads; the
+  user never sends more than they saw. A failure part-way (after at least one row went) is still a done
+  press whose report lists what went and what did not (`unsent`); with nothing sent it is the ordinary
+  failed press. Submissions only — an admin's `direct` cards are vault commits and keep one press each
+  (the pass rule tells an admin's avatar so). Draft cards on screen re-read through `teamBrainCardsChanged`
+  (`lib/teamBrain.ts`) after every successful press or saved 출처 정보, and once (coalesced,
+  `teamBrainDraftCardMounted`) when a new draft card appears.
 - **A press is TOLD to the avatar at once (user decision 2026-11-11)** — `submit` and `apply`, done or refused;
   취소 / 제안 철회 never. A card tool returns at once, so the drafting turn is usually over when the button is
   pressed and the avatar would learn of it only by looking. `pressTeamBrainCard` (`teamBrainActions.ts`, what

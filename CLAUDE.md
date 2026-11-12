@@ -164,6 +164,10 @@ These are the invariants the project is built around. New work should reinforce 
   `agent/brainPolicy.ts` (skills and templates refer to it, never restate it). An approved submission
   RECORDS its personal notes; nothing writes the personal repo for it — the avatar asks first. When the two
   disagree, show both. → `repo-knowledge.md`, `team-brain.md`.
+- **The team brain gets the reusable conclusion, never the working detail — and selecting is not sharing.**
+  ONE level rule gates the everyday offer and the `brain-share` selection pass alike; the pass only DRAFTS a
+  few cards (a "no" is remembered on the note as `team_share: no`), and they go to the admins with a human
+  press — one press may send all of a conversation's drafts, never zero. → `repo-knowledge.md`.
 - **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and SUBMIT
   SOURCES, an admin's avatar COMPILES them, an admin decides.** It is a Karpathy-style LLM wiki: immutable
   server-rendered `raw/` sources → `wiki/` pages under a FIXED `SCHEMA.md` the SERVER validates (rules are

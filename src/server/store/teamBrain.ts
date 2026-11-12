@@ -390,6 +390,8 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
       kind?: TeamBrainProposalKind;
       statuses?: readonly TeamBrainProposalStatus[];
       proposerUserId?: string;
+      /** Only rows whose card lives in this conversation. */
+      conversationId?: string;
       limit?: number;
     }): TeamBrainProposal[] {
       this.expireTeamBrainDrafts();
@@ -406,6 +408,10 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
       if (filter.proposerUserId) {
         where.push("p.proposer_user_id = ?");
         params.push(filter.proposerUserId);
+      }
+      if (filter.conversationId) {
+        where.push("p.conversation_id = ?");
+        params.push(filter.conversationId);
       }
       const limit = Math.min(Math.max(1, filter.limit ?? 50), 200);
       const sql = `${PROPOSAL_SELECT}${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY p.created_at DESC, p.id LIMIT ${limit}`;

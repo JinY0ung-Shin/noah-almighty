@@ -47,3 +47,8 @@ return nothing for conversations the owner does not own. Never read anyone else'
    where the change history is kept, not in the note.
 6. Optionally archive raw notes you fully consolidated.
 7. **Commit once.** If a write or the commit fails, report what you found — do not retry via Bash.
+8. **Point at the team, in one line — never more.** Only in a run that can submit to the team brain
+   (your instructions carry the TEAM KNOWLEDGE tests and THE RIGHT LEVEL): if notes you just wrote or
+   updated look like team knowledge at that level, end the report with ONE line saying how many and
+   that the brain-share skill picks them ("팀에 올릴 만한 노트가 N건 보입니다 — 골라 드릴까요?"). Do not
+   draft a card, list the notes or run brain-share from here; in any other run, say nothing about it.

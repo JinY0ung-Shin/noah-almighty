@@ -95,6 +95,17 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
     respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "submit"));
   });
 
+  // 초안 N건 모두 제출: ONE press for every submission draft of the card's conversation.
+  // Body `{ count }` = the number on the button; a different number now is a 409, nothing sent.
+  router.post("/api/team-brain/cards/:id/submit-all", async (req: AuthenticatedRequest, res) => {
+    const count = (req.body as { count?: unknown } | undefined)?.count;
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
+      apiError(res, 400, "요청이 올바르지 않습니다.");
+      return;
+    }
+    respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "submit_all", count));
+  });
+
   // The drafter's 출처 정보 edit on their own draft card (body: TeamProvenanceInput).
   router.put("/api/team-brain/cards/:id/provenance", async (req: AuthenticatedRequest, res) => {
     respond(res, await editTeamBrainProvenance(actionDeps(req), actor(req), String(req.params.id), req.body));

@@ -21,6 +21,42 @@ export function teamBrainBadgeTitle(status: TeamBrainStatus): string {
     .join(" · ");
 }
 
+// Cards on screen re-read themselves when a press on ANOTHER card changed
+// what they show: 초안 모두 제출 sends several cards' drafts at once, and any
+// submit / 취소 moves which card carries that button.
+const cardListeners = new Set<() => void>();
+
+/** Subscribe a mounted card; returns the unsubscribe. */
+export function onTeamBrainCardsChanged(listener: () => void): () => void {
+  cardListeners.add(listener);
+  return () => {
+    cardListeners.delete(listener);
+  };
+}
+
+/** A press went through on the card that owns `self` — every OTHER card re-reads. */
+export function teamBrainCardsChanged(self?: () => void): void {
+  for (const listener of [...cardListeners]) {
+    if (listener !== self) listener();
+  }
+}
+
+let mountedTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * A draft card appeared (a new card of this turn, a conversation just opened):
+ * the other draft cards re-read once — which of them carries 초안 모두 제출, and
+ * for how many, may have changed. Coalesced, so a conversation that opens with
+ * several cards re-reads once.
+ */
+export function teamBrainDraftCardMounted(): void {
+  if (mountedTimer) return;
+  mountedTimer = setTimeout(() => {
+    mountedTimer = null;
+    teamBrainCardsChanged();
+  }, 150);
+}
+
 export async function refreshTeamBrainStatus({ announce = false } = {}): Promise<void> {
   if (!readState().user) return;
   let status: TeamBrainStatus;

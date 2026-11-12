@@ -939,6 +939,7 @@ describe("loadDefaultPluginRoots", () => {
       "brain-lint",
       "brain-migrate",
       "brain-search",
+      "brain-share",
     ]) {
       expect(names).toContain(n);
     }

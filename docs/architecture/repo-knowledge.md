@@ -206,6 +206,24 @@
   (`unscannedNote`, on a hit and on a miss) — the same rule as the team search, [`team-brain.md`](team-brain.md) "Tools".
   Read-time marks of promoted / link notes (`team_page:` frontmatter) → [`team-brain.md`](team-brain.md)
   "Personal-note links".
+- **Selecting personal notes for the team (user, 2026-11-12) — the `brain-share` default skill + three rules in
+  `brainPolicy.ts`.** `TEAM_SHARE_LEVEL_RULE` ("THE RIGHT LEVEL": the reusable conclusion, never the working
+  detail; only the PART of a note that states it) sits next to the four tests in the team-brain prompt
+  section and the manual, so it gates the everyday OFFER TO SHARE and the selection pass alike.
+  `TEAM_SHARE_PASS_RULE` ("SELECTING FOR THE TEAM", runs that can capture AND submit): asking for the pass
+  is the yes to DRAFT, never to share; at most `TEAM_SHARE_PASS_MAX` (3) cards per pass — a default the
+  admins' POLICY.md guidelines may replace (it is the avatar's own bound, so the server has nothing to
+  enforce; `max_open_proposals` stays the hard cap); never a LINK / PROMOTED / kept-personal note or a fact
+  already in the team brain or the queue, and a rejected one only once the note changed in the point the
+  rejection named; in a pass the source is the note's passage (verbatim) and the intake comes from the note
+  — the `propose_team_note` description says the same, so the two never pull apart. `BRAIN_KEPT_PERSONAL_RULE` ("KEPT PERSONAL"): a declined note gets
+  frontmatter `team_share: no` (`PERSONAL_TEAM_SHARE_KEY`), written by the avatar with `mcp__repo__edit_file`
+  + commit — the owner's own decision in the owner's own repo, so it is not the "nothing writes the personal
+  repo" case (that one is about approvals). The server's one part: `personalNotes` refuses such a note
+  (`isKeptPersonalNote`, `brainTools.ts`). The skill is procedure only — no number, no criteria, no key
+  spelling of its own (`tests/brain-policy.test.ts`); in a run without the submit tools it stops instead of
+  judging by rules the run does not carry. `brain-reflect` ends with ONE line pointing at it, on submit-capable
+  runs only. The cards and the one-press submit → [`team-brain.md`](team-brain.md) "Cards and routes".
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
   hygiene default-skill — skill-only, no server lint code; the `[[link]]` resolution the graph view uses
   lives in `knowledgeGraph.ts` — the brain view's clickable `[[links]]` re-resolve client-side in

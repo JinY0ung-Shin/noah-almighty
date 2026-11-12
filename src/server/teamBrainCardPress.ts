@@ -24,6 +24,7 @@ import {
   TEAM_BRAIN_CARD_PRESS_MARK,
   teamBrainCardButtonLabel,
   teamBrainCardPressBubble,
+  teamProvenanceIssues,
   type TeamBrainCardPressAction,
   type TeamBrainProposal,
 } from "../shared/teamBrain.js";
@@ -32,6 +33,17 @@ import {
 export const TEAM_BRAIN_CARD_PRESS_TTL_MS = 10 * 60 * 1000;
 /** Reports kept at once (the oldest goes first). */
 export const MAX_TEAM_BRAIN_CARD_PRESSES = 200;
+
+/**
+ * What ONE press of 초안 모두 제출 did: the drafts it sent to the admins, the
+ * ones it left because their provenance is incomplete (`held`), and the ones a
+ * failure on Noah's side stopped it from sending (`unsent` — still drafts).
+ */
+export interface TeamBrainCardPressBatch {
+  submitted: TeamBrainProposal[];
+  held: TeamBrainProposal[];
+  unsent?: TeamBrainProposal[];
+}
 
 export interface TeamBrainCardPressReport {
   proposalId: string;
@@ -136,7 +148,39 @@ function pagesText(card: TeamBrainProposal): string {
   return changes.map((c) => `${c.path} (${c.op})`).join(", ");
 }
 
-function doneText(action: TeamBrainCardPressAction, card: TeamBrainProposal): string {
+/** 초안 모두 제출: every source the press sent, and every draft it left with the reason. */
+function batchDoneText(batch: TeamBrainCardPressBatch): string {
+  const { submitted, held } = batch;
+  const unsent = batch.unsent ?? [];
+  const many = submitted.length !== 1;
+  const notes = submitted.flatMap((c) => c.personalNotes.map((n) => n.path)).join(", ");
+  return [
+    `DONE: ${submitted.length} source${many ? "s are" : " is"} now in the admins' review queue (status pending): ${submitted
+      .map((c) => `${quoted(c.title)} (draft ${c.id})`)
+      .join(", ")}. Nothing is in the team brain yet — an admin's avatar compiles each one and the admin approves it, asks for more information or rejects it; the user sees each result on its card and as a badge.`,
+    ...(held.length
+      ? [
+          `NOT sent — still drafts: ${held
+            .map((c) => `${quoted(c.title)} (draft ${c.id}; provenance incomplete: ${teamProvenanceIssues(c.intake).map((i) => i.slot).join(", ")})`)
+            .join(", ")}. The user fills in 출처 정보 on each of those cards and presses that card's own button — do not draft them again.`,
+        ]
+      : []),
+    ...(unsent.length
+      ? [
+          `NOT sent — Noah failed part-way (a failure on Noah's side), still drafts: ${unsent
+            .map((c) => `${quoted(c.title)} (draft ${c.id})`)
+            .join(", ")}. The user can press the button on those cards again — do not draft them again.`,
+        ]
+      : []),
+    ...(notes ? [`Linked personal note(s): ${notes} — unchanged; each is marked only once an admin approves its submission.`] : []),
+    `What to do now: tell the user, in one or two sentences, how many are with the admins (not shared yet)${
+      held.length ? " and which cards still wait for their 출처 정보" : ""
+    }${unsent.length ? " and which were not sent and can be pressed again" : ""}, then carry on with anything that was waiting on this press. Do not submit any of them again.`,
+  ].join("\n");
+}
+
+function doneText(action: TeamBrainCardPressAction, card: TeamBrainProposal, batch?: TeamBrainCardPressBatch): string {
+  if (action === "submit_all") return batchDoneText(batch ?? { submitted: [card], held: [] });
   const notes = card.personalNotes.map((n) => n.path).join(", ");
   if (action === "submit") {
     return [
@@ -185,18 +229,20 @@ const FAILED_FALLBACK = "Noah refused the press and gave no further reason; the 
 export function composeTeamBrainCardPress(input: {
   action: TeamBrainCardPressAction;
   card: TeamBrainProposal;
-  outcome: { ok: true } | { ok: false; agent?: string };
+  outcome: { ok: true; batch?: TeamBrainCardPressBatch } | { ok: false; agent?: string };
 }): Pick<TeamBrainCardPressReport, "agentText" | "displayText"> {
   const { action, card, outcome } = input;
-  const pressed = `The user pressed "${teamBrainCardButtonLabel(action, card)}" on ${cardRef(card)}.`;
+  // 초안 모두 제출: the number on the button is the number the press really sent.
+  const count = outcome.ok ? outcome.batch?.submitted.length : undefined;
+  const pressed = `The user pressed "${teamBrainCardButtonLabel(action, card, count)}" on ${cardRef(card)}.`;
   const result = outcome.ok
-    ? doneText(action, card)
+    ? doneText(action, card, outcome.batch)
     : [
         `FAILED — this press changed nothing. ${outcome.agent?.trim() || FAILED_FALLBACK}`,
         "What to do now: tell the user plainly that the press did not go through and why. If the reason names a fix that is yours, do it now; if it is the user's, say what they need to do.",
       ].join("\n");
   return {
     agentText: `${HEADER}\n${pressed}\n${result}`,
-    displayText: teamBrainCardPressBubble(action, card, outcome.ok),
+    displayText: teamBrainCardPressBubble(action, card, outcome.ok, count),
   };
 }
