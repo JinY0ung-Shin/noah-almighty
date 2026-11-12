@@ -37,6 +37,46 @@ const TOO_BIG = "차트 데이터가 너무 커서 그리지 못했습니다.";
 
 const NO_PROBLEM = () => {};
 
+// Drawing is asynchronous (the Vega chunk on first use, then the render), so a
+// chart has nothing to show for a moment after its tag has arrived. Two things
+// keep the answer from jumping in that moment:
+//
+// - `drawn`: the markup (and measured height) of the charts drawn most
+//   recently, by signature. A chart that MOUNTS with a spec already drawn —
+//   above all the stored message taking over from the live bubble at the end of
+//   a turn — is there in its first frame instead of blinking out and back.
+// - a reserved height while nothing is drawn yet: the measured one when the
+//   same chart was drawn before, else an estimate from the spec. Without it the
+//   text that follows the chart was painted in the chart's place and pushed
+//   down when the drawing landed.
+const DRAWN_LIMIT = 16;
+const drawn = new Map<string, { markup: string; height: number }>();
+
+function remember(sig: string, markup: string, height: number): void {
+  drawn.delete(sig);
+  drawn.set(sig, { markup, height });
+  while (drawn.size > DRAWN_LIMIT) drawn.delete(drawn.keys().next().value as string);
+}
+
+/** For tests: forget every drawing, so one test's chart is not another's first frame. */
+export function forgetDrawnCharts(): void {
+  drawn.clear();
+}
+
+// Around the plot Vega adds axes, labels and padding; the drawing is then
+// fitted to the width it gets (never enlarged). Close enough to hold the place.
+const AXES_WIDTH = 56;
+const AXES_HEIGHT = 36;
+
+function estimateHeight(target: unknown, hostWidth: number): number {
+  const spec = target as Record<string, unknown>;
+  if (!("mark" in spec) && !("layer" in spec)) return DEFAULT_HEIGHT;
+  const plotWidth = typeof spec.width === "number" ? spec.width : DEFAULT_WIDTH;
+  const plotHeight = typeof spec.height === "number" ? spec.height : DEFAULT_HEIGHT;
+  const scale = hostWidth > 0 ? Math.min(1, hostWidth / (plotWidth + AXES_WIDTH)) : 1;
+  return Math.round((plotHeight + AXES_HEIGHT) * scale);
+}
+
 // A single-view or layered chart takes the panel-friendly default size; a
 // concat/facet spec sizes its own cells, where top-level width/height do not apply.
 function sized(raw: Record<string, unknown>, h: number | undefined): unknown {
@@ -56,6 +96,9 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
   const [error, setError] = useState("");
   // Nothing to draw: `spec` evaluated to nothing (an unpicked option, `cond ? {…} : null`).
   const [empty, setEmpty] = useState(false);
+  // The height held while the drawing is on its way (0 = nothing to hold).
+  const [reserved, setReserved] = useState(0);
+  const hostRef = useRef<HTMLDivElement | null>(null);
   // What is never shown: read when a frame fires or a render lands, long after the render that asked for it.
   const s = useRef({
     entered: false,
@@ -90,6 +133,14 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
     if (sig === s.wantedSig) return;
     s.wantedSig = sig;
     s.wanted = target;
+    const known = drawn.get(sig);
+    if (known && !s.drawnSig) {
+      // Nothing drawn here yet and this very chart was drawn a moment ago
+      // (the live bubble's, as a rule): show it now, in this commit.
+      show(known.markup, sig);
+      return;
+    }
+    if (!s.drawnSig) setReserved(known?.height ?? estimateHeight(target, hostRef.current?.clientWidth ?? 0));
     if (s.frame) return;
     const run = () => {
       s.frame = 0;
@@ -98,12 +149,26 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
     s.frame = typeof requestAnimationFrame === "function" ? requestAnimationFrame(run) : (setTimeout(run, 16) as unknown as number);
   }
 
+  /** Put a finished drawing on screen (a fresh render, or one remembered for this signature). */
+  function show(markup: string, sig: string): void {
+    s.token++;
+    // The key is the spec without the theme: a chart redrawn for a theme flip is the same chart.
+    const rule = entranceNow.current;
+    setEnter(rule ? claimEntrance(rule, sig.slice(1), !s.entered) : null);
+    s.entered = true;
+    setSvg(markup);
+    setError("");
+    setReserved(0);
+    s.drawnSig = sig;
+  }
+
   /** A state with nothing to draw: drop the drawing and anything still on its way. */
   function settle(sig: string, message: string, isEmpty: boolean): void {
     s.wantedSig = sig;
     s.drawnSig = sig;
     s.token++;
     setSvg("");
+    setReserved(0);
     // The chart is gone: the next one drawn here appears anew (`{cond ? spec : null}` is a tab, too).
     s.entered = false;
     setError(message);
@@ -116,13 +181,8 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
     try {
       const markup = await renderVegaSvg(target, isDark);
       if (s.destroyed || mine !== s.token) return; // a newer render won
-      // The key is the spec without the theme: a chart redrawn for a theme flip is the same chart.
-      const rule = entranceNow.current;
-      setEnter(rule ? claimEntrance(rule, sig.slice(1), !s.entered) : null);
-      s.entered = true;
-      setSvg(markup);
-      setError("");
-      s.drawnSig = sig;
+      show(markup, sig);
+      remember(sig, markup, 0);
     } catch (err) {
       if (s.destroyed || mine !== s.token) return;
       const detail = err instanceof Error ? err.message : "";
@@ -131,6 +191,7 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
       // The previous drawing no longer matches the state: an old chart above the
       // error would read as the current one.
       setSvg("");
+      setReserved(0);
       s.drawnSig = "";
     }
   }
@@ -141,6 +202,15 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
   useLayoutEffect(() => {
     request(spec, height, dark);
   });
+
+  // Once a drawing is on screen, note how tall it came out: the next mount of
+  // the same chart holds exactly that. After paint — a layout read here must
+  // not delay the frame that shows the chart.
+  useEffect(() => {
+    if (!svg || !s.drawnSig) return;
+    const height = hostRef.current?.getBoundingClientRect().height ?? 0;
+    if (height > 0) remember(s.drawnSig, svg, Math.round(height));
+  }, [svg, s]);
 
   useEffect(() => {
     s.destroyed = false;
@@ -153,7 +223,7 @@ export default function WidgetChart({ spec, height = undefined, label = "", dark
   }, [s]);
 
   return (
-    <div className="wg-chart">
+    <div className="wg-chart" ref={hostRef} style={!svg && reserved > 0 ? { minHeight: `${reserved}px` } : undefined}>
       {svg ? <ChartDrawing markup={svg} enter={enter} label={label} /> : null}
       {error ? (
         <p className="canvas-render-error" role="alert">

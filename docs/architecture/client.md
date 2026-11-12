@@ -280,6 +280,15 @@ pane's controller (`tests/react-chat-stick.test.tsx`).
   `open` flips (spec behavior, jsdom matches) — a test must await a macrotask, not just a flushed render. Trade-off accepted:
   Chrome's find-in-page can no longer reach inside an unopened card.
 
+- **An inline `<chart>` holds its place** (`components/widget/WidgetChart.tsx`, 2026-11-12). Drawing is
+  asynchronous (the Vega chunk on first use, then the render), and a chart with no height let the text that
+  FOLLOWS it be painted in its place and pushed down when the drawing landed; at the end of a turn — the
+  stored message replacing the live bubble — every chart blinked out and back. Now the chart reserves a
+  height while nothing is drawn (the measured height when the same chart was drawn before, else an
+  estimate from the spec's size plus the axes, fitted to the width it has), and a small module cache of the
+  last drawings (by theme + spec signature) lets a chart that MOUNTS with a spec drawn a moment ago show in
+  its first frame without a second render. The cache is only read by an instance that has nothing drawn
+  yet; `forgetDrawnCharts()` clears it for tests (`tests/react-widget-chart.test.tsx`).
 - **Conditional motion on a keyed list is gated INSIDE the transition/animation function, on NON-reactive
   state read when it starts** (the 할 일 card animates only the avatar's changes; `components/TodoOverlay.tsx`).
   A removed row is frozen by `<Presence>` with its LAST props, so the gate reads plain module state
