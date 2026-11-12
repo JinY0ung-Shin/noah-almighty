@@ -205,7 +205,7 @@ python3 scripts/test-egress.py
 python3 scripts/test-egress.py --runtime nerdctl
 # 관리자 권한/롤백 회귀 테스트 (컨테이너 없이 실행)
 python3 tests/egress_controller_test.py
-npx vitest run tests/egress-admin.test.ts tests/svelte-admin-egress.test.ts
+npx vitest run tests/egress-admin.test.ts tests/react-admin-egress.test.tsx
 ```
 
 검증 대상: 허용 HTTP/CONNECT, 차단 도메인/apex/하위 도메인/대소문자/말미 점,

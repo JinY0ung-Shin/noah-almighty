@@ -1,8 +1,8 @@
-// Dialog keyboard/focus behaviors, extracted from Modal.svelte so every
+// Dialog keyboard/focus behaviors, extracted from Modal.tsx so every
 // dialog-ish surface gets the SAME treatment — including the ones that cannot
 // use <Modal> because they render inside a chat pane (PromptModal) or float
 // over the whole app without an overlay component (CanvasTab's fullscreen
-// stage). Modal.svelte remains the reference implementation; these helpers are
+// stage). Modal.tsx remains the reference implementation; these helpers are
 // a straight lift of what it already did.
 
 const FOCUSABLE_SELECTOR =

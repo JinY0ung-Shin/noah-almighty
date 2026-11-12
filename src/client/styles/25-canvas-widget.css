@@ -423,7 +423,7 @@
   min-width: 0;
 }
 
-/* A drawing bound to state (components/widget/WidgetSvg.svelte). It lives in
+/* A drawing bound to state (components/widget/WidgetSvg.tsx). It lives in
    its own shadow root; the host only places it and hands down the text colour
    (the drawing's default fill) and the app's font. */
 .wg-svg {
@@ -441,7 +441,7 @@
   flex: 0 1 auto;
 }
 
-/* ---- Inline UI in an answer (components/widget/AnswerUi.svelte) ----
+/* ---- Inline UI in an answer (components/widget/AnswerUi.tsx) ----
    The UI blocks sit in the bubble between the answer's Markdown runs, as wide
    as the bubble, with the same air around them a paragraph has. */
 .bubble > .answer-ui {
@@ -497,7 +497,7 @@
 }
 
 
-/* ---- 인라인 UI 갤러리 (views/UiGalleryView.svelte, `#/uiGallery`) ----
+/* ---- 인라인 UI 갤러리 (views/UiGalleryView.tsx, `#/uiGallery`) ----
    One column as wide as a chat transcript, so a sample has the room a real
    answer has. A card is: what it is, the sample drawn, then its source. */
 .ui-gallery {

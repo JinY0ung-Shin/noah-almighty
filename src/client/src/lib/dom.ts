@@ -1,5 +1,5 @@
 // DOM helpers ported from the old core.js: clipboard copy with button flash,
-// and a Svelte action that enhances rendered markdown (code-block copy buttons +
+// and an action (attached with `useAction`) that enhances rendered markdown (code-block copy buttons +
 // horizontally-scrollable tables) the way enhanceCodeBlocks() used to.
 
 import { iconSvg } from "./icons";
@@ -102,7 +102,7 @@ function copyHost(origin: Element | null | undefined, active: Element | null): H
   const near = origin?.closest<HTMLElement>(DIALOG_SELECTOR) ?? active?.closest<HTMLElement>(DIALOG_SELECTOR);
   if (near) return near;
   // No hint from the button or the focus: the top-most open modal (DOM order is
-  // the stacking order — see App.svelte) traps focus all the same.
+  // the stacking order — see App.tsx) traps focus all the same.
   const modals = document.querySelectorAll<HTMLElement>(MODAL_SELECTOR);
   return modals.length ? modals[modals.length - 1] : document.body;
 }
@@ -216,14 +216,18 @@ function restoreAttribute(el: Element, name: string, value: string | null): void
 
 // Auto-grow a textarea with its content, capped at min(200px, 30% viewport) —
 // mirrors the old composer autoGrow().
-// The `_value` param mirrors the textarea's bound value so Svelte calls
-// `update()` on programmatic value changes too — e.g. clearing the draft to ""
-// after a send must shrink the box back, and no `input` event fires for a
-// programmatic value change. CAUTION: Svelte runs an action's `update()` BEFORE
-// it flushes the new `value` to the DOM node, so reading `scrollHeight` here
-// synchronously sees the OLD content and re-pins the old height. Defer the
-// param-driven grow to a microtask so it measures the post-flush value. The
-// `input` path stays synchronous (the browser updates `value` before `input`).
+// The `_value` param mirrors the textarea's value (`useAction(autosize, draft)`)
+// so `update()` runs on programmatic value changes too — e.g. clearing the
+// draft to "" after a send must shrink the box back, and no `input` event fires
+// for a programmatic value change. `useAction` calls `update()` from a layout
+// effect, AFTER React has written the new `value` to the node, so the content
+// measured there is already the new one. The param-driven grow is deferred to
+// a microtask all the same: the deferral dates from when `update()` ran BEFORE
+// the new value reached the node (a synchronous `scrollHeight` read saw the OLD
+// content and re-pinned the old height), tests/client-dom.test.ts pins it, and
+// it keeps the action right for any caller that updates before the value
+// lands; a microtask still runs before the next paint. The `input` path stays
+// synchronous (the browser updates `value` before `input`).
 export function autosize(node: HTMLTextAreaElement, _value?: string) {
   const grow = () => {
     node.style.height = "auto";
@@ -367,14 +371,17 @@ function enhanceRendered(root: ParentNode): void {
 // Wrap each <pre> in a .code-block (language label, wrap toggle, copy button),
 // and each <table> in a .table-wrap scroller. Idempotent — a block already
 // wrapped keeps its header (and its toggle state) for as long as its html stays.
-// Use as `<div use:enhanceMarkdown={source}>{@html …}</div>`;
-// re-runs after the html updates because Svelte calls update() on dependency change.
+// Use as `<div ref={useAction(enhanceMarkdown, source)} dangerouslySetInnerHTML={{ __html: … }} />`;
+// it re-runs after the html changes because `useAction` calls update() — from a
+// layout effect, with the new html already in the DOM — when the param changed.
 //
-// Pass the SAME source text the sibling {@html} renders, so an unchanged param
-// can skip the sweep: Svelte re-runs update() whenever the each-block item is
-// re-emitted, and `updateState` re-emits the whole appState on every SSE token.
-// Without the identity check, each message already in a long transcript paid two
-// querySelectorAll passes per streamed token (see renderMarkdownCached).
+// Pass the SAME source text the element's html is rendered from, so an
+// unchanged param skips the sweep: every transcript row re-renders on every
+// appState publication, and `updateState` publishes on every SSE token.
+// `useAction` already leaves update() out for an unchanged string; the identity
+// check below holds the same line for any other caller. Without it, each
+// message already in a long transcript paid two querySelectorAll passes per
+// streamed token (see renderMarkdownCached).
 //
 // A ```mermaid block is drawn as its diagram here (lib/mermaidBlock.ts): this
 // html is whole, so no fence in it is still being written.
@@ -452,19 +459,20 @@ function patchCodeBlock(current: ChildNode[], fresh: ChildNode[]): boolean {
 
 /**
  * Draw a live answer's blocks into `node`, touching only the blocks whose html
- * changed. Use as `<div class="md" use:markdownBlocks={blocks}>…</div>` with the
- * array `createStreamMarkdown().render()` returns.
+ * changed. Use as `<div className="md" ref={useAction(markdownBlocks, blocks)}>…</div>`
+ * with the array `createStreamMarkdown().render()` returns.
  *
- * Why not `{#each}{@html}`: the nodes go straight into `node`, with no wrapper
- * per block, so the DOM is the same tree a whole `{@html}` render produces
- * (`.md > :first-child`, sibling margins and the rest of the prose CSS apply
- * unchanged) — and a code block's wrapper, which `{@html}` does not know about,
- * is removed with its block instead of being left behind.
+ * Why not one `dangerouslySetInnerHTML` element per block: the nodes go
+ * straight into `node`, with no wrapper per block, so the DOM is the same tree
+ * a whole-html render produces (`.md > :first-child`, sibling margins and the
+ * rest of the prose CSS apply unchanged) — and a code block's wrapper, which
+ * React does not know about, is removed with its block instead of being left
+ * behind.
  *
  * A ```mermaid block is drawn as its diagram (lib/mermaidBlock.ts) once its
  * block is no longer `open`; while it is being written it is a code block.
  *
- * The blocks sit BEFORE anything Svelte renders inside `node` (the stream caret).
+ * The blocks sit BEFORE anything React renders inside `node` (the stream caret).
  */
 export function markdownBlocks(node: HTMLElement, blocks: readonly HtmlBlock[] = []) {
   const end = node.ownerDocument.createComment("");

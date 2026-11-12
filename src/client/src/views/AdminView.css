@@ -1,0 +1,7 @@
+/* Localized action labels are longer than the raw ids, and only `.tag.mono`
+   truncates in the shared audit-table rule — give the Korean variant the same
+   clipping so a long label can't push the detail column out of the row. */
+.audit-action-tag:is(.cmp-admin-view, .cmp-admin-view *) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

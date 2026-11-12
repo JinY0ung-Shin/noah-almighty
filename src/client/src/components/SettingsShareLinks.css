@@ -1,0 +1,26 @@
+.share-links-count:is(.cmp-settings-share-links, .cmp-settings-share-links *) {
+  margin: 0 0 var(--s-2);
+  font-size: var(--t-xs);
+}
+.share-link-main:is(.cmp-settings-share-links, .cmp-settings-share-links *) {
+  display: grid;
+  flex: 1 1 220px;
+  gap: var(--s-0-5);
+  min-width: 0;
+}
+.share-link-name:is(.cmp-settings-share-links, .cmp-settings-share-links *),
+.share-link-source:is(.cmp-settings-share-links, .cmp-settings-share-links *) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-link-source:is(.cmp-settings-share-links, .cmp-settings-share-links *),
+.share-link-dates:is(.cmp-settings-share-links, .cmp-settings-share-links *) {
+  font-size: var(--t-xs);
+}
+.share-link-actions:is(.cmp-settings-share-links, .cmp-settings-share-links *) {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-3);
+}

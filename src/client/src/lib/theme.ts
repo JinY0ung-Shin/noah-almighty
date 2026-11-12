@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "./store";
 import { prefersReducedMotion } from "./motion";
 
 const THEME_KEY = "noah-theme";

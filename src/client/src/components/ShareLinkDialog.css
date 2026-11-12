@@ -1,0 +1,42 @@
+/* ShareLinkDialog's own styles (were its <style> block), scoped to
+   .cmp-share-link-dialog — the class the dialog gives its Modal card. */
+.share-link-file:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  overflow-wrap: anywhere;
+}
+.share-link-status:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  color: var(--ok);
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+.share-link-expiry:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  display: grid;
+  gap: var(--s-1-5);
+}
+.share-link-label:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  color: var(--text-soft);
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+.share-link-url:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-2);
+}
+.share-link-url:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) .field {
+  flex: 1;
+  min-width: 0;
+}
+.share-link-confirm:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  display: grid;
+  gap: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+}
+.share-link-confirm:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) p {
+  font-size: var(--t-sm);
+}
+.share-link-confirm:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) .routine-modal-actions-right {
+  justify-content: flex-end;
+}

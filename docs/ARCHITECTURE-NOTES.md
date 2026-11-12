@@ -53,14 +53,14 @@ Companion to the agent-area philosophy in [`../src/server/agent/CLAUDE.md`](../s
 | [agent-misc.md](architecture/agent-misc.md) | Experimental feature flags, hex-ssh remote SSH, server-expanded slash commands, why git remote work is MCP-only, and how to test repo tools offline. |
 | [pi-runtime.md](architecture/pi-runtime.md) | Touching the agent runtime (pi-gateway, the only one since the Claude Agent SDK was removed): every run class on pi and its sandbox principal (`piRunPrincipal`), conversation-less runs in an ephemeral folder, owner-only shell secrets (`sandbox_env`), the bearer-token-only `/mcp` endpoint and its static catalog, the frozen per-conversation prompt (D2), sessions/resume/rewind over `previous_response_id`, mid-turn messages over pi's `/input` (P2), the S1 degrades (model switch, cwd, async `ask_avatar`/canvas), the sandbox conversation folder and working-repo copies, skills in the sandbox, Noah's MCP relays (hex-ssh, plugin `.mcp.json` — stdio only from bundled plugins —, 공용 MCP), env vars and operator setup (`scripts/pi-register-mcp.mjs`). |
 
-## Client (`src/client/` — Svelte + Vite)
+## Client (`src/client/` — React + Vite)
 
 Companion to the client-area philosophy in [`../src/client/CLAUDE.md`](../src/client/CLAUDE.md);
 design language in [`DESIGN.md`](DESIGN.md).
 
 | Page | Read it when |
 |---|---|
-| [client.md](architecture/client.md) | Any frontend change: module structure and the central store, the strict same-origin CSP, theme single-source, CSS gotchas, **Svelte 5 runtime gotchas that `svelte-check` does NOT catch**, auto-scroll, split chat, the client↔server contracts mirrored by hand, deliberate behavior gotchas, client verification, and the load-bearing UI-consistency invariants. |
+| [client.md](architecture/client.md) | Any frontend change: module structure and the central store, the strict same-origin CSP, theme single-source, CSS gotchas, **the React client rules and gotchas the typecheck does NOT catch** (state mutated in place, stale closures, `<Presence>`, scoped component CSS, portals), auto-scroll, split chat, the client↔server contracts mirrored by hand, deliberate behavior gotchas, client verification, and the load-bearing UI-consistency invariants. |
 
 ---
 

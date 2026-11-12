@@ -1,6 +1,6 @@
 # 디자인 철학 — Noah Almighty
 
-이 문서는 Svelte 프론트엔드(`src/client/`)의 **시각 언어 기준**이다.
+이 문서는 React 프론트엔드(`src/client/`)의 **시각 언어 기준**이다.
 새 UI를 만들거나 기존 UI를 고칠 때 여기 정의된 토큰·규칙을 따른다. 어긋난 곳을
 발견하면 이 문서 쪽으로 수렴시킨다(즉석 새 값 도입 금지).
 
@@ -232,11 +232,11 @@ backdrop을 토큰·베이스로 통일.**
 신규 오버레이는 위 z-index 토큰을 쓴다(즉석 숫자 금지). `--z-prompt`는 권한/질문 프롬프트가
 모달·토스트 위에서 응답 가능해야 해서 최상위다.
 
-- **같은 `--z-modal` 층의 우선순위는 `App.svelte`의 DOM 순서가 결정한다(load-bearing):**
+- **같은 `--z-modal` 층의 우선순위는 `App.tsx`의 DOM 순서가 결정한다(load-bearing):**
   `Shell → OnboardingModal → WhatsNewModal → PromptModal → Toasts → ConfirmationDialog`.
   ConfirmationDialog가 마지막이어야 다른 모달 위에서 확인창이 그려진다 — 순서를 바꾸지 말 것.
 - **닫기 관례:** 모달은 푸터 액션(확인/취소)으로 닫는 것이 기본이고 Escape/백드롭은
-  `Modal.svelte` 베이스가 처리한다. 전체화면 뷰어(그래프·캔버스)는 명시적 닫기 컨트롤을 둔다.
+  `Modal.tsx` 베이스가 처리한다. 전체화면 뷰어(그래프·캔버스)는 명시적 닫기 컨트롤을 둔다.
   권한 게이트(PromptModal)는 **Escape=거부**, 백드롭 닫기 없음(의도적 — 묵시 해제 금지).
 
 ---

@@ -235,7 +235,7 @@
 
 ## Cards and routes (`teamBrainActions.ts`, `routes/teamBrain.ts`)
 - A card is a `kind:"team_brain"` `MessageAttachment` (id = proposal id; no file behind it), emitted on the
-  `file` SSE event and persisted with the message. `TeamBrainCard.svelte` reads its live state from
+  `file` SSE event and persisted with the message. `TeamBrainCard.tsx` reads its live state from
   `GET /api/team-brain/cards/:id` — visible ONLY to the row's drafter. The view carries `pages` (per changed
   page: before = committed content, after, stale). Viewing a decided card marks the result seen.
 - **Provenance edit** (`PUT …/provenance` `{sourceKind, source, author, authoredAt}` →
@@ -303,8 +303,9 @@
   not position itself over the app (fake UI); the card shows raw text in `<pre>`.
 - **Two rail items (user, 2026-11-06): 내 브레인 (`brain`, `#/brain`) and 팀 브레인 (`teamBrain`,
   `#/teamBrain`)** — the old single 지식 그래프 item with in-view tabs is gone. Both render `BrainView`
-  (`scope` prop); 팀 브레인 goes through the thin `TeamBrainView.svelte` wrapper so switching between them
-  REMOUNTS (the router's `<svelte:component>` keeps an instance whose constructor did not change). The team
+  (`scope` prop); 팀 브레인 goes through the thin `TeamBrainView.tsx` wrapper so switching between them
+  REMOUNTS (`App.tsx` renders the active view in one place, and React keeps an instance whose component
+  type did not change — `BrainView` rendered for both would keep its state). The team
   view's side panel (no node selected) lists 내 제안 (status + rejection reason) and, for admins, 검토 대기
   with a **검토 시작** button per row: `openSeededChat` → a new chat with the admin's OWN avatar, the composer
   pre-filled (not sent) with a review request naming ONLY the proposal id — never the teammate-written
@@ -312,7 +313,7 @@
   badge = `unseenResults + pendingReview`, polled with the knowledge watch (`lib/teamBrain.ts`); a toast on
   growth and the admin panel's 위키 페이지 card open it with `goView("teamBrain")` (the one-shot
   `brainOpenTeamTab` flag is gone).
-- 관리자 → 팀 브레인 (`AdminTeamBrainPanel.svelte`): counts + backup address/branch/status, 지금 백업, 백업에서 복원,
+- 관리자 → 팀 브레인 (`AdminTeamBrainPanel.tsx`): counts + backup address/branch/status, 지금 백업, 백업에서 복원,
   and the read-only 팀 정책 view (settings vs defaults, problems, guidelines as text, change history — changes
   go through the admin's own avatar + a card). A `policy` card shows the POLICY.md line diff and 팀 정책 반영;
   propose/direct cards list their linked 내 브레인 notes.

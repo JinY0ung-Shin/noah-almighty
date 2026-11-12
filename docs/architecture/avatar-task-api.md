@@ -13,7 +13,7 @@ routine and no new run kind** — a task row is bookkeeping over a full owner ru
 
 Files: `src/server/routes/avatarTasks.ts` (HTTP, both halves), `src/server/avatarTaskRunner.ts`
 (dispatcher + run), `src/server/store/avatarTasks.ts` (store mixin), `src/shared/avatarTasks.ts`
-(the wire types both sides import), `src/client/src/components/SettingsAvatarApiKeys.svelte`
+(the wire types both sides import), `src/client/src/components/SettingsAvatarApiKeys.tsx`
 (내 아바타 → 권한·연결 → 외부 작업 API).
 
 ## Tables (`store/internal.ts` `migrate()`, plain `CREATE TABLE IF NOT EXISTS`)
@@ -221,7 +221,7 @@ keeps only the default plus a pointer to describe_system: `read_manual` must nev
 the turn's own `chat` action (`entry.action === "chat" ? "avatar_api_task" : entry.action`) and
 prefixes every detail with `task <id>: `, so a tool the run uses keeps its OWN action name
 (`browser_<op>` and friends) — the task action never swallows them. `AUDIT_ACTION_LABELS` in
-`views/AdminView.svelte` carries the Korean labels; an unlabeled id still renders as its raw string.
+`views/AdminView.tsx` carries the Korean labels; an unlabeled id still renders as its raw string.
 
 ## Prunes and cascades
 - **Deleting the conversation deletes its tasks** (`store/conversations.ts`, both the single and bulk
@@ -271,5 +271,5 @@ limits, the dispatcher's claim/concurrency/re-validation matrix, cancel incl. th
 respond, restart recovery, the 409 backoff/cap, owner defaults, and the
 prune/cascade rules), `tests/agent-run-registry.test.ts` (post-abort prompts), the provenance cases in
 `tests/agent-core.test.ts` / `tests/agent-run.test.ts` / `tests/agent-tools.test.ts`, and
-`tests/svelte-avatar-api-keys.test.ts` (the settings card: issue, the one-time secret, the refetch on
+`tests/react-avatar-api-keys.test.tsx` (the settings card: issue, the one-time secret, the refetch on
 tab re-entry, revoke).

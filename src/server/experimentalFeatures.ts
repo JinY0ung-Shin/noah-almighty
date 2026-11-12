@@ -6,7 +6,7 @@
  * `name`/`description` are shown to the user in Settings, so they are KOREAN
  * (the language split: user-facing strings are Korean). The KEYS are stable
  * identifiers and never shown. This module is intentionally dependency-free so
- * it can be imported by BOTH the server and the Svelte client (it is listed in
+ * it can be imported by BOTH the server and the web client (it is listed in
  * `tsconfig.client.json` includes), mirroring `routineSchedule.ts` — the client
  * renders the settings card from the same registry, avoiding drift.
  *

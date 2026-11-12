@@ -1,0 +1,8 @@
+.egress-card:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) { margin-bottom: var(--s-4); }
+.egress-add-row:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.egress-add-row:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) label { display: flex; align-items: center; gap: .5rem; font-size: var(--t-sm); }
+.egress-domains:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) { list-style: none; margin: var(--s-3) 0; padding: 0; max-height: 20rem; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-md); }
+.egress-domains:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *):empty { display: none; }
+.egress-domains:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) li { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: var(--s-2) var(--s-3); font-size: var(--t-sm); }
+.egress-domains:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) li + li { border-top: 1px solid var(--line); }
+.egress-domains:is(.cmp-admin-egress-panel, .cmp-admin-egress-panel *) li div { min-width: 0; display: grid; gap: .2rem; overflow-wrap: anywhere; }

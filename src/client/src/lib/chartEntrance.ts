@@ -305,7 +305,7 @@ export function playChartEntrance(host: HTMLElement, entrance: Entrance): () => 
 }
 
 /**
- * Svelte action: draw a chart's sanitized SVG in the node's shadow root
+ * Action (attached with `useAction`): draw a chart's sanitized SVG in the node's shadow root
  * (`shadowSvg`) and, when the drawing it is MOUNTED with may enter, play that.
  * A later drawing replaces it at rest.
  */

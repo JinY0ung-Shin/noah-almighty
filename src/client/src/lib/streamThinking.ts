@@ -8,7 +8,7 @@
 // `streamReveal.ts`: the pane store is not involved, and a reattached run starts
 // counting from the replay (the header then simply shows no duration).
 
-import { writable, type Readable } from "svelte/store";
+import { writable, type Readable } from "./store";
 
 export interface ThinkingClock {
   /** Finished reasoning intervals of this turn, in ms. */

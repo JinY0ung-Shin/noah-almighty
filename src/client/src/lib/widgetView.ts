@@ -1,15 +1,14 @@
-// Inline UI, EVALUATED into plain data the Svelte components only have to draw.
+// Inline UI, EVALUATED into plain data the React components only have to draw.
 //
 // The whole evaluation happens here, in one pass — not spread over the
-// components' reactive blocks — for three reasons:
+// components' render bodies — for two reasons:
 // - budgets: every top-level block gets a fresh step/allocation budget and a
 //   block that blows it becomes ONE error node, which a tree of independently
 //   evaluating components could not attribute;
 // - isolation: a node whose expression throws becomes an error node in place
-//   and its siblings still render;
-// - Svelte 5 legacy mode resolves template deps at compile time, so state read
-//   inside a helper renders stale. The components here read nothing but the
-//   `VNode` they are handed.
+//   and its siblings still render.
+// The components (components/widget/*.tsx) evaluate nothing themselves: they
+// draw the `VNode` they are handed.
 //
 // Nothing in a VNode is HTML: text is text, and inline Markdown is a list of
 // styled segments the component assembles from elements. The answer's own

@@ -1,0 +1,123 @@
+/* SlidePresenter's own styles (were its <style> block), scoped to .cmp-slide-presenter. */
+.slide-presenter:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  animation: cmp-slide-presenter-slide-presenter-in 180ms var(--ease-out);
+}
+.slide-presenter-stage:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-4);
+}
+/* The box fills the stage and the render is contained inside it: one slide
+   fitted at any window shape, no layout maths. */
+.slide-presenter-image:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+}
+.slide-presenter-zone:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 50%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.slide-presenter-zone:active:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  transform: none;
+}
+.slide-presenter-zone:disabled:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  cursor: default;
+  opacity: 1;
+}
+.slide-presenter-zone.prev:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  left: 0;
+}
+.slide-presenter-zone.next:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  right: 0;
+}
+.slide-presenter-error:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  color: var(--text);
+  font-size: var(--t-sm);
+}
+.slide-presenter-bar:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  padding-bottom: calc(var(--s-2) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.slide-presenter-title:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+.slide-presenter-controls:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+}
+.slide-presenter-count:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  min-width: 4.5em;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--t-sm);
+  font-variant-numeric: tabular-nums;
+}
+@media (pointer: coarse) {
+  .slide-presenter-controls:is(.cmp-slide-presenter, .cmp-slide-presenter *) .btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+@media (max-width: 640px) {
+  .slide-presenter-title:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+    display: none;
+  }
+}
+:root[data-motion="reduce"] .slide-presenter:is(.cmp-slide-presenter, .cmp-slide-presenter *) {
+  animation: none;
+}
+@keyframes cmp-slide-presenter-slide-presenter-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

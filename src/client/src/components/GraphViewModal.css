@@ -1,0 +1,66 @@
+/* GraphViewModal.tsx — the component styles, scoped by hand. `.cmp-graph-view-modal` sits on each element the
+   modal puts into <Modal> (not on the card), so nothing here reaches GraphCanvas or the modal chrome. */
+.graph-head:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.graph-head:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) > div:first-child {
+  min-width: 0;
+  flex: 1 1 280px;
+}
+.graph-head:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) h2 {
+  overflow-wrap: anywhere;
+}
+.graph-head-acts:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.graph-head:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) p {
+  margin: var(--s-1) 0 0;
+  font-size: var(--t-sm);
+  overflow-wrap: anywhere;
+}
+.graph-state:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) {
+  padding: var(--s-6) var(--s-2);
+  text-align: center;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.graph-state:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) .linkish.small {
+  margin-left: var(--s-2);
+}
+.graph-footer:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.graph-info:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  font-size: var(--t-sm);
+  min-width: 0;
+  max-width: 100%;
+}
+.graph-info:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) strong,
+.graph-info:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.graph-info:is(.cmp-graph-view-modal, .cmp-graph-view-modal *) code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

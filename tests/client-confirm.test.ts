@@ -1,4 +1,4 @@
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 import { describe, expect, it } from "vitest";
 
 import { confirmAction, confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";

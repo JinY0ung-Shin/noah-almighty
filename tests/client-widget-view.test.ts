@@ -1,4 +1,4 @@
-// lib/widgetView.ts — inline UI evaluated into plain nodes for the Svelte
+// lib/widgetView.ts — inline UI evaluated into plain nodes for the React
 // components: inline Markdown as styled runs (never HTML), one error node per
 // failing node / over-budget block, keys stable across renders, and finished
 // blocks kept (not evaluated again) while an answer grows.

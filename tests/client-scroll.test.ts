@@ -24,7 +24,7 @@ import {
 
 describe("nextStickBottom — browser scroll clamps must NOT disengage", () => {
   it("ignores the composer-shrink-after-send clamp (the reported bug)", () => {
-    // Observed in a real-browser repro: afterUpdate pinned lastScrollTop to 887
+    // Observed in a real-browser repro: the after-render pin set lastScrollTop to 887
     // (composer still multi-line), then autosize collapsed the composer in a
     // microtask, growing the viewport and clamping scrollTop to 775 — which lands
     // exactly at the new bottom. The OLD "any decrease is a scroll-up" rule

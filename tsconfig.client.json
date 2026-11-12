@@ -3,11 +3,12 @@
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "types": ["svelte", "vite/client"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
     "noEmit": true,
     "rootDir": ".",
     "isolatedModules": true
   },
-  "include": ["src/client/src/**/*.ts", "src/client/src/**/*.svelte", "src/shared/**/*.ts", "src/server/types.ts", "src/server/routineSchedule.ts", "src/server/experimentalFeatures.ts", "src/server/releaseNotes.ts", "src/server/effortLevels.ts", "src/server/hexSshPolicy.ts", "tests/client-*.test.ts", "tests/svelte-*.test.ts"],
+  "include": ["src/client/src/**/*.ts", "src/client/src/**/*.tsx", "src/shared/**/*.ts", "src/server/types.ts", "src/server/routineSchedule.ts", "src/server/experimentalFeatures.ts", "src/server/releaseNotes.ts", "src/server/effortLevels.ts", "src/server/hexSshPolicy.ts", "tests/client-*.test.ts", "tests/react-*.test.tsx"],
   "exclude": ["node_modules", "dist"]
 }

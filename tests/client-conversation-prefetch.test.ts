@@ -21,7 +21,7 @@ import {
 } from "../src/client/src/lib/conversationPrefetch.js";
 import { readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import type { ConversationSummary } from "../src/client/src/lib/types.js";
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 
 /* ------------------------------------------------------------------ */
 /* the generic cache                                                   */

@@ -42,12 +42,12 @@
   just-downloaded extension badges orange forever, telling users to update to something no download
   provides.
 - **The composer badge has FOUR rungs, and `compatible` is the one that keeps getting re-collapsed.**
-  `ChatView.svelte` holds ONE `bridgeCompat.level` (`current`/`compatible`/`outdated`/`unreachable`) —
+  The chat view (`views/chat/controller.tsx`, drawn by `views/chat/Composer.tsx`) holds ONE `bridgeCompat.level` (`current`/`compatible`/`outdated`/`unreachable`) —
   the reachability and version axes were two fields that always moved together. `compatible` (at/above
   the floor, behind the bundle) is deliberately NOT folded into `current`: it works right now, so the
   temptation is to call it healthy, but that hides an available update. It renders `--info` blue with
   its own "· 업데이트 있음" text and IS clickable into 설정 → 접근/보안; only `current` is an inert span.
-  `tests/svelte-chat-bridge-badge.test.ts` pins all of that.
+  `tests/react-chat-bridge-badge.test.tsx` pins all of that.
 - **`screenshot` is gated on the RUN's resolved vision (pi's per-model image setting), and with it click_at's PIXEL mode only**
   (`runVisionEnabled` → `BrowserToolsContext.vision`, defaulting to `false` so an unwired caller gets a
   polite refusal rather than an API error; pixel coordinates have no source without a screenshot).

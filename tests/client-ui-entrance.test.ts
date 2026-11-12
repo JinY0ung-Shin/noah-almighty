@@ -159,7 +159,7 @@ describe("enter (action)", () => {
   });
 
   it("leaves the element as it was drawn when the entrance cannot be set up", () => {
-    // A stand-in `animate` with no pause() — what a test DOM's polyfill for Svelte transitions looks like.
+    // A stand-in `animate` with no pause() — what a test DOM's polyfill for element transitions (tests/setup-dom.ts) looks like.
     const cancelled: string[] = [];
     (Element.prototype as unknown as { animate: unknown }).animate = () => ({ cancel: () => cancelled.push("cancel") });
     const body = document.createElement("tbody");

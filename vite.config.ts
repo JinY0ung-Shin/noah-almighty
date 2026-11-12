@@ -1,10 +1,22 @@
-import { svelte } from "@sveltejs/vite-plugin-svelte";
+import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+
+// The React plugin's dev-server preamble (Fast Refresh) is normally an INLINE
+// <script> added to every HTML page — which the app's CSP (`script-src 'self'`)
+// blocks, and which the browser specs that run under that CSP count as a
+// violation. So the HTML injection is dropped and main.tsx imports the
+// same preamble as a module instead (`@vitejs/plugin-react/preamble`, empty in a
+// production build).
+function reactPlugins() {
+  return react({ include: /\.tsx$/ }).map((plugin) =>
+    plugin.name === "vite:react-refresh" ? { ...plugin, transformIndexHtml: undefined } : plugin,
+  );
+}
 
 export default defineConfig({
   root: "src/client",
   publicDir: "public",
-  plugins: [svelte()],
+  plugins: [reactPlugins()],
   server: {
     port: 5173,
     strictPort: false,

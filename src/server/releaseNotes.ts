@@ -15,7 +15,7 @@
  *
  * `items` are shown verbatim to users, so they are KOREAN (language split:
  * user-facing strings are Korean). This module is intentionally dependency-free
- * so it can be imported by BOTH the server and the Svelte client (it is listed
+ * so it can be imported by BOTH the server and the web client (it is listed
  * in `tsconfig.client.json` includes), mirroring `experimentalFeatures.ts`.
  */
 /**

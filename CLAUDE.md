@@ -182,7 +182,7 @@ These are the invariants the project is built around. New work should reinforce 
   self-state in `agent/ownerState.ts`; MCP tools via `agent/mcpServer.ts`; the `/mcp` endpoint in
   `mcpHttp/endpoint.ts`.
 - **Store:** `store.ts` is a thin barrel over per-domain mixins in `store/*.ts`.
-- **Client:** Svelte + Vite under `src/client/` (NOT vanilla `public/`); central store `lib/state.ts`.
+- **Client:** React + Vite under `src/client/` (NOT vanilla `public/`); central store `lib/state.ts`.
 - **Shared:** `src/shared/*` is the real client↔server layer; new cross-boundary code goes there, not
   into a hand-copy (`tsconfig.client.json` lists the server modules the client may import).
 - Module cautions: [`src/server/CLAUDE.md`](src/server/CLAUDE.md),
@@ -192,7 +192,7 @@ These are the invariants the project is built around. New work should reinforce 
 
 ## Verification gate
 - `npm run lint && npm test && npm run build`, plus client checks run directly: `npx tsc --noEmit` +
-  `npx svelte-check --tsconfig ./tsconfig.client.json`. ⚠️ The rtk hook misrewrites `npm run lint` to
+  `npx tsc -p tsconfig.client.json --noEmit`. ⚠️ The rtk hook misrewrites `npm run lint` to
   eslint and fails — don't rely on it.
 - `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file.
 - `npm run dev` — server (:48787) + client (vite, :5173).

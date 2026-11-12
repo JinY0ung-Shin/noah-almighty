@@ -7,7 +7,7 @@
 // Every response's {todayKst, counts} then replaces the snapshot, so the counts
 // and the overdue/today buckets always come from the server's KST clock.
 
-import { writable } from "svelte/store";
+import { writable } from "./store";
 import { ApiError, api } from "./api";
 import { persistTodoOverlayOpen } from "./layout";
 import { goView } from "./nav";
@@ -215,7 +215,7 @@ export const TODO_OVERLAY_LIMIT = 8;
  * transcript pads its right side by clamp(24, 2×328 + 800 + 24 − W, 328) — 328 =
  * card 300 + its 16px right offset + a 12px gap, 24 = the transcript's own side
  * padding, 800 = `--transcript-max` (the `:global(.chat-body:has(...))` rule in
- * TodoOverlay.svelte). From W = 1456 up nothing moves; down to 1152 the full
+ * TodoOverlay.tsx). From W = 1456 up nothing moves; down to 1152 the full
  * 800px column shifts left to clear the card; below that the column narrows to
  * W − 352 with the card 12px beside it — 648px at this threshold, the narrowest
  * a pinned layout gives the conversation. Narrower hosts (split panes, an open
@@ -485,13 +485,15 @@ let avatarEndsSeen = 0;
 let avatarEndsCovered = 0;
 let lastAvatarEndAt = 0;
 const TODO_CLAIM_MAX_AGE_MS = 5000;
-// Read by the card's out: transition when a row STARTS to leave. Deliberately not
-// reactive: a removed keyed row only ever sees the params of its last render, so
-// a store would still say "not the avatar" at that moment. id → expiry (ms).
+// Read by the card's row when it STARTS to leave (the layout effect that sets up
+// its exit). Deliberately not state: a row that was dropped is kept by
+// <Presence> with the props of its last render, so anything handed down would
+// still say "not the avatar" at that moment. id → expiry (ms).
 const avatarDepartures = new Map<string, number>();
-// Open only while the update that applies an avatar's change flushes (Svelte
-// flushes in a microtask, each-block animations in the next); closed by a timer,
-// and at once by the viewer's own next write — so their edit never glides.
+// Open only while the update that applies an avatar's change is rendered: the
+// card's layout effects read it in that commit, and a deferred transition one
+// microtask later — both before the 0 ms timer that closes it. Closed at once
+// by the viewer's own next write too — so their edit never glides.
 let avatarFlushOpen = false;
 
 /**
@@ -1118,14 +1120,14 @@ function noteAvatarChange(diff: TodoListDiff): void {
   activityTimers.add(timer);
 }
 
-/** One-shot: whether the avatar's change just removed this row from the open list (the card's out: transition). */
+/** One-shot: whether the avatar's change just removed this row from the open list (the card's row exit). */
 export function takeAvatarDeparture(id: string): boolean {
   const until = avatarDepartures.get(id);
   avatarDepartures.delete(id);
   return until !== undefined && until > Date.now();
 }
 
-/** Whether the update now flushing applies an avatar's change (the card's sibling glide and section fades). */
+/** Whether the update now being rendered applies an avatar's change (the card's sibling glide and section fades). */
 export function avatarChangeFlushing(): boolean {
   return avatarFlushOpen;
 }

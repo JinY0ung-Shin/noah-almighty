@@ -22,7 +22,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-/** The container as the bubble has it: Svelte's own child (the caret) already inside. */
+/** The container as the bubble has it: React's own child (the caret) already inside. */
 function liveContainer(): { node: HTMLElement; caret: HTMLElement } {
   const node = document.createElement("div");
   node.className = "md";

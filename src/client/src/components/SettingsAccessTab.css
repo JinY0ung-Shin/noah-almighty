@@ -1,0 +1,97 @@
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { margin: var(--s-3) 0; padding: var(--s-3); border: 1px solid var(--line); border-radius: var(--r-md); }
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) p { margin: var(--s-1) 0 var(--s-2); }
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-2); }
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) li { display: grid; gap: var(--s-1-5); padding-top: var(--s-2); border-top: 1px solid var(--line); }
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) li:first-child { border-top: 0; padding-top: 0; }
+.shared-mcp-secret-head:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); }
+.shared-mcp-secret-head:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) .mono { overflow-wrap: anywhere; font-size: var(--t-sm); }
+.shared-mcp-secret-server:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { font-weight: 600; }
+.shared-mcp-secret-desc:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { font-size: var(--t-sm); }
+.shared-mcp-slot:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.shared-mcp-slot:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) select { min-width: 12rem; max-width: 100%; }
+.shared-mcp-stale:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) { flex-basis: 100%; font-size: var(--t-sm); color: var(--warn); }
+.shared-mcp-secret-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) .linkish { justify-self: start; }
+.experimental-list:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.experimental-item:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  cursor: pointer;
+}
+.experimental-item:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) input {
+  margin-top: var(--s-1);
+}
+.experimental-meta:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0-5);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.shell-expose-toggle:is(.cmp-settings-access-tab, .cmp-settings-access-tab *),
+.browser-input-toggle:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  cursor: pointer;
+  white-space: nowrap;
+  min-height: 32px;
+}
+/* Takes a full line of the WRAPPING flex row it lives in (.secret-preset-actions
+   / .secret-row), so the allowed-sites editor never squeezes the row's buttons
+   onto a third line. */
+.browser-input-box:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  margin-top: var(--s-1);
+  padding-top: var(--s-3);
+  border-top: 1px dashed var(--line-soft);
+}
+.browser-input-hosts:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.browser-input-summary:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--t-xs);
+  overflow-wrap: anywhere;
+}
+.browser-input-actions:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  flex: none;
+  gap: var(--s-2);
+}
+/* Composes the global `.tag accent` base; only the deltas that make it read as
+   a label riding inside a <strong> heading live here. */
+.browser-allowlist:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line-soft);
+}
+.browser-allowlist:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.browser-bridge-actions:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+}
+.experimental-badge:is(.cmp-settings-access-tab, .cmp-settings-access-tab *) {
+  font-weight: 600;
+  vertical-align: middle;
+}

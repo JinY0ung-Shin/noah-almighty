@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 import { isOpenTodo, type TodoItem, type TodoListResponse } from "../../src/shared/todos.js";
 
-// The chat screen's 할 일 card (TodoOverlay.svelte) picks its presentation from the
+// The chat screen's 할 일 card (TodoOverlay.tsx) picks its presentation from the
 // chat column's measured width: pinned at the top-right of a ≥1000px column, a
 // popover above the composer when narrower, a full-width sheet at ≤860px. These are
 // geometry checks (no screenshots): the card stays inside .chat-body, never covers
@@ -516,9 +516,9 @@ function sseFrames(frames: Array<{ event: string; data: unknown }>): string {
 interface MotionSample {
   /** The list's scrollable overflow (> 0 would flash a scrollbar in a card that does not scroll). */
   overflow: number;
-  /** Rows held out of flow (`animate:` fixes a leaving row) — by title. */
+  /** Rows held out of flow (the card's FLIP fixes a leaving row absolutely) — by title. */
   absolute: string[];
-  /** Rows that are leaving — on their own or with their whole section (Svelte marks them `inert`) — by title. */
+  /** Rows that are leaving — on their own or with their whole section (an exit that plays marks them `inert`) — by title. */
   leaving: string[];
   /** Rows with a running animation (glide, exit, arrival) — by title. */
   moving: string[];
@@ -631,8 +631,8 @@ function maxOverflow(samples: MotionSample[]): number {
  */
 function expectNoLateMoves(samples: MotionSample[], options: { cardHeight?: boolean } = {}): void {
   if (options.cardHeight) {
-    // The frame the change lands: a row starts leaving (Svelte marks it `inert` in
-    // the same flush that resizes the card) or — an instant change — the rows
+    // The frame the change lands: a row starts leaving (it is marked `inert` in
+    // the same commit that resizes the card) or — an instant change — the rows
     // differ. Glides hold rows in place on that frame, so tops alone can lag it.
     const landed = samples.findIndex((sample) => sample.leaving.length > 0 || rowsMoved(sample, samples[0]));
     const resizes = samples.flatMap((sample, index) =>
@@ -871,7 +871,7 @@ test("with a parallel addition above, the pinned card's leaving row still leaves
   await openCard(page, { width: 1680, height: 1000 });
   await expect(page.locator("#todo-overlay")).toHaveAttribute("data-mode", "pinned");
   // Two parallel tool calls, one re-read: an overdue item lands at the top (every
-  // row below shifts down before Svelte measures the leaving one) while 다음's
+  // row below shifts down before the card measures the leaving one) while 다음's
   // first row is completed.
   server.nextTurn(() => {
     server.add(todo("todo-7", "새로 생긴 급한 일", { dueDate: "2026-07-10", source: "avatar" }));

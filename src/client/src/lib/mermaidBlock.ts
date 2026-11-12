@@ -352,7 +352,7 @@ export function syncMermaidBlocks(root: ParentNode | readonly Node[], open = fal
 }
 
 /**
- * Svelte action: hear about the diagrams under `node` that could not be drawn —
+ * Action (attached with `useAction`): hear about the diagrams under `node` that could not be drawn —
  * one ENGLISH line each, for the avatar (lib/canvasReport.ts decides whether it
  * goes anywhere). Use it on the element the Markdown is rendered into.
  */

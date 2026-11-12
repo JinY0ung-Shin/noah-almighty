@@ -43,7 +43,7 @@ const ready = (async () => {
     purify.addHook = () => {};
   }
   const mermaid = (await import(workerData.mermaidUrl)).default;
-  // Mirrors CanvasTab.svelte's initialize so both sides parse alike.
+  // Mirrors CanvasTab.tsx's initialize so both sides parse alike.
   mermaid.initialize({ startOnLoad: false, securityLevel: "strict", htmlLabels: false });
   return mermaid;
 })();

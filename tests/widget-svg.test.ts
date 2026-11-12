@@ -4,7 +4,8 @@
 // every value — enforced twice: statically by `checkWidget` (the server, before
 // anything is shown) and again on the evaluated values by `renderSvg` (the
 // browser, which parses the source itself). The third wall, DOMPurify + a
-// shadow root, is in tests/svelte-canvas-widget-more.test.ts.
+// shadow root (lib/widgetSvg.ts `sanitizeWidgetSvg`, components/widget/WidgetSvg.tsx),
+// is not covered here.
 import { describe, expect, it } from "vitest";
 
 import { checkWidget } from "../src/shared/widget/check.js";

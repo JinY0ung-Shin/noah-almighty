@@ -12,7 +12,7 @@ export function initials(user: { alias?: string; displayName?: string; username?
 }
 
 // Seed → stable hue (0..359), mirroring the old paintGenerated() so generated
-// avatars keep the same colors as before the Svelte migration.
+// avatars keep the same colors they had in the vanilla frontend (before 2026-06).
 export function hashHue(seed: string): number {
   let h = 0;
   const str = String(seed);
@@ -29,7 +29,8 @@ export function avatarGradient(user: { id?: string; username?: string; displayNa
 
 export function renderMarkdown(text: string | null | undefined, options: { forbidInlineStyle?: boolean } = {}): string {
   const source = text || "";
-  // A <style> (HTML or inline-SVG) in {@html} output styles the WHOLE app, so a
+  // A <style> (HTML or inline-SVG) in html injected into the app's document
+  // (`dangerouslySetInnerHTML`) styles the WHOLE app, so a
   // message's `body { … }` would restyle every screen: markdown never keeps one.
   // Inline style="" stays. Canvas pages and drawings get their own document or
   // shadow root instead (CanvasTab).
@@ -64,13 +65,15 @@ export function sanitizeMarkdownHtml(
 
 // Rendered-markdown cache for PERSISTED message bodies.
 //
-// Svelte 5 legacy reactivity (this client uses no runes) re-evaluates every
-// each-block item's template expressions on any appState emission, and
-// `updateState` emits once per SSE token — so a streaming turn re-parsed the
-// markdown of every message already in the transcript on every token. Measured
-// at 200 messages: 200 renderMarkdown calls per token, all discarded because the
-// html was identical. renderMarkdown is pure in its source text, so caching on
-// that text makes the parse cost O(new text) instead of O(transcript × tokens).
+// Every component that reads the app state (`useAppState()`) re-renders on any
+// appState publication — the state is mutated in place, so nothing below it
+// can be memoized on identity — and `updateState` publishes once per SSE
+// token. Without this cache a streaming turn re-parses the markdown of every
+// message already in the transcript on every token (measured before the cache
+// existed, at 200 messages: 200 renderMarkdown calls per token, all discarded
+// because the html was identical). renderMarkdown is pure in its source text,
+// so caching on that text makes the parse cost O(new text) instead of
+// O(transcript × tokens).
 //
 // Streaming text (liveText / liveThinking) never goes through this cache: it
 // changes every token, so caching it only churns the map. It is rendered as

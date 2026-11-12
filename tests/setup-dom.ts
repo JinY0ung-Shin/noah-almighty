@@ -1,6 +1,7 @@
-// jsdom does not implement Web Animations. Svelte 5 uses it internally for
-// transition directives, so component tests get a zero-time, deterministic
-// stand-in while real timing remains covered by Playwright.
+// jsdom does not implement Web Animations. The client plays every element
+// enter/exit transition through it (lib/transition.ts `runTransition`, driven by
+// lib/presence.tsx and by the 할 일 card), so component tests get a zero-time,
+// deterministic stand-in while real timing remains covered by Playwright.
 if (typeof Element !== "undefined" && !(Element.prototype as Element & { animate?: unknown }).animate) {
   Object.defineProperty(Element.prototype, "animate", {
     configurable: true,
@@ -30,9 +31,9 @@ if (typeof Element !== "undefined" && !(Element.prototype as Element & { animate
   });
 }
 
-// Svelte's `animate:` directive (the 할 일 card's sibling glide) asks a LEAVING
-// keyed row for its running animations, and jsdom has none. Nothing runs here,
-// so an empty list is honest.
+// The 할 일 card's sibling glide (components/TodoOverlay.tsx, `CardMotion.hold`)
+// asks a LEAVING row or section for its running animations, and jsdom has none.
+// Nothing runs here, so an empty list is honest.
 if (typeof Element !== "undefined" && !("getAnimations" in Element.prototype)) {
   Object.defineProperty(Element.prototype, "getAnimations", { configurable: true, value: () => [] });
 }

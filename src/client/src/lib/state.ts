@@ -1,4 +1,4 @@
-import { get, writable } from "svelte/store";
+import { get, writable } from "./store";
 import type {
   AdminPresence,
   AdminStats,
@@ -81,7 +81,7 @@ export interface ClientState {
   browserGuideRequested: boolean;
   /**
    * One-shot re-open of the first-run onboarding modal, set by the 시작 안내
-   * settings card. App.svelte consumes and clears it — the modal is a global
+   * settings card. App.tsx consumes and clears it — the modal is a global
    * overlay, so unlike browserGuideRequested this carries no view change, and
    * it is independent of `user.onboardedAt` (already-onboarded owners re-open
    * it on demand).

@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable } from "./store";
 import type { LiveAgentNode } from "./types";
 
 /**

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { get } from "svelte/store";
+import { get } from "../src/client/src/lib/store.js";
 import {
   autosize,
   clickOutside,
@@ -491,8 +491,9 @@ describe("dom.autosize", () => {
     const action = autosize(ta, "multi\nline\ndraft");
     expect(ta.style.height).toBe("100px");
 
-    // A programmatic value change: Svelte calls update() BEFORE flushing the new
-    // value, so grow() must NOT run synchronously (it would measure stale content).
+    // A programmatic value change: update() defers its grow, so a caller that
+    // updates BEFORE the new value is in the node never measures stale content
+    // (`useAction` itself updates after React wrote the value — see lib/dom.ts).
     sh = 250;
     action.update();
     expect(ta.style.height).toBe("100px"); // still stale — deferred
@@ -566,8 +567,9 @@ describe("dom.enhanceMarkdown", () => {
   });
 
   it("skips the sweep when the source text is unchanged", () => {
-    // Svelte re-runs update() on every appState emission (one per SSE token), so
-    // an unchanged body must not re-query the DOM once per message per token.
+    // Every transcript row re-renders on every appState publication (one per SSE
+    // token), so an update() with an unchanged body must not re-query the DOM
+    // once per message per token.
     const node = document.createElement("div");
     node.innerHTML = "<pre><code>const x = 1;</code></pre>";
     document.body.append(node);

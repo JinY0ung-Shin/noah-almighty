@@ -1,0 +1,564 @@
+/* TodoOverlay's own styles (were its <style> block), scoped to .cmp-todo-overlay. */
+/* The surface (border colour, radius, the frosted --material-thick with its
+   backdrop blur, shadow, and the opaque reduced-transparency fallback) comes
+   from the shared popover material group in 80-apple-design.css — the same
+   glass as the MCP tool panel beside it — for the TRANSIENT modes; the pinned
+   card overrides it with an opaque surface (see .is-pinned). Otherwise only
+   geometry lives here. */
+.todo-overlay:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  /* Card width + its right offset + breathing room before the transcript's
+     text column; the unscoped .chat-body rule below reserves exactly this. */
+  --todo-overlay-width: 300px;
+  position: absolute;
+  z-index: var(--z-popover);
+  width: min(var(--todo-overlay-width), calc(100% - 2 * var(--s-4)));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-width: 1px;
+  border-style: solid;
+  overflow: hidden;
+}
+.todo-overlay[hidden]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: none;
+}
+/* Pinned grows with its list down to the composer (the host's bottom edge),
+   never past it; a longer list scrolls, its bottom edge fading (.has-more). */
+.todo-overlay.is-pinned:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  top: var(--s-3);
+  right: var(--s-4);
+  max-height: calc(100% - 2 * var(--s-3));
+  /* Pinned stays up while the transcript scrolls and streams beside it, with
+     nothing behind it to frost — so no permanent backdrop blur (it would
+     re-composite on every transcript repaint); the opaque elevated surface the
+     prompt card uses instead. The transient modes keep the shared glass. */
+  background: linear-gradient(var(--bg-elevated), var(--bg-elevated)) var(--bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* Above the composer, right-aligned — the .composer-tools-panel spot. The
+   host's bottom edge IS the composer's top edge. */
+.todo-overlay.is-popover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  bottom: var(--s-2);
+  right: var(--s-4);
+  max-height: min(calc(100% - 2 * var(--s-2)), 440px);
+}
+.todo-overlay.is-sheet:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  left: var(--s-2);
+  right: var(--s-2);
+  bottom: var(--s-2);
+  width: auto;
+  max-height: min(calc(100% - 2 * var(--s-2)), 70dvh);
+}
+/* Pinned: give the transcript enough right padding that its centred text
+   column ends left of the card. Padding % resolves against .chat-body's width,
+   so this is clamp(normal padding, 2×reserve + column − host width, reserve):
+   nothing extra on a wide screen, a left shift of the full column on a laptop,
+   and never more than the card's own reserve — below 1152px the column narrows
+   (648px at the 1000px pin threshold, lib/todos.ts) instead of being squeezed
+   around a dead gap. */
+.chat-body:has(> .todo-overlay.is-pinned:not([hidden])) > .transcript {
+  --todo-overlay-reserve: calc(300px + var(--s-4) + var(--s-3));
+  padding-right: clamp(
+    var(--s-5),
+    calc(2 * var(--todo-overlay-reserve) + var(--transcript-max) + var(--s-5) - 100%),
+    var(--todo-overlay-reserve)
+  );
+}
+
+.todo-overlay-head:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.todo-overlay.is-minimized:is(.cmp-todo-overlay, .cmp-todo-overlay *) .todo-overlay-head {
+  border-bottom-color: transparent;
+}
+/* Everything under the header: what a minimized card folds away. */
+.todo-overlay-content:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.todo-overlay-content[hidden]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: none;
+}
+.todo-overlay-head:is(.cmp-todo-overlay, .cmp-todo-overlay *) h2 {
+  margin: 0;
+  font-size: var(--t-sm);
+  font-weight: 700;
+}
+.todo-overlay-counts:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--s-1);
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.todo-overlay-overdue:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--warn);
+  font-weight: 600;
+}
+.todo-overlay-icon-btn:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.todo-overlay-icon-btn:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+
+/* The day at a glance: 오늘 progress (into the 오늘 filter) + chips into the
+   tab's other filters. */
+.todo-overlay-summary:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: grid;
+  gap: var(--s-1-5);
+  padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+.todo-overlay-progress:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: grid;
+  gap: var(--s-1);
+}
+.todo-overlay-progress-text:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  justify-self: start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+}
+.todo-overlay-progress-text:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  text-decoration: underline;
+}
+.todo-overlay-progress-text:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+.todo-overlay-chip:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+.todo-overlay-section-toggle:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+.todo-overlay-action:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.todo-overlay-progress-text:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  border-radius: var(--r-xs);
+}
+.todo-overlay-progress-bar:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--bg-subtle);
+}
+.todo-overlay-progress-bar:is(.cmp-todo-overlay, .cmp-todo-overlay *) > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.todo-overlay-progress[data-complete="true"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) .todo-overlay-progress-bar > span {
+  background: var(--ok);
+}
+.todo-overlay-chips:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+}
+.todo-overlay-chip:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  min-height: 22px;
+  padding: 0 var(--s-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.todo-overlay-chip:is(.cmp-todo-overlay, .cmp-todo-overlay *) b {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.todo-overlay-chip:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  background: var(--bg-subtle);
+  color: var(--text);
+}
+.todo-overlay-chip[data-filter="overdue"]:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+.todo-overlay-chip[data-filter="overdue"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) b {
+  color: var(--warn);
+}
+/* Positioned: a row or section the avatar removes is held in place
+   (the card's FLIP, `CardMotion.hold`, fixes it absolutely) while it leaves, and must stay inside —
+   and scroll with — this list. No horizontal overflow: the leaving row's
+   sideways slide must never flash a scrollbar. The fleet's classic scrollbars
+   take width when they appear, so the gutter is reserved: a list growing
+   into scrolling never narrows (and re-ellipsizes) its rows. The bottom
+   padding clears an added last row's 6px rise. */
+.todo-overlay-body:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: var(--s-1) var(--s-2) var(--s-2);
+}
+/* More rows below: fade the bottom edge so the cut reads as "scroll", not as a clipped row. */
+.todo-overlay-body.has-more:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent);
+}
+.todo-overlay-empty:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  margin: 0;
+  padding: var(--s-2) var(--s-1) var(--s-3);
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+}
+.todo-overlay-section:is(.cmp-todo-overlay, .cmp-todo-overlay *) h3 {
+  margin: var(--s-1) 0 var(--s-0-5);
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.todo-overlay-section:is(.cmp-todo-overlay, .cmp-todo-overlay *) h3.warn {
+  color: var(--warn);
+}
+/* The heading folds its section: chevron, label, count. */
+.todo-overlay-section-toggle:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-height: 22px;
+  padding: 0 var(--s-1);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.todo-overlay-section-toggle:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--text);
+}
+.todo-overlay-section:is(.cmp-todo-overlay, .cmp-todo-overlay *) h3.warn .todo-overlay-section-toggle:hover {
+  color: var(--warn);
+}
+.todo-overlay-section-toggle:is(.cmp-todo-overlay, .cmp-todo-overlay *) svg {
+  flex: none;
+}
+.todo-overlay-section-toggle[aria-expanded="false"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) svg {
+  transform: rotate(-90deg);
+}
+:root:not([data-motion="reduce"]) .todo-overlay-section-toggle:is(.cmp-todo-overlay, .cmp-todo-overlay *) svg {
+  transition: transform 160ms var(--ease-out);
+}
+.todo-overlay-section-count:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+:root:not([data-motion="reduce"]) .todo-overlay-section-count.is-popping:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-block;
+  animation: todo-count-pop 360ms var(--ease-out);
+}
+.todo-overlay-section:is(.cmp-todo-overlay, .cmp-todo-overlay *) ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: var(--s-0-5);
+}
+.todo-overlay-item:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  /* Its own stacking context, so the wash below paints over the row's
+     background but under its content. */
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-1);
+  border-radius: var(--r-sm);
+}
+.todo-overlay-main:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+}
+.todo-overlay-flag:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--r-pill);
+  background: var(--warn);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+.todo-overlay-tag:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  flex: 0 1 auto;
+  max-width: 84px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The row's end: its meta (memo, avatar-added, due) and, on hover or keyboard
+   focus, the actions in the SAME cell — the cell is as wide as the wider of the
+   two, so revealing them never re-wraps or re-ellipsizes the title. */
+.todo-overlay-trail:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: grid;
+  justify-items: end;
+  align-items: center;
+}
+.todo-overlay-meta:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+.todo-overlay-actions:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  grid-area: 1 / 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+}
+.todo-overlay-icon:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+}
+.todo-overlay-icon.is-avatar:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--accent-strong);
+}
+/* 22px buttons pulled into the row's 16px line box, so the hidden actions
+   never make a row taller than its checkbox line. */
+.todo-overlay-action:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-block: -3px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.todo-overlay-action:hover:not(:disabled):is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+.todo-overlay-action:disabled:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  cursor: default;
+  opacity: 0.5;
+}
+/* A fine hovering pointer: the actions stay invisible (yet focusable — tabbing
+   onto one reveals them) until the row is hovered; the meta steps aside only
+   then, so focus on the checkbox or title keeps the due date in view (and in
+   the accessibility tree). */
+@media (hover: hover) and (pointer: fine) {
+  .todo-overlay-actions:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .todo-overlay-item:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) .todo-overlay-actions,
+  .todo-overlay-actions:focus-within:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .todo-overlay-item:is(:hover, :has(.todo-overlay-actions:focus-within)):is(.cmp-todo-overlay, .cmp-todo-overlay *) .todo-overlay-meta {
+    visibility: hidden;
+  }
+}
+/* Touch (or no hover): nothing to reveal them, so the actions get their own
+   column, always shown. */
+@media (hover: none), (pointer: coarse) {
+  .todo-overlay-trail:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    grid-auto-flow: column;
+    gap: var(--s-1);
+  }
+  .todo-overlay-actions:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    grid-area: auto;
+  }
+}
+/* Touch targets: the global 44px rule loses to this component's own sizes. */
+@media (pointer: coarse) {
+  .todo-overlay-chip:is(.cmp-todo-overlay, .cmp-todo-overlay *),
+  .todo-overlay-section-toggle:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    min-height: 44px;
+  }
+  .todo-overlay-action:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    width: 44px;
+    height: 44px;
+    margin-block: calc(var(--s-2) * -1);
+  }
+}
+.todo-overlay-item:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  background: var(--bg-subtle);
+}
+.todo-overlay-item[aria-busy="true"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  opacity: 0.7;
+}
+/* The accent wash on a row the avatar just added or edited: an opacity-only
+   layer, held briefly, then fading out over the rest of ~1.2 s. Kept under
+   reduced motion — it moves nothing. Longer than DESIGN §2.5's 120–240 ms on
+   purpose: a highlight that lingers long enough to be found is the USER's
+   choice for this card (2026-10-10) — not a motion-audit fix target.
+   Fill `backwards` (end = resting styles): a finished animation leaves
+   getAnimations(), so the card's FLIP (`CardMotion.hold`, which skips an
+   element that has animations) can still fix and glide this row at once. */
+.todo-overlay-item:is(.cmp-todo-overlay, .cmp-todo-overlay *)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--accent-soft);
+  opacity: 0;
+  pointer-events: none;
+}
+.todo-overlay-item[data-arrival]:is(.cmp-todo-overlay, .cmp-todo-overlay *)::before {
+  animation: cmp-todo-overlay-todo-row-wash 1200ms var(--ease-out) var(--todo-arrival-delay, 0ms) backwards;
+}
+/* A row the avatar added rises in, staggered top to bottom; under reduced
+   motion it only fades in. */
+.todo-overlay-item[data-arrival="added"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  animation: cmp-todo-overlay-todo-row-fade 240ms var(--ease-out) var(--todo-arrival-delay, 0ms) backwards;
+}
+:root:not([data-motion="reduce"]) .todo-overlay-item[data-arrival="added"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  animation-name: cmp-todo-overlay-todo-row-rise;
+}
+@keyframes cmp-todo-overlay-todo-row-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+@keyframes cmp-todo-overlay-todo-row-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes cmp-todo-overlay-todo-row-wash {
+  0%,
+  30% {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.todo-overlay-check-hit:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.todo-overlay-check:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* Touch: the global 44px target rule exempts checkboxes, so the hit area is
+   the label around it. */
+@media (pointer: coarse) {
+  .todo-overlay-check-hit:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    min-width: 44px;
+    min-height: 44px;
+    margin: calc(var(--s-2) * -1) 0;
+  }
+  .todo-overlay-check:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+    width: 20px;
+    height: 20px;
+  }
+}
+.todo-overlay-title:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--t-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.todo-overlay-title:hover:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  text-decoration: underline;
+}
+.todo-overlay-title:focus-visible:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--r-xs);
+}
+.todo-overlay-due:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--t-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.todo-overlay-due[data-bucket="overdue"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--warn);
+  font-weight: 600;
+}
+.todo-overlay-due[data-bucket="today"]:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+.todo-overlay-foot:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--s-1-5) var(--s-3);
+  border-top: 1px solid var(--line-soft);
+}
+/* The button lays its text out as flex items, which drops the spaces between them. */
+.todo-overlay-foot:is(.cmp-todo-overlay, .cmp-todo-overlay *) .linkish {
+  gap: 0.3em;
+}
+/* The avatar added an item past the visible rows: its count pops (the
+   composer count's `todo-count-pop`, 30-agent-md-composer.css — its 360 ms
+   overshoot is the user's choice, see there). */
+:root:not([data-motion="reduce"]) .todo-overlay-more.is-popping:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  display: inline-block;
+  animation: todo-count-pop 360ms var(--ease-out);
+}
+:root:not([data-motion="reduce"]) .todo-overlay:is(.cmp-todo-overlay, .cmp-todo-overlay *) {
+  animation: cmp-todo-overlay-todo-overlay-in 160ms var(--ease-out) both;
+}
+@keyframes cmp-todo-overlay-todo-overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}

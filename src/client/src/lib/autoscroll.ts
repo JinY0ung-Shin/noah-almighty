@@ -48,9 +48,9 @@ export interface StickStore {
 }
 
 export interface StickController {
-  /** Svelte-action-compatible: wire up a mounted `.transcript` element. */
+  /** Action-shaped (the chat view attaches it with `useAction`): wire up a mounted `.transcript` element. */
   attach(node: HTMLElement): { destroy(): void };
-  /** Re-pin to the bottom if sticking (afterUpdate / ResizeObserver ticks). */
+  /** Re-pin to the bottom if sticking (the chat view's after-render layout effect / ResizeObserver ticks). */
   pin(): void;
   /** Scroll-to-bottom FAB: force stick and jump. */
   jumpToBottom(): void;
@@ -206,7 +206,7 @@ export function createStickController(store: StickStore): StickController {
     // A newly mounted element is a fresh coordinate space; don't compare its
     // scrollTop against a predecessor's.
     lastTop = undefined;
-    // `afterUpdate` re-pins only at the instant the store changes — but the
+    // The chat view's after-render pin fires only when the store changes — but the
     // streaming bubble keeps GROWING afterward (activity tree, plugin chips,
     // lazy images, markdown settling). The ResizeObserver re-pins on every
     // content-size change of `.transcript-inner` and on viewport resizes of

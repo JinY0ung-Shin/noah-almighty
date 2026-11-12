@@ -1,8 +1,9 @@
 import type { EntranceRule } from "./uiEntrance";
 
 // What the inline UI components need from the view that hosts them. A new
-// object is built whenever one of its fields changes (Svelte legacy mode tracks
-// a prop, not what a helper reads), so components may read it in their markup.
+// object is built only when one of its fields changes (a `useMemo` in
+// AnswerUi.tsx), so a component may use its identity as "something changed"
+// (WidgetControl's effect depends on it).
 export interface WidgetCtx {
   /** Run a widget handler as an EVENT (setters and `copy` act only then). */
   fire(handler: unknown, args: unknown[]): void;

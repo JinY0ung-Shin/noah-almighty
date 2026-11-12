@@ -7,15 +7,22 @@
 - `npm run dev` — `concurrently` runs `dev:server` (tsx watch, port 48787) + `dev:client`
   (vite, port 5173, proxies `/api`,`/users`,`/fonts` → 48787).
 - `npm run lint && npm test && npm run build` — standard verification gate. `lint` =
-  `tsc --noEmit` (server) **+ `svelte-check`** (client); `build` = server tsc + `vite build`
+  `tsc --noEmit` (server) **+ `tsc -p tsconfig.client.json --noEmit`** (client; `svelte-check` went with the
+  Svelte app on 2026-11-12); `build` = server tsc + `vite build`
   (→ `dist/client`); `pretest` runs `vite build --mode test`, so a client compile break fails
   the test gate.
 - **Client checks (run these directly):** `npx tsc --noEmit` and
-  `npx svelte-check --tsconfig ./tsconfig.client.json`. ⚠️ The rtk hook misrewrites
+  `npx tsc -p tsconfig.client.json --noEmit`. ⚠️ The rtk hook misrewrites
   `npm run lint` to eslint and fails — don't rely on it; run the two commands above. `npm run
-  build:client` (vite) / `npm run lint:client` (svelte-check) also work. `tsconfig.client.json`
+  build:client` (vite) / `npm run lint:client` (the client `tsc`) also work. `tsconfig.client.json`
   pulls in `src/server/types.ts` + `routineSchedule.ts` so the client shares server types via
   the `src/client/src/lib/types.ts` re-export barrel — import server types through it.
+- **The client is React 19 since 2026-11-12** (`@vitejs/plugin-react`; Svelte and its tooling are gone —
+  [`client.md`](client.md)). The plugin's dev-server Fast Refresh preamble is normally an INLINE `<script>`,
+  which the app's CSP (`script-src 'self'`) blocks, so `vite.config.ts` drops that HTML injection and
+  `main.tsx` imports the same preamble as a module (`@vitejs/plugin-react/preamble`, empty in a production
+  build). Production bundle after the move (gzip): the entry chunk grew from ~74 kB to ~136 kB (the React
+  runtime), the per-view chunks shrank (ChatView ~49 → ~40 kB), total JS is about the same.
 - `rtk proxy npx vitest run tests/<file>.test.ts` — run ONE test file (full suite is ~16s); see
   "Tests" below for the layout.
 - `docker compose config` — validate compose/env wiring before Docker changes. The stack INCLUDES
@@ -48,13 +55,21 @@
   ([`browser-bridge/extension.md`](browser-bridge/extension.md)).
 
 ## Tests
-- **Layout:** ~110 vitest files in `tests/`, named by area (`agent-*`, `pi-*`, `client-*`, `svelte-*`, `browser-*`,
+- **Layout:** ~170 vitest files in `tests/`, named by area (`agent-*`, `pi-*`, `client-*`, `react-*`, `browser-*`,
   `deck-*`, `share-*`, `routes-*`, `chat-*`, `retire-*`, `store`, `infra`, `app`, …) plus `helpers.ts`,
-  `setup-dom.ts` and the Playwright `visual/*.spec.ts`.
-- **The vitest project is chosen purely by FILENAME.** `svelte-*.test.ts` → `components` (jsdom + Svelte plugins
-  + `setupFiles: ["tests/setup-dom.ts"]`); every other `*.test.ts` → `unit` (node, no DOM, no Svelte transform). A
-  Svelte-mounting test without the prefix lands in `unit`, where `document`/`window` are absent and `.svelte`
-  imports don't transform — it fails loudly.
+  `setup-dom.ts`, `setup-react.ts` and the Playwright `visual/*.spec.ts`.
+- **The vitest project is chosen purely by FILENAME.** `tests/react-*.test.tsx` → `react` (jsdom +
+  `@vitejs/plugin-react` + `@testing-library/react`, `setupFiles: ["tests/setup-dom.ts",
+  "tests/setup-react.ts"]`); every `tests/**/*.test.ts` → `unit` (node, no DOM, no JSX transform; client-lib
+  tests are `client-*.test.ts` with per-file jsdom pragmas). The same glob routes the typecheck: `react-*.test.tsx`
+  and `client-*.test.ts` are in `tsconfig.client.json`'s `include` and out of the root NodeNext program.
+  ⚠️ A component test named `*.test.tsx` WITHOUT the `react-` prefix matches NEITHER project and neither
+  tsconfig — it is silently never run nor typechecked. (`setup-react.ts` registers Testing Library's `cleanup`
+  by hand: vitest runs without globals, so RTL's automatic `afterEach` never installs.)
+- **Two React-test gotchas.** RTL's `waitFor`/`findBy*` do not advance under vitest FAKE timers (their
+  wrapper waits on a real `setTimeout(0)` and finds no `jest` global) — use `act` +
+  `vi.advanceTimersByTimeAsync`. jsdom does not reflect React's `inert` attribute as a property — assert
+  `hasAttribute("inert")`. A store write made while a component is mounted goes inside `act`.
 - **`helpers.ts` wires up NOTHING itself** — thin real primitives (supertest wrapper, SSE frame parser, temp-dir
   registrar, git/plugin/marketplace fixture builders, `callTool`, stdio JSON-RPC client). Each file builds its OWN
   `createServices`+`createApp` and mocks the runtime itself (`vi.mock("../src/server/agent/index.js")` via
@@ -66,13 +81,15 @@
   inside `it()`. Its accessor is `undefined` until the first `beforeEach`; the
   `let tempDir; const get = withTempDir(label, () => { tempDir = get(); })` idiom captures the fresh
   `fs.mkdtempSync` dir (cleaned per test).
-- **`setup-dom.ts` polyfills exactly three jsdom gaps** Svelte 5 needs: `Element.prototype.animate`
-  (transition directives), `Element.prototype.getAnimations` (an `animate:` directive queries a leaving keyed row)
+- **`setup-dom.ts` polyfills exactly three jsdom gaps** the client needs: `Element.prototype.animate`
+  (`lib/transition.ts` `runTransition` plays every enter/exit transition through Web Animations — a zero-time
+  stand-in whose `onfinish` fires on a microtask), `Element.prototype.getAnimations` (the 할 일 card's
+  hand-written FLIP in `TodoOverlay.tsx` asks a leaving row for its running animations before it holds it)
   and `ResizeObserver` (the transcript's autoscroll controller) — safe only because jsdom never lays out; real
   timing/layout is covered ONLY by the Playwright visual suite.
 - **`pretest` (`npm run build:client -- --mode test`) runs only through `npm test`, not `npx vitest`.** A red
   `npm test` with ZERO test output almost always means the CLIENT BUILD broke. No test reads `dist/client`.
-- **Visual specs never run under `npm test`** (both projects include only `*.test.ts`). They run via
+- **Visual specs never run under `npm test`** (the two projects include only `*.test.ts` / `react-*.test.tsx`). They run via
   `npm run test:visual` (`tests/run-visual.mjs`), which starts its own Vite on `127.0.0.1:5173` with
   `strictPort` — it fails if 5173 is taken, and a bare `npx playwright test` connection-refuses.
 - **Coverage thresholds are ONE global gate under `--coverage` only** (`test:coverage`). A green list with a red
@@ -89,8 +106,9 @@
   a browser engine and runtime-verify isolated UI (Playwright fixture — see
   [`client.md`](client.md) §Client verification).
 - Running the FULL app here is impractical (it talks to a separate deployment, no local DB) — so
-  feature-level changes ride on svelte-check + careful reading + the `f0a6128` parity reference + a
-  human browser smoke test.
+  feature-level changes ride on the typecheck + careful reading + the parity references (`f0a6128` for
+  the vanilla frontend, `18e98d7` for the Svelte app — the last commit that has it) + a human browser smoke
+  test.
 - For visual/layout bugs, inspect the *rendered* state (screenshot + DevTools computed styles),
   don't reason from CSS source alone — collisions/inherited rules aren't visible in the source.
 
