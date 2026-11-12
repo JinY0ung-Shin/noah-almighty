@@ -908,14 +908,28 @@ export function useChatController() {
     }));
   }
 
-  // Action for the `.transcript` element of one pane.
+  // Action for the `.transcript` element of one pane. In the single-pane
+  // layout the SAME element serves whichever pane is shown, so when the pane
+  // is replaced (a new chat, another conversation) the element is handed to
+  // the new pane's controller. Without that the old controller kept the
+  // element and wrote `stickBottom` to a pane that no longer exists: wheel-up
+  // never detached, 맨 아래로 never appeared, and a streamed answer pulled the
+  // reader back down.
   function transcriptStick(node: HTMLElement, paneId: string) {
-    const wired = stickFor(paneId).attach(node);
+    let boundTo = paneId;
+    let wired = stickFor(boundTo).attach(node);
+    const release = (): void => {
+      wired.destroy();
+      delete inst.stickControllers[boundTo];
+    };
     return {
-      destroy() {
-        wired.destroy();
-        delete inst.stickControllers[paneId];
+      update(next: string) {
+        if (next === boundTo) return;
+        release();
+        boundTo = next;
+        wired = stickFor(boundTo).attach(node); // attach() lands at the bottom, as on a conversation open
       },
+      destroy: release,
     };
   }
 

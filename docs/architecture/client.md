@@ -215,11 +215,12 @@ real browser.
 Found by rendering both with the same fixtures. Three defects of the original are NOT reproduced:
 `SettingsPluginSelect`'s 선택 저장 never became enabled (its dirty flag had no dependencies);
 a canvas option button's `aria-pressed` stayed `"false"` after a click; `PromptModal` did not move focus
-to 건너뛰기 when the NEXT queued question arrived. One is kept as it was and is still open: in the SINGLE
-pane the transcript's stick controller stays bound to the pane it was created for, so after the pane is
-replaced (new chat, another conversation) wheel-up no longer detaches and 맨 아래로 does nothing — the fix
-is `key={pane.id}` on the single-branch `<PaneTranscript>` (seen in jsdom in both apps, not yet confirmed
-in a browser).
+to 건너뛰기 when the NEXT queued question arrived. A fourth was fixed right after the port (2026-11-12,
+reproduced in a real browser first): in the SINGLE pane one `.transcript` element serves whichever pane is
+shown, and its stick controller stayed bound to the pane it was created for — after a new chat or another
+conversation, wheel-up no longer detached, 맨 아래로 never appeared and a streamed answer pulled the reader
+back down. The `transcriptStick` action now has an `update(paneId)` that hands the element to the new
+pane's controller (`tests/react-chat-stick.test.tsx`).
 
 ## Rendering and motion facts (don't regress)
 - **One `updateState` re-renders EVERYTHING under `useAppState()` — and streaming calls it once per SSE
@@ -335,9 +336,9 @@ in a browser).
   - The view keeps only thin wiring: each pane's transcript element gets
     `useAction(ctx.transcriptStick, item.id)` (`views/chat/Transcript.tsx`), a layout effect with no
     dependency array re-pins every pane after each render (`views/chat/controller.tsx`), and the FAB calls
-    `jumpToBottom()`; `stickBottom` stays in the pane store (send re-arms it in `lib/chat.ts`). Known
-    defect, kept from the original: the single pane's controller is not re-created when the pane is
-    replaced (see "Where the port deliberately differs").
+    `jumpToBottom()`; `stickBottom` stays in the pane store (send re-arms it in `lib/chat.ts`). In the
+    single-pane layout the element outlives the pane, so the action's `update(paneId)` re-binds it to the
+    new pane's controller when the pane is replaced.
 
 ## Split chat
 - Avatar pool = all visible avatars, duplicates allowed (multiple parallel conversations with the same
