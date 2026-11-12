@@ -19,6 +19,7 @@ import {
   type TeamPersonalNoteLink,
 } from "../../shared/teamBrain.js";
 import type Database from "better-sqlite3";
+import { TeamBrainCardPressLog, type TeamBrainCardPressReport } from "../teamBrainCardPress.js";
 import { type Constructor, type StoreBase, now } from "./internal.js";
 
 // Team brain proposals (see the team_brain_proposals table comment in internal.ts).
@@ -275,6 +276,32 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
       } catch {
         return DEFAULT_LIMITS;
       }
+    }
+
+    /**
+     * Card presses waiting to be told to the avatar (`teamBrainCardPress.ts`):
+     * process memory, one report per (presser, card), collected once.
+     */
+    private readonly teamBrainCardPressLog = new TeamBrainCardPressLog();
+
+    /** A card's confirm button was pressed (done or refused): keep its report for the presser's chat. */
+    noteTeamBrainCardPress(report: TeamBrainCardPressReport): void {
+      this.teamBrainCardPressLog.put(report);
+    }
+
+    /** The waiting report of `userId`'s press on a card, left in place. */
+    peekTeamBrainCardPress(userId: string, proposalId: string): TeamBrainCardPressReport | null {
+      return this.teamBrainCardPressLog.peek(userId, proposalId);
+    }
+
+    /** The waiting report, removed — the caller is handing it to the avatar (or gives it back below). */
+    takeTeamBrainCardPress(userId: string, proposalId: string): TeamBrainCardPressReport | null {
+      return this.teamBrainCardPressLog.take(userId, proposalId);
+    }
+
+    /** A taken report did not reach the avatar after all: it waits again (unless a newer press replaced it). */
+    restoreTeamBrainCardPress(report: TeamBrainCardPressReport): void {
+      this.teamBrainCardPressLog.restore(report);
     }
 
     /**
@@ -627,6 +654,7 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
     /** deleteUser cascade: the user's own rows (approved content stays in git). */
     deleteTeamBrainProposalsForUser(userId: string): void {
       this.db.prepare("DELETE FROM team_brain_proposals WHERE proposer_user_id = ?").run(userId);
+      this.teamBrainCardPressLog.forgetUser(userId);
     }
   };
 }

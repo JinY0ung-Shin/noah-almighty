@@ -8,6 +8,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import Icon from "./Icon";
 import type {
+  TeamBrainCardPressAction,
   TeamBrainCardView,
   TeamBrainIntake,
   TeamBrainProposalKind,
@@ -24,11 +25,14 @@ import {
   TEAM_SOURCE_KIND_LABELS,
   TEAM_SOURCE_KIND_PLACEHOLDERS,
   isTeamIntakeUnknown,
+  teamBrainCardButtonLabel,
+  teamBrainCardPressBubble,
   teamProvenanceProblem,
   teamProvenanceProblemLabel,
   teamSourceKindOf,
 } from "../../../shared/teamBrain";
 import { collapseUnchanged, diffLines, type DiffHunkItem } from "../../../shared/lineDiff";
+import { reportTeamBrainCardPress } from "../lib/chat";
 import { cx, useDocumentEvent } from "../lib/hooks";
 import { refreshTeamBrainStatus } from "../lib/teamBrain";
 
@@ -121,14 +125,9 @@ function statusText(v: TeamBrainCardView): { text: string; tone: Tone } {
   return { text: "취소했습니다.", tone: "muted" };
 }
 
+// The confirm button's label — the same one the press report names to the avatar.
 function applyLabel(v: TeamBrainCardView): string {
-  if (v.proposal.kind === "review") {
-    if (v.proposal.decision === "approve") return "승인 반영";
-    if (v.proposal.decision === "ask") return "보완 요청 보내기";
-    return "반려 확정";
-  }
-  if (v.proposal.kind === "policy") return "팀 정책 반영";
-  return "팀 브레인에 반영";
+  return teamBrainCardButtonLabel("apply", v.proposal);
 }
 
 function kindLine(v: TeamBrainCardView): string {
@@ -215,6 +214,8 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   // `busy`/`saving` are shown AND guard re-entry, so each has a ref the guard reads.
   const busyRef = useRef(false);
   const savingRef = useRef(false);
+  // The card's root, to find the chat pane it sits in.
+  const rootRef = useRef<HTMLElement | null>(null);
 
   function setBusy(next: boolean): void {
     busyRef.current = next;
@@ -232,15 +233,38 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
     }
   }
 
+  /**
+   * Tell the avatar what a press of 관리자에게 제출 / the confirm button did —
+   * done or refused — so it can go on by itself (lib/chat.ts
+   * reportTeamBrainCardPress). 취소 / 제안 철회 is not told. `pressed` is the card as
+   * it was when pressed: its kind, decision and title name the button.
+   */
+  function tellAvatar(paneId: string | undefined, action: TeamBrainCardPressAction, pressed: TeamBrainCardView, ok: boolean): void {
+    if (!paneId) return;
+    void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(action, pressed.proposal, ok));
+  }
+
   async function act(action: "submit" | "withdraw" | "apply"): Promise<void> {
-    if (busyRef.current) return;
+    if (busyRef.current || !view) return;
+    const pressed = view;
+    // The pane is read NOW, at the press: a card drafted in the turn still being
+    // written sits in the live bubble, which is torn down (and this instance with
+    // it — the ref goes null) when that turn ends, possibly before the server answers.
+    const paneId = rootRef.current?.closest<HTMLElement>("[data-pane]")?.dataset.pane;
     setBusy(true);
     setActionError("");
     try {
       setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${action}`, { method: "POST" }));
       void refreshTeamBrainStatus();
+      if (action !== "withdraw") tellAvatar(paneId, action, pressed, true);
     } catch (err) {
       setActionError((err as Error).message);
+      // A press the SERVER refused is told too (the avatar may be the one to fix
+      // it): 403 / 409 / 500 are the action's own refusals, each recorded with
+      // its reason. Anything else — a 404 (no such card for this user), a lost
+      // connection — left nothing on the server to tell.
+      const status = (err as { status?: number }).status;
+      if (action !== "withdraw" && (status === 403 || status === 409 || status === 500)) tellAvatar(paneId, action, pressed, false);
       await load();
     } finally {
       setBusy(false);
@@ -556,7 +580,7 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   }
 
   return (
-    <section className="team-brain-card" aria-label={KIND_LABEL[proposal.kind]}>
+    <section className="team-brain-card" aria-label={KIND_LABEL[proposal.kind]} ref={rootRef}>
       <header className="team-brain-head">
         <span className="team-brain-icon" aria-hidden="true">
           <Icon name="book" size={16} />

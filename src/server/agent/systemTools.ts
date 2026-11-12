@@ -108,6 +108,8 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   const promotedLine = promoted
     ? `; ${promoted} of the owner's approved submissions link personal notes — the team page is now canonical for them (PROMOTED NOTES in the Brain policy; list_team_proposals names them)`
     : "";
+  // Not a number: the standing fact that a card press reaches the avatar by itself (teamBrainCardPress.ts).
+  const pressLine = "; a press of a card's confirm button (not a cancel) is reported to you in this conversation as it happens (a message starting with [Team-brain card press)";
   if (tb.admin) {
     const pending = store.countPendingTeamBrainProposals();
     const queue = `${pending} teammate submission${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → compile → prepare_team_review)`;
@@ -130,10 +132,10 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
         health = "; health: unavailable right now (mcp__brain__team_brain_health)";
       }
     }
-    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, policy changes through mcp__brain__prepare_team_policy, and ${queue}; nothing changes until they press the card${health}${policyLine}${promotedLine}`;
+    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, policy changes through mcp__brain__prepare_team_policy, and ${queue}; nothing changes until they press the card${pressLine}${health}${policyLine}${promotedLine}`;
   }
   const unseen = store.countUnseenTeamBrainResults(ctx.avatarUserId);
-  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}${policyLine}${promotedLine}`;
+  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${pressLine}${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}${policyLine}${promotedLine}`;
 }
 
 /** Admin-only: the push-only backup mirror's state. */

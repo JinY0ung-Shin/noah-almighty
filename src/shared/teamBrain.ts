@@ -541,6 +541,69 @@ export interface TeamBrainCardView {
   provenance: { editable: boolean; issues: TeamProvenanceSlot[] } | null;
 }
 
+/**
+ * The card buttons whose press Noah REPORTS to the avatar that drafted the card
+ * (server: `teamBrainCardPress.ts`): 관리자에게 제출 (`submit`) and the admin's
+ * confirm button (`apply`). 취소 / 제안 철회 is never reported.
+ */
+export const TEAM_BRAIN_CARD_PRESS_ACTIONS = ["submit", "apply"] as const;
+export type TeamBrainCardPressAction = (typeof TEAM_BRAIN_CARD_PRESS_ACTIONS)[number];
+export const isTeamBrainCardPressAction = oneOf(TEAM_BRAIN_CARD_PRESS_ACTIONS);
+
+/** How every press report starts (agent-facing) — the standing prompt note names it. */
+export const TEAM_BRAIN_CARD_PRESS_MARK = "[Team-brain card press";
+
+/** What a press report needs to know about the card (a `TeamBrainProposal` fits). */
+export interface TeamBrainCardPressSubject {
+  kind: TeamBrainProposalKind;
+  decision: TeamBrainDecision | null;
+  title: string;
+}
+
+/** The Korean label ON the card's confirm button — the card and the press report share it. */
+export function teamBrainCardButtonLabel(
+  action: TeamBrainCardPressAction,
+  card: Pick<TeamBrainCardPressSubject, "kind" | "decision">,
+): string {
+  if (action === "submit") return "관리자에게 제출";
+  if (card.kind === "review") {
+    if (card.decision === "approve") return "승인 반영";
+    if (card.decision === "ask") return "보완 요청 보내기";
+    return "반려 확정";
+  }
+  if (card.kind === "policy") return "팀 정책 반영";
+  return "팀 브레인에 반영";
+}
+
+const PRESS_BUBBLE_TITLE_MAX = 80;
+
+/**
+ * The chat bubble a reported press leaves in the presser's conversation
+ * (Korean, user-facing): what THEY just did, shown and stored as their turn —
+ * the model reads the server's English report instead. The client draws it
+ * before the server answers, so both sides build it here. A review card's
+ * title is a TEAMMATE's text (the submission's), so it is never quoted: this
+ * line is stored as the presser's own words.
+ */
+export function teamBrainCardPressBubble(
+  action: TeamBrainCardPressAction,
+  card: TeamBrainCardPressSubject,
+  ok: boolean,
+): string {
+  if (!ok) return `카드의 ‘${teamBrainCardButtonLabel(action, card)}’ 버튼을 눌렀지만 처리되지 않았습니다.`;
+  if (card.kind === "review") {
+    if (card.decision === "approve") return "제안 승인을 팀 브레인에 반영했습니다.";
+    if (card.decision === "ask") return "제안자에게 보완 요청을 보냈습니다.";
+    return "제안 반려를 확정했습니다.";
+  }
+  const oneLine = card.title.replace(/\s+/g, " ").trim();
+  const title = oneLine.length > PRESS_BUBBLE_TITLE_MAX ? `${oneLine.slice(0, PRESS_BUBBLE_TITLE_MAX)}…` : oneLine;
+  const suffix = title ? `: ${title}` : ".";
+  if (action === "submit") return `팀 브레인 제안을 관리자에게 제출했습니다${suffix}`;
+  if (card.kind === "policy") return `팀 정책 변경을 반영했습니다${suffix}`;
+  return `팀 브레인에 반영했습니다${suffix}`;
+}
+
 /** PUT /api/team-brain/cards/:id/provenance — the drafter's edit on the card. */
 export interface TeamProvenanceInput {
   sourceKind: string;

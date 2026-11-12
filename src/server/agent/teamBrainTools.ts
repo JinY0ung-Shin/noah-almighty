@@ -30,6 +30,7 @@ import { BRAIN_LINK_CHECK_NAME, TEAM_KNOWLEDGE_DEFINITION } from "./brainPolicy.
 import { checkIntake, parseTeamPage, provenanceProblemText, validateChangeset, type TeamProvenanceIssue } from "../teamBrainSchema.js";
 import { unscannedNote, type BrainNoteHit } from "./brainSearch.js";
 import {
+  TEAM_BRAIN_CARD_PRESS_MARK,
   TEAM_BRAIN_MAX_CHANGES,
   TEAM_BRAIN_MAX_CONTENT_BYTES,
   TEAM_BRAIN_MAX_PERSONAL_NOTES,
@@ -132,8 +133,21 @@ export const TEAM_OFFER_TO_SHARE =
   "OFFER TO SHARE: when this turn produced team knowledge (all four tests) — a problem solved, a decision made, a fact the user had to explain — end your reply with ONE short question asking whether to share it with the team brain, in the user's language. Never share without the user's yes in this conversation. " +
   `INTAKE, after the yes: search the team brain (scope "team") to see what it already says (with a personal brain in this run, also do the ${BRAIN_LINK_CHECK_NAME} check of the Brain policy); pick the page type (${TEAM_PAGE_TYPES.join(", ")}); check which of that type's required facts the conversation already answers (${REQUIRED_FACTS}); then ask ONCE, in ONE message, only for the missing ones (at most about 4 questions; "모름"/unknown is a fine answer and is recorded as a gap — except for source_kind and source: a source whose origin nobody knows is not submitted) — never re-ask what the conversation already says. PROVENANCE is asked every time: source_kind (${TEAM_SOURCE_KINDS.join(", ")}), source (the document, URL, meeting, conversation or where it was verified), author (who originally wrote or said it — the user themselves when it is their own verification) and authored_at (when, YYYY-MM-DD; YYYY-MM or YYYY is fine). The card lets the user correct these four before submitting. The user's own words (and any material they pasted) are the SOURCE and are kept verbatim. The team brain states the CURRENT truth only. There is no delete.`;
 
+/**
+ * Standing note of every propose-capable prompt (it closes both flows below):
+ * Noah REPORTS a card press to the avatar that drafted the card
+ * (`teamBrainCardPress.ts`), so the avatar neither waits for the user to say
+ * so nor assumes a press it was not told about.
+ */
+export const TEAM_CARD_PRESS_NOTE =
+  `CARD PRESSES: when the user presses a card's confirm button, Noah tells you at once, in this conversation, in a message that starts with \`${TEAM_BRAIN_CARD_PRESS_MARK}\` — Noah's own report of what the press did (done, or refused and why), not something the user typed. So after showing a card, say what its button does and stop: never ask the user to tell you once they have pressed it, and never act as if a card was pressed before its report arrives. When a report arrives, continue from it — the step that was waiting on the press, the next card of a batch, the PROMOTED NOTES question for a linked personal note — or fix what it says failed. A card the user cancels (취소 / 제안 철회) is not reported. If the user says they pressed a card and no report has come, look instead of taking either for granted: \`mcp__brain__list_team_proposals\` for a submission, \`mcp__brain__get_note\` (scope "team") on the pages of a change.`;
+
+/** Closes every "card shown" tool result — the action trigger for TEAM_CARD_PRESS_NOTE. */
+const CARD_PRESS_REPORTED = ` Then stop: Noah tells you what the press did as soon as it happens (a message starting with \`${TEAM_BRAIN_CARD_PRESS_MARK}\`), so do not ask the user to report back.`;
+
 export const TEAM_MEMBER_FLOW =
-  "Then call `mcp__brain__propose_team_note` with the type, a short title and summary, the user's words verbatim as `source` and the facts as `answers`: it shows the user a card and NOTHING is shared until they press 관리자에게 제출. Never write team-brain wiki pages yourself — an admin's avatar compiles the submitted source into the team wiki and the admin approves it, asks for more information, or rejects it; the user sees the result on the card and as a badge. A 보완 요청 (status needs_info; `mcp__brain__list_team_proposals` shows the admin's questions): relay the questions to the user, pass their answer to `mcp__brain__answer_team_questions`, and tell them to press 관리자에게 제출 on the new card. Never say anything was shared or saved before an admin approved it.";
+  "Then call `mcp__brain__propose_team_note` with the type, a short title and summary, the user's words verbatim as `source` and the facts as `answers`: it shows the user a card and NOTHING is shared until they press 관리자에게 제출. Never write team-brain wiki pages yourself — an admin's avatar compiles the submitted source into the team wiki and the admin approves it, asks for more information, or rejects it; the user sees the result on the card and as a badge. A 보완 요청 (status needs_info; `mcp__brain__list_team_proposals` shows the admin's questions): relay the questions to the user, pass their answer to `mcp__brain__answer_team_questions`, and tell them to press 관리자에게 제출 on the new card. Never say anything was shared or saved before an admin approved it. " +
+  TEAM_CARD_PRESS_NOTE;
 
 export const TEAM_ADMIN_FLOW =
   "The owner is an ADMIN of the team brain — its CURATOR, through you. Read `SCHEMA.md` (the fixed page rules) and `wiki/index.md` with `mcp__brain__get_note` (scope \"team\") before compiling anything. " +
@@ -142,7 +156,7 @@ export const TEAM_ADMIN_FLOW =
   "Maintenance (compiling raw/legacy sources, fixing invalid or overdue pages) goes through `prepare_team_changes` without a source, guided by `mcp__brain__team_brain_health` and the team-brain-curate skill. " +
   `With a personal brain in this run, the ${BRAIN_LINK_CHECK_NAME} check of the Brain policy comes before EVERY \`prepare_team_changes\` card — the admin's own knowledge and maintenance alike. ` +
   "Nothing changes until the admin presses the card. `mcp__system__describe_system` reports how many proposals await review; mention them when the admin asks what needs attention. " +
-  `THE TEAM POLICY: \`${TEAM_POLICY_PATH}\` (read it with get_note, scope "team") holds the team's settings — the review_after horizon per page type, when unpressed cards expire, open cards per person — and the admins' own guidelines; follow it when compiling. When the admin asks to change it, draft the FULL new file with \`mcp__brain__prepare_team_policy\` (it shows a card; nothing changes until they press it). It can refine the rules but never override the fixed core (${TEAM_BRAIN_FIXED_CORE}) or SCHEMA.md.`;
+  `THE TEAM POLICY: \`${TEAM_POLICY_PATH}\` (read it with get_note, scope "team") holds the team's settings — the review_after horizon per page type, when unpressed cards expire, open cards per person — and the admins' own guidelines; follow it when compiling. When the admin asks to change it, draft the FULL new file with \`mcp__brain__prepare_team_policy\` (it shows a card; nothing changes until they press it). It can refine the rules but never override the fixed core (${TEAM_BRAIN_FIXED_CORE}) or SCHEMA.md. ${TEAM_CARD_PRESS_NOTE}`;
 
 /**
  * The admins' POLICY.md guidelines for a propose-capable prompt, framed as
@@ -580,7 +594,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
           const gaps = intake.intake.gaps.length > 0 ? ` Recorded as unknown (gaps): ${intake.intake.gaps.join(", ")}.` : "";
           const linked = linkedNotesLine(personal.links, "once approved");
           return text(
-            `Card shown (draft ${created.proposal.id}). NOTHING is shared yet: the user can correct the source's provenance (출처 유형·출처·작성자·작성일) on the card and must press "관리자에게 제출". Pressing it sends the source to an admin, whose avatar compiles it into the team wiki; the admin approves it, asks for more information (보완 요청) or rejects it, and the user sees the result on the card and as a badge.${gaps}${linked} Do not say it was shared or saved — tell the user, in their language, to check the card.`,
+            `Card shown (draft ${created.proposal.id}). NOTHING is shared yet: the user can correct the source's provenance (출처 유형·출처·작성자·작성일) on the card and must press "관리자에게 제출". Pressing it sends the source to an admin, whose avatar compiles it into the team wiki; the admin approves it, asks for more information (보완 요청) or rejects it, and the user sees the result on the card and as a badge.${gaps}${linked} Do not say it was shared or saved — tell the user, in their language, to check the card.${CARD_PRESS_REPORTED}`,
           );
         },
       ),
@@ -623,7 +637,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
           }
           ctx.onCard({ proposalId: row.id, kind: "propose" });
           return text(
-            `Answer recorded and a card shown (submission ${row.id}). NOTHING is resubmitted yet: the user must press "관리자에게 제출" on the card to send it back to the admin. Tell the user, in their language, to check the card.`,
+            `Answer recorded and a card shown (submission ${row.id}). NOTHING is resubmitted yet: the user must press "관리자에게 제출" on the card to send it back to the admin. Tell the user, in their language, to check the card.${CARD_PRESS_REPORTED}`,
           );
         },
       ),
@@ -791,7 +805,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
               ? ` Tell the admin about each flagged conflict (${changeset.conflicts.length}) in your reply — they are also on the card.`
               : "";
           return text(
-            `Decision card shown (draft ${created.proposal.id}). NOTHING is decided yet: the admin presses "${button}" on the card to ${effect}.${conflicts} Tell the admin, in their language, to check the card.`,
+            `Decision card shown (draft ${created.proposal.id}). NOTHING is decided yet: the admin presses "${button}" on the card to ${effect}.${conflicts} Tell the admin, in their language, to check the card.${CARD_PRESS_REPORTED}`,
           );
         },
       ),
@@ -880,7 +894,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
               : "";
           const linked = linkedNotesLine(personal.links, "once the admin presses the card");
           return text(
-            `Card shown (draft ${created.proposal.id}): ${rawPath ? `a new source at ${rawPath} and ` : ""}${changesetSummary(changeset.changes)}. NOTHING is changed yet: the admin presses "팀 브레인에 반영" on the card to commit it.${conflicts}${linked} Tell the admin, in their language, to check the card.`,
+            `Card shown (draft ${created.proposal.id}): ${rawPath ? `a new source at ${rawPath} and ` : ""}${changesetSummary(changeset.changes)}. NOTHING is changed yet: the admin presses "팀 브레인에 반영" on the card to commit it.${conflicts}${linked} Tell the admin, in their language, to check the card.${CARD_PRESS_REPORTED}`,
           );
         },
       ),
@@ -944,7 +958,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
           ctx.onCard({ proposalId: created.proposal.id, kind: "policy" });
           const effective = parseTeamPolicy(content).knobs;
           return text(
-            `Policy card shown (draft ${created.proposal.id}). NOTHING is changed yet: the admin presses "팀 정책 반영" on the card. Settings after the change: ${teamPolicyKnobsText(effective)}. New guidelines apply to conversations started after it is saved (a running conversation keeps its instructions). Tell the admin, in their language, to check the card.`,
+            `Policy card shown (draft ${created.proposal.id}). NOTHING is changed yet: the admin presses "팀 정책 반영" on the card. Settings after the change: ${teamPolicyKnobsText(effective)}. New guidelines apply to conversations started after it is saved (a running conversation keeps its instructions). Tell the admin, in their language, to check the card.${CARD_PRESS_REPORTED}`,
           );
         },
       ),

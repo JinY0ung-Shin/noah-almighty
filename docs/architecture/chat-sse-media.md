@@ -182,7 +182,14 @@
   persisted BEFORE the assistant row of the answer it joined.
   **Endpoint:** `POST /api/chat/runs/:runId/message` — session cookie only (never a personal API key),
   plain text capped at `MAX_STEER_LENGTH` (20k chars); 400 empty/too long, 404 unknown/ended/other-user
-  run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **Out of scope by design:**
+  run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **The one non-typed body:**
+  `{teamBrainCardPress: {proposalId}}` — a team-brain card pressed while the avatar is answering; the server
+  pushes the recorded press report (`pushRunSteer(…, {displayText, cardPress, onDropped})`: English `text` for
+  the model, the Korean bubble shown and stored as the presser's `kind:"steer"` row). `cardPress:
+  {proposalId}` rides `SteerRecord` → `SteerPublic`: the viewer's own bubble, but a `dropped` one is NOT handed
+  back to the composer (it was never there) — `onDropped` puts the report back on the server and the client
+  sends it as a turn of its own once the run is over. → `team-brain.md` ("Cards and routes"). **Out of scope
+  by design:**
   external-task-API and headless turns get NO channel (`steers` undefined → `midTurnMessages` false on both
   metacognition surfaces, which otherwise say a message arrives DURING the work at the next tool-call boundary
   and may change the task). The `open` frame carries no delivery mode: the composer always says

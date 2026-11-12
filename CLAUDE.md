@@ -173,7 +173,9 @@ These are the invariants the project is built around. New work should reinforce 
   mirror to the internal git host with the saving admin's token. New team-brain names are `team_brain*`, never `group*`.
   The admins' `POLICY.md` (knobs the server enforces + guidelines) changes only through a card and can never
   override the fixed core or SCHEMA.md; a new adjustable rule becomes a POLICY.md knob, not a constant.
-  → `team-brain.md`.
+  A press (done or refused — never a cancel) is REPORTED to the drafting avatar at once, in text the SERVER
+  composes from the press it recorded; the client names only the card. **A new card button goes through
+  `pressTeamBrainCard`.** → `team-brain.md`.
 
 ### Code shape
 - **Per-user settings follow ONE pattern** (column → migration → `toUser` → `updateProfile` → `User` type

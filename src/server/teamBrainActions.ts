@@ -26,6 +26,7 @@ import {
   teamPageTypeForPath,
   withTeamProvenance,
 } from "./teamBrainSchema.js";
+import { composeTeamBrainCardPress } from "./teamBrainCardPress.js";
 import logger from "./logger.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
@@ -33,6 +34,7 @@ import {
   TEAM_POLICY_PATH,
   teamProvenanceIssues,
   teamProvenanceProblemLabel,
+  type TeamBrainCardPressAction,
   type TeamBrainCardView,
   type TeamBrainProposal,
   type TeamPageChangeView,
@@ -45,9 +47,14 @@ export interface TeamBrainActor {
   displayName: string;
 }
 
+/**
+ * `message` is the Korean line the card shows. `agent` is the same refusal for
+ * the AVATAR (English): why the press did nothing and whose fix it is — it
+ * rides the press report (`teamBrainCardPress.ts`), never the UI.
+ */
 export type TeamBrainActionResult =
   | { ok: true; view: TeamBrainCardView }
-  | { ok: false; status: number; message: string };
+  | { ok: false; status: number; message: string; agent?: string };
 
 export interface TeamBrainActionDeps {
   store: Store;
@@ -65,6 +72,50 @@ function hasOwnSource(row: TeamBrainProposal): boolean {
 }
 
 const PROVENANCE_INCOMPLETE = "출처 정보(출처 유형·출처·작성자·작성일)를 카드에서 먼저 채워 주세요.";
+
+/** "이미 처리된 카드입니다" for a reported press, naming the row's status NOW. */
+function alreadyHandled(store: Store, id: string): TeamBrainActionResult {
+  const status = store.getTeamBrainProposal(id)?.status ?? "gone";
+  const redraft = status === "cancelled" || status === "expired" || status === "withdrawn" || status === "gone";
+  return {
+    ...ALREADY,
+    agent: `The card is not a draft any more (its status is now "${status}") — it was already pressed, cancelled or it expired, so this press did nothing. ${
+      redraft ? "If the change is still wanted, draft a new card." : "Do not draft it again."
+    }`,
+  };
+}
+
+/** The provenance refusal for a reported press, naming the slots the card still needs. */
+function provenanceIncomplete(row: TeamBrainProposal): TeamBrainActionResult {
+  const slots = teamProvenanceIssues(row.intake).map((i) => i.slot);
+  return {
+    ok: false,
+    status: 409,
+    message: PROVENANCE_INCOMPLETE,
+    agent: `The source's provenance is incomplete or invalid (${slots.join(", ")}). The user fills it in on the card itself (its 출처 정보 form) and presses the button again — do not draft the card again.`,
+  };
+}
+
+const NOT_SAVED_AGENT =
+  "Noah could not write the team brain (a failure on Noah's side, not a problem with the card). The card is a draft again, so the user can press it again — do not draft it again. If it keeps failing, an admin of this Noah instance has to look at the server.";
+
+/** The avatar's version of a refused commit: what changed under the card, and that the fix is a NEW card. */
+function applyErrorAgentNote(error: unknown): string | undefined {
+  if (error instanceof TeamNoteConflictError) {
+    const what =
+      error.reason === "EXISTS"
+        ? "a file this card creates exists now"
+        : error.reason === "MISSING"
+          ? "a page this card updates is gone"
+          : "a page this card updates changed after you read it";
+    return `The team brain changed after this card was drafted — ${what}${error.path ? ` (${error.path})` : ""}. Nothing was committed and this card can no longer be applied. Read the affected page(s) again with mcp__brain__get_note (scope "team"), rebuild the change on the current content (with the new \`blob\` as \`baseBlob\`) and draft a new card.`;
+  }
+  if (error instanceof TeamChangesetInvalidError) {
+    const lines = error.errors.slice(0, 10).map((line) => `- ${line.replace(/\s+/g, " ").trim().slice(0, 300)}`);
+    return `The change no longer passes the team-brain rules as the vault is now (${error.errors.length} problem${error.errors.length === 1 ? "" : "s"}):\n${lines.join("\n")}\nNothing was committed. Fix these and draft a new card.`;
+  }
+  return undefined;
+}
 
 const STALE_MESSAGE = "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.";
 
@@ -172,10 +223,10 @@ export async function submitTeamBrainProposal(
   store.expireTeamBrainDrafts();
   const row = store.getTeamBrainProposal(id);
   if (!row || row.proposerUserId !== actor.id || !store.isActiveUser(actor.id)) return NOT_FOUND;
-  if (row.kind !== "propose" || row.status !== "draft") return ALREADY;
+  if (row.kind !== "propose" || row.status !== "draft") return alreadyHandled(store, id);
   // A source goes to the queue only with its provenance (rows drafted before it was asked fill it on the card).
-  if (teamProvenanceIssues(row.intake).length > 0) return { ok: false, status: 409, message: PROVENANCE_INCOMPLETE };
-  if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) return ALREADY;
+  if (teamProvenanceIssues(row.intake).length > 0) return provenanceIncomplete(row);
+  if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) return alreadyHandled(store, id);
   deps.audit?.("team_brain_submit", `${row.id} ${row.path}`);
   return viewOrGone(deps, actor.id, id);
 }
@@ -330,7 +381,9 @@ async function applyPolicyCard(
   row: TeamBrainProposal,
 ): Promise<TeamBrainActionResult> {
   const { store, config } = deps;
-  if (!store.transitionTeamBrainProposal(row.id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) return ALREADY;
+  if (!store.transitionTeamBrainProposal(row.id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) {
+    return alreadyHandled(store, row.id);
+  }
   try {
     await applyTeamPolicy(config, {
       content: row.content,
@@ -343,14 +396,24 @@ async function applyPolicyCard(
   } catch (error) {
     store.transitionTeamBrainProposal(row.id, ["applied"], "draft", { clearDecision: true });
     if (error instanceof TeamNoteConflictError) {
-      return { ok: false, status: 409, message: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요." };
+      return {
+        ok: false,
+        status: 409,
+        message: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요.",
+        agent: `${TEAM_POLICY_PATH} changed after this card was drafted. Nothing was committed and this card can no longer be applied. Read it again (mcp__brain__get_note, scope "team"), make the same change on the current file and draft a new policy card with its new \`blob\` as \`baseBlob\`.`,
+      };
     }
     if (error instanceof TeamChangesetInvalidError) {
-      return { ok: false, status: 409, message: "팀 정책 형식이 올바르지 않습니다. 아바타에게 다시 정리해 달라고 요청하세요." };
+      return {
+        ok: false,
+        status: 409,
+        message: "팀 정책 형식이 올바르지 않습니다. 아바타에게 다시 정리해 달라고 요청하세요.",
+        agent: applyErrorAgentNote(error),
+      };
     }
     logger.error({ err: error, proposalId: row.id }, "team policy apply failed");
     deps.audit?.("team_brain_policy", row.id, "error");
-    return { ok: false, status: 500, message: "팀 정책을 저장하지 못했습니다." };
+    return { ok: false, status: 500, message: "팀 정책을 저장하지 못했습니다.", agent: NOT_SAVED_AGENT };
   }
   deps.onCommitted?.();
   deps.audit?.("team_brain_policy", `${row.id} ${TEAM_POLICY_PATH}`);
@@ -373,26 +436,53 @@ export async function applyTeamBrainCard(
   const row = store.getTeamBrainProposal(id);
   if (!row || row.proposerUserId !== actor.id) return NOT_FOUND;
   if (!store.isActiveAdmin(actor.id)) {
-    return { ok: false, status: 403, message: "관리자만 팀 브레인에 반영할 수 있습니다." };
+    return {
+      ok: false,
+      status: 403,
+      message: "관리자만 팀 브레인에 반영할 수 있습니다.",
+      agent: "The user is not an active admin any more, so they cannot apply team-brain cards. Nothing you draft can change that.",
+    };
   }
-  if (row.kind === "propose" || row.status !== "draft") return ALREADY;
+  if (row.kind === "propose" || row.status !== "draft") return alreadyHandled(store, id);
   if (row.kind === "policy") return applyPolicyCard(deps, actor, row);
   // The admin's own source is committed as a raw file: its provenance must be complete too.
-  if (hasOwnSource(row) && teamProvenanceIssues(row.intake).length > 0) {
-    return { ok: false, status: 409, message: PROVENANCE_INCOMPLETE };
-  }
+  if (hasOwnSource(row) && teamProvenanceIssues(row.intake).length > 0) return provenanceIncomplete(row);
   const target = row.kind === "review" && row.targetId ? store.getTeamBrainProposal(row.targetId) : null;
   if (row.kind === "review" && (!target || target.kind !== "propose" || target.status !== "pending")) {
-    return { ok: false, status: 409, message: "이 제안은 이미 처리되었거나 철회되었습니다." };
+    return {
+      ok: false,
+      status: 409,
+      message: "이 제안은 이미 처리되었거나 철회되었습니다.",
+      agent: `The submission this card decides is not pending any more (its status is now "${
+        target?.kind === "propose" ? target.status : "gone"
+      }") — it was already decided or withdrawn, so this decision card is void. Do not draft it again.`,
+    };
   }
   const decision = row.kind === "direct" ? "approve" : row.decision;
-  if (!decision) return { ok: false, status: 409, message: "이 카드의 결정이 올바르지 않습니다." };
+  if (!decision) {
+    return {
+      ok: false,
+      status: 409,
+      message: "이 카드의 결정이 올바르지 않습니다.",
+      agent: "This card records no valid decision. Draft the decision again with mcp__brain__prepare_team_review.",
+    };
+  }
   const commits = decision === "approve";
   if (commits && (!row.changeset || row.changeset.changes.length === 0)) {
-    return { ok: false, status: 409, message: "반영할 변경 내용이 없습니다. 아바타에게 다시 정리해 달라고 요청하세요." };
+    return {
+      ok: false,
+      status: 409,
+      message: "반영할 변경 내용이 없습니다. 아바타에게 다시 정리해 달라고 요청하세요.",
+      agent: "This card carries no page changes to commit. Draft it again with the pages it creates or updates.",
+    };
   }
   if (commits && target && !isTeamRawPath(target.path)) {
-    return { ok: false, status: 409, message: "이 제안의 원본 경로가 올바르지 않습니다." };
+    return {
+      ok: false,
+      status: 409,
+      message: "이 제안의 원본 경로가 올바르지 않습니다.",
+      agent: "The submission's source path is not a raw/ path (a row from before the schema), so it cannot be committed as a source. It can only be rejected, or asked to be submitted again.",
+    };
   }
   const targetTo = decision === "approve" ? "approved" : decision === "reject" ? "rejected" : "needs_info";
 
@@ -428,7 +518,7 @@ export async function applyTeamBrainCard(
   } catch (error) {
     if (!(error instanceof Error && error.message === "TARGET_RACE")) throw error;
   }
-  if (!claimed) return ALREADY;
+  if (!claimed) return alreadyHandled(store, id);
 
   // A failed write decided nothing: the card is a draft again (no decision
   // stamps) and the drafts it voided come back.
@@ -470,11 +560,11 @@ export async function applyTeamBrainCard(
         if (error instanceof TeamChangesetInvalidError) {
           logger.warn({ proposalId: id, errors: error.errors.slice(0, 10) }, "team brain changeset refused at apply");
         }
-        return { ok: false, status: 409, message };
+        return { ok: false, status: 409, message, agent: applyErrorAgentNote(error) };
       }
       logger.error({ err: error, proposalId: id }, "team brain apply failed");
       deps.audit?.("team_brain_apply", `${row.id} ${row.path}`, "error");
-      return { ok: false, status: 500, message: "팀 브레인에 저장하지 못했습니다." };
+      return { ok: false, status: 500, message: "팀 브레인에 저장하지 못했습니다.", agent: NOT_SAVED_AGENT };
     }
     deps.onCommitted?.();
     if (target) approveTargetAfterCommit(store, target.id, actor.id);
@@ -493,4 +583,41 @@ export async function applyTeamBrainCard(
     `${target?.id ?? row.id} ${target?.path ?? row.path}${commits ? ` (${pages} pages)` : ""}${target ? ` (proposer ${target.proposerUserId})` : ""}`,
   );
   return viewOrGone(deps, actor.id, id);
+}
+
+/**
+ * A press of a card's confirm button as the ROUTE runs it: the action above,
+ * plus the report the presser's chat hands to the avatar
+ * (`teamBrainCardPress.ts`) — done, or refused and why. Recorded only for a
+ * card that is the presser's own (anything else is a 404 that names nothing).
+ */
+export async function pressTeamBrainCard(
+  deps: TeamBrainActionDeps,
+  actor: TeamBrainActor,
+  id: string,
+  action: TeamBrainCardPressAction,
+): Promise<TeamBrainActionResult> {
+  const card = deps.store.getTeamBrainProposal(id);
+  const mine = card && card.proposerUserId === actor.id ? card : null;
+  const record = (outcome: { ok: true } | { ok: false; agent?: string }) => {
+    if (!mine) return;
+    deps.store.noteTeamBrainCardPress({
+      proposalId: id,
+      userId: actor.id,
+      action,
+      ok: outcome.ok,
+      ...composeTeamBrainCardPress({ action, card: mine, outcome }),
+    });
+  };
+  let result: TeamBrainActionResult;
+  try {
+    result = action === "submit" ? await submitTeamBrainProposal(deps, actor, id) : await applyTeamBrainCard(deps, actor, id);
+  } catch (error) {
+    // An unexpected failure is a refused press too: whatever the client is answered, the report says so.
+    record({ ok: false, agent: NOT_SAVED_AGENT });
+    throw error;
+  }
+  if (result.ok) record({ ok: true });
+  else if (result.status !== 404) record({ ok: false, agent: result.agent });
+  return result;
 }

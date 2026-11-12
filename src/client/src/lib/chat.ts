@@ -6,7 +6,7 @@ import { takeConversationLoad } from "./conversationPrefetch";
 import { syncHash } from "./nav";
 import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
-import { newId, notify, readState, updateState } from "./state";
+import { appState, newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
 import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState } from "./widgetState";
@@ -954,6 +954,13 @@ export async function sendMessage(
      * composer stays there, and the text is never read as a slash command.
      */
     widgetSend?: boolean;
+    /**
+     * This turn tells the avatar that a team-brain card's button was pressed
+     * (see reportTeamBrainCardPress). Only the card id goes out: the server
+     * swaps in the report it recorded for that press — the English text for the
+     * model and this same Korean bubble. Always sent with `widgetSend`.
+     */
+    teamBrainCardPress?: { proposalId: string };
   } = {},
 ): Promise<void> {
   let pane = readState().chatPanes.find((item) => item.id === paneId);
@@ -1178,6 +1185,7 @@ export async function sendMessage(
         // Non-blocking canvas submission/edit (#50), when this turn was triggered
         // from a canvas form rather than the composer.
         canvasSubmission: opts.canvasSubmission,
+        teamBrainCardPress: opts.teamBrainCardPress,
       }),
     });
     if (response.status === 401) {
@@ -1231,7 +1239,9 @@ export async function sendMessage(
           }
           if (pendingDocuments.length) target.pendingDocuments = pendingDocuments;
         });
-        notify(`메시지를 보내지 못했습니다: ${error.message}`);
+        // A card-press report the user never typed: not sending it is not their
+        // error to fix (the card already shows what the press did).
+        if (!opts.teamBrainCardPress) notify(`메시지를 보내지 못했습니다: ${error.message}`);
       } else {
         finalizeError(paneId, error.message);
       }
@@ -1306,6 +1316,84 @@ export async function sendSteer(paneId: string, rawText: string): Promise<void> 
       target.steerSending = false;
     });
   }
+}
+
+/** How long a card-press report waits for the answer in progress before it is given up. */
+const CARD_PRESS_IDLE_WAIT_MS = 10 * 60 * 1000;
+
+/**
+ * Resolves true once the pane's turn is OVER — not streaming AND its send /
+ * attach loop has torn down (`abortController` is cleared only in those
+ * loops' `finally`; `streaming` already drops at the `done` frame, and a send
+ * started in between would have its live state wiped by that teardown).
+ * False when the pane is gone, shows another conversation, or the wait ran out.
+ */
+function whenPaneIdle(paneId: string, conversationId: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let unsubscribe: (() => void) | null = null;
+    const finish = (idle: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe?.();
+      resolve(idle);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    unsubscribe = appState.subscribe((state) => {
+      const pane = state.chatPanes.find((item) => item.id === paneId);
+      if (!pane || pane.conversationId !== conversationId) finish(false);
+      else if (!pane.streaming && !pane.abortController) finish(true);
+    });
+    // The store calls back synchronously on subscribe, before `unsubscribe` exists.
+    if (settled) unsubscribe();
+  });
+}
+
+/**
+ * A team-brain card's confirm button (관리자에게 제출 / 팀 브레인에 반영 / …) was
+ * pressed in this pane, and the server answered — done or refused. Tell the
+ * avatar right away, so it can go on (or fix what failed) without the user
+ * having to say "눌렀어":
+ *  - while an answer is streaming, the report joins that turn as a mid-turn
+ *    message;
+ *  - otherwise (or when the turn was already wrapping up) it is a turn of its
+ *    own, sent once the pane is idle.
+ * Only the card id leaves the browser: the server swaps in the report it
+ * recorded for the press, so `bubble` (teamBrainCardPressBubble — the same
+ * line the server stores) is just what this pane shows meanwhile. Like a
+ * widget's send, it never touches the composer.
+ */
+export async function reportTeamBrainCardPress(
+  paneId: string,
+  proposalId: string,
+  bubble: string,
+): Promise<void> {
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  if (!pane) return;
+  if (pane.streaming && pane.liveRunId) {
+    try {
+      const result = await api<{ steer?: SteerPublic }>(
+        `/api/chat/runs/${encodeURIComponent(pane.liveRunId)}/message`,
+        { method: "POST", body: JSON.stringify({ teamBrainCardPress: { proposalId } }) },
+      );
+      if (result?.steer?.id)
+        updatePane(paneId, (target) => upsertPendingSteer(target, result.steer!));
+      return;
+    } catch {
+      // The turn was wrapping up (or takes no mid-turn message): the report is
+      // still waiting on the server — it goes out as its own turn below.
+    }
+  }
+  await sendCardPressTurn(paneId, proposalId, bubble);
+}
+
+/** The press report as a turn of its own, once the pane's current turn (if any) is over. */
+async function sendCardPressTurn(paneId: string, proposalId: string, bubble: string): Promise<void> {
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  if (!pane) return;
+  if (!(await whenPaneIdle(paneId, pane.conversationId, CARD_PRESS_IDLE_WAIT_MS))) return;
+  await sendMessage(paneId, bubble, { widgetSend: true, teamBrainCardPress: { proposalId } });
 }
 
 export async function attachActiveRun(paneId: string): Promise<void> {
@@ -2073,6 +2161,13 @@ function handleSteer(
       // It never reached the model, so the text is the user's again — unless
       // Noah pushed it (a consulted avatar's answer): that was never theirs.
       if (!settleSteer(steer.id) || steer.source) return;
+      // A card press Noah reported for them was never in the composer either:
+      // the server holds the report again, and it goes out as its own turn
+      // once this one has ended (`steer.text` is its bubble).
+      if (steer.cardPress) {
+        void sendCardPressTurn(paneId, steer.cardPress.proposalId, steer.text);
+        return;
+      }
       restoreSteerDraft(paneId, steer.text);
       notify(
         "응답이 끝나 전달되지 않은 메시지를 입력창에 되돌려 두었습니다.",
