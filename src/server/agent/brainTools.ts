@@ -7,7 +7,13 @@ import { OWNER_ONLY, cloneFailureMessage, readFileErrorMessage } from "./repoToo
 import { text } from "./mcpTools.js";
 import { formatBrainHits, normalizeWikiPath, rankBrainNotes, unscannedNote } from "./brainSearch.js";
 import { buildTeamBrainTools, readTeamNoteTool, teamNoMatchText, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
-import { BRAIN_CONFLICT_RULE, PERSONAL_TEAM_PAGE_KEY } from "./brainPolicy.js";
+import {
+  BRAIN_CONFLICT_RULE,
+  BRAIN_KEPT_PERSONAL_NAME,
+  PERSONAL_TEAM_PAGE_KEY,
+  PERSONAL_TEAM_SHARE_DECLINED,
+  PERSONAL_TEAM_SHARE_KEY,
+} from "./brainPolicy.js";
 import { parseTeamFrontmatter } from "../teamBrainSchema.js";
 import { readTeamVaultFile } from "../teamBrain.js";
 import type { TeamBrainPersonalLink } from "../store/teamBrain.js";
@@ -64,6 +70,15 @@ function linkNoteTarget(content: string): string | null {
   const block = parseTeamFrontmatter(content);
   const v = block?.fields.get(PERSONAL_TEAM_PAGE_KEY);
   return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** The owner marked this personal note `team_share: no` — it stays out of the team brain (KEPT PERSONAL). */
+export function isKeptPersonalNote(content: string): boolean {
+  const v: unknown = parseTeamFrontmatter(content)?.fields.get(PERSONAL_TEAM_SHARE_KEY);
+  if (typeof v !== "string") return v === false;
+  // Fail closed on the spellings a person would write: `no`, `false`, quoted, with a trailing comment.
+  const word = v.replace(/\s+#.*$/, "").trim().replace(/^["']|["']$/g, "").toLowerCase();
+  return word === PERSONAL_TEAM_SHARE_DECLINED || word === "false";
 }
 
 /** "wiki/decisions/x.md (Title)" — the team page's title when it still exists. */
@@ -135,6 +150,12 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
           try {
             const content = await readRepoFile(await ensureClone(c), w.norm);
             if (linkNoteTarget(content)) return { ok: false, reason: "already a link note to the team brain" };
+            if (isKeptPersonalNote(content)) {
+              return {
+                ok: false,
+                reason: `marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` — the owner keeps this note out of the team brain (${BRAIN_KEPT_PERSONAL_NAME} in the Brain policy). Do not submit what this note says, with or without the link; only when the user names this note and asks to share it, remove the mark (mcp__repo__edit_file + commit) and call again`,
+              };
+            }
             return { ok: true, link: { path: w.norm, blob: personalNoteBlobId(content) } };
           } catch {
             return { ok: false, reason: "no such note in the personal brain (search it with scope \"personal\" for the exact path)" };

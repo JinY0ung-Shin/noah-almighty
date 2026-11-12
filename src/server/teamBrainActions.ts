@@ -26,11 +26,12 @@ import {
   teamPageTypeForPath,
   withTeamProvenance,
 } from "./teamBrainSchema.js";
-import { composeTeamBrainCardPress } from "./teamBrainCardPress.js";
+import { composeTeamBrainCardPress, type TeamBrainCardPressBatch } from "./teamBrainCardPress.js";
 import logger from "./logger.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
 import {
+  TEAM_BRAIN_SUBMIT_ALL_MIN,
   TEAM_POLICY_PATH,
   teamProvenanceIssues,
   teamProvenanceProblemLabel,
@@ -53,7 +54,7 @@ export interface TeamBrainActor {
  * rides the press report (`teamBrainCardPress.ts`), never the UI.
  */
 export type TeamBrainActionResult =
-  | { ok: true; view: TeamBrainCardView }
+  | { ok: true; view: TeamBrainCardView; /** 초안 모두 제출: what the ONE press sent and what it left. */ batch?: TeamBrainCardPressBatch }
   | { ok: false; status: number; message: string; agent?: string };
 
 export interface TeamBrainActionDeps {
@@ -69,6 +70,36 @@ const ALREADY = { ok: false as const, status: 409, message: "이미 처리된 �
 /** The row's OWN source (propose, or an admin's direct card with one) — what its provenance describes. */
 function hasOwnSource(row: TeamBrainProposal): boolean {
   return (row.kind === "propose" || row.kind === "direct") && Boolean(row.intake?.type);
+}
+
+/**
+ * The drafter's submission drafts whose card lives in `row`'s conversation,
+ * oldest first: `ready` to go to the admins, and `held` back because their
+ * provenance is still incomplete (the user fills it on that card). What ONE
+ * press of 초안 모두 제출 covers — each of them is a card the user can see in
+ * that conversation.
+ */
+function conversationSubmissionDrafts(store: Store, row: TeamBrainProposal): TeamBrainCardPressBatch & { ready: TeamBrainProposal[] } {
+  const drafts = row.conversationId
+    ? store
+        .listTeamBrainProposals({
+          kind: "propose",
+          statuses: ["draft"],
+          proposerUserId: row.proposerUserId,
+          conversationId: row.conversationId,
+          limit: 200,
+        })
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    : [row];
+  const ready = drafts.filter((d) => teamProvenanceIssues(d.intake).length === 0);
+  return { ready, submitted: [], held: drafts.filter((d) => !ready.includes(d)) };
+}
+
+/** How many drafts 초안 모두 제출 on THIS card would send: only on the newest ready draft of at least two. */
+function submitAllCount(store: Store, row: TeamBrainProposal): number {
+  if (row.kind !== "propose" || row.status !== "draft") return 0;
+  const { ready } = conversationSubmissionDrafts(store, row);
+  return ready.length >= TEAM_BRAIN_SUBMIT_ALL_MIN && ready[ready.length - 1]!.id === row.id ? ready.length : 0;
 }
 
 const PROVENANCE_INCOMPLETE = "출처 정보(출처 유형·출처·작성자·작성일)를 카드에서 먼저 채워 주세요.";
@@ -182,6 +213,7 @@ export async function teamBrainCardView(
   const pages = await pageViews(config, proposal, draft);
   const stale = pages.some((p) => p.stale);
   const admin = store.isActiveAdmin(viewerId);
+  const submitAll = submitAllCount(store, proposal);
   // Seeing a decided proposal on its card counts as seeing the result (the badge clears).
   if (proposal.kind === "propose" && ["approved", "rejected", "needs_info"].includes(proposal.status)) {
     store.markTeamBrainResultsSeen(viewerId, [proposal.id]);
@@ -201,6 +233,8 @@ export async function teamBrainCardView(
         !stale &&
         (proposal.kind === "direct" || proposal.kind === "policy" || target?.status === "pending"),
       cancel: proposal.kind !== "propose" && draft,
+      // Present only on the one card that carries the button.
+      ...(submitAll ? { submitAll } : {}),
     },
     provenance: hasOwnSource(proposal)
       ? { editable: draft, issues: teamProvenanceIssues(proposal.intake).map((i) => i.slot) }
@@ -229,6 +263,61 @@ export async function submitTeamBrainProposal(
   if (!store.transitionTeamBrainProposal(id, ["draft"], "pending")) return alreadyHandled(store, id);
   deps.audit?.("team_brain_submit", `${row.id} ${row.path}`);
   return viewOrGone(deps, actor.id, id);
+}
+
+/**
+ * 초안 N건 모두 제출: ONE press sends every submission draft of the pressed
+ * card's conversation to the review queue (the brain-share selection pass
+ * drafts several at once). Each of them is the presser's own draft, shown as a
+ * card in that conversation; a draft whose provenance is incomplete stays a
+ * draft and is named in the press report. Each row is its own compare-and-set,
+ * so one pressed meanwhile is simply not sent twice.
+ */
+export async function submitAllTeamBrainProposals(
+  deps: TeamBrainActionDeps,
+  actor: TeamBrainActor,
+  id: string,
+  /** The number on the button the user pressed; a press never sends a different number of drafts. */
+  expected?: number,
+): Promise<TeamBrainActionResult> {
+  const { store } = deps;
+  store.expireTeamBrainDrafts();
+  const row = store.getTeamBrainProposal(id);
+  if (!row || row.proposerUserId !== actor.id || !store.isActiveUser(actor.id)) return NOT_FOUND;
+  if (row.kind !== "propose" || row.status !== "draft") return alreadyHandled(store, id);
+  if (teamProvenanceIssues(row.intake).length > 0) return provenanceIncomplete(row);
+  const { ready, held } = conversationSubmissionDrafts(store, row);
+  // The card was read before another draft appeared, was filled in or went away: the user
+  // agreed to the number they saw, so nothing is sent and the card shows the number now.
+  if (expected !== undefined && expected !== ready.length) {
+    return {
+      ok: false,
+      status: 409,
+      message: `그 사이 제출할 초안이 ${ready.length}건으로 바뀌었습니다. 카드를 확인한 뒤 다시 눌러 주세요.`,
+      agent: `The drafts of this conversation changed after the card was last read: its button said ${expected}, ${ready.length} ${ready.length === 1 ? "is" : "are"} ready now. Nothing was sent; the card shows the current number, and the user presses again if they still want to — do not draft anything again.`,
+    };
+  }
+  const submitted: TeamBrainProposal[] = [];
+  let failed = false;
+  for (const draft of ready) {
+    try {
+      if (!store.transitionTeamBrainProposal(draft.id, ["draft"], "pending")) continue;
+      submitted.push(draft);
+      deps.audit?.("team_brain_submit", `${draft.id} ${draft.path} (one press for ${ready.length})`);
+    } catch (error) {
+      // Nothing sent yet: an ordinary failed press. Part-way: say exactly what went and what did not.
+      if (submitted.length === 0) throw error;
+      logger.error({ err: error, proposalId: draft.id }, "team brain submit-all stopped part-way");
+      failed = true;
+      break;
+    }
+  }
+  if (submitted.length === 0) return alreadyHandled(store, id);
+  const unsent = failed
+    ? ready.filter((d) => !submitted.includes(d) && store.getTeamBrainProposal(d.id)?.status === "draft")
+    : [];
+  const view = await teamBrainCardView(deps, actor.id, id);
+  return view ? { ok: true, view, batch: { submitted, held, ...(unsent.length ? { unsent } : {}) } } : NOT_FOUND;
 }
 
 /**
@@ -596,10 +685,12 @@ export async function pressTeamBrainCard(
   actor: TeamBrainActor,
   id: string,
   action: TeamBrainCardPressAction,
+  /** `submit_all` only: the number on the button that was pressed. */
+  expected?: number,
 ): Promise<TeamBrainActionResult> {
   const card = deps.store.getTeamBrainProposal(id);
   const mine = card && card.proposerUserId === actor.id ? card : null;
-  const record = (outcome: { ok: true } | { ok: false; agent?: string }) => {
+  const record = (outcome: { ok: true; batch?: TeamBrainCardPressBatch } | { ok: false; agent?: string }) => {
     if (!mine) return;
     deps.store.noteTeamBrainCardPress({
       proposalId: id,
@@ -611,13 +702,18 @@ export async function pressTeamBrainCard(
   };
   let result: TeamBrainActionResult;
   try {
-    result = action === "submit" ? await submitTeamBrainProposal(deps, actor, id) : await applyTeamBrainCard(deps, actor, id);
+    result =
+      action === "submit"
+        ? await submitTeamBrainProposal(deps, actor, id)
+        : action === "submit_all"
+          ? await submitAllTeamBrainProposals(deps, actor, id, expected)
+          : await applyTeamBrainCard(deps, actor, id);
   } catch (error) {
     // An unexpected failure is a refused press too: whatever the client is answered, the report says so.
     record({ ok: false, agent: NOT_SAVED_AGENT });
     throw error;
   }
-  if (result.ok) record({ ok: true });
+  if (result.ok) record({ ok: true, batch: result.batch });
   else if (result.status !== 404) record({ ok: false, agent: result.agent });
   return result;
 }

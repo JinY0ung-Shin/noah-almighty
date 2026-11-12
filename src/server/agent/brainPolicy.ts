@@ -13,6 +13,41 @@
 export const TEAM_KNOWLEDGE_DEFINITION =
   "TEAM KNOWLEDGE — what belongs in the team brain. Something is team knowledge only if ALL four hold: (1) useful to others — another teammate would look for it in the same situation; (2) durable — it stays true for a while, not a one-off status update; (3) settled — a decision that was made or a fact that was verified, not an opinion or a guess; (4) safe to share — no secrets, tokens or passwords, personal data, customer data, or anyone's private matters. Good fits: team decisions (what and why), system/infrastructure facts, fixes for recurring problems, glossary terms, conventions, owners and points of contact. Never: personal preferences, work in progress, personal to-dos, feelings or judgments about people.";
 
+/**
+ * The altitude test on top of the four (user decision 2026-11-12: "너무 세부적인
+ * 정보는 말고 팀에 공유할만한 정보로"). It gates the everyday OFFER TO SHARE and
+ * the brain-share selection pass alike — one rule, so the two never drift.
+ */
+export const TEAM_SHARE_LEVEL_RULE =
+  "THE RIGHT LEVEL — passing the four tests is not enough: the team brain holds what a teammate can reuse, not the detail of how one person got there. Worth sharing: a decision and its reason, how a system works and where it lives, the fix for a problem that will come back, a convention, a term, who owns what. Too detailed — it stays personal: the step-by-step record of one debugging or work session, the particulars of one ticket, one meeting or one case, values that mattered only once (a temporary path, a one-off number, yesterday's status), anyone's task list or progress, drafts and half-formed ideas. When a detailed note or conversation holds a conclusion a teammate could reuse, offer only the part that states that conclusion; when nothing reusable is left once the detail is removed, do not offer it at all. This holds for every offer to share and for every pass that selects personal notes for the team. When in doubt, leave it out: a short team brain people trust beats a complete one.";
+
+/** The bundled skill that selects personal notes for the team (default-skills/skills/brain-share). */
+export const TEAM_SHARE_SKILL = "brain-share";
+
+/** Cards ONE selection pass may draft (user decision 2026-11-12) — the admins' queue is not flooded. */
+export const TEAM_SHARE_PASS_MAX = 3;
+
+/** Frontmatter key (+ its one value) of a personal note the owner decided to keep out of the team brain. */
+export const PERSONAL_TEAM_SHARE_KEY = "team_share";
+export const PERSONAL_TEAM_SHARE_DECLINED = "no";
+
+/** The rule's name, for the tool refusal that points at it (brainTools.ts). */
+export const BRAIN_KEPT_PERSONAL_NAME = "KEPT PERSONAL";
+
+/**
+ * The selection pass over the personal brain (user decisions 2026-11-12: on
+ * request, the cards are drafted without a per-candidate question, at most
+ * TEAM_SHARE_PASS_MAX per pass — a number the admins' POLICY.md guidelines may
+ * replace; the cards still wait for the owner's press, ONE press for all of
+ * them with 초안 N건 모두 제출).
+ */
+export const TEAM_SHARE_PASS_RULE =
+  `SELECTING FOR THE TEAM: when the user asks which of their own notes are worth sharing with the team, run the \`${TEAM_SHARE_SKILL}\` skill — it goes through the personal brain's \`wiki/\` notes, keeps only what passes the TEAM KNOWLEDGE tests at THE RIGHT LEVEL, and drafts a team-brain card for the best ones. Asking for the pass is the user's yes to DRAFT those cards — do not ask again per note — but not to share them: nothing leaves the drafts until the user presses a card. In a pass, each card's source is the note's own passage that states the conclusion, verbatim, and the intake facts (provenance included) come from the note where it states them; ask ONCE, for all the drafts together, only for what the notes do not say — a note whose origin the user cannot name is left out. One pass drafts at most ${TEAM_SHARE_PASS_MAX} cards (the team guidelines may set another number), the most useful first; name the other candidates by title only and leave them for the next pass. A teammate's submission cards each have 관리자에게 제출, and with two or more of them the LAST card also carries 초안 N건 모두 제출 — one press that sends them all to the admins; an admin's own cards (\`prepare_team_changes\`) write the team brain when pressed, so each is pressed on its own. Never select a LINK note, a PROMOTED note, a note marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\`, or a fact that the team brain or an open team submission already holds; a note whose submission was rejected comes back only when it has since changed in the point the rejection named.`;
+
+/** Remembering a "no" (user decision 2026-11-12: a declined note is not asked about again). */
+export const BRAIN_KEPT_PERSONAL_RULE =
+  `${BRAIN_KEPT_PERSONAL_NAME}: when the user says a personal note should stay out of the team brain — they decline it in a selection pass, or say so about a note — record it so it is not asked again: add the frontmatter line \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` to that note with \`mcp__repo__edit_file\`, commit, and say in one line that the note is now kept personal. When they only withdrew its card without saying why, ask once whether to leave it out of future passes before marking it. A note marked so is never offered or selected again; it goes to the team only when the user names that note and asks — then remove the mark and commit first.`;
+
 /** What the personal second brain holds, and that capture needs no question first (user decision 2026-11-10). */
 export const PERSONAL_KNOWLEDGE_DEFINITION =
   "PERSONAL KNOWLEDGE — what belongs in the owner's second brain: what matters to the owner themselves — their preferences and way of working, their own projects and unfinished work, the people and context they deal with, sources they want to keep, and facts that are durable for them but not (yet) team knowledge. Capture it without asking first (the brain-ingest skill), then say in one short line what you saved and where.";
@@ -79,7 +114,7 @@ export function brainPolicySection(scope: BrainPolicyScope): string | null {
   if (!personal && !scope.teamRead) return null;
   const parts: string[] = ["**Brain policy** (the rules for both brains; the brain-* and team-brain-curate skills follow them):"];
   if (scope.personalWrite) parts.push(PERSONAL_KNOWLEDGE_DEFINITION);
-  if (scope.personalWrite && scope.teamPropose) parts.push(BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE);
+  if (scope.personalWrite && scope.teamPropose) parts.push(BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE);
   if (personal && scope.teamRead) {
     parts.push(BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE);
     if (scope.personalWrite) parts.push(PROMOTED_NOTE_RULE);
@@ -92,8 +127,11 @@ export function brainPolicyManualText(): string {
   return [
     PERSONAL_KNOWLEDGE_DEFINITION,
     TEAM_KNOWLEDGE_DEFINITION,
+    TEAM_SHARE_LEVEL_RULE,
     BRAIN_ROUTING_RULE,
     BRAIN_LINK_CHECK_RULE,
+    TEAM_SHARE_PASS_RULE,
+    BRAIN_KEPT_PERSONAL_RULE,
     BRAIN_ONE_HOME_RULE,
     BRAIN_CONFLICT_RULE,
     PROMOTED_NOTE_RULE,

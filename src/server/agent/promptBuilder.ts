@@ -29,7 +29,7 @@ import {
   TEAM_OFFER_TO_SHARE,
   teamGuidelinesBlock,
 } from "./teamBrainTools.js";
-import { TEAM_KNOWLEDGE_DEFINITION, brainPolicySection } from "./brainPolicy.js";
+import { TEAM_KNOWLEDGE_DEFINITION, TEAM_SHARE_LEVEL_RULE, brainPolicySection } from "./brainPolicy.js";
 import {
   effectiveMcpToolGroups,
   MCP_TOOL_GROUPS,
@@ -299,7 +299,7 @@ function teamBrainSection(request: AgentRequest): string | null {
     return `${base} Proposing team notes is not available in this run (only in the owner's own interactive conversation).`;
   }
   const guidelines = teamGuidelinesBlock(tb.guidelines);
-  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW, ...(guidelines ? [guidelines] : [])].join(" ");
+  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_SHARE_LEVEL_RULE, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW, ...(guidelines ? [guidelines] : [])].join(" ");
 }
 
 /**

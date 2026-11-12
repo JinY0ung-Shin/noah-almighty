@@ -65,18 +65,21 @@ function json(body: unknown, status = 200): Response {
 /** What the fake server answers to a GET of the card, and to a press of it. */
 let current: TeamBrainCardView;
 let pressReply: (() => Response) | null = null;
+const pressedUrls: string[] = [];
 let paneEl: HTMLElement;
 
 beforeEach(() => {
   reported.mockClear();
   pressReply = null;
+  pressedUrls.length = 0;
   replaceState({ user: null });
   paneEl = document.createElement("section");
   paneEl.dataset.pane = "pane-7";
   document.body.appendChild(paneEl);
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
-    if (/\/(submit|withdraw|apply)$/.test(url)) {
+    if (/\/(submit|submit-all|withdraw|apply)$/.test(url)) {
+      pressedUrls.push(url);
       expect(init?.method).toBe("POST");
       return pressReply ? pressReply() : json(current);
     }
@@ -108,6 +111,47 @@ describe("TeamBrainCard — telling the avatar about a press", () => {
     fireEvent.click(screen.getByRole("button", { name: "관리자에게 제출" }));
     await waitFor(() => expect(reported).toHaveBeenCalledTimes(1));
     expect(reported).toHaveBeenCalledWith("pane-7", "p1", "팀 브레인 제안을 관리자에게 제출했습니다: 배포 서버 접속 방법");
+  });
+
+  it("초안 N건 모두 제출: one press, its own route, the number in the bubble — and the other cards re-read", async () => {
+    // An older card of the same conversation, still showing its own 관리자에게 제출.
+    const other = document.createElement("section");
+    other.dataset.pane = "pane-7";
+    document.body.appendChild(other);
+    try {
+      const older = cardView({ proposal: proposal({ id: "p0", title: "먼저 만든 초안" }), actions: { submit: true, withdraw: true, apply: false, cancel: false } });
+      const newest = cardView({ actions: { submit: true, withdraw: true, apply: false, cancel: false, submitAll: 2 } });
+      const views: Record<string, TeamBrainCardView> = { p0: older, p1: newest };
+      vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+        const url = String(input);
+        const id = /cards\/([^/]+)/.exec(url)?.[1] ?? "";
+        if (url.endsWith("/submit-all")) {
+          pressedUrls.push(url);
+          // The press names the number on the button it sits on.
+          expect(JSON.parse(String(init?.body))).toEqual({ count: 2 });
+          for (const key of Object.keys(views)) {
+            views[key] = { ...views[key], proposal: { ...views[key].proposal, status: "pending" }, actions: { submit: false, withdraw: true, apply: false, cancel: false, submitAll: 0 } };
+          }
+        }
+        return views[id] ? json(views[id]) : json({ error: "not found" }, 404);
+      });
+      render(<TeamBrainCard proposalId="p0" />, { container: other });
+      render(<TeamBrainCard proposalId="p1" />, { container: paneEl });
+      await screen.findByText("먼저 만든 초안");
+      // Only the newest card carries the button.
+      const all = await screen.findAllByRole("button", { name: "초안 2건 모두 제출" });
+      expect(all).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "관리자에게 제출" })).toHaveLength(2);
+
+      fireEvent.click(all[0]);
+      await waitFor(() => expect(reported).toHaveBeenCalledTimes(1));
+      expect(pressedUrls).toEqual(["/api/team-brain/cards/p1/submit-all"]);
+      expect(reported).toHaveBeenCalledWith("pane-7", "p1", "팀 브레인 제안 2건을 모두 관리자에게 제출했습니다.");
+      // The older card re-read itself: its own submit button is gone without a reload.
+      await waitFor(() => expect(screen.queryAllByRole("button", { name: "관리자에게 제출" })).toHaveLength(0));
+    } finally {
+      other.remove();
+    }
   });
 
   it("팀 브레인에 반영: reports the done press", async () => {

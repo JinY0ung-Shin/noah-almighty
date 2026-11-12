@@ -20,7 +20,7 @@ not actually say. Never invent facts.
 - **Which brain:** follow the Brain policy in your instructions (PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT
   ONE HOME; the TEAM KNOWLEDGE tests sit in the team-brain section, on runs that can submit) — this skill does
   not restate them. Personal knowledge is captured here without
-  asking first. Team knowledge is OFFERED to the team (`mcp__brain__propose_team_note`; an admin uses
+  asking first. Team knowledge — at THE RIGHT LEVEL, never working detail — is OFFERED to the team (`mcp__brain__propose_team_note`; an admin uses
   `mcp__brain__prepare_team_changes`) only in the owner's own chat; when you also captured it here, pass the
   note's `wiki/` path in `personalNotes`. Before writing, search the team brain (scope `"team"`): a fact the
   team brain already holds is linked or mentioned, never copied in full.

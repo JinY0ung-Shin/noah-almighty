@@ -8,11 +8,12 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { callTool, gitInit, makeBareRemote, withTempDir } from "./helpers.js";
 import { createServices } from "../src/server/app.js";
-import { buildBrainTools } from "../src/server/agent/brainTools.js";
+import { buildBrainTools, isKeptPersonalNote } from "../src/server/agent/brainTools.js";
 import type { TeamBrainToolsContext } from "../src/server/agent/teamBrainTools.js";
 import { TEAM_ADMIN_FLOW, TEAM_OFFER_TO_SHARE, teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
 import {
   BRAIN_CONFLICT_RULE,
+  BRAIN_KEPT_PERSONAL_RULE,
   BRAIN_ONE_HOME_RULE,
   BRAIN_POLICY_REFERENCE,
   BRAIN_LINK_CHECK_NAME,
@@ -21,7 +22,11 @@ import {
   PERSONAL_KNOWLEDGE_DEFINITION,
   PROMOTED_NOTE_RULE,
   TEAM_KNOWLEDGE_DEFINITION,
+  TEAM_SHARE_LEVEL_RULE,
+  TEAM_SHARE_PASS_MAX,
+  TEAM_SHARE_PASS_RULE,
   brainPolicySection,
+  brainPolicyManualText,
 } from "../src/server/agent/brainPolicy.js";
 import { SYSTEM_MANUAL_TOPICS } from "../src/server/agent/systemManual.js";
 import {
@@ -484,6 +489,24 @@ describe("personal notes linked to a team submission", () => {
     });
     expect(relink.content[0].text).toContain("already a link note");
 
+    // A note the owner keeps personal (`team_share: no`) is refused too — and the refusal says not to
+    // submit the fact without the link either (KEPT PERSONAL).
+    const kept = setup("keptnote");
+    withPersonalRepo(kept, "keptnote", { "wiki/concepts/pay.md": "---\ntitle: 연봉 협상 메모\nteam_share: no\n---\n내 메모\n" });
+    const keptTools = buildBrainTools(kept.store, { avatarUserId: kept.mate.id, viewerIsOwner: true, elevated: true, personalActive: true, team: teamCtx(kept, kept.mate), config: kept.config });
+    const keptRes = await callTool(keptTools, "propose_team_note", { type: "howto", title: "t", summary: "s", source: "x", answers, personalNotes: ["wiki/concepts/pay.md"] });
+    expect(keptRes.isError).toBe(true);
+    expect(keptRes.content[0].text).toContain("marked `team_share: no`");
+    expect(keptRes.content[0].text).toContain("KEPT PERSONAL in the Brain policy");
+    expect(keptRes.content[0].text).toContain("with or without the link");
+    expect(kept.store.listTeamBrainProposals({ proposerUserId: kept.mate.id })).toEqual([]);
+    // The spellings a person would write all count; anything else does not.
+    const fm = (line: string) => `---\ntitle: t\n${line}\n---\nbody\n`;
+    for (const line of ["team_share: no", "team_share: No", 'team_share: "no"', "team_share: false", "team_share: no # 개인 메모"]) {
+      expect(isKeptPersonalNote(fm(line)), line).toBe(true);
+    }
+    for (const line of ["team_share: yes", "tags: [no]", "team_shared: no"]) expect(isKeptPersonalNote(fm(line)), line).toBe(false);
+
     const teamOnly = buildBrainTools(s.store, { avatarUserId: s.mate.id, viewerIsOwner: true, elevated: true, personalActive: false, team: teamCtx(s, s.mate), config: s.config });
     const refused = await callTool(teamOnly, "propose_team_note", { type: "howto", title: "t", summary: "s", source: "x", answers, personalNotes: ["wiki/a.md"] });
     expect(refused.isError).toBe(true);
@@ -498,6 +521,9 @@ describe("the Brain policy is ONE source", () => {
     for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE, PROMOTED_NOTE_RULE]) {
       expect(owner).toContain(rule);
     }
+    // The selection pass and the remembered "no" ride the runs that can both capture and submit.
+    expect(owner).toContain(TEAM_SHARE_PASS_RULE);
+    expect(owner).toContain(BRAIN_KEPT_PERSONAL_RULE);
     // A read-only teammate: the conflict rule, never the write-side rules.
     const reader = brainPolicySection({ personalRead: true, personalWrite: false, teamRead: true, teamPropose: false })!;
     expect(reader).toContain(BRAIN_CONFLICT_RULE);
@@ -506,6 +532,32 @@ describe("the Brain policy is ONE source", () => {
     const routine = brainPolicySection({ personalRead: true, personalWrite: true, teamRead: true, teamPropose: false })!;
     expect(routine).not.toContain(BRAIN_ROUTING_RULE);
     expect(routine).not.toContain(BRAIN_LINK_CHECK_RULE);
+    expect(routine).not.toContain(TEAM_SHARE_PASS_RULE);
+    expect(routine).not.toContain(BRAIN_KEPT_PERSONAL_RULE);
+  });
+
+  it("the level test gates offers and selection alike, and the selection pass is bounded and remembers a no (2026-11-12)", () => {
+    // Too-detailed notes stay personal; only the reusable part of a note is offered.
+    expect(TEAM_SHARE_LEVEL_RULE).toContain("passing the four tests is not enough");
+    expect(TEAM_SHARE_LEVEL_RULE).toContain("offer only the part that states that conclusion");
+    expect(TEAM_SHARE_LEVEL_RULE).toContain("every offer to share and for every pass that selects personal notes");
+    // The pass: the skill by name, the cap, the press that is still the user's, and what it never selects.
+    expect(TEAM_SHARE_PASS_MAX).toBe(3);
+    expect(TEAM_SHARE_PASS_RULE).toContain("`brain-share` skill");
+    expect(TEAM_SHARE_PASS_RULE).toContain("at most 3 cards (the team guidelines may set another number)");
+    expect(TEAM_SHARE_PASS_RULE).toContain("the user's yes to DRAFT those cards — do not ask again per note — but not to share them");
+    expect(TEAM_SHARE_PASS_RULE).toContain("nothing leaves the drafts until the user presses a card");
+    // The pass's source and intake come from the note (the tool text agrees), and an admin's cards are pressed one by one.
+    expect(TEAM_SHARE_PASS_RULE).toContain("the note's own passage that states the conclusion, verbatim");
+    expect(TEAM_SHARE_PASS_RULE).toContain("an admin's own cards (`prepare_team_changes`) write the team brain when pressed, so each is pressed on its own");
+    expect(TEAM_SHARE_PASS_RULE).toContain("a note whose submission was rejected comes back only when");
+    expect(TEAM_SHARE_PASS_RULE).toContain("초안 N건 모두 제출");
+    expect(TEAM_SHARE_PASS_RULE).toContain("a note marked `team_share: no`");
+    // A declined note is marked in the owner's own repo, by the avatar, and never asked about again.
+    expect(BRAIN_KEPT_PERSONAL_RULE).toContain("add the frontmatter line `team_share: no`");
+    expect(BRAIN_KEPT_PERSONAL_RULE).toContain("never offered or selected again");
+    const manual = brainPolicyManualText();
+    for (const rule of [TEAM_SHARE_LEVEL_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE]) expect(manual).toContain(rule);
   });
 
   it("every team card has an execution point for one-fact-one-home: look in the personal brain first (#82)", () => {
@@ -530,13 +582,30 @@ describe("the Brain policy is ONE source", () => {
 
   it("bundled brain skills refer to the policy instead of restating it", () => {
     const dir = path.join(process.cwd(), "default-skills", "skills");
-    for (const name of ["brain-ingest", "brain-reflect", "brain-lint", "brain-search", "team-brain-curate"]) {
+    for (const name of ["brain-ingest", "brain-reflect", "brain-lint", "brain-search", "brain-share", "team-brain-curate"]) {
       const skill = fs.readFileSync(path.join(dir, name, "SKILL.md"), "utf8");
       expect(skill, name).toContain(BRAIN_POLICY_REFERENCE);
       // No hand copy of a definition (the drift this module exists to stop).
       expect(skill, name).not.toContain("useful to others");
       expect(skill, name).not.toContain(PERSONAL_KNOWLEDGE_DEFINITION.slice(0, 60));
+      expect(skill, name).not.toContain(TEAM_SHARE_LEVEL_RULE.slice(0, 60));
     }
+  });
+
+  it("brain-share is the procedure only: no number, no criteria of its own, and it never submits", () => {
+    const dir = path.join(process.cwd(), "default-skills", "skills");
+    const share = fs.readFileSync(path.join(dir, "brain-share", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    for (const name of ["SELECTING FOR THE TEAM", "KEPT PERSONAL", "THE RIGHT LEVEL", "BEFORE A TEAM CARD", "ONE FACT ONE HOME"]) expect(share).toContain(name);
+    // The cap and the mark's spelling live in brainPolicy.ts alone.
+    expect(share).not.toMatch(/at most \d/);
+    expect(share).not.toContain("team_share");
+    expect(share).toContain("up to the pass limit");
+    expect(share).toContain("Never submit, press or claim anything was shared");
+    expect(share).toContain("say that this pass needs the owner's own chat and stop");
+    // brain-reflect only points at it, in one line, and only where the run can submit.
+    const reflect = fs.readFileSync(path.join(dir, "brain-reflect", "SKILL.md"), "utf8").replace(/\s+/g, " ");
+    expect(reflect).toContain("end the report with ONE line");
+    expect(reflect).toContain("Do not draft a card, list the notes or run brain-share from here");
   });
 
   it("read_manual carries the policy and no longer claims there is no team brain", () => {

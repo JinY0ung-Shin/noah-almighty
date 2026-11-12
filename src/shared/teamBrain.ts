@@ -530,8 +530,13 @@ export interface TeamBrainCardView {
   stale: boolean;
   /** review (approve) / direct cards: each page write, with its current content. policy cards: ONE entry, `POLICY.md`. */
   pages: TeamPageChangeView[];
-  /** Which buttons this viewer may press now. */
-  actions: { submit: boolean; withdraw: boolean; apply: boolean; cancel: boolean };
+  /**
+   * Which buttons this viewer may press now. `submitAll` = how many of the
+   * viewer's submission drafts in this card's conversation ONE press would
+   * send to the admins (this card included) — set only on the NEWEST of them
+   * and only when there are at least two; absent everywhere else.
+   */
+  actions: { submit: boolean; withdraw: boolean; apply: boolean; cancel: boolean; submitAll?: number };
   /**
    * The card's own source provenance (출처 유형·출처·작성자·작성일): `editable` while the
    * drafter may still change it on the card (a propose / direct-with-source
@@ -543,10 +548,11 @@ export interface TeamBrainCardView {
 
 /**
  * The card buttons whose press Noah REPORTS to the avatar that drafted the card
- * (server: `teamBrainCardPress.ts`): 관리자에게 제출 (`submit`) and the admin's
- * confirm button (`apply`). 취소 / 제안 철회 is never reported.
+ * (server: `teamBrainCardPress.ts`): 관리자에게 제출 (`submit`), 초안 N건 모두 제출
+ * (`submit_all` — every submission draft of the conversation with ONE press)
+ * and the admin's confirm button (`apply`). 취소 / 제안 철회 is never reported.
  */
-export const TEAM_BRAIN_CARD_PRESS_ACTIONS = ["submit", "apply"] as const;
+export const TEAM_BRAIN_CARD_PRESS_ACTIONS = ["submit", "submit_all", "apply"] as const;
 export type TeamBrainCardPressAction = (typeof TEAM_BRAIN_CARD_PRESS_ACTIONS)[number];
 export const isTeamBrainCardPressAction = oneOf(TEAM_BRAIN_CARD_PRESS_ACTIONS);
 
@@ -560,12 +566,20 @@ export interface TeamBrainCardPressSubject {
   title: string;
 }
 
-/** The Korean label ON the card's confirm button — the card and the press report share it. */
+/** Fewer submission drafts than this in a conversation: no 모두 제출 button (the card's own button does it). */
+export const TEAM_BRAIN_SUBMIT_ALL_MIN = 2;
+
+/**
+ * The Korean label ON the card's confirm button — the card and the press
+ * report share it. `count` = how many drafts a `submit_all` press sends.
+ */
 export function teamBrainCardButtonLabel(
   action: TeamBrainCardPressAction,
   card: Pick<TeamBrainCardPressSubject, "kind" | "decision">,
+  count?: number,
 ): string {
   if (action === "submit") return "관리자에게 제출";
+  if (action === "submit_all") return count ? `초안 ${count}건 모두 제출` : "초안 모두 제출";
   if (card.kind === "review") {
     if (card.decision === "approve") return "승인 반영";
     if (card.decision === "ask") return "보완 요청 보내기";
@@ -583,14 +597,18 @@ const PRESS_BUBBLE_TITLE_MAX = 80;
  * the model reads the server's English report instead. The client draws it
  * before the server answers, so both sides build it here. A review card's
  * title is a TEAMMATE's text (the submission's), so it is never quoted: this
- * line is stored as the presser's own words.
+ * line is stored as the presser's own words. `count` = the drafts a
+ * `submit_all` press sent (the client passes the number on the button; the
+ * server stores the number it really sent).
  */
 export function teamBrainCardPressBubble(
   action: TeamBrainCardPressAction,
   card: TeamBrainCardPressSubject,
   ok: boolean,
+  count?: number,
 ): string {
-  if (!ok) return `카드의 ‘${teamBrainCardButtonLabel(action, card)}’ 버튼을 눌렀지만 처리되지 않았습니다.`;
+  if (!ok) return `카드의 ‘${teamBrainCardButtonLabel(action, card, count)}’ 버튼을 눌렀지만 처리되지 않았습니다.`;
+  if (action === "submit_all") return `팀 브레인 제안 ${count ? `${count}건` : "초안"}을 모두 관리자에게 제출했습니다.`;
   if (card.kind === "review") {
     if (card.decision === "approve") return "제안 승인을 팀 브레인에 반영했습니다.";
     if (card.decision === "ask") return "제안자에게 보완 요청을 보냈습니다.";
