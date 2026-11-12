@@ -70,7 +70,7 @@ ${widgetComponentBrief()}
 
 Charts — a chart the user only needs to SEE also goes here, in the answer, not on a canvas:
 \`<chart type="bar" data={[{ month: "1월", sales: 120, cost: 80 }, { month: "2월", sales: 150, cost: 90 }]} xKey="month" series={[{ key: "sales", label: "매출" }, { key: "cost", label: "비용" }]} unit="만원" title="월별 매출과 비용" />\`
-\`type\`: bar | line | area | pie | donut, plus \`stacked\` and \`horizontal\`. Anything else (scatter, heatmap, layered marks): a whole Vega-Lite spec with inline values — \`<chart spec={{ mark: "point", data: { values: rows }, encoding: { … } }} />\`.
+\`type\`: bar | line | area | pie | donut, plus \`stacked\` and \`horizontal\` — these five are every chart there is. The app draws it with a tooltip under the pointer and a legend the viewer can hover. For any other shape (scatter, heatmap) give the numbers as a \`<table>\`; there is no free-form chart spec.
 
 Diagrams — a flow, sequence, state or ER diagram the user only needs to SEE goes in the answer too, as an ordinary \`\`\`mermaid fenced code block (not a tag): the app draws it in place once the fence is closed, with a toggle to its source. Double-quote every label that contains punctuation: \`A["Login (SSO)"] -->|"POST /api"| B\`.
 

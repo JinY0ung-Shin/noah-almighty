@@ -1,5 +1,5 @@
 // The entrance of a ```mermaid diagram of an answer (lib/mermaidBlock.ts): its
-// parts arrive in order instead of all at once. Mermaid, like Vega, hands over
+// parts arrive in order instead of all at once. Mermaid hands over
 // ONE finished SVG, so only the first appearance of a diagram moves.
 //
 // The plan is read off the SVG mermaid really writes — classes and geometry

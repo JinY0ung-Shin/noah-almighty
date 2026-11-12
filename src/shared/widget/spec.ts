@@ -26,7 +26,7 @@ export type PropType =
   | { k: "columns" }
   /** Table rows: an array of plain objects. */
   | { k: "rows" }
-  /** A plain object (a Vega-Lite spec, the values of a submit). */
+  /** A plain object (the values of a submit). */
   | { k: "object" }
   /** Text a button sends as the user's next chat message: 1–MAX_SEND_CHARS characters after trimming. */
   | { k: "send" }
@@ -301,9 +301,9 @@ const LIST: ComponentSpec[] = [
     "chart",
     "Data",
     "none",
-    "Give `data` (+ type, xKey, series) for the common charts, or a whole Vega-Lite `spec` — exactly one of the two.",
+    "Give `data` (+ type, xKey, series). The viewer gets a tooltip under the pointer and can single a series out from the legend.",
     {
-      data: { type: { k: "rows" }, doc: "the rows to plot, e.g. [{month: \"Jan\", sales: 12, cost: 7}]", ref: "" },
+      data: { type: { k: "rows" }, required: true, doc: "the rows to plot, e.g. [{month: \"Jan\", sales: 12, cost: 7}]", ref: "" },
       type: { type: { k: "enum", values: ["bar", "line", "area", "pie", "donut"] }, doc: "with `data`; default bar", ref: "default bar" },
       xKey: { type: SHORT, doc: "row key of the category / x axis (pie: the slice name); default the first non-numeric key", ref: "category key; default the first" },
       series: {
@@ -316,11 +316,9 @@ const LIST: ComponentSpec[] = [
       horizontal: { type: BOOL, doc: "bar: horizontal bars", ref: "" },
       unit: { type: { k: "string", max: 20 }, doc: "unit of the values, shown on the value axis", ref: "" },
       title: { type: SHORT },
-      spec: { type: { k: "object" }, doc: "a whole Vega-Lite spec instead of `data` (inline data.values only, no url)", ref: "Vega-Lite, inline data.values only" },
       height: { type: { k: "number", min: 120, max: 600 }, doc: "px, default 240" },
       label: { type: SHORT, doc: "accessible name" },
     },
-    { oneOf: ["data", "spec"] },
   ),
   component("details", "Data", "block", "", {
     title: { type: SHORT, required: true },

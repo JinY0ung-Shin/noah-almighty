@@ -17,7 +17,7 @@ export interface WidgetCtx {
   locked: boolean;
   /** The id of the status line that says why, for `aria-describedby`. */
   statusId: string;
-  /** Dark theme in effect — charts bake their colors in. */
+  /** Dark theme in effect — a chart resolves its colors when it is drawn. */
   dark: boolean;
   /**
    * How a thing that appears NOW may play its entrance (lib/uiEntrance.ts): set

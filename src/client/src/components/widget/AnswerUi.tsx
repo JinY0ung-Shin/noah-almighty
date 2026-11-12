@@ -206,7 +206,7 @@ function createAnswerView(first: Current, surface: Surface) {
   const fresh = !preview && Boolean(p.messageId) && continuesEntranceText(entranceScope, p.text);
   // This instance has shown the answer WHILE it was written (the live bubble, a
   // stored message whose end drained in). Kept once true: a chart is drawn a
-  // moment after its tag arrived (Vega loads lazily), and by then the last of
+  // moment after its tag arrived (its library loads on demand), and by then the last of
   // the text may be in — the chart still appeared now.
   let written = p.streaming;
   // The viewer changed something here: what appears from now on (the tab they

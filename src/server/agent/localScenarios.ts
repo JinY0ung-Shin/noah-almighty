@@ -195,31 +195,14 @@ const CANVAS_MARKDOWN = `# 분기 회고 초안
 > 이 캔버스는 \`editable\`입니다 — 내용을 고쳐서 보내면 수정본이 다음 메시지로 돌아옵니다.
 `;
 
-const CANVAS_VEGA = JSON.stringify({
-  $schema: "https://vega.github.io/schema/vega-lite/v5.json",
-  description: "월별 배포 횟수",
-  width: "container",
-  height: 260,
-  data: {
-    values: [
-      { month: "7월", team: "플랫폼", deploys: 4 },
-      { month: "7월", team: "제품", deploys: 2 },
-      { month: "8월", team: "플랫폼", deploys: 5 },
-      { month: "8월", team: "제품", deploys: 3 },
-      { month: "9월", team: "플랫폼", deploys: 7 },
-      { month: "9월", team: "제품", deploys: 4 },
-      { month: "10월", team: "플랫폼", deploys: 6 },
-      { month: "10월", team: "제품", deploys: 6 },
-    ],
-  },
-  mark: { type: "bar", tooltip: true },
-  encoding: {
-    x: { field: "month", type: "nominal", sort: null, title: "월" },
-    y: { field: "deploys", type: "quantitative", title: "배포 횟수" },
-    color: { field: "team", type: "nominal", title: "팀" },
-    xOffset: { field: "team" },
-  },
-});
+// A chart on a canvas is a mermaid chart (the `vega` content type is retired).
+const CANVAS_CHART = `xychart-beta
+    title "월별 배포 횟수"
+    x-axis ["7월", "8월", "9월", "10월"]
+    y-axis "배포(회)" 0 --> 14
+    bar [4, 6, 9, 11]
+    line [4, 6, 9, 11]
+`;
 
 const CANVAS_MERMAID = `flowchart LR
   U["사용자 브라우저"] -->|"POST /api/chat/stream"| N["Noah (BFF)"]
@@ -243,7 +226,7 @@ const CANVAS_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240
     <path d="M144 120 H176" stroke="#56607a" stroke-width="2" marker-end="url(#arrow)"/>
     <path d="M300 120 H332" stroke="#56607a" stroke-width="2" marker-end="url(#arrow)"/>
     <text x="240" y="44" fill="#1f2a44" font-size="16" font-weight="bold">SVG 캔버스: 손으로 그린 도식</text>
-    <text x="240" y="204" fill="#56607a" font-size="12">vega나 mermaid로 표현하기 어려운 그림에 씁니다</text>
+    <text x="240" y="204" fill="#56607a" font-size="12">mermaid로 표현하기 어려운 그림에 씁니다</text>
   </g>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -325,7 +308,7 @@ const CANVAS_FORM_CONTROLS: CanvasControl[] = [
 
 const CANVAS_DEMO: LocalDemoCanvas[] = [
   { id: "markdown", title: "Markdown · 분기 회고 초안", content: CANVAS_MARKDOWN, contentType: "markdown", editable: true },
-  { id: "vega", title: "Vega-Lite · 월별 배포 횟수", content: CANVAS_VEGA, contentType: "vega" },
+  { id: "chart", title: "Mermaid 차트 · 월별 배포 횟수", content: CANVAS_CHART, contentType: "mermaid" },
   { id: "mermaid", title: "Mermaid · 요청 흐름", content: CANVAS_MERMAID, contentType: "mermaid" },
   { id: "svg", title: "SVG · 세 단계 파이프라인", content: CANVAS_SVG, contentType: "svg" },
   { id: "html", title: "HTML · 대시보드 목업", content: CANVAS_HTML, contentType: "html" },
@@ -344,7 +327,7 @@ const canvasAnswer = (state: LocalDemoState): string =>
     : `캔버스 ${state.canvasesShown}개를 옆 패널에 열었습니다. 탭을 넘기며 확인해 보세요.
 
 1. **Markdown** — 편집 가능(\`editable\`). 내용을 고쳐 보내면 수정본이 다음 메시지로 돌아옵니다.
-2. **Vega-Lite** — 묶음 막대 차트.
+2. **Mermaid 차트** — 막대와 선(\`xychart-beta\`).
 3. **Mermaid** — 요청 흐름도.
 4. **SVG** — 손으로 그린 도식.
 5. **HTML** — 샌드박스 프레임 속 정적 목업. 안에 넣어 둔 \`<script>\`는 실행되지 않아야 합니다.
@@ -607,7 +590,7 @@ export const LOCAL_DEMO_SCENARIOS: readonly LocalDemoScenario[] = [
   },
   {
     name: "canvas",
-    summary: "캔버스 6종: markdown(편집 가능)·vega·mermaid·svg·html + controls 양식",
+    summary: "캔버스 6종: markdown(편집 가능)·mermaid 차트·mermaid 흐름도·svg·html + controls 양식",
     steps: () => [
       { kind: "text", text: "콘텐츠 유형별 캔버스를 차례로 열겠습니다." },
       ...CANVAS_DEMO.map((canvas): LocalDemoStep => ({ kind: "canvas", canvas })),

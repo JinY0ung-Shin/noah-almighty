@@ -1,7 +1,7 @@
 // Telling the avatar that a canvas it showed did not render.
 //
 // A canvas is drawn in the VIEWER's browser, so a failure there (a widget node
-// that throws, a Vega spec that does not compile, a mermaid layout error) was
+// that throws, a mermaid layout error) was
 // something only the viewer saw. The client now posts the reasons — short
 // English lines — to the server, which hands them to the avatar ONCE with the
 // next turn so it can fix the canvas.

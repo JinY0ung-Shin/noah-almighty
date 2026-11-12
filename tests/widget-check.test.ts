@@ -32,7 +32,7 @@ const SAMPLES: Record<string, string> = {
     "  {:else if months === 36}",
     "    <text color=\"muted\">딱 36개월입니다.</text>",
     "  {/if}",
-    '  <chart label="잔액 추이" height={220} spec={{ mark: "line", data: { values: schedule }, encoding: { x: { field: "month", type: "quantitative" }, y: { field: "balance", type: "quantitative" } } }} />',
+    '  <chart label="잔액 추이" height={220} type="line" data={schedule} xKey="month" series={["balance"]} />',
     '  <table columns={[{ key: "month", label: "회차" }, { key: "balance", label: "잔액", align: "end" }]} rows={schedule.slice(0, 6)} />',
     "</box>",
     "",
@@ -132,8 +132,8 @@ describe("checkWidget", () => {
     expect(errorOf('<slider label value={1} onChange={(v) => v} />')).toMatch(/Prop "label" of <slider> needs a value/);
     expect(errorOf('<select label="a" value="x" onChange={(v) => v} options="a,b" />')).toMatch(/Prop "options" of <select> must be an expression in braces/);
     expect(errorOf('<select label="a" value="x" onChange={(v) => v} options={{ a: 1 }} />')).toMatch(/must be an array, not an object/);
-    expect(errorOf('<chart spec={[1]} />')).toMatch(/Prop "spec" of <chart> must be an object, not an array/);
-    expect(errorOf('<chart spec={() => 1} />')).toMatch(/must not be a function/);
+    expect(errorOf("<submit values={[1]}>go</submit>")).toMatch(/Prop "values" of <submit> must be an object, not an array/);
+    expect(errorOf("<submit values={() => 1}>go</submit>")).toMatch(/must not be a function/);
     expect(errorOf("<box gap={[1]}>x</box>")).toMatch(/must not be an array/);
     expect(errorOf("<box gap={true}>x</box>")).toMatch(/Prop "gap" of <box> must be a number/);
     // accepted literal forms
@@ -344,8 +344,9 @@ describe("widget component spec", () => {
     expect(ref.endsWith(`\nIcons: ${WIDGET_ICON_NAMES.join(" ")}`)).toBe(true);
     expect(ref).toContain("- <svg>SVG elements</svg> — A drawing that follows state (a gauge, a diagram).");
     expect(ref).toContain(svgReference());
-    // A chart has two forms, and its `series` is not spelled like a table's columns.
-    expect(ref).toContain("- <chart /> — Give `data` (+ type, xKey, series) for the common charts, or a whole Vega-Lite `spec` — exactly one of the two.");
+    // A chart has one form (a Vega-Lite `spec` is retired), and its `series` is not spelled like a table's columns.
+    expect(ref).toContain("- <chart /> — Give `data` (+ type, xKey, series). The viewer gets a tooltip under the pointer and can single a series out from the legend.");
+    expect(ref.toLowerCase()).not.toContain("vega");
     expect(ref).toContain('type: bar|line|area|pie|donut (default bar); xKey: str (category key; default the first); series: ["key"] | [{key, label}] (numeric keys; default all)');
     // The manual page it rides is capped (tests/system-manual.test.ts): keep the reference terse.
     expect(ref.length).toBeLessThan(6800);

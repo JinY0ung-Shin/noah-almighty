@@ -21,7 +21,8 @@ import {
   componentSpec,
   conversationImageRef,
   emptyValue,
-  simpleChartSpec,
+  CHART_SPEC_RETIRED,
+  simpleChartModel,
   eachScopes,
   interpolate,
   jsxWhitespace,
@@ -270,11 +271,16 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
   const spec = componentSpec(node.name);
   if (!spec) return errorNode(key, node, NODE_ERROR, `unknown component <${node.name}>`);
   const { props, errors } = resolveProps(node, env, rt);
-  if (node.name === "chart" && props.spec === undefined && props.data !== undefined) {
-    // The simple form (`type` + `data`) is drawn through the same Vega-Lite pipeline.
-    const simple = simpleChartSpec(props);
-    props.spec = simple.spec ?? {};
+  if (node.name === "chart") {
+    // What the chart components draw (shared/widget/chart.ts); absent when there is nothing to plot.
+    const simple = simpleChartModel(props);
+    if (simple.model) props.simple = simple.model;
     for (const problem of simple.problems) errors.push(problem);
+    // An answer written against the retired grammar: say so to the avatar, and to the viewer in the chart's place.
+    if (node.attrs.some((attr) => attr.name === "spec")) {
+      errors.push(CHART_SPEC_RETIRED);
+      if (!simple.model) props.retiredSpec = true;
+    }
   }
   let segs: Seg[] = [];
   let children: VNode[] = [];

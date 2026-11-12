@@ -10,6 +10,7 @@
  * browser runs `widgetProblems` on what it drew and reports the lines to the
  * avatar with its next turn; the server uses `checkWidget` on its own examples.
  */
+import { CHART_SPEC_RETIRED } from "./chart.js";
 import type { Expr, Param, Pattern, Stmt } from "./expr.js";
 import { GLOBAL_NAMES } from "./interp.js";
 import { nearest } from "./names.js";
@@ -329,7 +330,9 @@ class Checker {
               ? " It is not needed — remove it."
               : spec.child === "svg" && attr.name === "height"
                 ? " The height follows the viewBox's aspect ratio."
-                : "";
+                : spec.tag === "chart" && attr.name === "spec"
+                  ? ` ${CHART_SPEC_RETIRED}`
+                  : "";
       this.problem(
         `<${spec.tag}> has no prop "${attr.name}".${hint ? ` Did you mean "${hint}"?` : ""}${note} Props: ${names.length ? names.join(", ") : "(none)"}.`,
         attr.s,

@@ -584,3 +584,25 @@
 .ui-gallery-source > .md {
   margin-top: var(--s-2);
 }
+
+/* A <chart> (components/widget/WidgetChart.tsx): the title above the plot, and
+   the plot's box — which has its height before the drawing is there. */
+.wg-chart-title {
+  margin: 0 0 var(--s-1);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.wg-chart-plot {
+  width: 100%;
+  min-width: 0;
+}
+/* The library makes the plot and its marks focusable for keyboard reading:
+   no ring for a pointer press, the app's ring for the keyboard. */
+.wg-chart-plot :focus {
+  outline: none;
+}
+.wg-chart-plot :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

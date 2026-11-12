@@ -402,7 +402,7 @@ describe("run capability plan", () => {
     // The canvas line and the standing canvas guidance draw the line between the two.
     const canvasLine = await describeLine(env.baseRequest, "- Visual canvas");
     expect(canvasLine).toContain("a SIDE-PANEL artifact worked on with the user");
-    expect(canvasLine).toContain("contentType markdown | vega | mermaid | svg | html.");
+    expect(canvasLine).toContain("contentType markdown | mermaid | svg | html (a side-panel chart is a mermaid xychart-beta / pie; 'vega' is retired).");
     expect(canvasLine).toContain("is inline UI (next line), not a canvas");
     expect(canvasLine).not.toContain("widget");
     expect(chat.append).toContain("**Visual canvas** is available via `mcp__canvas__show`: a SIDE-PANEL artifact you work on WITH the user");
@@ -481,7 +481,7 @@ describe("run capability plan", () => {
     expect(onCanvas).not.toHaveBeenCalled();
     const other = await call(env.baseRequest, "canvas", "show", { title: "t", content: "x", contentType: "pdf" });
     expect(other.isError).toBe(true);
-    expect(other.text).toBe("Unknown contentType 'pdf'. Use one of: 'markdown', 'vega', 'mermaid', 'svg', 'html'. Nothing was shown.");
+    expect(other.text).toBe("Unknown contentType 'pdf'. Use one of: 'markdown', 'mermaid', 'svg', 'html'. Nothing was shown.");
     expect(onCanvas).not.toHaveBeenCalled();
     expect((await call(env.baseRequest, "canvas", "show", { title: "메모", content: "# hi", contentType: "markdown" })).isError).toBe(false);
     expect(onCanvas).toHaveBeenCalledTimes(1);

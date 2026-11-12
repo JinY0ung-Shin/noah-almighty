@@ -74,13 +74,6 @@ const CHARTS: GallerySample[] = [
     source: `<chart type="donut" data={[{ kind: "버그", count: 12 }, { kind: "기능", count: 21 }, { kind: "문의", count: 9 }, { kind: "기타", count: 4 }]} xKey="kind" series={["count"]} title="요청 유형" />`,
   },
   {
-    id: "chart-spec",
-    title: "Vega-Lite 스펙",
-    note: "다섯 가지 밖의 차트(산점도, 히트맵, 겹친 마크)는 Vega-Lite 스펙을 통째로 적습니다.",
-    source: `{@const points = [{ hours: 2, score: 51, team: "A" }, { hours: 3, score: 58, team: "A" }, { hours: 5, score: 70, team: "A" }, { hours: 7, score: 82, team: "A" }, { hours: 1, score: 40, team: "B" }, { hours: 4, score: 55, team: "B" }, { hours: 6, score: 66, team: "B" }, { hours: 8, score: 74, team: "B" }]}
-<chart label="학습 시간과 점수" spec={{ title: "학습 시간과 점수", data: { values: points }, mark: { type: "point", filled: true, size: 80 }, encoding: { x: { field: "hours", type: "quantitative", title: "학습 시간(시간)" }, y: { field: "score", type: "quantitative", title: "점수", scale: { zero: false } }, color: { field: "team", type: "nominal", title: "팀" } } }} />`,
-  },
-  {
     id: "chart-state",
     title: "상태에 묶인 차트",
     note: "탭을 눌러 차트로 넘어가면 그때 등장 효과가 재생됩니다. 이미 그려진 차트의 값만 바뀔 때는 움직이지 않습니다.",
@@ -428,7 +421,7 @@ const SENDING: GallerySample[] = [
 ];
 
 export const UI_GALLERY: readonly GallerySection[] = Object.freeze([
-  { id: "charts", title: "차트", intro: "data만 넘기는 간단한 형식 다섯 가지와 Vega-Lite 스펙. 차트가 처음 나타날 때 등장 효과가 재생됩니다.", samples: CHARTS },
+  { id: "charts", title: "차트", intro: "data만 넘기면 그려지는 다섯 가지. 마우스를 올리면 값이 보이고, 범례에 올리면 그 계열만 도드라집니다. 처음 나타날 때 등장 효과가 재생됩니다.", samples: CHARTS },
   { id: "data", title: "지표와 데이터", intro: "숫자와 표를 보여 주는 컴포넌트입니다.", samples: DATA },
   { id: "inputs", title: "입력과 상태", intro: "보는 사람이 값을 바꾸면 그 자리에서 다시 계산됩니다. 아바타는 호출되지 않습니다.", samples: INPUTS },
   { id: "layout", title: "레이아웃", intro: "다른 컴포넌트를 담고 배치합니다.", samples: LAYOUT },

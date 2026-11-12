@@ -5,6 +5,7 @@
 //
 // There is no `dangerouslySetInnerHTML` here: everything the avatar wrote, and
 // everything an expression produced, is inserted as text.
+import type { SimpleChartModel } from "../../../../shared/widget/index";
 import type { CSSProperties, ReactNode } from "react";
 
 import { WIDGET_ICON_SIZES, type WidgetColumn } from "../../../../shared/widget/index";
@@ -218,12 +219,12 @@ function element(v: ElVNode, ctx: WidgetCtx): ReactNode {
   if (v.tag === "chart") {
     return (
       <WidgetChart
-        spec={v.props.spec}
+        model={(v.props.simple as SimpleChartModel | undefined) ?? null}
+        retired={v.props.retiredSpec === true}
         height={typeof v.props.height === "number" ? v.props.height : undefined}
         label={typeof v.props.label === "string" ? v.props.label : ""}
         dark={ctx.dark}
         entrance={ctx.entrance}
-        onProblem={ctx.report}
       />
     );
   }

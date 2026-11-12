@@ -6,7 +6,7 @@ import { CURRENT_RELEASE_ID } from "../../src/server/releaseNotes.js";
 
 // Canvas content never styles the app. An `html` canvas is a PAGE in its own
 // sandboxed frame: its LEADING <style> (the one a body-only sanitize used to drop)
-// must style it, and the frame must fit the page. An svg/mermaid/vega canvas is a
+// must style it, and the frame must fit the page. An svg/mermaid canvas is a
 // drawing in its own shadow root: its <style> styles the drawing only, and sizing
 // and export work as before. Real layout, a real sandbox and real SVG styling —
 // jsdom can check none of them.
@@ -234,9 +234,12 @@ test("an svg canvas draws in its own shadow root: styled, contained, sized and e
     .evaluate((node) => getComputedStyle(node.querySelector("rect, path, polygon") as Element).fill);
   expect(nodeFill).toBe("rgb(236, 236, 255)"); // mermaid's default-theme node fill (#ECECFF)
 
-  // 5. vega still draws its marks there.
+  // 5. A `vega` canvas an older build stored (the type is retired with the Vega
+  // renderer) shows a notice and its source — it does not vanish, and draws nothing.
   await page.getByRole("tab", { name: "막대" }).click();
-  await expect(panel.locator(".canvas-svg .mark-rect path")).toHaveCount(2);
+  await expect(panel.getByText("더 이상 지원하지 않는 Vega 차트 형식의 캔버스입니다. 원본만 표시합니다.")).toBeVisible();
+  await expect(panel.locator(".canvas-content")).toContainText('"mark"');
+  await expect(panel.locator(".canvas-svg")).toHaveCount(0);
 });
 
 test("every labeled mermaid diagram keeps its labels through the sanitize", async ({ page }) => {

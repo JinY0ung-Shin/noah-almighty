@@ -1,93 +1,162 @@
-// WidgetChart — the answer must not jump around a chart.
+// WidgetChart — an inline <chart>, drawn with Recharts.
 //
-// Drawing is asynchronous, so for a moment after a <chart> tag has arrived
-// there is nothing to show. The chart used to have no height in that moment:
-// the text that follows it was painted in its place and pushed down when the
-// drawing landed, and at the end of a turn (the stored message replacing the
-// live bubble) every chart blinked out and back. Now the place is held, and a
-// chart that mounts with a spec drawn a moment ago is there in its first frame.
+// The frame (WidgetChart) has the chart's height from its first frame, loads
+// the drawing on demand and, when the chart is to arrive with motion, holds it
+// back until the frame is on screen. The drawing (ChartDrawing) is the
+// library's: bars, lines, slices, a legend, a tooltip. jsdom has no layout, so
+// what is checked here is WHAT is drawn and WHEN it is mounted; how it looks
+// and moves is the Playwright suite's (inline-ui.spec.ts, ui-gallery.spec.ts).
 //
-// Runs in the vitest "react" project. Vega is replaced by a render the test
-// resolves by hand; real drawing is the Playwright suite's (inline-ui.spec.ts).
-import { act, render } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Runs in the vitest "react" project.
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const pending: Array<(markup: string) => void> = [];
-const renderVegaSvg = vi.fn(() => new Promise<string>((resolve) => pending.push(resolve)));
-vi.mock("../src/client/src/lib/vegaCanvas", () => ({ renderVegaSvg: (...args: unknown[]) => renderVegaSvg(...(args as [])) }));
+import WidgetChart, { DEFAULT_CHART_HEIGHT } from "../src/client/src/components/widget/WidgetChart";
+import { resetEntrances, type EntranceRule } from "../src/client/src/lib/uiEntrance";
+import { normalizeProps, simpleChartModel, type SimpleChartModel } from "../src/shared/widget/index";
 
-import WidgetChart, { forgetDrawnCharts } from "../src/client/src/components/widget/WidgetChart";
+function model(props: Record<string, unknown>): SimpleChartModel {
+  const read = simpleChartModel(normalizeProps("chart", props).props);
+  if (!read.model) throw new Error("no model: " + read.problems.join("; "));
+  return read.model;
+}
 
-const SPEC = { mark: "bar", height: 180, data: { values: [{ a: "가", b: 1 }] }, encoding: { x: { field: "a" }, y: { field: "b", type: "quantitative" } } };
-const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="10" height="10"/></svg>';
+const MONTHLY = [
+  { month: "7월", sales: 120, cost: 80 },
+  { month: "8월", sales: 150, cost: 90 },
+  { month: "9월", sales: 175, cost: 95 },
+];
+const SERIES = [
+  { key: "sales", label: "매출" },
+  { key: "cost", label: "비용" },
+];
 
-/** Let the chart's animation frame fire (it coalesces renders into one per frame). */
-const frame = (): Promise<void> => act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
 const host = (): HTMLElement => document.querySelector<HTMLElement>(".wg-chart")!;
+const drawn = (selector: string): number => document.querySelectorAll(`.wg-chart ${selector}`).length;
 
+/** An IntersectionObserver the test fires by hand. */
+function fakeObserver(): { show(): void } {
+  const callbacks: Array<(entries: Array<{ isIntersecting: boolean }>) => void> = [];
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+        callbacks.push(callback);
+      }
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+  return { show: () => act(() => callbacks.forEach((callback) => callback([{ isIntersecting: true }]))) };
+}
+
+// jsdom lays nothing out, and the chart library sizes itself from its
+// container's measured box: give that container a size, as a browser would.
+const measure = HTMLElement.prototype.getBoundingClientRect;
 beforeEach(() => {
-  pending.length = 0;
-  renderVegaSvg.mockClear();
-  forgetDrawnCharts();
+  resetEntrances();
+  document.documentElement.removeAttribute("data-motion");
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.classList.contains("recharts-responsive-container")) return { x: 0, y: 0, top: 0, left: 0, right: 480, bottom: 240, width: 480, height: 240, toJSON: () => ({}) } as DOMRect;
+    return measure.call(this);
+  };
+});
+afterEach(() => {
+  HTMLElement.prototype.getBoundingClientRect = measure;
+  vi.unstubAllGlobals();
 });
 
-describe("WidgetChart holds its place", () => {
-  it("reserves a height while the drawing is on its way, and gives it up when the drawing lands", async () => {
-    render(<WidgetChart spec={SPEC} />);
-    await frame();
-
-    expect(renderVegaSvg).toHaveBeenCalledTimes(1);
-    expect(host().querySelector(".canvas-svg")).toBeNull();
-    expect(parseFloat(host().style.minHeight)).toBeGreaterThan(150); // the spec's 180 plus the axes, not 0
-
-    await act(async () => pending[0](SVG));
-
-    expect(host().querySelector(".canvas-svg")).not.toBeNull();
-    expect(host().style.minHeight).toBe("");
+describe("WidgetChart", () => {
+  it("draws the bars, the legend and the title of a grouped bar chart", async () => {
+    render(<WidgetChart model={model({ data: MONTHLY, xKey: "month", series: SERIES, unit: "만원", title: "월별 매출과 비용" })} />);
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6)); // 3 months × 2 series
+    expect(screen.getByRole("group", { name: "월별 매출과 비용" })).toBe(host());
+    expect(host().querySelector(".wg-chart-title")?.textContent).toBe("월별 매출과 비용");
+    const legend = [...document.querySelectorAll(".recharts-legend-item-text")].map((node) => node.textContent);
+    expect(legend).toEqual(["매출", "비용"]);
   });
 
-  it("is on screen in its first frame when the same chart was drawn a moment ago — no second render", async () => {
-    const live = render(<WidgetChart spec={SPEC} />);
-    await frame();
-    await act(async () => pending[0](SVG));
-    live.unmount(); // the live bubble goes; the stored message mounts its own chart
-
-    render(<WidgetChart spec={{ ...SPEC }} />);
-
-    expect(host().querySelector(".canvas-svg")).not.toBeNull(); // no frame, no await
-    await frame();
-    expect(renderVegaSvg).toHaveBeenCalledTimes(1);
+  it("draws one mark per series for a line and an area, and one slice per row for a pie and a donut", async () => {
+    const line = render(<WidgetChart model={model({ type: "line", data: MONTHLY, xKey: "month", series: SERIES })} />);
+    await waitFor(() => expect(drawn(".recharts-line-curve")).toBe(2));
+    line.unmount();
+    const area = render(<WidgetChart model={model({ type: "area", stacked: true, data: MONTHLY, xKey: "month", series: SERIES })} />);
+    await waitFor(() => expect(drawn(".recharts-area-area")).toBe(2));
+    area.unmount();
+    const share = [
+      { team: "플랫폼", share: 45 },
+      { team: "제품", share: 35 },
+      { team: "디자인", share: 20 },
+    ];
+    const pie = render(<WidgetChart model={model({ type: "pie", data: share, xKey: "team" })} />);
+    await waitFor(() => expect(drawn(".recharts-pie-sector")).toBe(3));
+    // The legend keeps the rows' own order (the slices are laid out largest first).
+    expect([...document.querySelectorAll(".recharts-legend-item-text")].map((node) => node.textContent)).toEqual(["플랫폼", "제품", "디자인"]);
+    pie.unmount();
+    render(<WidgetChart model={model({ type: "donut", data: share, xKey: "team" })} />);
+    await waitFor(() => expect(drawn(".recharts-pie-sector")).toBe(3));
   });
 
-  it("does not reuse a drawing for another spec or another theme", async () => {
-    const first = render(<WidgetChart spec={SPEC} />);
-    await frame();
-    await act(async () => pending[0](SVG));
-    first.unmount();
-
-    const other = render(<WidgetChart spec={{ ...SPEC, height: 120 }} />);
-    expect(host().querySelector(".canvas-svg")).toBeNull();
-    await frame();
-    expect(renderVegaSvg).toHaveBeenCalledTimes(2);
-    other.unmount();
-
-    render(<WidgetChart spec={SPEC} dark />);
-    expect(host().querySelector(".canvas-svg")).toBeNull();
-    await frame();
-    expect(renderVegaSvg).toHaveBeenCalledTimes(3);
+  it("has its height before anything is drawn — the answer below never jumps", () => {
+    render(<WidgetChart model={model({ data: MONTHLY })} />);
+    // First frame: the chart library is not even loaded yet.
+    expect(host().querySelector<HTMLElement>(".wg-chart-plot")?.style.height).toBe(`${DEFAULT_CHART_HEIGHT}px`);
+    render(<WidgetChart model={model({ data: MONTHLY })} height={320} />);
+    expect([...document.querySelectorAll<HTMLElement>(".wg-chart-plot")].at(-1)?.style.height).toBe("320px");
   });
 
-  it("holds nothing for a chart with nothing to draw, or one that failed", async () => {
-    const empty = render(<WidgetChart spec={null} />);
-    expect(host().style.minHeight).toBe("");
-    expect(host().textContent).toContain("표시할 차트가 없습니다.");
+  it("says so when there is nothing to plot, and names the retired form when the answer used it", () => {
+    const empty = render(<WidgetChart model={null} />);
+    expect(host().textContent).toBe("표시할 차트가 없습니다.");
+    expect(host().querySelector(".wg-chart-plot")).toBeNull();
     empty.unmount();
+    render(<WidgetChart model={null} retired />);
+    expect(host().textContent).toBe("예전 형식(Vega-Lite 스펙)으로 작성된 차트라 더 이상 그릴 수 없습니다.");
+  });
+});
 
-    renderVegaSvg.mockImplementationOnce(() => Promise.reject(new Error("bad spec")));
-    render(<WidgetChart spec={SPEC} />);
-    await frame();
-    await act(async () => {});
-    expect(host().querySelector('[role="alert"]')?.textContent).toContain("차트를 그리지 못했습니다");
-    expect(host().style.minHeight).toBe("");
+describe("WidgetChart entrance", () => {
+  const rule: EntranceRule = { scope: "test", always: true };
+
+  it("holds a chart that will enter until its frame is on screen, then draws it", async () => {
+    const observer = fakeObserver();
+    render(<WidgetChart model={model({ data: MONTHLY })} entrance={rule} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60)); // the chunk is here by now
+    });
+    expect(drawn(".recharts-bar-rectangle")).toBe(0); // off screen: nothing spent
+    expect(host().querySelector<HTMLElement>(".wg-chart-plot")?.style.height).toBe(`${DEFAULT_CHART_HEIGHT}px`); // …and its place is held
+
+    observer.show();
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6));
+  });
+
+  it("draws at once the chart whose entrance was already played elsewhere (the stored message taking over from the live bubble)", async () => {
+    const once: EntranceRule = { scope: "pane-1", always: false };
+    const chart = model({ data: MONTHLY });
+    // The live bubble's chart: on screen, it enters.
+    const observer = fakeObserver();
+    const live = render(<WidgetChart model={chart} entrance={once} />);
+    observer.show();
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6));
+    live.unmount();
+
+    // The stored message mounts the same chart: nothing to wait for — drawn without the screen saying anything.
+    fakeObserver(); // never fires
+    render(<WidgetChart model={model({ data: MONTHLY })} entrance={once} />);
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6));
+  });
+
+  it("draws at once a chart with no entrance (an answer from the history), on screen or not", async () => {
+    fakeObserver(); // never fires
+    render(<WidgetChart model={model({ data: MONTHLY })} entrance={null} />);
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6));
+  });
+
+  it("draws at once under the app's 움직임 줄이기, whatever the entrance rule says", async () => {
+    document.documentElement.setAttribute("data-motion", "reduce");
+    fakeObserver(); // never fires
+    render(<WidgetChart model={model({ data: MONTHLY })} entrance={rule} />);
+    await waitFor(() => expect(drawn(".recharts-bar-rectangle")).toBe(6));
   });
 });
