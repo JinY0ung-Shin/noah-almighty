@@ -45,6 +45,7 @@ const BASE_USER = {
   sharedAccount: false,
   onboardedAt: null,
   lastSeenRelease: null,
+  seenFeatureHints: [],
 } satisfies User;
 
 const PRISTINE = structuredClone(readState());

@@ -13,6 +13,9 @@
  * and sees the latest entries once more, which self-heals on dismiss — the
  * alternative (showing nothing) would silence every future note for them.
  *
+ * An item whose feature has a control on screen can also carry a `hint`: a
+ * bubble at that control (#feature-hints, below), tracked on its own.
+ *
  * `items` are shown verbatim to users, so they are KOREAN (language split:
  * user-facing strings are Korean). This module is intentionally dependency-free
  * so it can be imported by BOTH the server and the web client (it is listed
@@ -27,6 +30,43 @@
  */
 export type ReleaseNoteAction = "browser-guide";
 
+/**
+ * The on-screen home of a feature (#feature-hints): a control the client marks
+ * with `featureHintAnchor("<anchor>")` (client `lib/featureHints.ts`). Adding a
+ * value here means mounting that anchor AND giving it a side in the client's
+ * `FEATURE_HINT_SIDES` (a missing side fails the client typecheck; a missing
+ * mount fails tests/release-notes.test.ts).
+ */
+export type FeatureHintAnchor = "composer-attach" | "nav-brain" | "nav-teamBrain";
+
+/**
+ * A speech bubble shown AT the feature (#feature-hints), on top of the one-time
+ * dialog: the first time the user is on a screen where the anchor is visible,
+ * the control is ringed and the bubble says what is new. It stays until the
+ * user presses 알겠어요 or uses the control, and is then recorded per ACCOUNT
+ * (`users.seen_feature_hints`), independently of the dialog.
+ */
+export interface ReleaseNoteHint {
+  /**
+   * What is stored once dismissed. Unique across the whole registry and never
+   * reused or renamed — a changed id shows the bubble again to everyone.
+   * Convention: `<release id>.<slug>`.
+   */
+  id: string;
+  anchor: FeatureHintAnchor;
+  /** Bubble heading (Korean). Defaults to the item's `title`. */
+  title?: string;
+  /** Bubble text (Korean): one or two short sentences — the dialog has the detail. */
+  body: string;
+  /**
+   * Small print under the text (Korean), one short line each: the specifics a
+   * user needs AT the control — which file types, how many, how large. Facts
+   * only, and they must match the code (tests/release-notes.test.ts pins the
+   * document-attach lines to `shared/chatDocuments.ts`).
+   */
+  details?: string[];
+}
+
 export interface ReleaseNoteItem {
   /** User-facing feature name (Korean). */
   title: string;
@@ -36,6 +76,8 @@ export interface ReleaseNoteItem {
   example?: string;
   /** Optional in-app deep link (see ReleaseNoteAction). */
   action?: ReleaseNoteAction;
+  /** Optional bubble at the feature's own control (see ReleaseNoteHint). */
+  hint?: ReleaseNoteHint;
 }
 
 export interface ReleaseNote {
@@ -53,11 +95,22 @@ export const RELEASE_NOTES: ReleaseNote[] = [
         title: "팀 브레인이 생겼어요",
         body: "팀 전체가 함께 쓰는 지식 보관소예요. 대화에서 팀에 도움이 될 결정이나 해결 방법이 나오면 아바타가 공유를 제안하고, 출처를 확인해 보내면 관리자가 검토해서 반영해요. 모든 아바타가 여기서 찾아 답하고, 왼쪽 메뉴의 '팀 브레인'에서 직접 볼 수 있어요.",
         example: "예: “방금 정리한 배포 절차를 팀 브레인에 공유해 줘.”",
+        hint: {
+          id: "2026-11-12.team-brain-nav",
+          anchor: "nav-teamBrain",
+          body: "팀 전체가 함께 쓰는 지식 보관소예요. 여기를 누르면 팀 지식을 직접 볼 수 있어요.",
+        },
       },
       {
         title: "내 브레인(개인 위키)이 더 쓸모 있어졌어요",
         body: "아바타에게 기억해 달라고 하면 내 지식 저장소의 위키에 정리해 두고, 다음에 물으면 거기서 찾아 답해요. 왼쪽 메뉴의 '내 브레인'에서 내 노트와 노트 사이의 연결을 그래프로 볼 수 있고, 그래프가 더 읽기 쉬워졌어요. 개인적인 맥락은 내 브레인에, 팀이 함께 알아야 할 것은 팀 브레인에 두고, 두 곳의 내용이 다르면 아바타가 둘 다 보여 줘요.",
         example: "예: “이 장애 원인과 재발 방지 절차를 기억해 줘.”",
+        hint: {
+          id: "2026-11-12.brain-nav",
+          anchor: "nav-brain",
+          title: "내 브레인이 더 쓸모 있어졌어요",
+          body: "아바타가 기억해 둔 내 노트와 노트 사이의 연결을 여기서 그래프로 볼 수 있어요.",
+        },
       },
       {
         title: "답변 안에 차트와 화면이 바로 그려져요",
@@ -73,6 +126,17 @@ export const RELEASE_NOTES: ReleaseNote[] = [
         title: "문서를 첨부해서 물어볼 수 있어요",
         body: "내 아바타와의 대화에서 PDF, Word, Excel, PowerPoint, CSV, 텍스트 파일을 메시지에 붙이면 아바타가 내용을 읽고 답해요. 한 번에 5개, 파일당 8MB까지 되고, 버튼·붙여넣기·끌어다 놓기 모두 돼요.",
         example: "예: 보고서 PDF를 붙이고 “핵심만 세 줄로 요약해 줘.”",
+        hint: {
+          id: "2026-11-12.document-attach",
+          anchor: "composer-attach",
+          body: "문서를 붙이면 아바타가 내용을 읽고 답해요. 이 버튼으로 파일을 붙여 보세요.",
+          details: [
+            "문서: PDF · Word(.docx) · Excel(.xlsx) · PowerPoint(.pptx) · CSV · TXT · MD · JSON",
+            "이미지: PNG · JPG · WebP · GIF",
+            "문서는 한 메시지에 5개, 합쳐서 8MB까지",
+            "붙여넣기(Ctrl+V)와 끌어다 놓기도 돼요",
+          ],
+        },
       },
       {
         title: "하나의 팀으로 단순해졌어요",
@@ -432,6 +496,53 @@ export function unseenReleases(lastSeen: string | null | undefined): ReleaseNote
   const seenIndex = lastSeen ? RELEASE_NOTES.findIndex((note) => note.id === lastSeen) : -1;
   const fresh = seenIndex >= 0 ? RELEASE_NOTES.slice(0, seenIndex) : RELEASE_NOTES;
   return fresh.slice(0, MAX_RELEASES_SHOWN);
+}
+
+/** A hint as the client shows it: the registry's hint with its heading resolved. */
+export interface FeatureHint {
+  id: string;
+  anchor: FeatureHintAnchor;
+  title: string;
+  body: string;
+  /** Small-print lines under the text (empty when the hint has none). */
+  details: string[];
+}
+
+/**
+ * The hints in force, in the order they are offered (newest release first, then
+ * item order). Only the releases the dialog itself would still show count: once
+ * a release is that old its features are no longer news, so its bubbles stop
+ * without anyone having to delete them.
+ */
+export const FEATURE_HINTS: FeatureHint[] = RELEASE_NOTES.slice(0, MAX_RELEASES_SHOWN).flatMap((note) =>
+  note.items.flatMap((item) =>
+    item.hint
+      ? [
+          {
+            id: item.hint.id,
+            anchor: item.hint.anchor,
+            title: item.hint.title ?? item.title,
+            body: item.hint.body,
+            details: item.hint.details ?? [],
+          },
+        ]
+      : [],
+  ),
+);
+
+/** Ids of the hints in force — what a signup is seeded with, and what the server accepts. */
+export const FEATURE_HINT_IDS: string[] = FEATURE_HINTS.map((hint) => hint.id);
+
+/**
+ * Hints the account has not dismissed yet, in offer order. `seen` that is not a
+ * list (a server from before the feature, a test stub) means NOTHING is offered:
+ * without a place to record a dismissal a bubble would come back on every load.
+ */
+export function pendingFeatureHints(seen: readonly string[] | null | undefined): FeatureHint[] {
+  if (!Array.isArray(seen)) {
+    return [];
+  }
+  return FEATURE_HINTS.filter((hint) => !seen.includes(hint.id));
 }
 
 /** "2026-07-29" → "2026년 7월 29일" (unparseable ids fall back to the raw id). */

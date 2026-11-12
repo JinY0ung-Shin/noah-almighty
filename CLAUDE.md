@@ -153,6 +153,11 @@ These are the invariants the project is built around. New work should reinforce 
   side-panel artifact. Everything it can draw is on show at `#/uiGallery`, drawn by the SAME renderer:
   **a new component or chart type gets its sample in `lib/uiGallery.ts`** (a test fails without one).
   → `chat-sse-media.md` ("Inline UI").
+- **A release note with a control on screen also SHOWS itself there.** The 새로워진 기능 dialog stays; an
+  item's `hint` (same registry) rings that control and explains it in a bubble until the user presses
+  알겠어요 or uses the control — recorded per account, never for a bubble that merely could not be shown.
+  One at a time, never over a dialog. **A hint id is never reused; a new anchor is marked with
+  `featureHintAnchor` and gets a side.** → `server-core.md`, `client.md` ("Feature hints").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

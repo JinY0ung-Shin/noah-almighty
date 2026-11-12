@@ -28,7 +28,15 @@ a separate internal corporate server; end by reminding the user to deploy the ta
     USER-VISIBLE changes): date-based unique `id` (`YYYY-MM-DD`, same-day second
     release `YYYY-MM-DD.2`), Korean 해요체 `items` (`{title, body, example?}` —
     `example` renders as a highlighted "try this" hint; write one for features
-    users must act on to discover). Ordering = array position, newest first;
+    users must act on to discover). An item whose feature has a control on
+    screen (a button, a menu entry) also gets a `hint` — `{ id: "<release
+    id>.<slug>", anchor, body, details? }`, one or two short sentences (plus
+    optional small-print `details` lines for specifics such as file types and
+    limits, which must match the code); it is shown as a
+    bubble AT that control until the user dismisses it. `anchor` must be an
+    existing `FeatureHintAnchor`, or add one (mark the control with
+    `featureHintAnchor`, give it a side in `FEATURE_HINT_SIDES`). Never reuse
+    or rename a hint id. Ordering = array position, newest first;
     never reuse or re-sort ids. Skip for internal-only releases (refactor/docs/
     perf) — keep the dialog meaningful.
   - **GitHub release notes** (Korean, template below) — always drafted.

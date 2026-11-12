@@ -317,6 +317,42 @@ pane's controller (`tests/react-chat-stick.test.tsx`).
   the test instead of baking tofu into a baseline. Measure after first paint, or from a
   `ResizeObserver` callback.
 
+## Feature hints — the bubble at a new feature's control (#feature-hints)
+The one-time 새로워진 기능 dialog stays; on top of it, a release-note item with a `hint`
+([server-core.md](server-core.md), the registry and the per-account record) rings its control and says what
+is new next to it, the first time the user is on a screen where that control can be pointed at.
+- **A control marks itself: `ref={featureHintAnchor("<anchor>")}`** (`lib/featureHints.ts`; not a hook — ONE
+  function per anchor id, usable inside `.map()`, returns a React 19 ref cleanup). Passing `undefined`
+  instead WITHDRAWS the anchor: the composer does that while the slash menu or the staged-file strip is in
+  the space the bubble opens into, and for a pane that takes no documents (its button is not a +). Current
+  anchors: `composer-attach` (`views/chat/Composer.tsx`), `nav-brain` / `nav-teamBrain` (`Shell.tsx` `nav`).
+- **`components/FeatureHintLayer.tsx` is mounted once at the app root** (after the screen, BEFORE the
+  dialogs; `key` = user id). ONE hint at a time, in registry order; the one on screen stays while its
+  control can be pointed at (a bubble that jumps under the pointer is worse than one out of order). It is
+  closed by 알겠어요 or by a click on the control itself (document capture listener — the control's own
+  handler may stop the event), and only then recorded (`recordFeatureHintSeen`, fire-and-forget, NO
+  readback: the dismissed set lives in the layer for the session, so a `/api/me` answer already on its way
+  cannot bring the bubble back). A hint that merely cannot be shown is never recorded.
+- **"Can be pointed at"** (`featureHintAnchorBox`): connected, not under `[inert]` / `aria-hidden` /
+  `hidden` (an open dialog inerts the page; the collapsed rail; the view under the open mobile rail), not
+  `.disabled` / `:disabled` (the + button while an answer streams), has a size, its centre is inside the
+  window and — on the slow cadence only — is what `elementFromPoint` finds there. App also passes
+  `blocked` while the welcome / what's-new dialog is up.
+- **One `requestAnimationFrame` loop, running only while a hint is pending**: it looks for a control every
+  250 ms (first look 600 ms after the pending list changes — never in the mount commit, see the font-tofu
+  rule below), and follows the shown control EVERY frame, writing `transform` on the ring and the bubble
+  directly (no React render per frame; the rail slides, the composer grows, the window resizes). Nothing in
+  it subscribes to the store. `placeFeatureHint` (pure) picks the anchor's preferred side
+  (`FEATURE_HINT_SIDES`), falls back to a side with room (phone: an open rail leaves none on the right →
+  below), and keeps the arrow on the control's centre.
+- **Look:** an OPAQUE elevated card (`--bg-elevated` is translucent in the Apple layer, so it is laid over
+  `--bg`; the arrow is part of the outline), `--z-popover`, entrance only, the ring's halo breathes
+  (opacity; `animation: none` under 움직임 줄이기). The layer itself takes no pointer input — only the card.
+- **A user object WITHOUT `seenFeatureHints` shows nothing** (`pendingFeatureHints`): a server from before
+  the feature — and every Playwright fixture that predates it, so the visual baselines carry no bubble.
+  jsdom has no layout: `tests/react-feature-hints.test.tsx` gives each control a box by hand; real
+  placement was checked in Chromium (1280 px, 390 px, dark, 움직임 줄이기).
+
 ## Chat transcript auto-scroll (stick-to-bottom)
 - **User intent is read from INPUT events (wheel/touch/pointer), never inferred from scroll deltas.**
   Scroll-event heuristics lost twice over: mid-stream re-pins reset the viewport between wheel notches

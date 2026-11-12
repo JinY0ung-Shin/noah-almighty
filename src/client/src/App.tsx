@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import AuthView from "./components/AuthView";
 import ConfirmationDialog from "./components/ConfirmationDialog";
 import { ViewBoundary } from "./components/ErrorBoundary";
+import FeatureHintLayer from "./components/FeatureHintLayer";
 import OnboardingModal from "./components/OnboardingModal";
 import PromptModal from "./components/PromptModal";
 import Shell from "./components/Shell";
@@ -302,6 +303,12 @@ export default function App() {
   return (
     <>
       {screen}
+
+      {/* The bubble at a new feature's own control (#feature-hints). Before the
+          dialogs in DOM order: it is not a modal, and an open dialog makes it
+          inert like the rest of the page. Keyed by the user so what one account
+          dismissed in this session never carries over to the next login. */}
+      {state.user ? <FeatureHintLayer key={state.user.id} user={state.user} blocked={showOnboarding || showWhatsNew} /> : null}
 
       <Presence>
         {showOnboarding && state.user ? (

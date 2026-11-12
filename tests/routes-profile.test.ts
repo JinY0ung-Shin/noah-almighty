@@ -3,7 +3,7 @@ import path from "node:path";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
-import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
+import { CURRENT_RELEASE_ID, FEATURE_HINT_IDS } from "../src/server/releaseNotes.js";
 import { signup, withTempDir } from "./helpers.js";
 import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
@@ -130,6 +130,34 @@ describe("POST /api/me/release-seen", () => {
   it("requires auth", async () => {
     const app = testApp();
     await request(app).post("/api/me/release-seen").expect(401);
+  });
+});
+
+describe("POST /api/me/feature-hints/seen", () => {
+  it("seeds signups with every hint seen and accepts only ids the registry has in force", async () => {
+    const app = testApp();
+    const { agent } = await newUser(app, "hint-owner");
+
+    const me = await agent.get("/api/me").expect(200);
+    expect(me.body.user.seenFeatureHints).toEqual(FEATURE_HINT_IDS);
+
+    // Re-posting a seen id is a no-op that still answers with the user.
+    const first = FEATURE_HINT_IDS[0];
+    expect(first).toBeDefined();
+    const seen = await agent.post("/api/me/feature-hints/seen").send({ id: first }).expect(200);
+    expect(seen.body.user.seenFeatureHints).toEqual(FEATURE_HINT_IDS);
+
+    // Anything else is refused: a bundle from another build cannot store
+    // arbitrary values on the account.
+    const unknown = await agent.post("/api/me/feature-hints/seen").send({ id: "not-a-hint" }).expect(400);
+    expect(unknown.body.error).toBe("알 수 없는 안내입니다.");
+    await agent.post("/api/me/feature-hints/seen").send({ id: 7 }).expect(400);
+    await agent.post("/api/me/feature-hints/seen").send({}).expect(400);
+  });
+
+  it("requires auth", async () => {
+    const app = testApp();
+    await request(app).post("/api/me/feature-hints/seen").send({ id: FEATURE_HINT_IDS[0] }).expect(401);
   });
 });
 

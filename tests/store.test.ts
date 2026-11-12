@@ -7,7 +7,7 @@ import { createServices } from "../src/server/app.js";
 import { EXPERIMENTAL_FEATURES, EXPERIMENTAL_FEATURE_KEYS, normalizeExperimentalFeatures } from "../src/server/experimentalFeatures.js";
 import logger from "../src/server/logger.js";
 import { normalizeHashtags } from "../src/server/store.js";
-import { CURRENT_RELEASE_ID } from "../src/server/releaseNotes.js";
+import { CURRENT_RELEASE_ID, FEATURE_HINT_IDS } from "../src/server/releaseNotes.js";
 import { executeRoutineJob, startRoutineScheduler } from "../src/server/scheduler.js";
 import {
   formatMinuteOfDay,
@@ -641,6 +641,39 @@ describe("store agent session resume", () => {
     expect(store.getUserById(ownerId)?.lastSeenRelease).toBeNull();
     // Dismissing the what's-new dialog stamps the server-current id.
     expect(store.markReleaseSeen(ownerId).lastSeenRelease).toBe(CURRENT_RELEASE_ID);
+  });
+
+  it("seeds signups with every feature hint seen and records dismissals one by one", () => {
+    const { store, ownerId } = makeStore();
+    const db = (store as unknown as { db: { prepare(sql: string): { run(...params: unknown[]): unknown; get(...params: unknown[]): unknown } } }).db;
+    // A new account gets the welcome tour, not "this is new" bubbles.
+    expect(store.getUserById(ownerId)?.seenFeatureHints).toEqual(FEATURE_HINT_IDS);
+    // An account from before the feature: the additive migration leaves NULL,
+    // which reads as "nothing seen" — every hint in force is offered.
+    db.prepare("UPDATE users SET seen_feature_hints = NULL WHERE id = ?").run(ownerId);
+    expect(store.getUserById(ownerId)?.seenFeatureHints).toEqual([]);
+
+    const [first, second] = FEATURE_HINT_IDS;
+    expect(first).toBeDefined();
+    expect(store.markFeatureHintSeen(ownerId, first!).seenFeatureHints).toEqual([first]);
+    // Idempotent, and an id the registry does not have in force is never stored.
+    expect(store.markFeatureHintSeen(ownerId, first!).seenFeatureHints).toEqual([first]);
+    expect(store.markFeatureHintSeen(ownerId, "not-a-hint").seenFeatureHints).toEqual([first]);
+    if (second) {
+      expect(store.markFeatureHintSeen(ownerId, second).seenFeatureHints).toEqual([first, second]);
+    }
+
+    // Ids that are no longer in force (a pruned release) drop out of what the
+    // client is told, and out of the row on the next write.
+    db.prepare("UPDATE users SET seen_feature_hints = ? WHERE id = ?").run(JSON.stringify(["retired-hint"]), ownerId);
+    expect(store.getUserById(ownerId)?.seenFeatureHints).toEqual([]);
+    store.markFeatureHintSeen(ownerId, first!);
+    const row = db.prepare("SELECT seen_feature_hints AS seen FROM users WHERE id = ?").get(ownerId) as { seen: string };
+    expect(JSON.parse(row.seen)).toEqual([first]);
+    // A corrupt value reads as nothing seen rather than throwing.
+    db.prepare("UPDATE users SET seen_feature_hints = ? WHERE id = ?").run("{not json", ownerId);
+    expect(store.getUserById(ownerId)?.seenFeatureHints).toEqual([]);
+    expect(() => store.markFeatureHintSeen("no-such-user", first!)).toThrow("USER_NOT_FOUND");
   });
 });
 

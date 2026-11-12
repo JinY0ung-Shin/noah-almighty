@@ -7,6 +7,7 @@
 import Icon from "../../components/Icon";
 import { sendSteer, stopPane } from "../../lib/chat";
 import { autosize, clickOutside } from "../../lib/dom";
+import { featureHintAnchor } from "../../lib/featureHints";
 import { IMAGE_ACCEPT, IMAGE_AND_DOCUMENT_ACCEPT, documentTypeLabel, removePendingDocument } from "../../lib/composerDocuments";
 import { formatFileSize, formatUsageLabel } from "../../lib/format";
 import { cx, useAction } from "../../lib/hooks";
@@ -91,6 +92,13 @@ export function Composer({ ctx, item, compact, index }: { ctx: ChatController; i
   const activeDescendant = ctx.activeSlashDescendant[item.id];
   const badge =
     bridgeCompat && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser") ? bridgeBadge(bridgeCompat) : null;
+  // The document-attach hint (#feature-hints) points at the + button — only
+  // where it IS a + (a pane that takes documents), and not while the slash menu
+  // or the staged-file strip occupies the space above it, where the bubble opens.
+  const attachHintAnchor =
+    takesDocuments && !matches.length && !item.pendingImages?.length && !item.pendingDocuments?.length
+      ? featureHintAnchor("composer-attach")
+      : undefined;
 
   return (
     <footer className="composer">
@@ -174,7 +182,7 @@ export function Composer({ ctx, item, compact, index }: { ctx: ChatController; i
             </div>
           ) : null}{" "}
           <div className={cx("composer-box", canSteer(item) && "with-steer")}>
-            <label className={cx("composer-attach", item.streaming && "disabled")} title={attachTitle(item, state)}>
+            <label ref={attachHintAnchor} className={cx("composer-attach", item.streaming && "disabled")} title={attachTitle(item, state)}>
               <Icon name={takesDocuments ? "plus" : "image"} />{" "}
               {/* Visually hidden, NOT `hidden`: the input stays in the tab order,
                   so the picker opens from the keyboard too (Space/Enter), and it

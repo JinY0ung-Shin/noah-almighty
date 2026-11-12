@@ -235,6 +235,9 @@ backdrop을 토큰·베이스로 통일.**
 - **같은 `--z-modal` 층의 우선순위는 `App.tsx`의 DOM 순서가 결정한다(load-bearing):**
   `Shell → OnboardingModal → WhatsNewModal → PromptModal → Toasts → ConfirmationDialog`.
   ConfirmationDialog가 마지막이어야 다른 모달 위에서 확인창이 그려진다 — 순서를 바꾸지 말 것.
+  (`FeatureHintLayer`는 모달이 아니다: `Shell` 다음·모달들 앞에 놓이고 `--z-popover` 층이라 어떤 모달보다 아래에 그려진다.)
+- **새 기능 말풍선(`FeatureHintLayer`)** 은 불투명 카드 + 액센트 테두리 링이다. 넓은 면을 액센트로 채우지 않고,
+  링의 바깥 후광만 opacity로 숨쉰다(진입만 애니메이션, 닫힘은 즉시).
 - **닫기 관례:** 모달은 푸터 액션(확인/취소)으로 닫는 것이 기본이고 Escape/백드롭은
   `Modal.tsx` 베이스가 처리한다. 전체화면 뷰어(그래프·캔버스)는 명시적 닫기 컨트롤을 둔다.
   권한 게이트(PromptModal)는 **Escape=거부**, 백드롭 닫기 없음(의도적 — 묵시 해제 금지).

@@ -19,6 +19,7 @@ import { addConversationToSplit, clearChatHistory, forgetConversationWidgets, ne
 import { groupConversationsByDate, localDayStart, msUntilNextLocalDay } from "../lib/conversationGroups";
 import type { ConversationGroup } from "../lib/conversationGroups";
 import { createIntentDwell, prefetchConversation, PREFETCH_DWELL_MS } from "../lib/conversationPrefetch";
+import { featureHintAnchor } from "../lib/featureHints";
 import type { IntentDwell } from "../lib/conversationPrefetch";
 import { timeLabel } from "../lib/format";
 import { cx, useAppState, useLatest, useWindowEvent } from "../lib/hooks";
@@ -34,6 +35,7 @@ import type { ThemePref } from "../lib/theme";
 import { quartOut, slide } from "../lib/transition";
 import type { TransitionConfig } from "../lib/transition";
 import type { ConversationSummary, User, ViewName } from "../lib/types";
+import type { FeatureHintAnchor } from "../../../server/releaseNotes";
 
 export interface ShellProps {
   user: User;
@@ -48,17 +50,18 @@ export interface ShellProps {
 
 type RailGroup = ConversationGroup<ConversationSummary>;
 
-const nav = [
+// `hint`: this entry is the on-screen home of a feature hint (#feature-hints).
+const nav: ReadonlyArray<{ view: ViewName; label: string; icon: string; hint?: FeatureHintAnchor }> = [
   { view: "explore", label: "탐색", icon: "compass" },
   { view: "chat", label: "대화", icon: "chat" },
   { view: "todos", label: "할 일", icon: "check-square" },
-  { view: "brain", label: "내 브레인", icon: "network" },
-  { view: "teamBrain", label: "팀 브레인", icon: "users" },
+  { view: "brain", label: "내 브레인", icon: "network", hint: "nav-brain" },
+  { view: "teamBrain", label: "팀 브레인", icon: "users", hint: "nav-teamBrain" },
   { view: "inbox", label: "알림", icon: "bell" },
   { view: "routines", label: "예약 작업", icon: "clock" },
   { view: "skills", label: "스킬 배우기", icon: "sparkles" },
   { view: "settings", label: "내 아바타", icon: "user" },
-] as const;
+];
 
 const themeLabels: Record<ThemePref, string> = { system: "시스템", light: "라이트", dark: "다크" };
 const themeIcons: Record<ThemePref, string> = { system: "monitor", light: "sun", dark: "moon" };
@@ -1102,6 +1105,7 @@ export default function Shell({
             {nav.map((item, index) => (
               <button
                 key={index}
+                ref={item.hint ? featureHintAnchor(item.hint) : undefined}
                 className={cx("nav-item", view === item.view && "active")}
                 type="button"
                 aria-current={view === item.view ? "page" : undefined}

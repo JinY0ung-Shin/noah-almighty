@@ -58,6 +58,7 @@ const user = {
   sharedAccount: false,
   onboardedAt: null,
   lastSeenRelease: null,
+  seenFeatureHints: [],
 } satisfies User;
 
 let seq = 0;

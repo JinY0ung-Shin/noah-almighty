@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { hashPasswordSync, hashToken, verifyPassword } from "../auth.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import { normalizeExperimentalFeatures } from "../experimentalFeatures.js";
-import { CURRENT_RELEASE_ID } from "../releaseNotes.js";
+import { CURRENT_RELEASE_ID, FEATURE_HINT_IDS } from "../releaseNotes.js";
 import {
   type McpToolGroupId,
   normalizeMcpToolGroups,
@@ -18,6 +18,11 @@ import {
   parseNameList,
   SESSION_DAYS,
 } from "./internal.js";
+
+/** The stored dismissed-hint list, limited to hints still in force (stale ids drop out). */
+function seenFeatureHintIds(raw: string | null): string[] {
+  return (parseNameList(raw) ?? []).filter((id) => FEATURE_HINT_IDS.includes(id));
+}
 
 export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class Users extends Base {
@@ -77,6 +82,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         sharedAccount: Boolean(row.shared_account),
         onboardedAt: row.onboarded_at ?? null,
         lastSeenRelease: row.last_seen_release ?? null,
+        seenFeatureHints: seenFeatureHintIds(row.seen_feature_hints),
       };
     }
 
@@ -118,6 +124,24 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return this.toUser(row);
     }
 
+    /** Record that the user dismissed a feature hint (the bubble at a new
+     *  feature's control). Idempotent. Ids no longer in force are dropped on the
+     *  way, so the stored list never outgrows the registry. Returns the
+     *  refreshed user; an id the registry does not know is the CALLER's to refuse. */
+    markFeatureHintSeen(userId: string, hintId: string): User {
+      const row = this.userRowById(userId);
+      if (!row) throw new Error("USER_NOT_FOUND");
+      const seen = seenFeatureHintIds(row.seen_feature_hints);
+      if (FEATURE_HINT_IDS.includes(hintId) && !seen.includes(hintId)) {
+        this.db
+          .prepare("UPDATE users SET seen_feature_hints = ? WHERE id = ?")
+          .run(JSON.stringify([...seen, hintId]), userId);
+      }
+      const updated = this.userRowById(userId);
+      if (!updated) throw new Error("USER_NOT_FOUND");
+      return this.toUser(updated);
+    }
+
     /** The KNOWN experimental-feature keys the owner has enabled (drops stale). */
     getExperimentalFeatures(userId: string): string[] {
       const row = this.userRowById(userId);
@@ -156,8 +180,8 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       const isFirstUser = this.count("SELECT COUNT(*) AS c FROM users") === 0;
 
       const insertUser = this.db.prepare(`
-        INSERT INTO users (id, username, password_hash, display_name, bio, persona, avatar_ext, visibility, created_at, last_seen_at, last_seen_release)
-        VALUES (@id, @username, @password_hash, @display_name, '', '', NULL, 'group', @created_at, @created_at, @last_seen_release)
+        INSERT INTO users (id, username, password_hash, display_name, bio, persona, avatar_ext, visibility, created_at, last_seen_at, last_seen_release, seen_feature_hints)
+        VALUES (@id, @username, @password_hash, @display_name, '', '', NULL, 'group', @created_at, @created_at, @last_seen_release, @seen_feature_hints)
       `);
       const grantRole = this.db.prepare(
         "INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES (?, ?)",
@@ -173,6 +197,9 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
           // Seed new accounts as caught-up: the "what's new" dialog is for
           // updates that land AFTER signup, not for a brand-new user's day one.
           last_seen_release: CURRENT_RELEASE_ID,
+          // Same for the bubbles at each new feature's control: a new account
+          // has the welcome tour, not "this is new".
+          seen_feature_hints: JSON.stringify(FEATURE_HINT_IDS),
         });
         const memberId = this.getRoleId("member");
         if (memberId) grantRole.run(id, memberId);

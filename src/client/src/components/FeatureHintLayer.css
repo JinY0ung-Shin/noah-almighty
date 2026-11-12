@@ -1,0 +1,174 @@
+/* FeatureHintLayer's own styles, scoped to .cmp-feature-hint.
+   The layer covers the window but takes no input; only the bubble's card does.
+   The ring and the bubble are placed by FeatureHintLayer.tsx (transform only),
+   so nothing here knows where the control is. */
+.feature-hint-layer:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-popover);
+  pointer-events: none;
+  /* Not placed yet: one frame between mounting and the first measurement. */
+  visibility: hidden;
+}
+.feature-hint-layer[data-placed]:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  visibility: visible;
+}
+
+/* The ring: the control's own shape, a little larger. An opaque accent line —
+   the highlight has to read on the rail's material and on the composer alike. */
+.feature-hint-ring:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: calc(var(--feature-hint-radius, var(--r-md)) + 4px);
+}
+/* Its halo breathes (opacity only), so the eye finds the control without the
+   layout around it moving. */
+.feature-hint-ring:is(.cmp-feature-hint, .cmp-feature-hint *)::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border: 4px solid var(--accent-ring);
+  border-radius: calc(var(--feature-hint-radius, var(--r-md)) + 8px);
+  animation: cmp-feature-hint-breathe 1.4s ease-in-out infinite alternate;
+}
+/* An infinite animation does not stop under the global quiet rule. */
+:root[data-motion="reduce"] .feature-hint-ring:is(.cmp-feature-hint, .cmp-feature-hint *)::after {
+  animation: none;
+}
+
+.feature-hint:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: min(288px, calc(100vw - 2 * var(--s-2)));
+}
+
+/* An OPAQUE elevated surface, not the popover glass: the arrow is part of the
+   card's outline (two translucent shapes would show where they overlap), and
+   the bubble lies over live content it must stay readable on. `--bg-elevated`
+   itself is translucent in the Apple layer, so it is laid over the opaque page
+   colour. */
+.feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  --feature-hint-surface: linear-gradient(var(--bg-elevated), var(--bg-elevated)), var(--bg);
+  position: relative;
+  display: grid;
+  justify-items: start;
+  gap: var(--s-1-5);
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--feature-hint-surface);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  pointer-events: auto;
+}
+/* ENTRANCE only, from the arrow's corner (DESIGN §2.5); it starts when the
+   bubble is placed, and goes quiet under 움직임 줄이기 through the global rule. */
+.feature-hint-layer[data-placed] .feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  animation: cmp-feature-hint-in 180ms var(--ease-out) backwards;
+}
+.feature-hint[data-side="top"] .feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  transform-origin: var(--feature-hint-arrow, 50%) 100%;
+}
+.feature-hint[data-side="bottom"] .feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  transform-origin: var(--feature-hint-arrow, 50%) 0;
+}
+.feature-hint[data-side="right"] .feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  transform-origin: 0 var(--feature-hint-arrow, 50%);
+}
+.feature-hint[data-side="left"] .feature-hint-card:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  transform-origin: 100% var(--feature-hint-arrow, 50%);
+}
+
+/* Korean wraps between words, not mid-word. */
+.feature-hint-title:is(.cmp-feature-hint, .cmp-feature-hint *),
+.feature-hint-body:is(.cmp-feature-hint, .cmp-feature-hint *),
+.feature-hint-details:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.feature-hint-title:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  font-size: var(--t-base);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.feature-hint-body:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}
+/* The small print: the specifics (file types, limits), set apart from the
+   sentence above by a hairline and one step down in size and contrast. */
+.feature-hint-details:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  justify-self: stretch;
+  display: grid;
+  gap: var(--s-0-5);
+  margin: var(--s-1) 0 0;
+  padding: var(--s-2) 0 0;
+  border-top: 1px solid var(--line-soft);
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+}
+.feature-hint-actions:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  justify-self: end;
+  margin-top: var(--s-1);
+}
+
+/* The arrow: a square turned 45°, half outside the card, carrying the card's
+   border on its two outer sides. `--feature-hint-arrow` is its centre along
+   the card's edge. */
+.feature-hint-arrow:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  --feature-hint-arrow-size: 12px;
+  position: absolute;
+  width: var(--feature-hint-arrow-size);
+  height: var(--feature-hint-arrow-size);
+  border: 0 solid var(--line);
+  background: var(--feature-hint-surface);
+  transform: rotate(45deg);
+}
+.feature-hint[data-side="top"] .feature-hint-arrow:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  bottom: calc(var(--feature-hint-arrow-size) / -2 - 1px);
+  left: calc(var(--feature-hint-arrow, 50%) - var(--feature-hint-arrow-size) / 2);
+  border-right-width: 1px;
+  border-bottom-width: 1px;
+}
+.feature-hint[data-side="bottom"] .feature-hint-arrow:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  top: calc(var(--feature-hint-arrow-size) / -2 - 1px);
+  left: calc(var(--feature-hint-arrow, 50%) - var(--feature-hint-arrow-size) / 2);
+  border-top-width: 1px;
+  border-left-width: 1px;
+}
+.feature-hint[data-side="right"] .feature-hint-arrow:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  left: calc(var(--feature-hint-arrow-size) / -2 - 1px);
+  top: calc(var(--feature-hint-arrow, 50%) - var(--feature-hint-arrow-size) / 2);
+  border-bottom-width: 1px;
+  border-left-width: 1px;
+}
+.feature-hint[data-side="left"] .feature-hint-arrow:is(.cmp-feature-hint, .cmp-feature-hint *) {
+  right: calc(var(--feature-hint-arrow-size) / -2 - 1px);
+  top: calc(var(--feature-hint-arrow, 50%) - var(--feature-hint-arrow-size) / 2);
+  border-top-width: 1px;
+  border-right-width: 1px;
+}
+
+@keyframes cmp-feature-hint-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes cmp-feature-hint-breathe {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.25;
+  }
+}

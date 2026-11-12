@@ -36,6 +36,7 @@ const user = {
   sharedAccount: false,
   onboardedAt: null,
   lastSeenRelease: null,
+  seenFeatureHints: [],
 } satisfies User;
 
 const LISTING = {

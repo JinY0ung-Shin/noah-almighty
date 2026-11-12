@@ -5,6 +5,7 @@ import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { listSkillsInRoots } from "../plugins.js";
 import { normalizeHashtags } from "../store.js";
 import { isEffortLevel } from "../effortLevels.js";
+import { FEATURE_HINT_IDS } from "../releaseNotes.js";
 import {
   type McpToolGroupId,
   normalizeMcpToolGroups,
@@ -107,6 +108,24 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     requireAuth(store),
     (req: AuthenticatedRequest, res) => {
       const user = store.markReleaseSeen(req.user!.id);
+      res.json({ user });
+    },
+  );
+
+  // Record that a feature hint (releaseNotes.ts `hint`) was dismissed — the
+  // bubble at a new feature's control, closed with 알겠어요 or by using the
+  // control. Body: `{ id }`. Only an id the registry has in force is stored: a
+  // client bundle from another build cannot write arbitrary values.
+  router.post(
+    "/api/me/feature-hints/seen",
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const id = (req.body as { id?: unknown } | undefined)?.id;
+      if (typeof id !== "string" || !FEATURE_HINT_IDS.includes(id)) {
+        apiError(res, 400, "알 수 없는 안내입니다.");
+        return;
+      }
+      const user = store.markFeatureHintSeen(req.user!.id, id);
       res.json({ user });
     },
   );

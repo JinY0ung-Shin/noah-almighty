@@ -170,6 +170,7 @@ export interface UserRow {
   experimental_features: string | null;
   onboarded_at: string | null;
   last_seen_release: string | null;
+  seen_feature_hints: string | null;
 }
 
 export interface PluginRow {
@@ -766,6 +767,12 @@ export class StoreBase {
     // should get the one-time notice on their first load after a deploy. New
     // signups are seeded with the current release at creation instead (createUser).
     this.addColumnIfMissing("users", "last_seen_release", "TEXT");
+    // Feature-hint ids (releaseNotes.ts `hint.id`, a JSON list) the user has
+    // dismissed — the bubble shown AT a new feature's control. NULL = none,
+    // deliberately NOT backfilled, for the same reason as last_seen_release:
+    // existing accounts are the audience. New signups are seeded with every
+    // hint in force instead (createUser).
+    this.addColumnIfMissing("users", "seen_feature_hints", "TEXT");
     // Session of the conversation's last turn (on pi its latest `resp_…`
     // response id, continued as `previous_response_id`). Null until the first
     // turn completes; a CLI session id left by the removed SDK runner is ignored.

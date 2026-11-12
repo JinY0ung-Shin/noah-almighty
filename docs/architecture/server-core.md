@@ -368,3 +368,16 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   `WhatsNewModal` (root-mounted next to `OnboardingModal`, which takes precedence) → every dismissal path
   fires `POST /api/me/release-seen` (no body; the SERVER stamps its current id via `markReleaseSeen`)
   fire-and-forget, mirroring onboarding. Don't hand-copy the registry client-side.
+- **Feature hints (#feature-hints, 2026-11-12) — the bubble AT a new feature's control, on top of the dialog.**
+  A release-note item whose feature has a control on screen may carry `hint: { id, anchor, title?, body, details? }` (`details` = small-print lines under the text: file types, limits — facts that must match the code; the document-attach lines are pinned to `shared/chatDocuments.ts` by `tests/release-notes.test.ts`)
+  (same registry, so the note and its bubble are written together). `FEATURE_HINTS` = the hints of the
+  newest `MAX_RELEASES_SHOWN` releases, in registry order — a release that old is no longer news, so its
+  bubbles stop without a deletion. Tracking is per ACCOUNT and independent of the dialog:
+  `users.seen_feature_hints` (JSON list of hint ids; NULL = none, deliberately NOT backfilled, like
+  `last_seen_release`) → `User.seenFeatureHints` (only ids still in force); `createUser` seeds signups with
+  every hint in force. `POST /api/me/feature-hints/seen` `{ id }` → `markFeatureHintSeen` (idempotent;
+  an id not in force is a 400 and is never stored; stale ids drop out of the row on the next write).
+  **A hint `id` is never reused or renamed** (a changed id shows the bubble to everyone again); `anchor` is
+  the `FeatureHintAnchor` union — a new value needs its control marked in the client and a side in
+  `FEATURE_HINT_SIDES` (the typecheck and `tests/release-notes.test.ts` fail otherwise). Client half:
+  [client.md](client.md) § Feature hints.

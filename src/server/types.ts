@@ -451,6 +451,14 @@ export interface User {
    * with the then-current id at creation, so day-one accounts see nothing.
    */
   lastSeenRelease: string | null;
+  /**
+   * Feature-hint ids (`releaseNotes.ts` `hint.id`) the user has dismissed — the
+   * bubble shown at a new feature's own control. Only ids still in force are
+   * listed. The client offers the registry's hints that are NOT here, one at a
+   * time, and records a dismissal via `POST /api/me/feature-hints/seen`. New
+   * signups are seeded with every hint in force.
+   */
+  seenFeatureHints: string[];
 }
 
 export interface Plugin {

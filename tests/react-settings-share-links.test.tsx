@@ -227,6 +227,7 @@ describe("권한·연결 tab", () => {
     sharedAccount: false,
     onboardedAt: null,
     lastSeenRelease: null,
+    seenFeatureHints: [],
   } satisfies User;
 
   it("mounts the card with the tab's active prop", async () => {

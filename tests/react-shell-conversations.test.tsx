@@ -41,6 +41,7 @@ const user = {
   sharedAccount: false,
   onboardedAt: null,
   lastSeenRelease: null,
+  seenFeatureHints: [],
 } satisfies User;
 
 // LOCAL calendar fields throughout, so the suite passes in any TZ.
