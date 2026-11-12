@@ -21,7 +21,8 @@ import {
   componentSpec,
   conversationImageRef,
   emptyValue,
-  simpleChartSpec,
+  simpleChartModel,
+  simpleChartVegaSpec,
   eachScopes,
   interpolate,
   jsxWhitespace,
@@ -272,8 +273,10 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
   const { props, errors } = resolveProps(node, env, rt);
   if (node.name === "chart" && props.spec === undefined && props.data !== undefined) {
     // The simple form (`type` + `data`) is drawn through the same Vega-Lite pipeline.
-    const simple = simpleChartSpec(props);
-    props.spec = simple.spec ?? {};
+    const simple = simpleChartModel(props);
+    props.spec = simple.model ? simpleChartVegaSpec(simple.model) : {};
+    // The read form itself, for a renderer that draws it without Vega (lib/chartEngine.ts).
+    if (simple.model) props.simple = simple.model;
     for (const problem of simple.problems) errors.push(problem);
   }
   let segs: Seg[] = [];

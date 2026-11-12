@@ -11,7 +11,7 @@
  * (src/lib/genui @ 0e469c4) with the owner's permission; see each file's header.
  */
 export { checkWidget, widgetProblems, MAX_WIDGET_NODES, MAX_WIDGET_STATES, type WidgetCheck } from "./check.js";
-export { MAX_CHART_ROWS, MAX_CHART_SERIES, simpleChartSpec, type SimpleChart } from "./chart.js";
+export { MAX_CHART_ROWS, MAX_CHART_SERIES, simpleChartModel, simpleChartSpec, simpleChartVegaSpec, type SimpleChart, type SimpleChartModel } from "./chart.js";
 export { INLINE_UI_TAG_NAMES, containsInlineUi, inlineUiPlainText } from "./detect.js";
 export { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, inlineUiPromptSpec, widgetComponentBrief } from "./guide.js";
 export {

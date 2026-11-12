@@ -20,6 +20,7 @@
 // plain variables, so a handler, a timer or a late callback always sees the
 // current value; the component hands it this render's props (`sync`) and draws
 // what it holds.
+import { chartEngine as chartEngineStore, type ChartEngine } from "../../lib/chartEngine";
 import { Fragment, useEffect, useLayoutEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 
 import {
@@ -96,6 +97,8 @@ export interface AnswerUiProps {
    * is kept in this browser or reported. null in a chat.
    */
   outbox?: ((message: string) => void) | null;
+  /** SPIKE: draw simple-form charts with this engine instead of the browser's switch (the gallery's side-by-side). */
+  chartEngine?: ChartEngine;
 }
 
 /** The props the view reads later than the render that passed them. */
@@ -593,10 +596,14 @@ export default function AnswerUi({
   caret = false,
   cards = undefined,
   outbox = null,
+  chartEngine: chartEngineProp = undefined,
 }: AnswerUiProps) {
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const [notice, setNotice] = useState("");
   const dark = useStore(theme) === "dark";
+  // SPIKE: the engine of a simple-form chart — this browser's switch, unless the gallery asks for one.
+  const chartEnginePref = useStore(chartEngineStore);
+  const chartEngine = chartEngineProp ?? chartEnginePref;
 
   const current: Current = { pane, text, atts, streaming, messageId, latest, outbox };
   // Made once, with the props the component is mounted with: what the browser
@@ -628,9 +635,10 @@ export default function AnswerUi({
       statusId: view.statusId,
       dark,
       entrance,
+      chartEngine,
       domId: view.domId,
     }),
-    [view, locked, dark, entrance],
+    [view, locked, dark, entrance, chartEngine],
   );
   const status = notice || (locked && view.sends ? "아바타 응답이 끝난 뒤 보낼 수 있습니다." : "");
 

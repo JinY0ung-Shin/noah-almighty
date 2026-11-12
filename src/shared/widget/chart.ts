@@ -19,6 +19,32 @@ export interface SimpleChart {
   problems: string[];
 }
 
+/**
+ * The simple form, read and checked, before any chart engine sees it: which
+ * columns are plotted, in which shape, with the numbers already parsed. Both
+ * the Vega-Lite spec and a component-based renderer are built from this, so
+ * they cannot disagree about what the avatar asked for.
+ */
+export interface SimpleChartModel {
+  type: SimpleChartType;
+  title: string;
+  unit: string;
+  /** The plotted series' display names, in order (a pie/donut has one). */
+  names: string[];
+  stacked: boolean;
+  horizontal: boolean;
+  /** Line/area over numbers: the x axis is a number line, not categories. */
+  numericX: boolean;
+  /** One entry per plotted value, in the rows' own order. For a pie/donut `series` is the one series' name. */
+  values: { x: string | number; series: string; value: number }[];
+}
+
+export interface SimpleChartRead {
+  /** null when there is nothing to draw. */
+  model: SimpleChartModel | null;
+  problems: string[];
+}
+
 function toNumber(v: unknown): number {
   if (typeof v === "number") return v;
   if (typeof v === "string") {
@@ -39,12 +65,12 @@ function hasOwn(obj: object, key: string): boolean {
 }
 
 /** `props` are a `<chart>`'s NORMALIZED props (`normalizeProps`). */
-export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
+export function simpleChartModel(props: Record<string, unknown>): SimpleChartRead {
   const problems: string[] = [];
   const all = Array.isArray(props.data) ? (props.data as unknown[]) : [];
   const rows = all.filter((r): r is Record<string, unknown> => r !== null && typeof r === "object" && !Array.isArray(r)).slice(0, MAX_CHART_ROWS);
   if (all.length > MAX_CHART_ROWS) problems.push(`data has ${all.length} rows; only the first ${MAX_CHART_ROWS} are drawn`);
-  if (rows.length === 0) return { spec: null, problems };
+  if (rows.length === 0) return { model: null, problems };
 
   const keys: string[] = [];
   for (const row of rows.slice(0, 20)) for (const k of Object.keys(row)) if (!keys.includes(k)) keys.push(k);
@@ -72,38 +98,26 @@ export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
   }
   if (series.length === 0) {
     problems.push("the rows have no numeric key to plot");
-    return { spec: null, problems };
+    return { model: null, problems };
   }
 
   const type: SimpleChartType = props.type === "line" || props.type === "area" || props.type === "pie" || props.type === "donut" ? props.type : "bar";
   const unit = typeof props.unit === "string" ? props.unit : "";
-  const title = typeof props.title === "string" && props.title ? { title: props.title } : {};
-  const names = series.map((s) => s.label);
+  const title = typeof props.title === "string" ? props.title : "";
 
   if (type === "pie" || type === "donut") {
     const first = series[0];
-    const values = rows.map((r) => ({ x: label(r[xKey]), value: toNumber(r[first.key]) })).filter((v) => Number.isFinite(v.value) && v.value >= 0);
+    const values = rows
+      .map((r) => ({ x: label(r[xKey]), series: first.label, value: toNumber(r[first.key]) }))
+      .filter((v) => Number.isFinite(v.value) && v.value >= 0);
     if (series.length > 1) problems.push(`a ${type} chart draws one series; "${first.key}" is shown`);
-    if (values.length === 0) return { spec: null, problems };
-    return {
-      spec: {
-        ...title,
-        data: { values },
-        mark: { type: "arc", ...(type === "donut" ? { innerRadius: 60 } : {}) },
-        encoding: {
-          theta: { field: "value", type: "quantitative", stack: true },
-          color: { field: "x", type: "nominal", title: null, sort: null, scale: { domain: values.map((v) => v.x) } },
-          order: { field: "value", type: "quantitative", sort: "descending" },
-        },
-        view: { stroke: null },
-      },
-      problems,
-    };
+    if (values.length === 0) return { model: null, problems };
+    return { model: { type, title, unit, names: [first.label], stacked: false, horizontal: false, numericX: false, values }, problems };
   }
 
   // Line and area over numbers keep a numeric axis; anything else is a category in the rows' own order.
   const numericX = type !== "bar" && rows.every((r) => typeof r[xKey] === "number" && Number.isFinite(r[xKey] as number));
-  const values: { x: string | number; series: string; value: number }[] = [];
+  const values: SimpleChartModel["values"] = [];
   for (const row of rows) {
     for (const s of series) {
       if (!hasOwn(row, s.key)) continue;
@@ -111,11 +125,44 @@ export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
       if (Number.isFinite(value)) values.push({ x: numericX ? (row[xKey] as number) : label(row[xKey]), series: s.label, value });
     }
   }
-  if (values.length === 0) return { spec: null, problems };
+  if (values.length === 0) return { model: null, problems };
 
-  const multi = series.length > 1;
-  const stacked = props.stacked === true && type !== "line";
-  const horizontal = props.horizontal === true && type === "bar";
+  return {
+    model: {
+      type,
+      title,
+      unit,
+      names: series.map((s) => s.label),
+      stacked: props.stacked === true && type !== "line",
+      horizontal: props.horizontal === true && type === "bar",
+      numericX,
+      values,
+    },
+    problems,
+  };
+}
+
+/** The Vega-Lite spec of a read simple form. */
+export function simpleChartVegaSpec(model: SimpleChartModel): Record<string, unknown> {
+  const { type, unit, names, stacked, horizontal, numericX } = model;
+  const title = model.title ? { title: model.title } : {};
+
+  if (type === "pie" || type === "donut") {
+    const values = model.values.map((v) => ({ x: v.x as string, value: v.value }));
+    return {
+      ...title,
+      data: { values },
+      mark: { type: "arc", ...(type === "donut" ? { innerRadius: 60 } : {}) },
+      encoding: {
+        theta: { field: "value", type: "quantitative", stack: true },
+        color: { field: "x", type: "nominal", title: null, sort: null, scale: { domain: values.map((v) => v.x) } },
+        order: { field: "value", type: "quantitative", sort: "descending" },
+      },
+      view: { stroke: null },
+    };
+  }
+
+  const multi = names.length > 1;
   const category = { field: "x", type: numericX ? "quantitative" : type === "bar" ? "nominal" : "ordinal", title: null, ...(numericX ? {} : { sort: null, axis: { labelAngle: 0 } }) };
   const measure = {
     field: "value",
@@ -127,12 +174,15 @@ export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
   const offset = multi && type === "bar" && !stacked ? { [horizontal ? "yOffset" : "xOffset"]: { field: "series", type: "nominal", sort: null, scale: { domain: names } } } : {};
   const mark = type === "bar" ? { type: "bar" } : type === "line" ? { type: "line", point: true } : { type: "area", line: true, ...(multi && !stacked ? { opacity: 0.5 } : {}) };
   return {
-    spec: {
-      ...title,
-      data: { values },
-      mark,
-      encoding: { ...(horizontal ? { y: category, x: measure } : { x: category, y: measure }), ...color, ...offset },
-    },
-    problems,
+    ...title,
+    data: { values: model.values },
+    mark,
+    encoding: { ...(horizontal ? { y: category, x: measure } : { x: category, y: measure }), ...color, ...offset },
   };
+}
+
+/** `props` are a `<chart>`'s NORMALIZED props (`normalizeProps`). */
+export function simpleChartSpec(props: Record<string, unknown>): SimpleChart {
+  const { model, problems } = simpleChartModel(props);
+  return { spec: model ? simpleChartVegaSpec(model) : null, problems };
 }

@@ -1,3 +1,4 @@
+import type { ChartEngine } from "./chartEngine";
 import type { EntranceRule } from "./uiEntrance";
 
 // What the inline UI components need from the view that hosts them. A new
@@ -26,6 +27,8 @@ export interface WidgetCtx {
    * from the history — draws everything at rest.
    */
   entrance: EntranceRule | null;
+  /** Which engine draws a simple-form `<chart>` (lib/chartEngine.ts — a spike switch). */
+  chartEngine: ChartEngine;
   /** A DOM id unique to this view for a node key (two answers on one page must not collide). */
   domId(key: string): string;
 }

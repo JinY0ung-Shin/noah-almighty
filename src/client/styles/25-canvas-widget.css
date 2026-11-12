@@ -584,3 +584,44 @@
 .ui-gallery-source > .md {
   margin-top: var(--s-2);
 }
+
+/* SPIKE (2026-11-12): simple-form charts drawn by Recharts, and the gallery's side-by-side. */
+.wg-chart-rc {
+  width: 100%;
+}
+.wg-chart-title {
+  margin: 0 0 var(--s-1);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.wg-chart-rc :focus {
+  outline: none;
+}
+.wg-chart-rc :focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.ui-gallery-engine {
+  align-self: center;
+}
+.ui-gallery-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+.ui-gallery-compare > figure {
+  margin: 0;
+  min-width: 0;
+}
+.ui-gallery-compare figcaption {
+  margin-bottom: var(--s-1);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+@media (max-width: 900px) {
+  .ui-gallery-compare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
