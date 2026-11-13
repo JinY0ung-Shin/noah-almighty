@@ -276,6 +276,21 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   cut keeps ~20,000 estimated tokens of the tail, so two ~130K-char answers summarize only the first).
   Re-running `run-all.sh` on a stack that already ran it fails ONE check by design (`30-documents`: "the
   owner's sandbox is the only one" — the first run's other sandboxes are still there).
+  **pi `ad2d30f` (2026-11-13, the admin panel's 운영 → 실행 시간 page: statistics over the last 7 days' turns,
+  up to 500, read from Jaeger on every open — `GET /admin/api/traces/stats`):** `run-all.sh` all PASS on a
+  fresh stack (`~/.noah-work/boot-test-2026-11-13b/`), `70-tracing-static.sh` and `71-tracing-turn.mjs`
+  (25/25 — the session traces route now filters on the turn span) re-run, and `75-trace-stats.mjs` there
+  (30/30) is the look pi's commit did not take, through Noah's `/admin` proxy against the real gateway: an
+  admin gets 200, a member and an anonymous caller 403; the turn count, the turn-time p50/p95 and the
+  slowest turn equal what is recomputed from Jaeger's own answer; `mcp_call` is listed per real tool as
+  `execute_tool mcp_call <server>/<tool>` (`todo/add_todos`); the answer holds pi session ids and nothing of
+  the conversation (no marker of the prompt, command, result or MCP argument, no Noah user or conversation
+  id); the read is an audit row `pi_admin_proxy` (`GET /admin/api/traces/stats`); with `jaeger` stopped it
+  is `503 trace_store_unavailable` after ~10 s and the same turns are back once it starts.
+  `25-admin-ui-real-gateway.mjs` with `timing` added (40/40): all 13 pages render, light and dark. Measured
+  at the 500-turn cap (scripted turns of 6–7 spans each): 80–145 ms and ~2.2 KB per open — real turns carry
+  more spans, so this is a floor, not the production figure. Note for the next run: a Node client that
+  waits out a `compose stop` (10 s) meets Noah's closed keep-alive socket (`other side closed`) — retry once.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

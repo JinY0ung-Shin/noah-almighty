@@ -681,6 +681,8 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   session, status — polled every 10 s —, llm, tools, mcp/servers, history/retention, marketplaces, plugins,
   plugin-settings, chat/options, prompts, prompt-deployments) is an audit row `pi_admin_proxy` with `METHOD path`
   only — so `history`, `history/<id>`, `chat/file`, `requests` and any read pi adds LATER are audited by default.
+  `traces/stats` (pi `ad2d30f`, the panel's 운영 → 실행 시간 page) was such a later read and STAYS audited: its
+  slowest-turns list names pi sessions, and the page reads it once per open (no polling), so one row per look.
   No query and no body, except the pi user the call acts as: the query's `user` (`chat/file`, `history`,
   `chat/<id>/cancel`) or the JSON body's `user` of an admin chat / preview (`POST chat`, `chat/preview` — the
   body is buffered for it, up to pi's own 16 MiB limit, else 413 without forwarding), so the row says whose
