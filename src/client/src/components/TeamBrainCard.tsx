@@ -1,6 +1,10 @@
 // A team-brain confirmation card (a `kind:"team_brain"` attachment). The avatar
-// only DRAFTED it; this card is where a human decides. Its state is read LIVE
-// from the server (/api/team-brain/cards/:id) and every button re-checks there.
+// only DRAFTED it; this card is where its drafter decides: the confirm button
+// (팀 브레인에 반영 — a teammate's own page changes; 팀 정책 반영 — an admin's POLICY.md
+// change) commits, 취소 drops the draft. Its state is read LIVE from the server
+// (/api/team-brain/cards/:id) and every button re-checks there. A card of the
+// retired review queue (`view.legacy`) is history: its title and one line (plus, folded, the text of a
+// submission the upgrade closed).
 //
 // Everything shown here is teammate- or model-written text: it is rendered as
 // TEXT only (`<pre>`, diff lines, list items) — never as markdown or HTML.
@@ -8,10 +12,9 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import Icon from "./Icon";
 import type {
-  TeamBrainCardPressAction,
   TeamBrainCardView,
   TeamBrainIntake,
-  TeamBrainProposalKind,
+  TeamBrainLiveKind,
   TeamPageChangeView,
   TeamProvenanceInput,
   TeamProvenanceSlot,
@@ -24,6 +27,7 @@ import {
   TEAM_SOURCE_KINDS,
   TEAM_SOURCE_KIND_LABELS,
   TEAM_SOURCE_KIND_PLACEHOLDERS,
+  isTeamBrainLegacyKind,
   isTeamIntakeUnknown,
   teamBrainCardButtonLabel,
   teamBrainCardPressBubble,
@@ -34,7 +38,11 @@ import {
 import { collapseUnchanged, diffLines, type DiffHunkItem } from "../../../shared/lineDiff";
 import { reportTeamBrainCardPress } from "../lib/chat";
 import { cx, useDocumentEvent, useLatest } from "../lib/hooks";
-import { onTeamBrainCardsChanged, refreshTeamBrainStatus, teamBrainCardsChanged, teamBrainDraftCardMounted } from "../lib/teamBrain";
+
+// Draft cards on screen. One card's commit may change a page another draft
+// changes too (that draft is then stale and its apply refused), so the others
+// re-read when a card is applied.
+const draftCardRereads = new Set<() => void>();
 
 export interface TeamBrainCardProps {
   proposalId: string;
@@ -55,87 +63,37 @@ function formProblems(f: TeamProvenanceInput): string[] {
 }
 
 const KIND_LABEL = {
-  propose: "팀 브레인 제안",
   direct: "팀 브레인 변경",
-  review: "팀 브레인 검토",
   policy: "팀 정책 변경",
-} as const satisfies Record<TeamBrainProposalKind, string>;
-const DECISION_LABEL = { approve: "승인", reject: "반려", ask: "보완 요청" } as const;
+} as const satisfies Record<TeamBrainLiveKind, string>;
 
 type Tone = "info" | "ok" | "warn" | "muted";
 
-function statusText(v: TeamBrainCardView): { text: string; tone: Tone } {
-  const p = v.proposal;
-  if (p.kind === "propose") {
-    switch (p.status) {
-      case "draft":
-        // Sources have no staleness; only a legacy note row the server refuses to submit can be stale.
-        if (v.stale && !v.actions.submit) {
-          return { text: "그 사이 노트가 바뀌어 제출할 수 없습니다. 아바타에게 다시 제안을 요청하세요.", tone: "warn" };
-        }
-        return p.intake && p.intake.followups.length
-          ? { text: "답변을 반영했습니다. 다시 제출하세요.", tone: "info" }
-          : { text: "아직 공유되지 않았습니다. 내용을 확인하고 제출하세요.", tone: "info" };
-      case "pending":
-        return { text: "관리자의 검토를 기다리고 있습니다.", tone: "info" };
-      case "needs_info": {
-        const q = (p.decisionReason ?? "").trim();
-        const asked = q ? `: ${q}${/[.?!。？！]$/.test(q) ? "" : "."}` : ".";
-        return { text: `관리자가 보완을 요청했습니다${asked} 아바타에게 답을 알려 주세요.`, tone: "warn" };
+function statusText(v: TeamBrainCardView, kind: TeamBrainLiveKind): { text: string; tone: Tone } {
+  const policy = kind === "policy";
+  switch (v.proposal.status) {
+    case "draft":
+      if (v.stale) {
+        return policy
+          ? { text: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" }
+          : { text: "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" };
       }
-      case "approved":
-        return { text: `승인되어 팀 브레인에 반영되었습니다${p.decidedByName ? ` (${p.decidedByName})` : ""}.`, tone: "ok" };
-      case "rejected":
-        return { text: `반려되었습니다${p.decisionReason ? `: ${p.decisionReason}` : "."}`, tone: "warn" };
-      case "withdrawn":
-        return { text: "철회했습니다.", tone: "muted" };
-      case "expired":
-        return { text: "제출하지 않아 만료되었습니다.", tone: "muted" };
-      default:
-        return { text: "처리된 카드입니다.", tone: "muted" };
-    }
+      // Not stale and still no confirm button: the server judged the VIEWER (policy: no longer an admin).
+      if (!v.actions.apply) {
+        return policy
+          ? { text: "관리자만 반영할 수 있습니다.", tone: "warn" }
+          : { text: "지금은 이 계정으로 팀 브레인에 반영할 수 없습니다.", tone: "warn" };
+      }
+      return policy
+        ? { text: "버튼을 눌러야 팀 정책이 저장됩니다.", tone: "info" }
+        : { text: "버튼을 눌러야 팀 브레인에 저장됩니다.", tone: "info" };
+    case "applied":
+      return policy ? { text: "팀 정책을 저장했습니다.", tone: "ok" } : { text: "팀 브레인에 저장했습니다.", tone: "ok" };
+    case "expired":
+      return { text: "누르지 않아 만료되었습니다.", tone: "muted" };
+    default:
+      return { text: "취소했습니다.", tone: "muted" };
   }
-  if (p.status === "draft") {
-    if (p.kind === "review" && v.target && v.target.status !== "pending") {
-      return { text: "이 제안은 이미 처리되었거나 철회되었습니다.", tone: "muted" };
-    }
-    if (v.stale) {
-      return p.kind === "policy"
-        ? { text: "그 사이 팀 정책이 바뀌었습니다. 아바타에게 현재 정책에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" }
-        : { text: "그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.", tone: "warn" };
-    }
-    if (!v.actions.apply) return { text: "관리자만 반영할 수 있습니다.", tone: "warn" };
-    if (p.kind === "policy") return { text: "버튼을 눌러야 팀 정책이 저장됩니다.", tone: "info" };
-    if (p.kind === "review" && p.decision === "ask") return { text: "버튼을 눌러야 보완 요청이 제안자에게 전달됩니다.", tone: "info" };
-    return { text: p.kind === "review" ? "버튼을 눌러야 결정이 반영됩니다." : "버튼을 눌러야 팀 브레인에 저장됩니다.", tone: "info" };
-  }
-  if (p.status === "applied") {
-    if (p.kind === "review") {
-      if (p.decision === "approve") return { text: "승인해서 팀 브레인에 반영했습니다.", tone: "ok" };
-      if (p.decision === "ask") return { text: "보완 요청을 보냈습니다.", tone: "ok" };
-      return { text: "반려했습니다.", tone: "ok" };
-    }
-    if (p.kind === "policy") return { text: "팀 정책을 저장했습니다.", tone: "ok" };
-    return { text: "팀 브레인에 저장했습니다.", tone: "ok" };
-  }
-  if (p.status === "expired") return { text: "누르지 않아 만료되었습니다.", tone: "muted" };
-  // A review card is also cancelled by the server when another decision on the same proposal lands
-  // or the proposal is withdrawn — so the wording does not claim the viewer pressed 취소.
-  if (p.kind === "review") return { text: "취소되었습니다. 이 제안에 다른 결정이 반영되었거나 제안이 철회되었을 수 있습니다.", tone: "muted" };
-  return { text: "취소했습니다.", tone: "muted" };
-}
-
-// The confirm button's label — the same one the press report names to the avatar.
-function applyLabel(v: TeamBrainCardView): string {
-  return teamBrainCardButtonLabel("apply", v.proposal);
-}
-
-function kindLine(v: TeamBrainCardView): string {
-  const p = v.proposal;
-  if (p.kind === "review") return `${KIND_LABEL.review} · ${DECISION_LABEL[p.decision ?? "reject"]}`;
-  // Legacy single-note rows (no intake, no changeset) still read as a note write.
-  if (p.kind === "propose" && !p.intake) return `${KIND_LABEL.propose} · ${p.op === "create" ? "새 노트" : "노트 수정"}`;
-  return KIND_LABEL[p.kind];
 }
 
 /** "원본 1건 · 페이지 N개 (새 페이지 a · 수정 b)" — for changeset cards. */
@@ -222,59 +180,56 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
     setBusyState(next);
   }
 
-  async function load(): Promise<TeamBrainCardView | null> {
+  async function load(): Promise<void> {
     try {
-      const next = await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}`);
-      setView(next);
+      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}`));
       setLoadError("");
-      return next;
     } catch (err) {
       const status = (err as { status?: number }).status;
       if (status === 404) setGone(true);
       else setLoadError((err as Error).message);
-      return null;
     }
   }
 
-  /**
-   * Tell the avatar what a press of 관리자에게 제출 / the confirm button did —
-   * done or refused — so it can go on by itself (lib/chat.ts
-   * reportTeamBrainCardPress). 취소 / 제안 철회 is not told. `pressed` is the card as
-   * it was when pressed: its kind, decision and title name the button.
-   */
-  function tellAvatar(paneId: string | undefined, action: TeamBrainCardPressAction, pressed: TeamBrainCardView, ok: boolean): void {
-    if (!paneId) return;
-    // 초안 모두 제출: the number on the button (the server stores the number it really sent).
-    const count = action === "submit_all" ? pressed.actions.submitAll || undefined : undefined;
-    void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(action, pressed.proposal, ok, count));
-  }
-
-  // Another card changed the conversation's drafts (a press, a saved 출처 정보, a new
-  // draft card): a draft card re-reads — its status after 초안 모두 제출, or whether
-  // it now carries that button and for how many.
-  const onOtherCardPressed = useLatest(() => {
+  // A card applied elsewhere on screen: a draft re-reads (it may be stale now).
+  const rereadDraft = useLatest(() => {
     if (view?.proposal.status === "draft" && !busyRef.current) void load();
   });
-  const cardListener = useRef(() => onOtherCardPressed.current());
-  useEffect(() => onTeamBrainCardsChanged(cardListener.current), []);
+  const rereadListener = useRef(() => rereadDraft.current());
+  useEffect(() => {
+    const listener = rereadListener.current;
+    draftCardRereads.add(listener);
+    return () => {
+      draftCardRereads.delete(listener);
+    };
+  }, []);
 
-  async function act(action: "submit" | "submit_all" | "withdraw" | "apply"): Promise<void> {
-    if (busyRef.current || !view) return;
-    const pressed = view;
+  /**
+   * The confirm button (`apply`) or 취소 (`cancel`). A press of the confirm
+   * button is told to the avatar — done or refused — so it can go on by itself
+   * (lib/chat.ts reportTeamBrainCardPress); 취소 is not.
+   */
+  async function act(action: "apply" | "cancel"): Promise<void> {
+    if (busyRef.current || !view || isTeamBrainLegacyKind(view.proposal.kind)) return;
+    // The card as it was when pressed: its kind and title name the button.
+    const pressed = { kind: view.proposal.kind, title: view.proposal.title };
     // The pane is read NOW, at the press: a card drafted in the turn still being
     // written sits in the live bubble, which is torn down (and this instance with
     // it — the ref goes null) when that turn ends, possibly before the server answers.
     const paneId = rootRef.current?.closest<HTMLElement>("[data-pane]")?.dataset.pane;
+    const tellAvatar = (ok: boolean): void => {
+      if (action === "apply" && paneId) void reportTeamBrainCardPress(paneId, proposalId, teamBrainCardPressBubble(pressed, ok));
+    };
     setBusy(true);
     setActionError("");
     try {
-      const route = action === "submit_all" ? "submit-all" : action;
-      // 초안 모두 제출 names the number on the button: the server sends that many or nothing.
-      const body = action === "submit_all" ? { body: JSON.stringify({ count: pressed.actions.submitAll ?? 0 }) } : {};
-      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${route}`, { method: "POST", ...body }));
-      void refreshTeamBrainStatus();
-      teamBrainCardsChanged(cardListener.current);
-      if (action !== "withdraw") tellAvatar(paneId, action, pressed, true);
+      setView(await api<TeamBrainCardView>(`/api/team-brain/cards/${encodeURIComponent(proposalId)}/${action}`, { method: "POST" }));
+      if (action === "apply") {
+        for (const reread of [...draftCardRereads]) {
+          if (reread !== rereadListener.current) reread();
+        }
+      }
+      tellAvatar(true);
     } catch (err) {
       setActionError((err as Error).message);
       // A press the SERVER refused is told too (the avatar may be the one to fix
@@ -282,7 +237,7 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
       // its reason. Anything else — a 404 (no such card for this user), a lost
       // connection — left nothing on the server to tell.
       const status = (err as { status?: number }).status;
-      if (action !== "withdraw" && (status === 403 || status === 409 || status === 500)) tellAvatar(paneId, action, pressed, false);
+      if (status === 403 || status === 409 || status === 500) tellAvatar(false);
       await load();
     } finally {
       setBusy(false);
@@ -290,7 +245,7 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   }
 
   // 출처 정보 (provenance) editor: the drafter fills or corrects 출처 유형·출처·작성자·작성일
-  // on their own draft before 제출 / 반영. It opens by itself while something is
+  // on their own draft before 반영. It opens by itself while something is
   // missing — the gated button's prerequisite is the first step — and the
   // server re-validates every save.
   const [editing, setEditing] = useState(false);
@@ -333,8 +288,6 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
         }),
       );
       setEditing(false);
-      // A filled-in 출처 정보 makes this draft ready: the other cards' 모두 제출 count moves.
-      teamBrainCardsChanged(cardListener.current);
     } catch (err) {
       setFormError((err as Error).message);
     } finally {
@@ -358,45 +311,28 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   const provenanceBlocked = Boolean(view?.provenance && view.provenance.issues.length > 0);
   const formKind = teamSourceKindOf(form.sourceKind);
 
-  // An open proposal is decided (or answered) elsewhere — an admin's conversation,
-  // the proposer's avatar: re-read on return.
+  // A draft goes stale (a teammate changed the page) or expires while the tab is away: re-read on return.
   function onVisible(): void {
-    const s = view?.proposal.status;
-    if (document.visibilityState === "visible" && (s === "pending" || s === "draft" || s === "needs_info")) {
-      void load();
-    }
+    if (document.visibilityState === "visible" && view?.proposal.status === "draft") void load();
   }
 
   useEffect(() => {
-    void load().then((first) => {
-      // A new submission draft on screen: the other draft cards re-read their 모두 제출 count.
-      if (first?.proposal.kind === "propose" && first.proposal.status === "draft") teamBrainDraftCardMounted();
-    });
+    void load();
     // Once, on mount (the listener below always calls the latest `onVisible`).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useDocumentEvent("visibilitychange", onVisible);
 
-  const status = view ? statusText(view) : null;
   const proposal = view?.proposal ?? null;
-  const isReview = proposal?.kind === "review";
-  const isChangesetCard = Boolean(proposal && (proposal.kind === "direct" || (proposal.kind === "review" && proposal.decision === "approve")));
+  // Null on a card of the retired review queue (kinds `propose` / `review`).
+  const kind = view && proposal && !view.legacy && !isTeamBrainLegacyKind(proposal.kind) ? proposal.kind : null;
+  const status = view && kind ? statusText(view, kind) : null;
   // A policy card is ONE file write (POLICY.md): its diff is the whole card, so it is shown unfolded.
-  const isPolicy = proposal?.kind === "policy";
-  const showPages = isChangesetCard || isPolicy;
-  // Personal second-brain notes the submission came from (an older server sends none).
-  const personalNotes = proposal && (proposal.kind === "propose" || proposal.kind === "direct") ? (proposal.personalNotes ?? []) : [];
-  // The source being compiled: a review's target, or a direct card's own source (a maintenance changeset has none).
-  const source =
-    !view || !proposal
-      ? null
-      : proposal.kind === "review"
-        ? view.target && proposal.decision !== "reject"
-          ? { content: view.target.content, intake: view.target.intake }
-          : null
-        : proposal.kind === "direct" && (proposal.intake || proposal.content)
-          ? { content: proposal.content, intake: proposal.intake }
-          : null;
+  const isPolicy = kind === "policy";
+  // Personal second-brain notes the changes came from.
+  const personalNotes = proposal && kind === "direct" ? (proposal.personalNotes ?? []) : [];
+  // A direct card's own source (a changeset that only edits existing pages has none).
+  const source = proposal && kind === "direct" && (proposal.intake || proposal.content) ? { content: proposal.content, intake: proposal.intake } : null;
   const pages = view?.pages ?? [];
   const diffs = pages.map(pageDiff);
   const conflicts = proposal?.changeset?.conflicts ?? [];
@@ -532,43 +468,22 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
   function intakeBlock(intake: TeamBrainIntake) {
     const rows = intakeRows(intake);
     const gaps = gapLabels(intake);
-    return (
-      <>
-        {rows.length || gaps ? (
-          <div className="team-brain-intake">
-            <span className="team-brain-section-label">보충 정보</span>
-            {rows.length ? (
-              <dl className="team-brain-intake-list">
-                {rows.map((row) => (
-                  <div key={row.label} className="team-brain-intake-row">
-                    <dt>{row.label}</dt>
-                    <dd>{row.unknown ? <span className="tag team-brain-unknown">모름</span> : row.answer}</dd>
-                  </div>
-                ))}
-              </dl>
-            ) : null}
-            {gaps ? <p className="team-brain-gaps">아직 모르는 정보: {gaps}</p> : null}
-          </div>
-        ) : null}
-        {intake.followups.length ? (
-          <ol className="team-brain-followups" aria-label="보완 요청 기록">
-            {intake.followups.map((round, i) => (
-              <li key={i} className="team-brain-followup">
-                <span className="team-brain-section-label">보완 요청 {i + 1}</span>
-                <p className="team-brain-qa">
-                  <span className="team-brain-qa-label">질문</span>
-                  <span className="team-brain-qa-text">{round.questions}</span>
-                </p>
-                <p className="team-brain-qa">
-                  <span className="team-brain-qa-label">답변</span>
-                  <span className="team-brain-qa-text">{round.answer}</span>
-                </p>
-              </li>
+    return rows.length || gaps ? (
+      <div className="team-brain-intake">
+        <span className="team-brain-section-label">보충 정보</span>
+        {rows.length ? (
+          <dl className="team-brain-intake-list">
+            {rows.map((row) => (
+              <div key={row.label} className="team-brain-intake-row">
+                <dt>{row.label}</dt>
+                <dd>{row.unknown ? <span className="tag team-brain-unknown">모름</span> : row.answer}</dd>
+              </div>
             ))}
-          </ol>
+          </dl>
         ) : null}
-      </>
-    );
+        {gaps ? <p className="team-brain-gaps">아직 모르는 정보: {gaps}</p> : null}
+      </div>
+    ) : null;
   }
 
   if (gone) {
@@ -602,84 +517,62 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
     );
   }
 
+  if (!kind) {
+    // History of the retired review queue: the title and the server's one line. No buttons.
+    return (
+      <section className="team-brain-card" aria-label="지난 팀 브레인 카드">
+        <header className="team-brain-head">
+          <span className="team-brain-icon" aria-hidden="true">
+            <Icon name="book" size={16} />
+          </span>
+          <div className="team-brain-title">
+            <strong className="team-brain-name">{proposal.title}</strong>
+          </div>
+        </header>
+        {view.legacy ? (
+          <p className={`team-brain-status tone-${view.legacy.closedByUpgrade ? "info" : "muted"}`} role="status">
+            {view.legacy.notice}
+          </p>
+        ) : null}
+        {/* A submission the upgrade closed: the drafter's own text, folded, as plain text — to hand to the avatar again. */}
+        {view.legacy?.source ? (
+          <details className="team-brain-details">
+            <summary>제출했던 원문 보기</summary>
+            <pre className="team-brain-pre">{view.legacy.source}</pre>
+          </details>
+        ) : null}
+      </section>
+    );
+  }
+
   return (
-    <section className="team-brain-card" aria-label={KIND_LABEL[proposal.kind]} ref={rootRef}>
+    <section className="team-brain-card" aria-label={KIND_LABEL[kind]} ref={rootRef}>
       <header className="team-brain-head">
         <span className="team-brain-icon" aria-hidden="true">
           <Icon name="book" size={16} />
         </span>
         <div className="team-brain-title">
-          <span className="team-brain-kind">
-            {kindLine(view)}{" "}
-            {proposal.kind === "propose" && proposal.intake?.type ? (
-              <span className="tag accent team-brain-type">{TEAM_PAGE_TYPE_LABELS[proposal.intake.type]}</span>
-            ) : null}
-          </span>
+          <span className="team-brain-kind">{KIND_LABEL[kind]}</span>
           <strong className="team-brain-name">{proposal.title}</strong>
-          {isChangesetCard ? (
-            <span className="team-brain-count">{changesetLine(pages, Boolean(source))}</span>
-          ) : proposal.path && !isPolicy ? (
-            <code className="team-brain-path">{proposal.path}</code>
-          ) : null}
+          {kind === "direct" ? <span className="team-brain-count">{changesetLine(pages, Boolean(source))}</span> : null}
         </div>
       </header>
 
-      {isReview && view.target ? (
-        <p className="team-brain-summary">
-          {`${view.target.proposerName || "팀원"}님의 제안${view.target.summary ? ` — ${view.target.summary}` : ""}`}
-        </p>
-      ) : proposal.summary ? (
-        <p className="team-brain-summary">{proposal.summary}</p>
-      ) : null}
-
-      {isReview && proposal.decision === "reject" && proposal.decisionReason ? (
-        <p className="team-brain-summary">반려 사유: {proposal.decisionReason}</p>
-      ) : null}
-      {isReview && proposal.decision === "ask" ? (
-        <div className="team-brain-box team-brain-ask">
-          <span className="team-brain-section-label">보완 요청</span>
-          <p className="team-brain-box-text">{proposal.decisionReason ?? ""}</p>
-        </div>
-      ) : null}
-
-      {proposal.kind === "propose" ? (
-        proposal.intake ? (
-          <>
-            <details className="team-brain-details">
-              <summary>원문 보기</summary>
-              <pre className="team-brain-pre">{proposal.content}</pre>
-            </details>
-            {proposal.intake.type ? provenanceBlock(proposal.intake, Boolean(view.provenance?.editable)) : null}
-            {intakeBlock(proposal.intake)}
-          </>
-        ) : (
-          <details className="team-brain-details">
-            <summary>제안 내용 보기</summary>
-            <pre className="team-brain-pre">{proposal.content}</pre>
-          </details>
-        )
-      ) : null}
+      {proposal.summary ? <p className="team-brain-summary">{proposal.summary}</p> : null}
 
       {source ? (
         <>
-          {/* A direct card's own source: its provenance stays OUT of the fold, editable while a draft. */}
-          {proposal.kind === "direct" && source.intake?.type
-            ? provenanceBlock(source.intake, Boolean(view.provenance?.editable))
-            : null}
+          {/* The card's own source: its provenance stays OUT of the fold, editable while a draft. */}
+          {source.intake?.type ? provenanceBlock(source.intake, Boolean(view.provenance?.editable)) : null}
           <details className="team-brain-details">
             <summary>원본 보기</summary>
             <pre className="team-brain-pre">{source.content}</pre>
-            {source.intake ? (
-              <>
-                {proposal.kind !== "direct" && source.intake.type ? provenanceList(source.intake) : null}
-                {intakeBlock(source.intake)}
-              </>
-            ) : null}
+            {source.intake ? intakeBlock(source.intake) : null}
           </details>
         </>
       ) : null}
 
-      {proposal && personalNotes.length ? (
+      {personalNotes.length ? (
         <div className="team-brain-linked-notes">
           <p className="team-brain-linked-line">
             연결된 내 브레인 노트:{" "}
@@ -691,12 +584,12 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
             ))}
           </p>
           <p className="team-brain-hint">
-            {proposal.kind === "direct" ? "반영되면" : "승인되면"} 팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다.
+            반영되면 팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다.
           </p>
         </div>
       ) : null}
 
-      {isChangesetCard && conflicts.length ? (
+      {conflicts.length ? (
         <div className="team-brain-box team-brain-conflicts" role="note">
           <span className="team-brain-section-label">확인이 필요한 충돌</span>
           <ul>
@@ -707,7 +600,7 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
         </div>
       ) : null}
 
-      {showPages && pages.length ? (
+      {pages.length ? (
         <ul className="team-brain-pages" aria-label={isPolicy ? "바뀌는 정책 파일" : "바뀌는 페이지"}>
           {pages.map((page, i) => {
             const diff = diffs[i];
@@ -802,46 +695,23 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
           {status.text}
         </p>
       ) : null}
-      {provenanceBlocked && (view.actions.submit || view.actions.apply) ? (
-        <p className="team-brain-status tone-warn">
-          출처 정보(출처 유형·출처·작성자·작성일)를 채워야 {view.actions.submit ? "제출" : "반영"}할 수 있습니다.
-        </p>
+      {provenanceBlocked && view.actions.apply ? (
+        <p className="team-brain-status tone-warn">출처 정보(출처 유형·출처·작성자·작성일)를 채워야 반영할 수 있습니다.</p>
       ) : null}
       {actionError ? (
         <p className="team-brain-status tone-warn" role="alert">
           {actionError}
         </p>
       ) : null}
-      {view.actions.submit || view.actions.withdraw || view.actions.apply || view.actions.cancel ? (
+      {view.actions.apply || view.actions.cancel ? (
         <div className="team-brain-actions">
-          {view.actions.submit ? (
-            <button className="primary" type="button" disabled={busy || provenanceBlocked} onClick={() => void act("submit")}>
-              관리자에게 제출
-            </button>
-          ) : null}
-          {view.actions.submitAll ? (
-            <button
-              className="primary"
-              type="button"
-              disabled={busy || provenanceBlocked}
-              title="이 대화에 있는 제출 전 제안 카드를 한 번에 모두 관리자에게 보냅니다."
-              onClick={() => void act("submit_all")}
-            >
-              {teamBrainCardButtonLabel("submit_all", view.proposal, view.actions.submitAll)}
-            </button>
-          ) : null}
           {view.actions.apply ? (
             <button className="primary" type="button" disabled={busy || provenanceBlocked} onClick={() => void act("apply")}>
-              {applyLabel(view)}
-            </button>
-          ) : null}
-          {view.actions.withdraw ? (
-            <button className="ghost-sm" type="button" disabled={busy} onClick={() => void act("withdraw")}>
-              {proposal.status === "draft" ? "취소" : "제안 철회"}
+              {teamBrainCardButtonLabel({ kind })}
             </button>
           ) : null}
           {view.actions.cancel ? (
-            <button className="ghost-sm" type="button" disabled={busy} onClick={() => void act("withdraw")}>
+            <button className="ghost-sm" type="button" disabled={busy} onClick={() => void act("cancel")}>
               취소
             </button>
           ) : null}

@@ -1353,7 +1353,7 @@ function whenPaneIdle(paneId: string, conversationId: string, timeoutMs: number)
 }
 
 /**
- * A team-brain card's confirm button (관리자에게 제출 / 팀 브레인에 반영 / …) was
+ * A team-brain card's confirm button (팀 브레인에 반영 / 팀 정책 반영) was
  * pressed in this pane, and the server answered — done or refused. Tell the
  * avatar right away, so it can go on (or fix what failed) without the user
  * having to say "눌렀어":

@@ -959,7 +959,7 @@ describe("loadDefaultPluginRoots", () => {
 
     const reflect = skill("brain-reflect");
     expect(reflect).toContain("Reads raw/ + wiki/ and may optionally review the owner's own recent conversations");
-    expect(reflect).toContain("This consolidates the PERSONAL brain only; the team brain is admin-approved and never touched here.");
+    expect(reflect).toContain("This consolidates the PERSONAL brain only; the team brain is written through cards and never touched here.");
     expect(reflect).not.toContain("mcp__group_repo__");
     expect(reflect).not.toContain(
       "It reads ONLY raw/ and wiki/ — never conversations",
@@ -1957,6 +1957,8 @@ describe("buildPrompt", () => {
     // stale mentions to the ONE team brain (back 2026-11-06).
     expect(p).toContain("The old per-GROUP knowledge repositories and per-group brain were removed with groups");
     expect(p).toContain("use the ONE team brain instead");
+    expect(p).toContain("every teammate adds to it from their own chat, through a card they press");
+    expect(p).not.toContain("approved by an admin");
     expect(p).toContain("say they were removed");
     expect(p).not.toContain("mcp__group_repo__list_groups");
     expect(p).not.toContain("avatar sharing off");

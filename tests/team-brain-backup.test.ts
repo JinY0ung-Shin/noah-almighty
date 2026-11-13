@@ -5,6 +5,7 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import { countTeamNotes, readTeamNote, readTeamVaultFile, teamBrainRoot, teamVaultSchemaVersionSync } from "../src/server/teamBrain.js";
+import { TEAM_BRAIN_SCHEMA_VERSION } from "../src/shared/teamBrain.js";
 import { seedTeamVault, teamPage } from "./team-brain-fixtures.js";
 import { signup, withTempDir } from "./helpers.js";
 
@@ -109,7 +110,7 @@ describe("team brain backup", () => {
     await s.admin.put("/api/admin/team-brain/backup").send({ url: MIRROR_URL, branch: "v0" }).expect(200);
     const restored = await s.admin.post("/api/admin/team-brain/backup/restore").expect(200);
     expect(restored.body.noteCount).toBe(0);
-    expect(teamVaultSchemaVersionSync(s.config)).toBe(2);
+    expect(teamVaultSchemaVersionSync(s.config)).toBe(TEAM_BRAIN_SCHEMA_VERSION);
     expect(await readTeamVaultFile(s.config, "raw/legacy/concepts/deploy.md")).toBe("old note\n");
     // The admin panel shows how much is waiting to be compiled.
     expect((await s.admin.get("/api/admin/team-brain").expect(200)).body).toMatchObject({ noteCount: 0, rawSources: 1, uncompiledSources: 1 });
@@ -161,7 +162,7 @@ describe("team brain backup", () => {
     expect(state.lastError).toContain("더 이상 활성 관리자가 아닙니다");
   });
 
-  it("schedules a debounced push after an approved card is applied", async () => {
+  it("schedules a debounced push after a card is applied", async () => {
     const s = await boot();
     await seedNote(s.config);
     let scheduled = 0;

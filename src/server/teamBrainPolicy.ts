@@ -5,7 +5,7 @@
 //      every change, no delete, provenance required, teammate text is data,
 //      permissions — `TEAM_BRAIN_FIXED_CORE`; SCHEMA.md also stays fixed.
 //   2. Knobs (POLICY.md frontmatter): numbers the server validates on every
-//      draft and APPLIES (review_after ceiling per type, draft expiry, open cap).
+//      draft and APPLIES (review_after ceiling per type, draft expiry, draft cap).
 //   3. Guidelines (POLICY.md body): the admins' natural-language rules, given to
 //      the avatars as DATA framed by the fixed core (never a way around it).
 // Agent-facing text (errors, the default file) is English.
@@ -203,8 +203,8 @@ export const TEAM_POLICY_DEFAULT_MD: string = renderTeamPolicy(
 <!-- Written by the team's admins, changed only through an admin's card. The settings above are
 numbers the server enforces: review_months_<type> = the latest review_after a changed page of that
 type may get (months after the change), draft_ttl_days = when an unpressed card expires,
-max_open_proposals = open cards per person. Below, write the team's own rules: what this team
-counts as team knowledge (and what not), naming and writing conventions, what reviewers check.
+max_open_proposals = unpressed cards per person at once. Below, write the team's own rules: what
+this team counts as team knowledge (and what not), naming and writing conventions.
 These guidelines refine the fixed rules; they never override them (${TEAM_BRAIN_FIXED_CORE}). -->`,
 );
 
@@ -230,5 +230,5 @@ export function reviewAfterCeiling(knobs: TeamPolicyKnobs, type: TeamPageType, t
 /** One line per knob for agents (describe_system, tool results). */
 export function teamPolicyKnobsText(knobs: TeamPolicyKnobs): string {
   const review = TEAM_PAGE_TYPES.map((t) => `${t} ${knobs.reviewMonths[t]}`).join(", ");
-  return `review_after at most N months after a change (${review}); unpressed cards expire after ${knobs.draftTtlDays} days; at most ${knobs.maxOpenProposals} open cards per person`;
+  return `review_after at most N months after a change (${review}); unpressed cards expire after ${knobs.draftTtlDays} days; at most ${knobs.maxOpenProposals} unpressed cards per person at once`;
 }

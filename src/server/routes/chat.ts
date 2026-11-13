@@ -1942,7 +1942,7 @@ export async function executeChatTurn(
             persistedAttachmentsOffset = shownAttachments.length;
             thinkingMs = 0; // the next segment's reasoning time is its own
           },
-          // A team-brain card (the avatar drafted a proposal / note / review). It
+          // A team-brain card (the avatar drafted a page change or a policy change). It
           // rides the message's attachments like a file card; NOTHING happens until
           // the user presses it (routes/teamBrain.ts re-checks everything then).
           onTeamBrainCard: (event) => {

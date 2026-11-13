@@ -570,7 +570,7 @@ export interface AgentEvents {
   /** A second-brain note was saved (repo write under wiki/) — display notice. */
   onMemory?: (event: MemoryEvent) => void;
   /**
-   * A team-brain card was drafted (propose / direct / review). NON-blocking: the
+   * A team-brain card was drafted (a page change or a policy change). NON-blocking: the
    * chat route attaches it to the live assistant message; only a human press on
    * the card changes anything. Supplied by the interactive chat route only, so
    * an absent sink keeps every team-brain write tool unregistered.

@@ -5,7 +5,8 @@
 // log). Pure — no fs, no git: teamBrain.ts feeds it what HEAD holds.
 //
 // A schema change = bump TEAM_BRAIN_SCHEMA_VERSION (src/shared/teamBrain.ts)
-// and ship the new text here; the vault rewrites SCHEMA.md on boot and
+// and ship the new text here; the vault rewrites SCHEMA.md on boot. A change to
+// what a valid page IS also bumps TEAM_BRAIN_PAGE_RULES_VERSION — then
 // teamBrainHealth lists the pages that no longer conform. Agent-facing text
 // (SCHEMA.md, validation errors) is English. Design:
 // ~/.noah-work/team-brain-wiki-2026-11-06/design.md §1–§3.
@@ -34,7 +35,6 @@ import {
   type TeamBrainOp,
   type TeamBrainProposal,
   type TeamDecisionStatus,
-  type TeamIntakeFollowup,
   type TeamIntakeSlot,
   type TeamPageType,
   type TeamProvenanceProblem,
@@ -73,7 +73,7 @@ export function validateTeamNotePath(raw: unknown): TeamNotePathCheck {
   if (!norm.endsWith(".md") || norm.endsWith("_template.md") || TEAM_STRUCTURAL_PATHS.has(norm)) {
     return {
       ok: false,
-      reason: "Only a regular `.md` note under `wiki/` can be proposed (not `wiki/index.md`, `wiki/log.md` or a template).",
+      reason: "Only a regular `.md` note under `wiki/` can be changed (not `wiki/index.md`, `wiki/log.md` or a template).",
     };
   }
   // Letters (any script), digits, space, and . _ - / only — no control chars, no `..`, no hidden segments.
@@ -150,12 +150,13 @@ against these rules and refuses a changeset that breaks one (the error says whic
 
 ## Purpose
 The team's shared, compiled knowledge: decisions, systems, how-tos, rules, terms and owners — the
-CURRENT truth, each fact in one home, every statement traceable to a source.
+CURRENT truth, each fact in one home, every statement traceable to a source. Every teammate writes it:
+a change is drafted as a card and committed when the teammate who asked for it presses that card.
 
 ## Layers
-- \`raw/\` — immutable sources: one file per approved submission (\`raw/YYYY/MM/YYYY-MM-DD-<id>.md\`,
-  rendered by the server), and \`raw/legacy/\` for notes from before this schema. Raw files are the source
-  of truth and are never changed.
+- \`raw/\` — immutable sources: one file per source a teammate put in (\`raw/YYYY/MM/YYYY-MM-DD-<id>.md\`,
+  rendered by the server when its card is applied), and \`raw/legacy/\` for notes from before this schema.
+  Raw files are the source of truth and are never changed.
 - \`wiki/\` — compiled pages, one entity / decision / term per page, in the type folders below (flat — no
   subfolders). Pages are rewritten as knowledge changes; history lives in \`raw/\`, git and the log.
 - \`wiki/index.md\` (catalog, regenerated from page frontmatter) and \`wiki/log.md\` (one entry per change)
@@ -196,7 +197,7 @@ The body after the frontmatter must not be empty.
    and the log). A reversed decision: the old page gets \`status: superseded\` + \`superseded_by\`, and the new
    decision gets its own page.
 3. Never resolve a contradiction silently: keep the established text, list the conflict in the changeset's
-   \`conflicts\`, and let the admin decide.
+   \`conflicts\`, and let the teammate who presses the card decide.
 4. Never invent: every statement traces to a cited raw source; what is unknown goes to \`gaps\`.
 5. Keep the source's specifics (names, numbers, commands, versions, links) — do not over-summarize. Prefer
    small, source-backed edits over broad rewrites; never delete a page.
@@ -586,7 +587,7 @@ export function provenanceProblemText(slot: TeamProvenanceSlot, problem: TeamPro
     case "missing":
       return `${slot} is required`;
     case "unknown_not_allowed":
-      return `${slot} cannot be "unknown" — a source without a known origin is not submitted; ask where it comes from`;
+      return `${slot} cannot be "unknown" — a source without a known origin is not taken; ask where it comes from`;
     case "bad_kind":
       return `source_kind must be one of ${TEAM_SOURCE_KINDS.join(", ")}`;
     case "bad_url":
@@ -611,17 +612,13 @@ function gapsOf(answers: Partial<Record<TeamIntakeSlot, string>>): TeamIntakeSlo
 }
 
 /**
- * Normalize a submission's slot answers: trims, drops unknown keys and
+ * Normalize a new source's slot answers: trims, drops unknown keys and
  * non-strings; a blank answer is missing; an "unknown" answer is kept and
  * listed in `gaps`. Missing = a required slot for `type` with no answer;
  * invalid = a provenance answer the rules refuse (`teamProvenanceProblem`:
  * source kind/source never unknown, a link is a URL, a real past date).
  */
-export function checkIntake(
-  type: TeamPageType,
-  answers: Record<string, unknown>,
-  followups: TeamIntakeFollowup[] = [],
-): IntakeCheck {
+export function checkIntake(type: TeamPageType, answers: Record<string, unknown>): IntakeCheck {
   const kept: Partial<Record<TeamIntakeSlot, string>> = {};
   const source = answers && typeof answers === "object" ? answers : {};
   for (const slot of TEAM_INTAKE_SLOTS) {
@@ -630,7 +627,7 @@ export function checkIntake(
   }
   normalizeSourceKind(kept);
   const missing = TEAM_INTAKE_REQUIRED[type].filter((slot) => kept[slot] === undefined);
-  const intake: TeamBrainIntake = { type, answers: kept, gaps: gapsOf(kept), followups: [...followups] };
+  const intake: TeamBrainIntake = { type, answers: kept, gaps: gapsOf(kept) };
   const invalid = teamProvenanceIssues(intake).filter((i) => i.problem !== "missing");
   if (missing.length > 0 || invalid.length > 0) return { ok: false, missing, invalid };
   return { ok: true, intake };
@@ -638,7 +635,7 @@ export function checkIntake(
 
 /**
  * The drafter's provenance edit on the card, merged into the row's intake
- * (the other answers and the follow-ups are kept; gaps are recomputed). Every
+ * (the other answers are kept; gaps are recomputed). Every
  * provenance field must pass the same rules as the intake check.
  */
 export function withTeamProvenance(
@@ -668,14 +665,16 @@ function indentContinuation(value: string): string {
 }
 
 /**
- * The immutable raw source file for an approved submission (§1 format). The
- * server renders it at apply time — the model never writes raw/.
+ * The immutable raw source file of an applied card (§1 format). The server
+ * renders it at apply time — the model never writes raw/. `submitted_by` and
+ * `approved_by` are both the teammate who pressed the card (the frontmatter
+ * keys are kept as they were, so older raw files read the same).
  */
 export function renderTeamRaw(input: {
   proposal: TeamBrainProposal;
   approver: { name: string; username: string };
   approvedAt: string;
-  /** Who submitted it (defaults to the row's proposer name; pass it to add the username). */
+  /** Who put the source in (defaults to the row's drafter name; pass it to add the username). */
   submitter?: { name: string; username: string };
 }): string {
   const { proposal, approver, approvedAt } = input;
@@ -712,16 +711,6 @@ export function renderTeamRaw(input: {
       if (intake.gaps.length > 0) lines.push(`- gaps: ${intake.gaps.join(", ")}`);
       lines.push("");
     }
-    intake.followups.forEach((f, i) => {
-      lines.push(
-        `## Follow-up ${i + 1} (${f.askedAt})`,
-        "### Questions",
-        f.questions.trim(),
-        `### Answer (${f.answeredAt})`,
-        f.answer.trim(),
-        "",
-      );
-    });
   }
   return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }
@@ -765,20 +754,20 @@ export function renderTeamIndex(pages: TeamVaultIndexEntry[], invalid: Array<{ p
 
 export const TEAM_LOG_HEADER = "<!-- appended by Noah, one entry per change — do not edit -->\n# Team brain log\n";
 
-/** One wiki/log.md entry. */
+/**
+ * One wiki/log.md entry. `approvedBy` = the teammate whose press committed it
+ * (the wording is kept from when an admin approved, so the log reads as one).
+ */
 export function formatLogEntry(input: {
   date: string;
-  op: "ingest" | "direct" | "maintain" | "migrate" | "policy";
+  op: "direct" | "maintain" | "migrate" | "policy";
   title: string;
-  by?: string;
   approvedBy?: string;
   changes: Array<{ op: string; path: string }>;
   rawPath?: string | null;
   note?: string;
 }): string {
-  const who = [input.by ? `by ${oneLine(input.by)}` : "", input.approvedBy ? `approved by ${oneLine(input.approvedBy)}` : ""]
-    .filter(Boolean)
-    .join(" · ");
+  const who = input.approvedBy ? `approved by ${oneLine(input.approvedBy)}` : "";
   const lines = [`## [${input.date.slice(0, 10)}] ${input.op} | ${oneLine(input.title)}${who ? ` | ${who}` : ""}`];
   for (const c of input.changes) lines.push(`- ${c.op} ${c.path}`);
   if (input.rawPath) lines.push(`- source ${input.rawPath}`);

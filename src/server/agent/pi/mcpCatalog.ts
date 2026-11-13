@@ -123,12 +123,12 @@ async function buildCatalogServers(store: Store, config: AppConfig): Promise<Rec
     skill_exchange: buildSkillExchangeServer(store, base),
     ssh_identity: buildSshIdentityServer(store, base),
     git_repo: buildGitRepoServer(store, { ...base, elevated: false }),
-    // Widest form: the team-brain propose + admin tools too (handlers self-gate per call).
+    // Widest form: the team-brain write + admin tools too (handlers self-gate per call).
     brain: buildBrainServer(store, {
       ...base,
       team: {
         read: true,
-        propose: true,
+        write: true,
         admin: true,
         viewerUserId: "",
         conversationId: null,

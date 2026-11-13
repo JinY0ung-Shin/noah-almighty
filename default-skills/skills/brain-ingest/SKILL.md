@@ -15,13 +15,13 @@ not actually say. Never invent facts.
 
 ## Scope
 - **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
-- **Personal only:** this skill writes the owner's OWN repo. The team brain is a separate, admin-curated
-  wiki this skill never writes (its `raw/`/`wiki/` layout is Noah's, not this repo's).
+- **Personal only:** this skill writes the owner's OWN repo. The team brain is a separate wiki
+  every teammate writes through cards — this skill never writes it (its `raw/`/`wiki/` layout is Noah's, not this repo's).
 - **Which brain:** follow the Brain policy in your instructions (PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT
-  ONE HOME; the TEAM KNOWLEDGE tests sit in the team-brain section, on runs that can submit) — this skill does
+  ONE HOME; the TEAM KNOWLEDGE tests sit in the team-brain section, on runs that can write the team brain) — this skill does
   not restate them. Personal knowledge is captured here without
-  asking first. Team knowledge — at THE RIGHT LEVEL, never working detail — is OFFERED to the team (`mcp__brain__propose_team_note`; an admin uses
-  `mcp__brain__prepare_team_changes`) only in the owner's own chat; when you also captured it here, pass the
+  asking first. Team knowledge — at THE RIGHT LEVEL, never working detail — is OFFERED to the team (a
+  `mcp__brain__prepare_team_changes` card the user presses) only in the owner's own chat; when you also captured it here, pass the
   note's `wiki/` path in `personalNotes`. Before writing, search the team brain (scope `"team"`): a fact the
   team brain already holds is linked or mentioned, never copied in full.
 - **No repo connected (personal):** if a write returns `NO_REPO` and `mcp__repo__create_repo` is

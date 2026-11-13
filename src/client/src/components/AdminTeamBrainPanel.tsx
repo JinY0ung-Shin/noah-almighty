@@ -1,6 +1,6 @@
-// 관리자 → 팀 브레인: the vault's size, the review queue size (decisions go
-// through the admin's avatar + a card, never here) and the push-only backup
-// mirror. Saving the backup address binds pushes to THIS admin's git token.
+// 관리자 → 팀 브레인: the vault's size, the push-only backup mirror and the
+// read-only team policy (it changes through an admin's avatar + a card, never
+// here). Saving the backup address binds pushes to THIS admin's git token.
 import { useLayoutEffect, useRef, useState } from "react";
 import "./AdminTeamBrainPanel.css";
 import { api } from "../lib/api";
@@ -27,7 +27,6 @@ interface PanelState {
   rawSources?: number;
   /** raw/ sources no valid page cites yet — the curator's backlog. */
   uncompiledSources?: number;
-  pendingReview: number;
   backup: TeamBrainBackupState;
   githubHost: string;
 }
@@ -185,7 +184,8 @@ export default function AdminTeamBrainPanel({ active = false }: AdminTeamBrainPa
         <div>
           <h3 id="team-brain-admin-heading">팀 브레인</h3>
           <p className="muted">
-            팀원 모두가 읽는 공용 지식입니다. 팀원의 제안은 관리자가 자기 아바타를 통해 검토하고, 카드의 버튼을 눌러 승인하거나 반려합니다.
+            팀원 모두가 함께 읽고 쓰는 공용 지식입니다. 팀원 누구나 자기 아바타가 띄운 카드에서 ‘팀 브레인에 반영’을 눌러 직접 반영합니다. 팀 정책과
+            백업은 관리자가 관리합니다.
           </p>
         </div>
         <button className="ghost-sm" type="button" disabled={busy} onClick={() => void load()}>
@@ -207,11 +207,6 @@ export default function AdminTeamBrainPanel({ active = false }: AdminTeamBrainPa
                 <div className={cx("stat-link muted", uncompiled > 0 && "team-brain-admin-backlog")}>미편찬 {uncompiled}건</div>
               </div>
             )}
-            <button className="stat-card stat-clickable" type="button" onClick={openTeamBrain}>
-              <div className="stat-value">{state.pendingReview}</div>
-              <div className="stat-label">검토 대기 제안</div>
-              <div className="stat-link muted">목록 보기 · 결정은 아바타에게 요청</div>
-            </button>
           </div>
 
           {uncompiled > 0 && (

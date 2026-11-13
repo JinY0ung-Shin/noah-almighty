@@ -222,7 +222,12 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   these.
 - **Second-brain read tools (`brainTools`):** a read-only RECALL server (`search`/`get_note`) over the
   personal knowledge-repo clone, gating reads on `ctx.elevated`. The team brain (`groupBrainTools`) was
-  removed 2026-10-30. There is NO brain WRITE tool — route writes through `mcp__repo__write_file` + `commit`.
+  removed 2026-10-30. There is NO brain WRITE tool for the PERSONAL brain — route writes through
+  `mcp__repo__write_file` + `commit`. The instance-wide team brain (back 2026-11-06) rides the same `brain`
+  server: every teammate's own interactive run gets `prepare_team_changes` + `team_brain_health`, an admin's
+  also `prepare_team_policy`; they only DRAFT a card (the user's own press commits), self-gate per call
+  (`isActiveUser` / `isActiveAdmin`, live), and a call to one of the five review-queue tools removed
+  2026-11-13 is answered at `/mcp` by `RETIRED_TOOL_MESSAGES` → [`team-brain.md`](team-brain.md).
 - **Web fetch is REMOVED (user, 2026-11-10).** The `mcp__web__fetch` tool (`webFetchTools.ts`, server `web`,
   tool-group id `web`) fetched URLs from Noah's own process: it was the one tool that let page-derived text
   drive requests from inside Noah's container (loopback guard bypassable through `[::ffff:127.0.0.1]`, no

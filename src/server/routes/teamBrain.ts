@@ -2,10 +2,10 @@ import { Router } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { apiError, type RouterDeps } from "./_shared.js";
 import {
+  cancelTeamBrainCard,
   editTeamBrainProvenance,
   pressTeamBrainCard,
   teamBrainCardView,
-  withdrawTeamBrainProposal,
   type TeamBrainActionDeps,
   type TeamBrainActionResult,
 } from "../teamBrainActions.js";
@@ -21,12 +21,16 @@ import {
 } from "../teamBrain.js";
 import { teamPolicyProblemLabel } from "../teamBrainPolicy.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
-import type { TeamBrainStatus, TeamPolicyView } from "../../shared/teamBrain.js";
+import type { TeamPolicyView } from "../../shared/teamBrain.js";
 
 // Team brain HTTP surface (docs/architecture/team-brain.md). Every write here is
 // a HUMAN press on a chat card the avatar drafted; the actions module re-checks
 // the presser, the row status (compare-and-set) and the note (stale) live.
 // Reads: any signed-in (= approved) teammate. Errors are Korean (apiError).
+//
+// Retired with the review queue (2026-11-13) and reserved forever — never mount
+// them again: GET /api/team-brain/status, /proposals/mine, /proposals/pending,
+// POST /api/team-brain/cards/:id/submit, …/submit-all, …/withdraw.
 
 export function createTeamBrainRouter(deps: RouterDeps): Router {
   const { store, config } = deps;
@@ -52,33 +56,6 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
     res.json(result.view);
   };
 
-  router.get("/api/team-brain/status", (req: AuthenticatedRequest, res) => {
-    store.expireTeamBrainDrafts();
-    const status: TeamBrainStatus = {
-      unseenResults: store.countUnseenTeamBrainResults(req.user!.id),
-      pendingReview: store.isActiveAdmin(req.user!.id) ? store.countPendingTeamBrainProposals() : 0,
-    };
-    res.json(status);
-  });
-
-  // My own proposals (the read-only 내 제안 list the badge opens). Opening it marks results seen.
-  router.get("/api/team-brain/proposals/mine", (req: AuthenticatedRequest, res) => {
-    const proposals = store.listTeamBrainProposals({ kind: "propose", proposerUserId: req.user!.id, limit: 50 });
-    store.markTeamBrainResultsSeen(req.user!.id);
-    res.json({ proposals: proposals.map(({ content: _content, ...rest }) => rest) });
-  });
-
-  // Admins: the pending queue, READ-only (decisions go through the avatar + a card).
-  router.get("/api/team-brain/proposals/pending", (req: AuthenticatedRequest, res) => {
-    if (!store.isActiveAdmin(req.user!.id)) {
-      apiError(res, 403, "관리자만 볼 수 있습니다.");
-      return;
-    }
-    const proposals = store.listTeamBrainProposals({ kind: "propose", statuses: ["pending"], limit: 100 });
-    // A teammate's personal-note paths are theirs: never sent to an admin.
-    res.json({ proposals: proposals.map(({ content: _content, personalNotes: _notes, ...rest }) => ({ ...rest, personalNotes: [] })) });
-  });
-
   router.get("/api/team-brain/cards/:id", async (req: AuthenticatedRequest, res) => {
     const view = await teamBrainCardView(actionDeps(req), req.user!.id, String(req.params.id));
     if (!view) {
@@ -88,33 +65,19 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
     res.json(view);
   });
 
-  // 관리자에게 제출 and the admin's confirm button go through pressTeamBrainCard:
-  // the action, plus the report the presser's chat hands to the avatar at once
-  // (teamBrainCardPress.ts). 취소 / 제안 철회 below is not reported.
-  router.post("/api/team-brain/cards/:id/submit", async (req: AuthenticatedRequest, res) => {
-    respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "submit"));
-  });
-
-  // 초안 N건 모두 제출: ONE press for every submission draft of the card's conversation.
-  // Body `{ count }` = the number on the button; a different number now is a 409, nothing sent.
-  router.post("/api/team-brain/cards/:id/submit-all", async (req: AuthenticatedRequest, res) => {
-    const count = (req.body as { count?: unknown } | undefined)?.count;
-    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
-      apiError(res, 400, "요청이 올바르지 않습니다.");
-      return;
-    }
-    respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "submit_all", count));
-  });
-
   // The drafter's 출처 정보 edit on their own draft card (body: TeamProvenanceInput).
   router.put("/api/team-brain/cards/:id/provenance", async (req: AuthenticatedRequest, res) => {
     respond(res, await editTeamBrainProvenance(actionDeps(req), actor(req), String(req.params.id), req.body));
   });
 
-  router.post("/api/team-brain/cards/:id/withdraw", async (req: AuthenticatedRequest, res) => {
-    respond(res, await withdrawTeamBrainProposal(actionDeps(req), actor(req), String(req.params.id)));
+  // 취소: the drafter takes a draft card back (never reported to the avatar).
+  router.post("/api/team-brain/cards/:id/cancel", async (req: AuthenticatedRequest, res) => {
+    respond(res, await cancelTeamBrainCard(actionDeps(req), actor(req), String(req.params.id)));
   });
 
+  // The confirm button (팀 브레인에 반영 / 팀 정책 반영) goes through pressTeamBrainCard:
+  // the action, plus the report the presser's chat hands to the avatar at once
+  // (teamBrainCardPress.ts).
   router.post("/api/team-brain/cards/:id/apply", async (req: AuthenticatedRequest, res) => {
     respond(res, await pressTeamBrainCard(actionDeps(req), actor(req), String(req.params.id), "apply"));
   });
@@ -154,7 +117,6 @@ export function createTeamBrainRouter(deps: RouterDeps): Router {
       noteCount: counts.pages,
       rawSources: counts.rawSources,
       uncompiledSources: counts.uncompiledSources,
-      pendingReview: store.countPendingTeamBrainProposals(),
       backup: backup ? backup.state() : readTeamBrainBackupState(store),
       githubHost: config.githubHost,
     });

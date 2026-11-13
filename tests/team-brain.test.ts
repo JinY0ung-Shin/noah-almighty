@@ -26,8 +26,23 @@ import {
   validateTeamNotePath,
 } from "../src/server/teamBrain.js";
 import { TEAM_BRAIN_SCHEMA_MD } from "../src/server/teamBrainSchema.js";
-import { TEAM_BRAIN_MAX_OPEN_PROPOSALS, teamRawPath, type TeamBrainProposal } from "../src/shared/teamBrain.js";
-import { ADMIN_IDENTITY as ADMIN, SEED_RAW, commitIntoVault, gitOut, seedTeamVault, teamPage } from "./team-brain-fixtures.js";
+import { retireTeamBrainReviewQueueOnBoot } from "../src/server/teamBrainActions.js";
+import {
+  TEAM_BRAIN_CLOSED_BY_UPGRADE,
+  TEAM_BRAIN_MAX_OPEN_PROPOSALS,
+  teamRawPath,
+  type TeamBrainChangeset,
+  type TeamBrainProposal,
+} from "../src/shared/teamBrain.js";
+import {
+  ADMIN_IDENTITY as ADMIN,
+  SEED_RAW,
+  commitIntoVault,
+  gitOut,
+  insertLegacyTeamBrainRow,
+  seedTeamVault,
+  teamPage,
+} from "./team-brain-fixtures.js";
 import { withTempDir } from "./helpers.js";
 
 const dir = withTempDir("team-brain");
@@ -50,7 +65,7 @@ const NOTE = "We deploy with `docker compose up` after setup-host.sh.\n";
 
 function draft(store: Store, proposerUserId: string, extra: Partial<Parameters<Store["createTeamBrainProposal"]>[0]> = {}) {
   const result = store.createTeamBrainProposal({
-    kind: "propose",
+    kind: "direct",
     proposerUserId,
     conversationId: null,
     path: (id: string, createdAt: string) => teamRawPath(createdAt, id),
@@ -109,17 +124,17 @@ describe("team brain vault (local git)", () => {
     expect(root).toBe(path.join(config.dataDir, "team-brain"));
     expect(teamBrainInitialized(config)).toBe(true);
     expect(gitOut(root, ["remote"]).trim()).toBe("");
-    expect(gitOut(root, ["log", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: initialize (schema v2)");
+    expect(gitOut(root, ["log", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: initialize (schema v3)");
     expect(gitOut(root, ["ls-files"]).trim().split("\n")).toEqual(["POLICY.md", "SCHEMA.md", "wiki/index.md", "wiki/log.md"]);
     expect(await readTeamVaultFile(config, "SCHEMA.md")).toBe(TEAM_BRAIN_SCHEMA_MD);
-    expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("migrate | initialize schema v2");
-    expect(teamVaultSchemaVersionSync(config)).toBe(2);
+    expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("migrate | initialize schema v3");
+    expect(teamVaultSchemaVersionSync(config)).toBe(3);
     // Structural files are not notes.
     expect(await countTeamNotes(config)).toBe(0);
     expect(countTeamNotesSync(config)).toBe(0);
   });
 
-  it("commits a raw source + pages + index + log in ONE path-scoped commit with trailers", async () => {
+  it("commits a raw source + pages + index + log in ONE path-scoped commit by the presser, with the card's trailer", async () => {
     const { config } = boot();
     const root = await ensureTeamBrainRepo(config);
     // Something unrelated sitting in the index must not ride along.
@@ -134,17 +149,15 @@ describe("team brain vault (local git)", () => {
       ],
       title: "배포 절차",
       proposalId: "p1",
-      logOp: "ingest",
-      logBy: "mate",
+      logOp: "direct",
       logApprovedBy: "admin",
       author: ADMIN,
-      coAuthor: { name: "Teammate", email: "mate@noah-almighty.local" },
     });
     expect(sha).toMatch(/^[0-9a-f]{40}$/);
     const message = gitOut(root, ["log", "-1", "--format=%an|%B"]);
     expect(message).toContain("Admin|team-brain: 배포 절차");
     expect(message).toContain("Proposal: p1");
-    expect(message).toContain("Co-authored-by: Teammate <mate@noah-almighty.local>");
+    expect(message).not.toContain("Co-authored-by");
     expect(gitOut(root, ["show", "--name-only", "--format=", "HEAD"]).trim().split("\n").sort()).toEqual(
       [raw, "wiki/howto/deploy.md", "wiki/index.md", "wiki/log.md", "wiki/systems/ci.md"].sort(),
     );
@@ -155,7 +168,7 @@ describe("team brain vault (local git)", () => {
     expect(index).toContain("## Systems\n- [CI](systems/ci.md)");
     expect(index).toContain("## How-tos\n- [배포](howto/deploy.md)");
     expect(await readTeamVaultFile(config, "wiki/log.md")).toContain(
-      `ingest | 배포 절차 | by mate · approved by admin\n- create wiki/howto/deploy.md\n- create wiki/systems/ci.md\n- source ${raw}`,
+      `direct | 배포 절차 | approved by admin\n- create wiki/howto/deploy.md\n- create wiki/systems/ci.md\n- source ${raw}`,
     );
     expect(await countTeamNotes(config)).toBe(2);
     expect(countTeamRawSync(config)).toBe(1);
@@ -226,7 +239,7 @@ describe("team brain vault (local git)", () => {
         ],
         title: "t",
         proposalId: "p",
-        logOp: "ingest",
+        logOp: "direct",
         author: ADMIN,
       }),
     ).rejects.toThrow();
@@ -277,72 +290,62 @@ describe("team brain vault (local git)", () => {
   });
 });
 
-describe("team brain proposals store", () => {
-  it("creates drafts, caps open ones per user, and transitions by compare-and-set", () => {
+describe("team brain cards store", () => {
+  it("creates drafts, caps a user's UNPRESSED drafts only, and transitions by compare-and-set", () => {
     const { store } = boot();
     const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    // Rows of the retired review queue hold no slot, whatever their status.
+    for (const status of ["pending", "needs_info", "approved"] as const) {
+      insertLegacyTeamBrainRow(store, { kind: "propose", status, proposerUserId: user.id });
+    }
     const first = draft(store, user.id);
-    expect(first).toMatchObject<Partial<TeamBrainProposal>>({ status: "draft", kind: "propose", proposerName: "Mate", op: "create" });
+    expect(first).toMatchObject<Partial<TeamBrainProposal>>({ status: "draft", kind: "direct", proposerName: "Mate", op: "create" });
     for (let i = 1; i < TEAM_BRAIN_MAX_OPEN_PROPOSALS; i += 1) draft(store, user.id);
-    expect(
+    const oneMore = () =>
       store.createTeamBrainProposal({
-        kind: "propose",
+        kind: "direct",
         proposerUserId: user.id,
         conversationId: null,
-        path: "wiki/x.md",
+        path: "",
         op: "create",
         title: "x",
         summary: "",
-        content: "x",
+        content: "",
         baseBlob: null,
-      }),
-    ).toEqual({ ok: false, error: "LIMIT" });
+      });
+    expect(oneMore()).toEqual({ ok: false, error: "LIMIT" });
 
-    expect(store.transitionTeamBrainProposal(first.id, ["draft"], "pending")).toBe(true);
-    expect(store.countPendingTeamBrainProposals()).toBe(1);
+    expect(store.transitionTeamBrainProposal(first.id, ["draft"], "applied", { decidedBy: user.id, decided: true })).toBe(true);
     // A second press of the same transition loses the race.
-    expect(store.transitionTeamBrainProposal(first.id, ["draft"], "pending")).toBe(false);
-    expect(store.transitionTeamBrainProposal(first.id, ["pending"], "approved", { decidedBy: user.id, decided: true })).toBe(true);
-    expect(store.transitionTeamBrainProposal(first.id, ["pending"], "rejected")).toBe(false);
-    expect(store.getTeamBrainProposal(first.id)).toMatchObject({ status: "approved", decidedBy: user.id });
-    expect(store.countPendingTeamBrainProposals()).toBe(0);
+    expect(store.transitionTeamBrainProposal(first.id, ["draft"], "applied")).toBe(false);
+    expect(store.transitionTeamBrainProposal(first.id, ["draft"], "cancelled")).toBe(false);
+    expect(store.getTeamBrainProposal(first.id)).toMatchObject({ status: "applied", decidedBy: user.id });
+    // An applied card frees its slot.
+    expect(oneMore().ok).toBe(true);
+    // A released claim decided nothing.
+    expect(store.transitionTeamBrainProposal(first.id, ["applied"], "draft", { clearDecision: true })).toBe(true);
+    expect(store.getTeamBrainProposal(first.id)).toMatchObject({ status: "draft", decidedBy: null, decidedAt: null });
   });
 
-  it("counts unseen results for the proposer and marks them seen", () => {
-    const { store } = boot();
-    const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const a = draft(store, user.id);
-    const b = draft(store, user.id);
-    store.transitionTeamBrainProposal(a.id, ["draft"], "pending");
-    store.transitionTeamBrainProposal(b.id, ["draft"], "pending");
-    store.transitionTeamBrainProposal(a.id, ["pending"], "approved", { decided: true });
-    store.transitionTeamBrainProposal(b.id, ["pending"], "rejected", { decisionReason: "dup", decided: true });
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(2);
-    expect(store.markTeamBrainResultsSeen(user.id, [a.id])).toBe(1);
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(1);
-    store.markTeamBrainResultsSeen(user.id);
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(0);
-  });
-
-  it("expires stale drafts lazily, withdraws rewound drafts only, and drops a deleted user's rows", () => {
+  it("expires stale drafts lazily, cancels rewound drafts only, and drops a deleted user's rows", () => {
     const { store } = boot();
     const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
     const old = draft(store, user.id);
     rawDb(store).prepare("UPDATE team_brain_proposals SET updated_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", old.id);
     store.touchConversation(user.id, "c-rw", user.id, "되감기");
     store.touchConversation(user.id, "c-other", user.id, "다른 대화");
-    const submitted = draft(store, user.id, { conversationId: "c-rw" });
-    store.transitionTeamBrainProposal(submitted.id, ["draft"], "pending");
+    const applied = draft(store, user.id, { conversationId: "c-rw" });
+    store.transitionTeamBrainProposal(applied.id, ["draft"], "applied");
     const fresh = draft(store, user.id, { conversationId: "c-rw" });
-    const direct = draft(store, user.id, { kind: "direct", conversationId: "c-rw" });
-    // A card that now lives in ANOTHER conversation is not that rewind's to withdraw.
+    const policy = draft(store, user.id, { kind: "policy", conversationId: "c-rw" });
+    // A card that lives in ANOTHER conversation is not that rewind's to cancel.
     const elsewhere = draft(store, user.id, { conversationId: "c-other" });
     expect(store.listTeamBrainProposals({ proposerUserId: user.id }).find((p) => p.id === old.id)?.status).toBe("expired");
-    expect(store.withdrawTeamBrainDrafts("c-rw", [submitted.id, fresh.id, direct.id, elsewhere.id])).toBe(2);
+    expect(store.cancelTeamBrainDrafts("c-rw", [applied.id, fresh.id, policy.id, elsewhere.id])).toBe(2);
     expect(store.getTeamBrainProposal(elsewhere.id)?.status).toBe("draft");
-    expect(store.getTeamBrainProposal(submitted.id)?.status).toBe("pending");
-    expect(store.getTeamBrainProposal(fresh.id)?.status).toBe("withdrawn");
-    expect(store.getTeamBrainProposal(direct.id)?.status).toBe("cancelled");
+    expect(store.getTeamBrainProposal(applied.id)?.status).toBe("applied");
+    expect(store.getTeamBrainProposal(fresh.id)?.status).toBe("cancelled");
+    expect(store.getTeamBrainProposal(policy.id)?.status).toBe("cancelled");
     expect(store.deleteUser(user.id)).toBe(true);
     expect(store.listTeamBrainProposals({})).toEqual([]);
   });
@@ -359,93 +362,31 @@ describe("team brain proposals store", () => {
     expect(store.getTeamBrainProposal(gone.id)?.status).toBe("expired");
   });
 
-  it("stores intake + changeset, mints the raw path from its own id/created_at, and decodes bad JSON as null", () => {
+  it("stores intake + changeset, mints the raw path from its own id/created_at, and decodes old or bad JSON defensively", () => {
     const { store } = boot();
     const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const intake = { type: "howto" as const, answers: { source: "직접" }, gaps: [], followups: [] };
-    const p = draft(store, user.id, { intake });
-    expect(p.path).toBe(teamRawPath(p.createdAt, p.id));
-    expect(p.intake).toEqual(intake);
-    expect(p.changeset).toBeNull();
+    const intake = { type: "howto" as const, answers: { source: "직접" }, gaps: [] };
     const changeset = { changes: [{ path: "wiki/howto/a.md", op: "create" as const, content: "x", baseBlob: null }], conflicts: ["c1"] };
-    const review = draft(store, user.id, { kind: "review", path: p.path, targetId: p.id, decision: "ask", changeset });
-    expect(review).toMatchObject({ changeset, decision: "ask" });
-    rawDb(store).prepare("UPDATE team_brain_proposals SET intake_json = '{bad', changes_json = '[1]' WHERE id = ?").run(review.id);
-    expect(store.getTeamBrainProposal(review.id)).toMatchObject({ intake: null, changeset: null });
-  });
-
-  it("needs_info: holds an open slot, badges again on every decision, and answers back to draft by CAS", () => {
-    const { store } = boot();
-    const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const other = store.createUser({ username: "other", displayName: "Other", password: "password123" });
-    const intake = { type: "howto" as const, answers: { source: "직접" }, gaps: [], followups: [] };
-    const p = draft(store, user.id, { intake, conversationId: null });
-    store.transitionTeamBrainProposal(p.id, ["draft"], "pending");
-    expect(store.transitionTeamBrainProposal(p.id, ["pending"], "needs_info", { decisionReason: "어느 서버?", decided: true, resetSeen: true })).toBe(true);
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(1);
-    store.markTeamBrainResultsSeen(user.id);
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(0);
-    for (let i = 1; i < TEAM_BRAIN_MAX_OPEN_PROPOSALS; i += 1) draft(store, user.id);
-    expect(store.createTeamBrainProposal({ kind: "propose", proposerUserId: user.id, conversationId: null, path: "raw/x.md", op: "create", title: "x", summary: "", content: "x", baseBlob: null })).toEqual({
-      ok: false,
-      error: "LIMIT",
+    const p = draft(store, user.id, { intake, changeset });
+    expect(p.path).toBe(teamRawPath(p.createdAt, p.id));
+    expect(p).toMatchObject({ intake, changeset, targetId: null, decision: null, decisionReason: null });
+    // An old submission's intake carried 보완 요청 rounds: the row still parses, without them.
+    const legacy = insertLegacyTeamBrainRow(store, {
+      kind: "propose",
+      status: "approved",
+      proposerUserId: user.id,
+      intake: { ...intake, followups: [{ questions: "q", answer: "a", askedAt: "x", answeredAt: "y" }] },
     });
-    const answered = { ...intake, followups: [{ questions: "어느 서버?", answer: "prod-1", askedAt: "a", answeredAt: "b" }] };
-    store.touchConversation(user.id, "c2", user.id, "답변");
-    expect(store.answerTeamBrainQuestions(p.id, other.id, answered, "c2")).toBe(false);
-    expect(store.answerTeamBrainQuestions(p.id, user.id, answered, "c2")).toBe(true);
-    expect(store.answerTeamBrainQuestions(p.id, user.id, answered, "c2")).toBe(false);
-    const after = store.getTeamBrainProposal(p.id)!;
-    expect(after).toMatchObject({ status: "draft", conversationId: "c2", createdAt: p.createdAt, path: p.path });
-    expect(after.intake?.followups).toHaveLength(1);
-    // A later decision badges again even though the earlier one was seen.
-    store.transitionTeamBrainProposal(p.id, ["draft"], "pending");
-    store.transitionTeamBrainProposal(p.id, ["pending"], "approved", { decided: true, resetSeen: true });
-    expect(store.countUnseenTeamBrainResults(user.id)).toBe(1);
+    expect(store.getTeamBrainProposal(legacy)).toMatchObject({ kind: "propose", status: "approved", intake });
+    rawDb(store).prepare("UPDATE team_brain_proposals SET intake_json = '{bad', changes_json = '[1]' WHERE id = ?").run(p.id);
+    expect(store.getTeamBrainProposal(p.id)).toMatchObject({ intake: null, changeset: null });
+    // A kind or status this build does not know reads as history, never as a card that can be pressed.
+    rawDb(store).prepare("UPDATE team_brain_proposals SET kind = 'future', status = 'future' WHERE id = ?").run(p.id);
+    expect(store.getTeamBrainProposal(p.id)).toMatchObject({ kind: "propose", status: "cancelled" });
   });
 });
 
-describe("team brain review fixes", () => {
-  function answeredDraft(store: Store, userId: string, answerConversation: string) {
-    const intake = { type: "howto" as const, answers: { source: "직접" }, gaps: [], followups: [] };
-    store.touchConversation(userId, "c-ask", userId, "제안");
-    store.touchConversation(userId, answerConversation, userId, "답변");
-    const p = draft(store, userId, { intake, conversationId: "c-ask" });
-    store.transitionTeamBrainProposal(p.id, ["draft"], "pending");
-    store.transitionTeamBrainProposal(p.id, ["pending"], "needs_info", { decisionReason: "어느 서버?", decided: true, resetSeen: true });
-    const answeredAt = new Date(Date.now() + 1000).toISOString();
-    const followup = { questions: "어느 서버?", answer: "prod-1", askedAt: "x", answeredAt };
-    expect(store.answerTeamBrainQuestions(p.id, userId, { ...intake, followups: [followup] }, answerConversation)).toBe(true);
-    return p;
-  }
-
-  it("#1 a rewind of ANOTHER conversation never touches an answered proposal; its own rewind falls back to needs_info", () => {
-    const { store } = boot();
-    const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const p = answeredDraft(store, user.id, "c-answer");
-    // The original card's conversation is rewound: the row now lives in c-answer.
-    expect(store.withdrawTeamBrainDrafts("c-ask", [p.id])).toBe(0);
-    expect(store.getTeamBrainProposal(p.id)?.status).toBe("draft");
-    // The answering conversation is rewound past the answer: back to needs_info, the unsent answer dropped.
-    expect(store.withdrawTeamBrainDrafts("c-answer", [p.id])).toBe(1);
-    expect(store.getTeamBrainProposal(p.id)).toMatchObject({ status: "needs_info", decisionReason: "어느 서버?" });
-    expect(store.getTeamBrainProposal(p.id)?.intake?.followups).toEqual([]);
-  });
-
-  it("#1 an answered proposal whose draft expires (TTL or conversation gone) falls back to needs_info, never expired", () => {
-    const { store } = boot();
-    const user = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
-    const byTtl = answeredDraft(store, user.id, "c-answer");
-    rawDb(store).prepare("UPDATE team_brain_proposals SET updated_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000Z", byTtl.id);
-    const byGone = answeredDraft(store, user.id, "c-gone");
-    rawDb(store).prepare("DELETE FROM conversations WHERE id = 'c-gone'").run();
-    const neverSubmitted = draft(store, user.id, { conversationId: "c-gone" });
-    store.expireTeamBrainDrafts();
-    expect(store.getTeamBrainProposal(byTtl.id)?.status).toBe("needs_info");
-    expect(store.getTeamBrainProposal(byGone.id)?.status).toBe("needs_info");
-    expect(store.getTeamBrainProposal(neverSubmitted.id)?.status).toBe("expired");
-  });
-
+describe("team brain vault — crash recovery and search", () => {
   it("#2 a crash after `git mv`, before the migration commit, is reconciled: ONE clean migration from HEAD", async () => {
     const { config } = boot();
     const root = teamBrainRoot(config);
@@ -497,6 +438,200 @@ describe("team brain review fixes", () => {
   });
 });
 
+describe("the review queue's retirement (boot step)", () => {
+  const changesetFor = (raw: string): TeamBrainChangeset => ({
+    changes: [{ path: "wiki/howto/deploy.md", op: "create", content: teamPage({ title: "배포", sources: [raw] }), baseBlob: null }],
+    conflicts: [],
+  });
+  const backups = (dataDir: string) => {
+    const folder = path.join(dataDir, "backups");
+    return fs.existsSync(folder) ? fs.readdirSync(folder).filter((f) => f.startsWith("pre-retire-")) : [];
+  };
+  const status = (store: Store, id: string) => {
+    const row = store.getTeamBrainProposal(id)!;
+    return [row.status, row.decisionReason];
+  };
+
+  it("does nothing — and backs nothing up — on a DB that never had a queue row", async () => {
+    const s = boot();
+    const user = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const live = draft(s.store, user.id);
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 0 });
+    expect(s.store.getTeamBrainProposal(live.id)?.status).toBe("draft");
+    expect(backups(s.config.dataDir)).toEqual([]);
+  });
+
+  it("backs the DB up first, then closes every open queue row with the marker; the source text, decided rows and live cards stay", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const admin = s.store.createUser({ username: "boss", displayName: "Boss", password: "password123" });
+    const row = (kind: "propose" | "review", st: TeamBrainProposal["status"], extra = {}) =>
+      insertLegacyTeamBrainRow(s.store, { kind, status: st, proposerUserId: kind === "review" ? admin.id : mate.id, ...extra });
+    const draftSource = row("propose", "draft", { content: "초안 원문\n" });
+    const pending = row("propose", "pending", { content: "대기 원문\n" });
+    const needsInfo = row("propose", "needs_info", { decisionReason: "어느 서버인가요?", decidedBy: admin.id, decidedAt: "2026-11-10T00:00:00.000Z" });
+    const reviewDraft = row("review", "draft", { targetId: pending, decision: "reject", decisionReason: "중복" });
+    const approved = row("propose", "approved");
+    const rejected = row("propose", "rejected", { decisionReason: "중복입니다" });
+    const withdrawn = row("propose", "withdrawn");
+    const reviewApplied = row("review", "applied", { targetId: rejected, decision: "reject", decisionReason: "중복입니다" });
+    const live = draft(s.store, mate.id);
+    expect(s.store.countOpenTeamBrainQueueRows()).toBe(4);
+
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 4 });
+
+    for (const id of [draftSource, pending, needsInfo, reviewDraft]) {
+      expect(status(s.store, id)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+    }
+    expect(s.store.getTeamBrainProposal(draftSource)?.content).toBe("초안 원문\n");
+    expect(s.store.getTeamBrainProposal(pending)?.content).toBe("대기 원문\n");
+    // Who asked, and when, stays on the row.
+    expect(s.store.getTeamBrainProposal(needsInfo)).toMatchObject({ decidedBy: admin.id, decidedAt: "2026-11-10T00:00:00.000Z" });
+    expect(status(s.store, approved)).toEqual(["approved", null]);
+    expect(status(s.store, rejected)).toEqual(["rejected", "중복입니다"]);
+    expect(status(s.store, withdrawn)).toEqual(["withdrawn", null]);
+    expect(status(s.store, reviewApplied)).toEqual(["applied", "중복입니다"]);
+    expect(s.store.getTeamBrainProposal(live.id)?.status).toBe("draft");
+
+    // The backup was taken BEFORE the rows changed: it still holds them open.
+    const files = backups(s.config.dataDir);
+    expect(files).toHaveLength(1);
+    const copy = new Database(path.join(s.config.dataDir, "backups", files[0]), { readonly: true });
+    expect((copy.prepare("SELECT status FROM team_brain_proposals WHERE id = ?").get(pending) as { status: string }).status).toBe("pending");
+    copy.close();
+
+    // Idempotent: nothing is open any more, and no second backup is taken.
+    expect(s.store.countOpenTeamBrainQueueRows()).toBe(0);
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 0 });
+    expect(backups(s.config.dataDir)).toHaveLength(1);
+  });
+
+  it("a failed backup HOLDS the step; the next boot's backup lets it through", async () => {
+    const dataDir = dir();
+    const first = createServices({ dataDir, agentRuntime: "local", sessionSecret: "test" });
+    const mate = first.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const pending = insertLegacyTeamBrainRow(first.store, { kind: "propose", status: "pending", proposerUserId: mate.id });
+    // The backups folder cannot be created: a file sits where it belongs.
+    fs.writeFileSync(path.join(dataDir, "backups"), "not a folder");
+    expect(await retireTeamBrainReviewQueueOnBoot(first)).toEqual({ approved: 0, closed: 0 });
+    expect(status(first.store, pending)).toEqual(["pending", null]);
+    // Still held on a second ask of the same boot.
+    expect(await retireTeamBrainReviewQueueOnBoot(first)).toEqual({ approved: 0, closed: 0 });
+    first.store.close();
+
+    fs.rmSync(path.join(dataDir, "backups"));
+    services = createServices({ dataDir, agentRuntime: "local", sessionSecret: "test" });
+    expect(await retireTeamBrainReviewQueueOnBoot(services)).toEqual({ approved: 0, closed: 1 });
+    expect(status(services.store, pending)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+    expect(backups(dataDir)).toHaveLength(1);
+  });
+
+  it("holds the whole step while approvals are in flight and the vault cannot be read — an empty answer would void them", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const admin = s.store.createUser({ username: "boss", displayName: "Boss", password: "password123" });
+    const target = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "pending", proposerUserId: mate.id });
+    const targetPath = s.store.getTeamBrainProposal(target)!.path;
+    const review = insertLegacyTeamBrainRow(s.store, {
+      kind: "review",
+      status: "applied",
+      proposerUserId: admin.id,
+      path: targetPath,
+      targetId: target,
+      decision: "approve",
+      changeset: changesetFor(targetPath),
+      decidedBy: admin.id,
+      decidedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const other = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "draft", proposerUserId: mate.id });
+
+    // No vault on disk (a volume not mounted, a restore not finished): nothing is closed, nothing approved.
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 0 });
+    expect(s.store.getTeamBrainProposal(target)?.status).toBe("pending");
+    expect(s.store.getTeamBrainProposal(review)?.status).toBe("applied");
+    expect(s.store.getTeamBrainProposal(other)?.status).toBe("draft");
+
+    // The vault is back, with the approval's commit in it: the next boot settles it and closes the rest.
+    await applyTeamChangeset(s.config, {
+      raw: { path: targetPath, content: "# 배포 원본\n" },
+      changes: changesetFor(targetPath).changes,
+      title: "배포",
+      proposalId: target,
+      logOp: "direct",
+      author: ADMIN,
+    });
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 1, closed: 1 });
+    expect(s.store.getTeamBrainProposal(target)?.status).toBe("approved");
+    expect(status(s.store, other)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+  });
+
+  it("the live housekeeping leaves a draft of the retired queue alone: it neither expires nor counts toward the cap", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const old = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "draft", proposerUserId: mate.id });
+    // Far past any draft TTL.
+    rawDb(s.store).prepare("UPDATE team_brain_proposals SET updated_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", old);
+    expect(s.store.expireTeamBrainDrafts()).toBe(0);
+    expect(s.store.getTeamBrainProposal(old)?.status).toBe("draft");
+    // Only the upgrade step closes it — with its own marker.
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 1 });
+    expect(status(s.store, old)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+  });
+
+  it("settles an approval that was mid-commit by the vault: landed → approved (its notes stay linked); never landed → closed with the rest", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const admin = s.store.createUser({ username: "boss", displayName: "Boss", password: "password123" });
+    const claimedAt = new Date(Date.now() - 60_000).toISOString();
+    const inFlight = (personalNotes?: Array<{ path: string; blob: string }>) => {
+      const target = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "pending", proposerUserId: mate.id, personalNotes });
+      const targetPath = s.store.getTeamBrainProposal(target)!.path;
+      const review = insertLegacyTeamBrainRow(s.store, {
+        kind: "review",
+        status: "applied",
+        proposerUserId: admin.id,
+        path: targetPath,
+        targetId: target,
+        decision: "approve",
+        changeset: changesetFor(targetPath),
+        decidedBy: admin.id,
+        decidedAt: claimedAt,
+      });
+      return { target, review, targetPath };
+    };
+    // A: the commit landed, then the process died before the submission turned approved.
+    const a = inFlight([{ path: "wiki/concepts/deploy.md", blob: "b1" }]);
+    await applyTeamChangeset(s.config, {
+      raw: { path: a.targetPath, content: "# 배포 원본\n" },
+      changes: changesetFor(a.targetPath).changes,
+      title: "배포",
+      proposalId: a.target,
+      logOp: "direct",
+      author: ADMIN,
+    });
+    // B: the process died before the commit.
+    const b = inFlight();
+    expect(s.store.listTeamBrainInFlightApprovals().map((f) => f.targetId).sort()).toEqual([a.target, b.target].sort());
+
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 1, closed: 2 });
+
+    expect(s.store.getTeamBrainProposal(a.target)).toMatchObject({ status: "approved", decidedBy: admin.id, decisionReason: null });
+    expect(s.store.getTeamBrainProposal(a.review)?.status).toBe("applied");
+    expect(s.store.listTeamBrainPersonalLinks(mate.id)).toMatchObject([
+      { proposalId: a.target, notes: [{ path: "wiki/concepts/deploy.md", blob: "b1" }], teamPages: ["wiki/howto/deploy.md"], fromSource: true },
+    ]);
+    expect(status(s.store, b.target)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+    expect(s.store.getTeamBrainProposal(b.review)).toMatchObject({
+      status: "cancelled",
+      decisionReason: TEAM_BRAIN_CLOSED_BY_UPGRADE,
+      decidedBy: null,
+      decidedAt: null,
+    });
+    expect(await readTeamVaultFile(s.config, b.targetPath)).toBeNull();
+    expect(s.store.listTeamBrainInFlightApprovals()).toEqual([]);
+  });
+});
+
 describe("team brain proposals — schema v1 DB migration (user_version 3)", () => {
   it("turns open legacy note proposals into raw sources, cancels legacy admin drafts, leaves decided rows", () => {
     const dataDir = dir();
@@ -523,15 +658,15 @@ describe("team brain proposals — schema v1 DB migration (user_version 3)", () 
       path: "raw/2026/10/2026-10-01-aaaa1111.md",
       baseBlob: null,
       content: "old note",
-      intake: { type: null, answers: {}, gaps: [], followups: [] },
+      intake: { type: null, answers: {}, gaps: [] },
     });
     expect(s.getTeamBrainProposal("bbbb2222-x")?.path).toBe("raw/2026/10/2026-10-01-bbbb2222.md");
     expect(s.getTeamBrainProposal("cccc3333-x")?.status).toBe("cancelled");
     expect(s.getTeamBrainProposal("dddd4444-x")?.status).toBe("cancelled");
     expect(s.getTeamBrainProposal("eeee5555-x")).toMatchObject({ status: "approved", path: "wiki/concepts/e.md", baseBlob: "blob2", intake: null });
     expect(Number(rawDb(s).pragma("user_version", { simple: true }))).toBeGreaterThanOrEqual(3);
-    // Gated: an admin draft created later is never cancelled by a re-run on the next boot.
-    const later = draft(s, user.id, { kind: "direct" });
+    // Gated: a draft created later is never cancelled by a re-run on the next boot.
+    const later = draft(s, user.id);
     services.store.close();
     services = createServices({ dataDir, agentRuntime: "local", sessionSecret: "test" });
     expect(services.store.getTeamBrainProposal(later.id)?.status).toBe("draft");

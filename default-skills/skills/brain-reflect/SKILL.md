@@ -10,7 +10,7 @@ asked to "tidy up / consolidate my notes".
 
 ## Scope
 - **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
-  This consolidates the PERSONAL brain only; the team brain is admin-approved and never touched here.
+  This consolidates the PERSONAL brain only; the team brain is written through cards and never touched here.
 - **Which brain:** follow the Brain policy in your instructions (ONE FACT ONE HOME, PROMOTED NOTES). Never
   compile a capture into a new full personal note when the team brain already holds that fact — search it
   (scope `"team"`) first and link to the team page instead; a note `mcp__brain__get_note` marks as PROMOTED
@@ -47,7 +47,7 @@ return nothing for conversations the owner does not own. Never read anyone else'
    where the change history is kept, not in the note.
 6. Optionally archive raw notes you fully consolidated.
 7. **Commit once.** If a write or the commit fails, report what you found — do not retry via Bash.
-8. **Point at the team, in one line — never more.** Only in a run that can submit to the team brain
+8. **Point at the team, in one line — never more.** Only in a run that can write the team brain
    (your instructions carry the TEAM KNOWLEDGE tests and THE RIGHT LEVEL): if notes you just wrote or
    updated look like team knowledge at that level, end the report with ONE line saying how many and
    that the brain-share skill picks them ("팀에 올릴 만한 노트가 N건 보입니다 — 골라 드릴까요?"). Do not

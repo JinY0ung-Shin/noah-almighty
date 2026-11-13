@@ -255,7 +255,6 @@
 }
 
 .brain-links:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)),
-.brain-proposals:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)),
 .brain-hubs:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
   display: flex;
   flex-direction: column;
@@ -266,7 +265,6 @@
   border-top: 1px solid var(--line-soft);
 }
 .brain-links:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) h3,
-.brain-proposals:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) h3,
 .brain-hubs:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) h3 {
   display: flex;
   align-items: center;
@@ -289,10 +287,6 @@
   font-size: var(--t-xs);
   line-height: 1.5;
   color: var(--muted);
-}
-.brain-proposals:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) + .brain-hubs {
-  padding-top: var(--s-4);
-  border-top: 1px solid var(--line-soft);
 }
 .brain-list:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
   list-style: none;
@@ -342,54 +336,6 @@
 .brain-dot.dangling:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
   background: transparent;
   border: 1.5px dashed var(--muted);
-}
-.brain-card:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
-  padding: var(--s-3);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-md);
-  background: var(--bg);
-  overflow-wrap: anywhere;
-}
-.brain-card-top:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--s-2);
-}
-.brain-card-top:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) strong {
-  font-size: var(--t-sm);
-  line-height: 1.4;
-}
-.brain-card-top:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) .tag {
-  flex: none;
-}
-.brain-card-meta:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  font-size: var(--t-xs);
-  color: var(--muted);
-}
-.brain-card-meta:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) code {
-  font-size: var(--t-2xs);
-}
-.brain-card-reason:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  margin: var(--s-1) 0 0;
-  padding: var(--s-2) var(--s-2-5);
-  border-radius: var(--r-sm);
-  background: var(--danger-soft);
-  color: var(--text);
-  font-size: var(--t-xs);
-  line-height: 1.5;
-}
-.brain-card-reason.is-ask:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  background: var(--warn-soft);
-  white-space: pre-line;
-}
-.brain-proposal-withdraw:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)),
-.brain-review-start:is(.cmp-brain-view, .cmp-brain-view *):where(:not(.brain-note-body *)) {
-  align-self: flex-start;
-  margin-top: var(--s-1);
 }
 
 @media (max-width: 960px) {

@@ -24,7 +24,7 @@ export const TEAM_SHARE_LEVEL_RULE =
 /** The bundled skill that selects personal notes for the team (default-skills/skills/brain-share). */
 export const TEAM_SHARE_SKILL = "brain-share";
 
-/** Cards ONE selection pass may draft (user decision 2026-11-12) — the admins' queue is not flooded. */
+/** Cards ONE selection pass may draft (user decision 2026-11-12) — a pass stays small enough to read before pressing. */
 export const TEAM_SHARE_PASS_MAX = 3;
 
 /** Frontmatter key (+ its one value) of a personal note the owner decided to keep out of the team brain. */
@@ -38,15 +38,15 @@ export const BRAIN_KEPT_PERSONAL_NAME = "KEPT PERSONAL";
  * The selection pass over the personal brain (user decisions 2026-11-12: on
  * request, the cards are drafted without a per-candidate question, at most
  * TEAM_SHARE_PASS_MAX per pass — a number the admins' POLICY.md guidelines may
- * replace; the cards still wait for the owner's press, ONE press for all of
- * them with 초안 N건 모두 제출).
+ * replace; 2026-11-13: each card writes the team brain when pressed, so each
+ * is pressed on its own — there is no "all at once" button).
  */
 export const TEAM_SHARE_PASS_RULE =
-  `SELECTING FOR THE TEAM: when the user asks which of their own notes are worth sharing with the team, run the \`${TEAM_SHARE_SKILL}\` skill — it goes through the personal brain's \`wiki/\` notes, keeps only what passes the TEAM KNOWLEDGE tests at THE RIGHT LEVEL, and drafts a team-brain card for the best ones. Asking for the pass is the user's yes to DRAFT those cards — do not ask again per note — but not to share them: nothing leaves the drafts until the user presses a card. In a pass, each card's source is the note's own passage that states the conclusion, verbatim, and the intake facts (provenance included) come from the note where it states them; ask ONCE, for all the drafts together, only for what the notes do not say — a note whose origin the user cannot name is left out. One pass drafts at most ${TEAM_SHARE_PASS_MAX} cards (the team guidelines may set another number), the most useful first; name the other candidates by title only and leave them for the next pass. A teammate's submission cards each have 관리자에게 제출, and with two or more of them the LAST card also carries 초안 N건 모두 제출 — one press that sends them all to the admins; an admin's own cards (\`prepare_team_changes\`) write the team brain when pressed, so each is pressed on its own. Never select a LINK note, a PROMOTED note, a note marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\`, or a fact that the team brain or an open team submission already holds; a note whose submission was rejected comes back only when it has since changed in the point the rejection named.`;
+  `SELECTING FOR THE TEAM: when the user asks which of their own notes are worth sharing with the team, run the \`${TEAM_SHARE_SKILL}\` skill — it goes through the personal brain's \`wiki/\` notes, keeps only what passes the TEAM KNOWLEDGE tests at THE RIGHT LEVEL, and drafts a team-brain card for the best ones. Asking for the pass is the user's yes to DRAFT those cards — do not ask again per note — but not to share them: nothing reaches the team brain until the user presses a card. In a pass, each card's source is the note's own passage that states the conclusion, verbatim, and the intake facts (provenance included) come from the note where it states them; ask ONCE, for all the drafts together, only for what the notes do not say — a note whose origin the user cannot name is left out. One pass drafts at most ${TEAM_SHARE_PASS_MAX} cards (the team guidelines may set another number), the most useful first; name the other candidates by title only and leave them for the next pass. Each card (\`mcp__brain__prepare_team_changes\`) writes the team brain when pressed, so each is pressed on its own — there is no button for all of them. Never select a LINK note, a PROMOTED note, a note marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\`, or a fact that the team brain or an unpressed card of this conversation already holds.`;
 
 /** Remembering a "no" (user decision 2026-11-12: a declined note is not asked about again). */
 export const BRAIN_KEPT_PERSONAL_RULE =
-  `${BRAIN_KEPT_PERSONAL_NAME}: when the user says a personal note should stay out of the team brain — they decline it in a selection pass, or say so about a note — record it so it is not asked again: add the frontmatter line \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` to that note with \`mcp__repo__edit_file\`, commit, and say in one line that the note is now kept personal. When they only withdrew its card without saying why, ask once whether to leave it out of future passes before marking it. A note marked so is never offered or selected again; it goes to the team only when the user names that note and asks — then remove the mark and commit first.`;
+  `${BRAIN_KEPT_PERSONAL_NAME}: when the user says a personal note should stay out of the team brain — they decline it in a selection pass, or say so about a note — record it so it is not asked again: add the frontmatter line \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` to that note with \`mcp__repo__edit_file\`, commit, and say in one line that the note is now kept personal. When they only cancelled its card without saying why, ask once whether to leave it out of future passes before marking it. A note marked so is never offered or selected again; it goes to the team only when the user names that note and asks — then remove the mark and commit first.`;
 
 /** What the personal second brain holds, and that capture needs no question first (user decision 2026-11-10). */
 export const PERSONAL_KNOWLEDGE_DEFINITION =
@@ -54,11 +54,11 @@ export const PERSONAL_KNOWLEDGE_DEFINITION =
 
 /** One fact, one home (the SSOT rule both brains follow). */
 export const BRAIN_ONE_HOME_RULE =
-  "ONE FACT, ONE HOME: team knowledge lives in the team brain, personal knowledge in the personal brain. Once an admin approves a fact into the team brain, the team page is the canonical version; a personal note about the same fact becomes at most a one-line link to it (only with the user's yes — see PROMOTED NOTES). Never create a second full copy of a fact the other brain already holds: link to it or search it instead.";
+  "ONE FACT, ONE HOME: team knowledge lives in the team brain, personal knowledge in the personal brain. Once a fact is in the team brain, the team page is the canonical version; a personal note about the same fact becomes at most a one-line link to it (only with the user's yes — see PROMOTED NOTES). Never create a second full copy of a fact the other brain already holds: link to it or search it instead.";
 
 /** Where a durable fact goes (the routing decision on every capture). */
 export const BRAIN_ROUTING_RULE =
-  "WHERE IT GOES: when the conversation produces something durable, decide its home first. Personal knowledge → capture it in the personal brain. Team knowledge → offer to share it with the team brain (OFFER TO SHARE). While a submission waits for an admin it may also live in the personal brain (capture it there when it is useful to the owner meanwhile); when you submit, pass that personal note's `wiki/` path in `personalNotes`, so the link is recorded.";
+  "WHERE IT GOES: when the conversation produces something durable, decide its home first. Personal knowledge → capture it in the personal brain. Team knowledge → offer to put it into the team brain (OFFER TO SHARE). It may also live in the personal brain while the user has not said yes or has not pressed its card (capture it there when it is useful to the owner meanwhile); when you draft the card, pass that personal note's `wiki/` path in `personalNotes`, so the link is recorded.";
 
 /** The rule's name, for the team flows that point at it (teamBrainTools.ts) instead of restating it. */
 export const BRAIN_LINK_CHECK_NAME = "BEFORE A TEAM CARD";
@@ -67,25 +67,25 @@ export const BRAIN_LINK_CHECK_NAME = "BEFORE A TEAM CARD";
  * The execution point of ONE FACT, ONE HOME (issue #82): the link between a
  * personal note and its team page exists only when the avatar passes
  * `personalNotes`, so every team card starts with a look into the personal
- * brain — the owner's own submission, an admin's own knowledge AND an admin's
- * maintenance card (the migration pass, where the link used to be refused).
+ * brain — new knowledge AND a correction or maintenance card (the migration
+ * pass, where the link used to be refused).
  * Still soft by decision (2026-11-10): the server detects nothing and never
  * writes the personal repo.
  */
 export const BRAIN_LINK_CHECK_RULE =
-  `${BRAIN_LINK_CHECK_NAME}: every time you are about to draft a team-brain card — \`mcp__brain__propose_team_note\`, or an admin's \`mcp__brain__prepare_team_changes\` (their own knowledge AND maintenance) — also search the personal brain (\`mcp__brain__search\`, scope "personal") for the topic: the card's title and the title of every page it creates or updates. Pass the \`wiki/\` path of each personal note that states the same fact in \`personalNotes\`, so the link is recorded and the note is marked once the change is in the team brain; a note that only mentions the topic is not one. This check changes nothing in the personal brain.`;
+  `${BRAIN_LINK_CHECK_NAME}: every time you are about to draft a team-brain card — \`mcp__brain__prepare_team_changes\`, for new knowledge AND for a correction or maintenance of existing pages — also search the personal brain (\`mcp__brain__search\`, scope "personal") for the topic: the card's title and the title of every page it creates or updates. Pass the \`wiki/\` path of each personal note that states the same fact in \`personalNotes\`, so the link is recorded and the note is marked once the change is in the team brain; a note that only mentions the topic is not one. This check changes nothing in the personal brain.`;
 
 /** When the two brains disagree (user decision 2026-11-10: no precedence — show both). */
 export const BRAIN_CONFLICT_RULE =
-  "WHEN THEY DISAGREE: if a personal note and a team page say different things about the same topic, do not pick one and do not merge them silently. Show both — say which is the personal brain (내 브레인) and which is the team brain (팀 브레인), with their dates when they have any — and ask the user which holds. Then offer the fix that fits: correct the personal note, or submit a correction to the team brain.";
+  "WHEN THEY DISAGREE: if a personal note and a team page say different things about the same topic, do not pick one and do not merge them silently. Show both — say which is the personal brain (내 브레인) and which is the team brain (팀 브레인), with their dates when they have any — and ask the user which holds. Then offer the fix that fits: correct the personal note, or correct the team page (a `mcp__brain__prepare_team_changes` card the user presses).";
 
 /**
- * Turning an approved personal note into a link (user decisions 2026-11-10:
+ * Turning a personal note whose fact went into the team brain into a link (user decisions 2026-11-10:
  * never forced, asked IN WORDS, and the question must be unambiguous to
  * someone who has never heard of the mechanism — the five required elements).
  */
 export const PROMOTED_NOTE_RULE =
-  "PROMOTED NOTES: a personal note that was submitted and approved into the team brain — or that an admin's maintenance change recorded as stating the same fact as a team page — is marked so by `mcp__brain__get_note`, `mcp__brain__search` and `mcp__brain__list_team_proposals`. Nothing changes it automatically. When it comes up, ask the user ONCE, in plain words, whether to replace the personal note's body with a one-line link to the team page. The question MUST say: (1) which personal note — its title and path; (2) which team page it was approved as — title and path; (3) exactly what changes — the note's body is deleted and only one line linking to the team page stays; (4) what is kept — the raw/ capture and the git history still hold the old text; (5) what happens if they say no — both stay, and searches show both. Never use vague words like 'tidy up', 'clean up' or 'pointer'. If the note changed after it was submitted (the mark says so), show the part that changed and offer three choices instead: submit that part to the team brain as a follow-up, keep only that part in the personal note and link the rest, or change nothing. If the mark says the note was NOT the team page's source, read the team page first and treat whatever only the note says the same way as a changed part. Only after the user's yes: rewrite the note with `mcp__repo__write_file` — frontmatter `title` (unchanged) and `team_page: <team page path>`, body ONE line naming the team page — and commit.";
+  "PROMOTED NOTES: a personal note that went into the team brain as the source of a team-brain card — or that a correction or maintenance card recorded as stating the same fact as a team page — is marked so by `mcp__brain__get_note` and `mcp__brain__search`, and in the owner's own chat `mcp__brain__team_brain_health` lists them. Nothing changes it automatically. When it comes up, ask the user ONCE, in plain words, whether to replace the personal note's body with a one-line link to the team page. The question MUST say: (1) which personal note — its title and path; (2) which team page now holds it — title and path; (3) exactly what changes — the note's body is deleted and only one line linking to the team page stays; (4) what is kept — the raw/ capture and the git history still hold the old text; (5) what happens if they say no — both stay, and searches show both. Never use vague words like 'tidy up', 'clean up' or 'pointer'. If the note changed after it went in (the mark says so), show the part that changed and offer three choices instead: put that part into the team brain as a follow-up change, keep only that part in the personal note and link the rest, or change nothing. If the mark says the note was NOT the team page's source, read the team page first and treat whatever only the note says the same way as a changed part. Only after the user's yes: rewrite the note with `mcp__repo__write_file` — frontmatter `title` (unchanged) and `team_page: <team page path>`, body ONE line naming the team page — and commit.";
 
 /** Frontmatter key of a personal note that became a link to its team page. */
 export const PERSONAL_TEAM_PAGE_KEY = "team_page";
@@ -100,8 +100,8 @@ export interface BrainPolicyScope {
   personalRead: boolean;
   /** The team brain can be read. */
   teamRead: boolean;
-  /** Team submissions can be drafted in this run (the owner's own interactive chat). */
-  teamPropose: boolean;
+  /** Team-brain cards can be drafted in this run (the owner's own interactive chat). */
+  teamWrite: boolean;
 }
 
 /**
@@ -114,7 +114,7 @@ export function brainPolicySection(scope: BrainPolicyScope): string | null {
   if (!personal && !scope.teamRead) return null;
   const parts: string[] = ["**Brain policy** (the rules for both brains; the brain-* and team-brain-curate skills follow them):"];
   if (scope.personalWrite) parts.push(PERSONAL_KNOWLEDGE_DEFINITION);
-  if (scope.personalWrite && scope.teamPropose) parts.push(BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE);
+  if (scope.personalWrite && scope.teamWrite) parts.push(BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE);
   if (personal && scope.teamRead) {
     parts.push(BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE);
     if (scope.personalWrite) parts.push(PROMOTED_NOTE_RULE);

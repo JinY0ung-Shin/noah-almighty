@@ -129,17 +129,15 @@ describe("Shell rail controls", () => {
     expect(onMobileRailOpenChange).toHaveBeenLastCalledWith(false);
   });
 
-  it("has 내 브레인 and 팀 브레인 as separate rail items, the team-brain badge on 팀 브레인 only", () => {
+  it("has 내 브레인 and 팀 브레인 as separate rail items, neither with a badge", () => {
     setDesktopViewport(true);
-    replaceState({ teamBrainStatus: { unseenResults: 1, pendingReview: 2 } });
     render(<Shell user={user} view="explore" />);
     const nav = screen.getByRole("navigation", { name: "주 메뉴" });
     const mine = within(nav).getByRole("button", { name: /^내 브레인/ });
     const team = within(nav).getByRole("button", { name: /^팀 브레인/ });
     expect(within(nav).queryByRole("button", { name: /지식 그래프/ })).toBeNull();
     expect(mine.querySelector(".nav-badge")).toBeNull();
-    expect(team.querySelector(".nav-badge")?.textContent).toBe("3");
-    replaceState({ teamBrainStatus: { unseenResults: 0, pendingReview: 0 } });
+    expect(team.querySelector(".nav-badge")).toBeNull();
   });
 
   it("makes conversation search reversible and gives repeated row actions contextual names", async () => {

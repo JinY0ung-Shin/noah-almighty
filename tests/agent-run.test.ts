@@ -289,7 +289,8 @@ describe("run capability plan", () => {
     // here, so only search/get_note); without a card sink no team-brain write tool exists.
     expect(run.servers).toContain("brain");
     expect(run.allowed).toContain("mcp__brain__search");
-    expect(run.allowed).not.toContain("mcp__brain__propose_team_note");
+    expect(run.allowed).not.toContain("mcp__brain__prepare_team_changes");
+    expect(run.allowed).not.toContain("mcp__brain__team_brain_health");
     // Every built server is one pi's broker knows; nothing is relayed for this run.
     expect(run.caps.piMcpProxies.upstreams).toEqual([]);
     expect(run.caps.piRuntimeFacts.sandboxOwner).toBe("owner");
@@ -523,7 +524,7 @@ describe("run capability plan", () => {
     expect(run.append).toContain("Noah serves a single team: every approved user is a teammate.");
     expect(run.append).toContain("Team size when this conversation started: 1 teammate besides the owner");
     expect(run.append).toContain("The old per-GROUP knowledge repositories and per-group brain were removed with groups");
-    // …and the ONE team brain is stated as readable (no card sink in this plan → no proposing).
+    // …and the ONE team brain is stated as readable (no card sink in this plan → no writing).
     expect(run.append).toContain("**Team brain**: the team's ONE shared knowledge vault");
     expect(run.append).not.toContain("avatar sharing off");
   });

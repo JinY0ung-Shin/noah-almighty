@@ -294,7 +294,9 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`, `direct_messages`), a retired `app_config` key (`server_agents_enabled`,
     `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
     three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
-    `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, or a bot-bound routine — the
+    `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, a bot-bound routine, or a
+    still-OPEN row of the team brain's retired review queue (`OPEN_TEAM_BRAIN_QUEUE_ROWS_SQL`, 2026-11-13 —
+    the one predicate about rows that are CLOSED, not deleted) — the
     first ask copies the DB with `VACUUM INTO` (synchronous, WAL included) to
     `<dataDir>/backups/pre-retire-<stamp>.db`: the file is created empty at 0600 first, the folder 0700 and
     never a link, the copy re-opened read-only and its schema count compared. One `warn` line logs path and
@@ -340,6 +342,24 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     `RETIRED_TABLES`, so every stored message survives only in that boot's backup. `PRESENCE_WINDOW_MS` stays
     (the admin presence badge owns it now). The table, index, route (`/api/dm`) and localStorage
     (`dmDockOpen`, `dmDockPeer`) names are reserved forever.
+  - **The team brain's review queue retired (2026-11-13, user decision: every teammate writes directly).**
+    A retirement that closes ROWS and deletes nothing, through the same gate. The boot step
+    `retireTeamBrainReviewQueueOnBoot` (`teamBrainActions.ts`; `index.ts` chains it AFTER
+    `migrateTeamBrainOnBoot` and BEFORE `sweepTeamBrainAppliesOnBoot`) closes what an older build left open
+    in `team_brain_proposals` — `propose` rows in draft / pending / needs_info, `review` drafts: status
+    `cancelled`, `decision_reason = "closed_by_upgrade"`, every other column (the submitted source text
+    included) kept. `OPEN_TEAM_BRAIN_QUEUE_ROWS_SQL` (`store/retirementBackup.ts`) is the ONE predicate for
+    the gate's `retirementDataPresent`, the step's own count and the store's close, so a row is never closed
+    without that boot's backup; a failed backup holds the step. It is a BOOT step, not a
+    `user_version` step, because an approval that was mid-commit is settled first from the vault's `git log`
+    (async — `migrate()` cannot wait for it): commit landed → the submission is `approved`; not landed → the
+    approve card is closed with the rest; a vault that cannot be read holds the whole step until the next
+    boot. It stays value-guarded on purpose: no code mints a queue row any more, so the predicate can only
+    match rows an older build left (also after a rollback) — the "value-guarded backfill is NOT one-time"
+    rule above is about predicates that match rows the app creates LATER. The table stays (it holds the live
+    cards). The queue's tool names, kinds, statuses, routes, press actions and audit events are reserved
+    forever → [`team-brain.md`](team-brain.md) ("The review queue's retirement", "Retired (reserved
+    forever)"). Tests: `tests/team-brain.test.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

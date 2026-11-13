@@ -268,6 +268,22 @@ const RETIRED_SERVER_MESSAGES: Record<string, string> = {
     "MCP server 'web' was removed: Noah no longer fetches web pages from its own server (mcp__web__fetch is gone). Do not retry. Read the page from your shell when you have one and the destination is on the pi operator's allowlist, or with the browser tools (mcp__browser__*) when this run has them; otherwise tell the user you cannot open the page and ask them to paste its content.",
 };
 
+/**
+ * Model-facing text for a TOOL a live server no longer has (keyed
+ * `<server>/<tool>`; the names are reserved forever). pi freezes a session's
+ * tool list and a conversation's prompt, so one started before the removal can
+ * still call it: the call is answered here — before any gate, never reaching
+ * the server — with where to go instead. tools/list never names these.
+ */
+const TEAM_BRAIN_QUEUE_RETIRED =
+  "was removed: the team brain has no submissions and no review queue any more — every teammate's avatar writes it directly, and submissions that were still open were closed. Do not retry it. To put knowledge into the team brain (or to redo a closed submission), read SCHEMA.md and wiki/index.md with mcp__brain__get_note (scope \"team\"), then draft the page changes with mcp__brain__prepare_team_changes — nothing changes until the user presses 팀 브레인에 반영 on its card. mcp__brain__team_brain_health reports what the team brain needs and which of the owner's personal notes are linked to team pages.";
+export const RETIRED_TOOL_MESSAGES: Readonly<Record<string, string>> = Object.fromEntries(
+  ["propose_team_note", "answer_team_questions", "list_team_proposals", "get_team_proposal", "prepare_team_review"].map((tool) => [
+    `brain/${tool}`,
+    `Tool 'mcp__brain__${tool}' ${TEAM_BRAIN_QUEUE_RETIRED}`,
+  ]),
+);
+
 function refusedToolResult(tool: string, message?: string): CallToolResult {
   return {
     content: [{ type: "text", text: message ?? `Tool '${tool}' is not available in this run.` }],
@@ -302,12 +318,14 @@ function installGates(session: Session, serverName: string, gates: McpRunGates):
         listRequests.add(message.id);
       } else if (message.method === "tools/call") {
         const tool = typeof message.params?.name === "string" ? message.params.name : "";
+        const retired = Object.hasOwn(RETIRED_TOOL_MESSAGES, `${serverName}/${tool}`) ? RETIRED_TOOL_MESSAGES[`${serverName}/${tool}`] : undefined;
         if (
+          retired ||
           (gates.allowTool && !gates.allowTool(serverName, tool)) ||
           (gates.allowCall && !gates.allowCall(serverName, tool))
         ) {
           session.inflight.delete(message.id);
-          const result = refusedToolResult(tool, gates.refusalMessage?.(serverName, tool));
+          const result = refusedToolResult(tool, retired ?? gates.refusalMessage?.(serverName, tool));
           void send(
             { jsonrpc: "2.0", id: message.id, result: result as Record<string, unknown> },
             { relatedRequestId: message.id },
