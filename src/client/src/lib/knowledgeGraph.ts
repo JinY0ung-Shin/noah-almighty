@@ -1,3 +1,4 @@
+import { TEAM_PAGE_TYPE_LABELS, TEAM_PAGE_TYPES } from "../../../shared/teamBrain";
 import type { KnowledgeGraph, KnowledgeGraphNode } from "./types";
 
 // Client-side helpers over a `[[wikilink]]` KnowledgeGraph, shared by the graph
@@ -6,15 +7,31 @@ import type { KnowledgeGraph, KnowledgeGraphNode } from "./types";
 
 // Vault-section colors (chosen to read on both light and dark themes).
 // DELIBERATE token-system exemption: this is a categorical data-viz palette
-// encoding a node's section, not UI chrome. It needs 8 mutually distinguishable
+// encoding a node's section, not UI chrome. It needs mutually distinguishable
 // hues, which the semantic token set doesn't provide — so it stays raw hex and
 // stays theme-independent (the same hue must mean the same section in both).
+//
+// Two vaults, two sets that never share a graph: the personal brain's folders
+// (sources … synthesis) and the team brain's page TYPES (decision … contact, the
+// section the server derives from a page's folder). `raw` and the grays are common.
+// The team set was picked WITH raw as one seven-colour set, measured pairwise
+// (OKLab ΔE ×100): 17 or more apart in normal vision, 6 or more under protan /
+// deutan / tritan simulation, and readable on both the light and the dark panel.
+// 6 is a floor that holds only because a node is never colour alone (its label,
+// the legend chip, the note pane's type) — re-measure the whole set before
+// changing or adding a colour; a nicer-looking hue usually collapses a pair.
 export const SECTION_COLORS: Record<string, string> = {
   raw: "#f59e0b",
   sources: "#3b82f6",
   entities: "#10b981",
   concepts: "#8b5cf6",
   synthesis: "#ef4444",
+  decision: "#dc2626",
+  system: "#0284c7",
+  howto: "#10b981",
+  concept: "#8b5cf6",
+  term: "#15803d",
+  contact: "#f472b6",
   wiki: "#64748b",
   other: "#94a3b8",
   unresolved: "#94a3b8",
@@ -26,13 +43,14 @@ export const SECTION_LABELS: Record<string, string> = {
   entities: "entities",
   concepts: "concepts",
   synthesis: "synthesis",
+  ...TEAM_PAGE_TYPE_LABELS,
   wiki: "wiki",
   other: "기타",
   unresolved: "미연결 링크",
 };
 
 /** Legend / filter order: the vault's own reading order, dangling targets last. */
-export const SECTION_ORDER = ["raw", "sources", "entities", "concepts", "synthesis", "wiki", "other", "unresolved"];
+export const SECTION_ORDER = ["raw", "sources", "entities", "concepts", "synthesis", ...TEAM_PAGE_TYPES, "wiki", "other", "unresolved"];
 
 export function sectionColor(section: string): string {
   return SECTION_COLORS[section] ?? SECTION_COLORS.other;
@@ -40,6 +58,22 @@ export function sectionColor(section: string): string {
 
 export function sectionLabel(section: string): string {
   return SECTION_LABELS[section] ?? section;
+}
+
+/** The legend bucket a node's section falls in (an unknown section counts as `other`). */
+export function sectionKey(section: string): string {
+  return section in SECTION_COLORS ? section : "other";
+}
+
+/**
+ * The sections a freshly loaded graph starts with hidden: `raw/` — the sources, not
+ * the wiki whose shape the graph is for. Only when something else is left to look
+ * at: a vault that holds nothing but captures still draws them.
+ */
+export function defaultHiddenSections(nodes: KnowledgeGraphNode[]): Set<string> {
+  const hasRaw = nodes.some((n) => n.section === "raw");
+  const hasPage = nodes.some((n) => !n.dangling && n.section !== "raw");
+  return new Set(hasRaw && hasPage ? ["raw"] : []);
 }
 
 /** Link count per node id (in + out, each de-duplicated edge counted once per end). */
