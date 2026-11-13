@@ -1,10 +1,10 @@
 // Team brain (팀 브레인): ONE instance-wide LOCAL git vault at
-// <dataDir>/team-brain that ONLY Noah's own code writes. Teammates read it
-// (brain search scope "team") and SUBMIT SOURCES; an admin's avatar compiles a
-// source into wiki pages under the FIXED schema (teamBrainSchema.ts), the
-// server validates the changeset, and an admin decides; every state change is
-// a human button press on a chat card (routes/teamBrain.ts). There is no
-// `origin` remote — the admin backup is a push-only mirror (teamBrainBackup.ts).
+// <dataDir>/team-brain that ONLY Noah's own code writes. Every teammate reads
+// it (brain search scope "team") and writes it: their avatar drafts wiki page
+// changes under the FIXED schema (teamBrainSchema.ts), the server validates
+// the changeset, and the teammate's own press on the chat card commits it
+// (routes/teamBrain.ts) — every state change is a human button press. There is
+// no `origin` remote — the admin backup is a push-only mirror (teamBrainBackup.ts).
 //
 // Never hand this tree to a sandbox and never run git in any other `.git`: the
 // agent sees note CONTENT only, through the brain tools. All git goes through
@@ -12,9 +12,9 @@
 // every write is serialized under ONE withRepoLock key (not reentrant — the
 // exported ops take it once, the *Locked internals never do).
 //
-// Layout (schema v2): SCHEMA.md · POLICY.md (the admins' knobs + guidelines,
+// Layout: SCHEMA.md · POLICY.md (the admins' knobs + guidelines,
 // teamBrainPolicy.ts; changed only by a policy card) · raw/YYYY/MM/<date>-<id8>.md
-// (immutable sources, committed only at approval) · raw/legacy/ (pre-schema
+// (immutable sources, committed only with the card that brings them) · raw/legacy/ (pre-schema
 // notes) · wiki/<type folder>/<slug>.md pages · wiki/index.md + wiki/log.md
 // (server-generated on every commit).
 //
@@ -49,6 +49,7 @@ import {
 import { TEAM_POLICY_DEFAULT_MD, parseTeamPolicy, reviewAfterCeiling, type TeamPolicyParse } from "./teamBrainPolicy.js";
 import {
   TEAM_BRAIN_MAX_CONTENT_BYTES,
+  TEAM_BRAIN_PAGE_RULES_VERSION,
   TEAM_BRAIN_SCHEMA_VERSION,
   TEAM_POLICY_PATH,
   type TeamPageChange,
@@ -251,7 +252,7 @@ async function appendLog(root: string, entry: string): Promise<string> {
 
 /**
  * Put every touched path back to HEAD (or remove it when HEAD lacks it) and
- * unstage it — a failed write never leaves an unapproved file readable (reads
+ * unstage it — a failed write never leaves an uncommitted file readable (reads
  * serve the working tree) or staged for the NEXT commit.
  */
 async function restorePathsLocked(root: string, paths: string[], inHead: (p: string) => boolean): Promise<void> {
@@ -313,12 +314,13 @@ async function initLocked(root: string): Promise<void> {
  * moves every pre-schema note to raw/legacy/ (git mv — nothing is deleted) and
  * writes SCHEMA.md, the index and a log entry in ONE commit by Noah; a later
  * bump rewrites SCHEMA.md + index + log. Idempotent; a vault from a NEWER build
- * is left alone. Returns whether it committed.
+ * is left alone. Returns the version it migrated FROM, or null when it
+ * committed nothing.
  */
-async function migrateTeamBrainLocked(root: string): Promise<boolean> {
-  if (!(await headHasCommit(root))) return false;
+async function migrateTeamBrainLocked(root: string): Promise<number | null> {
+  if (!(await headHasCommit(root))) return null;
   const version = schemaVersionOf(await showHead(root, SCHEMA_PATH));
-  if (version >= TEAM_BRAIN_SCHEMA_VERSION) return false;
+  if (version >= TEAM_BRAIN_SCHEMA_VERSION) return null;
   const before = await listVaultAt(root);
   const inHead = (p: string) => before.blobs.has(p);
   const touched: string[] = [];
@@ -359,10 +361,13 @@ async function migrateTeamBrainLocked(root: string): Promise<boolean> {
       }
     }
     await writeFile(root, INDEX_PATH, indexFor(remaining));
+    // A bump that changed no page rule leaves nothing for anyone to do.
     const note =
       version === 0
         ? `${moves.length} pre-schema notes moved to raw/legacy/; compile them with the team-brain-curate skill`
-        : `schema v${version} → v${TEAM_BRAIN_SCHEMA_VERSION}; run team_brain_health and fix the pages it lists with the team-brain-curate skill`;
+        : version < TEAM_BRAIN_PAGE_RULES_VERSION
+          ? `schema v${version} → v${TEAM_BRAIN_SCHEMA_VERSION}; run team_brain_health and fix the pages it lists with the team-brain-curate skill`
+          : `schema v${version} → v${TEAM_BRAIN_SCHEMA_VERSION}: SCHEMA.md wording only — no page rule changed, nothing to fix`;
     await writeFile(
       root,
       LOG_PATH,
@@ -387,7 +392,7 @@ async function migrateTeamBrainLocked(root: string): Promise<boolean> {
       undefined,
       identityConfig(NOAH_IDENTITY),
     );
-    return true;
+    return version;
   } catch (error) {
     await restorePathsLocked(root, [...new Set(touched)], inHead);
     throw error;
@@ -424,13 +429,18 @@ export async function migrateTeamBrainOnBoot(config: Config, onMigrated?: () => 
   if (!teamBrainInitialized(config)) return;
   const root = teamBrainRoot(config);
   try {
-    const migrated = await withRepoLock(root, async () => {
+    const from = await withRepoLock(root, async () => {
       await initLocked(root);
       await reconcileLocked(root);
       return migrateTeamBrainLocked(root);
     });
-    if (migrated) {
-      logger.info({ schemaVersion: TEAM_BRAIN_SCHEMA_VERSION }, "team brain migrated to the current schema (admins: run the team-brain-curate migration pass)");
+    if (from !== null) {
+      logger.info(
+        { from, schemaVersion: TEAM_BRAIN_SCHEMA_VERSION },
+        teamSchemaMigrationPending(from)
+          ? "team brain migrated to the current schema (run the team-brain-curate migration pass)"
+          : "team brain SCHEMA.md rewritten for the current schema version (wording only; nothing to migrate)",
+      );
       onMigrated?.();
     }
   } catch (error) {
@@ -438,15 +448,25 @@ export async function migrateTeamBrainOnBoot(config: Config, onMigrated?: () => 
   }
 }
 
-/** Run a migration with the vault lock ALREADY held (teamBrainBackup's restore). */
+/** Run a migration with the vault lock ALREADY held (teamBrainBackup's restore). Returns whether it committed. */
 export async function migrateTeamBrainHoldingLock(root: string): Promise<boolean> {
   await reconcileLocked(root);
-  return migrateTeamBrainLocked(root);
+  return (await migrateTeamBrainLocked(root)) !== null;
 }
 
 /** Reconcile the index/working tree to HEAD with the vault lock ALREADY held (teamBrainBackup). */
 export async function reconcileTeamBrainHoldingLock(root: string): Promise<void> {
   if (fsSync.existsSync(path.join(root, ".git"))) await reconcileLocked(root);
+}
+
+/**
+ * Does a vault declaring `schemaVersion` still have notes or pages to bring
+ * over ("migration pending")? Only below the last version that changed a page
+ * rule: a newer wording-only bump (v2 → v3) is the server's own SCHEMA.md
+ * rewrite and must never be announced as work for anyone.
+ */
+export function teamSchemaMigrationPending(schemaVersion: number): boolean {
+  return schemaVersion < TEAM_BRAIN_PAGE_RULES_VERSION;
 }
 
 /** The vault's declared schema version (0 = absent or pre-schema). Sync, for describe_system. */
@@ -692,7 +712,7 @@ function uncompiledOf(vault: TeamVaultListing): string[] {
  * Ranked recall over the team vault (an absent vault reads as an empty one):
  * wiki page hits first (`kind: "page"`), then hits from raw sources NO page
  * cites yet (`kind: "uncompiled_source"`, at most half the limit) — so a
- * submitted-and-approved but not-yet-compiled fact is still findable.
+ * fact that sits only in a not-yet-compiled source (`raw/legacy/`) is still findable.
  * `unscanned` (only when > 0) = pages + uncompiled sources beyond the scan cap
  * that were not scored; the tool tells the model the search was partial.
  */
@@ -726,8 +746,8 @@ export async function teamBrainCounts(config: Config): Promise<{ pages: number; 
 }
 
 /**
- * The proposal ids named by a `Proposal: <id>` trailer in commits since
- * `sinceIso` (the boot sweep's evidence that an applied card really landed).
+ * The card ids named by a `Proposal: <id>` trailer in commits since `sinceIso`
+ * (the boot steps' evidence that an applied card really landed).
  */
 export async function teamBrainProposalCommits(config: Config, sinceIso: string): Promise<Set<string>> {
   const out = new Set<string>();
@@ -810,13 +830,11 @@ export interface ApplyTeamChangesetInput {
   changes: TeamPageChange[];
   title: string;
   proposalId: string;
-  logOp: "ingest" | "direct" | "maintain";
-  logBy?: string;
+  /** `direct` = the card brought a new source; `maintain` = page changes only. */
+  logOp: "direct" | "maintain";
   logApprovedBy?: string;
-  /** The admin who pressed the button. */
+  /** The teammate who pressed the button (the card's drafter). */
   author: { name: string; email: string };
-  /** The teammate who submitted the source (omitted when the admin wrote it). */
-  coAuthor?: { name: string; email: string } | null;
 }
 
 /**
@@ -885,7 +903,6 @@ export async function applyTeamChangeset(config: Config, input: ApplyTeamChanges
             date: today(),
             op: input.logOp,
             title: input.title,
-            by: input.logBy,
             approvedBy: input.logApprovedBy,
             changes: changes.map((c) => ({ op: c.op, path: c.path })),
             rawPath: input.raw?.path ?? null,
@@ -894,13 +911,8 @@ export async function applyTeamChangeset(config: Config, input: ApplyTeamChanges
       );
       await git(root, ["add", "--", ...touched]);
       const subject = `team-brain: ${input.title.replace(/[\r\n]+/g, " ").trim().slice(0, 120) || "update"}`;
-      const trailers = [`Proposal: ${input.proposalId}`];
-      if (input.coAuthor) {
-        const co = safeIdentity(input.coAuthor);
-        trailers.push(`Co-authored-by: ${co.name} <${co.email}>`);
-      }
       // Pathspec: the commit carries THIS changeset only, whatever else the index holds.
-      await git(root, ["commit", "--quiet", "-m", `${subject}\n\n${trailers.join("\n")}`, "--", ...touched], undefined, identityConfig(input.author));
+      await git(root, ["commit", "--quiet", "-m", `${subject}\n\nProposal: ${input.proposalId}`, "--", ...touched], undefined, identityConfig(input.author));
       const { stdout } = await git(root, ["rev-parse", "HEAD"]);
       return stdout.trim();
     } catch (error) {
@@ -915,6 +927,8 @@ export async function applyTeamChangeset(config: Config, input: ApplyTeamChanges
 export interface TeamBrainHealth {
   schemaVersion: number;
   currentSchemaVersion: number;
+  /** The vault is below the last page-rule change: notes or pages wait to be brought over (`teamSchemaMigrationPending`). */
+  migrationPending: boolean;
   pages: number;
   rawSources: number;
   uncompiledSources: string[];
@@ -950,7 +964,7 @@ function linkTargetOf(raw: string): string {
   return raw.split("|")[0].split("#")[0].split("^")[0].trim();
 }
 
-/** The lint report the admin's avatar works from (read-only, bounded). */
+/** The lint report an avatar works from when it tidies the wiki (read-only, bounded). */
 export async function teamBrainHealth(config: Config): Promise<TeamBrainHealth> {
   const vault = await listTeamVault(config);
   const root = teamBrainRoot(config);
@@ -1027,9 +1041,11 @@ export async function teamBrainHealth(config: Config): Promise<TeamBrainHealth> 
   }
 
   const cap = <T>(list: T[]) => list.slice(0, HEALTH_LIST_CAP);
+  const schemaVersion = teamBrainInitialized(config) ? teamVaultSchemaVersionSync(config) : TEAM_BRAIN_SCHEMA_VERSION;
   return {
-    schemaVersion: teamBrainInitialized(config) ? teamVaultSchemaVersionSync(config) : TEAM_BRAIN_SCHEMA_VERSION,
+    schemaVersion,
     currentSchemaVersion: TEAM_BRAIN_SCHEMA_VERSION,
+    migrationPending: teamSchemaMigrationPending(schemaVersion),
     pages: vault.pagePaths.size,
     rawSources: vault.rawPaths.size,
     uncompiledSources: cap(uncompiled),
