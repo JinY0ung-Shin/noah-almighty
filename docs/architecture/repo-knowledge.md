@@ -170,8 +170,9 @@
   repos were retired, 2026-10-30.) `writeRepoTemplate` seeds a
   starter root `CLAUDE.md`.
 - **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL.** (The
-  ONE instance-wide team brain, back 2026-11-06, is a separate Noah-owned local vault with its own
-  proposal queue → [`team-brain.md`](team-brain.md); it shares the `brain` server, but its vault is a
+  ONE instance-wide team brain, back 2026-11-06, is a separate Noah-owned local vault that every teammate
+  writes through cards they press themselves (no review queue since 2026-11-13) →
+  [`team-brain.md`](team-brain.md); it shares the `brain` server, but its vault is a
   stricter LLM wiki: server-rendered `raw/` sources, a FIXED server-validated `SCHEMA.md`, server-generated index/log.)
   `wiki/` (curated) + `raw/` (capture) are just directories inside the owner's personal knowledge repo.
   The team brain (`mcp__group_brain__*`, group vault scaffolding, group graph) was REMOVED 2026-10-30 (user
@@ -190,13 +191,18 @@
 - **The Brain policy (user, 2026-11-10, SSOT) — ONE module, `agent/brainPolicy.ts`.** Every rule about
   what goes into the personal brain vs the team brain lives there and nowhere else: `PERSONAL_KNOWLEDGE_DEFINITION`
   (capture WITHOUT asking first, then say what was saved), `TEAM_KNOWLEDGE_DEFINITION` (the four tests — moved
-  here, re-exported from `teamBrainTools.ts`), `BRAIN_ROUTING_RULE` (decide the home first; a submission may
-  also live in the personal brain until approved and is linked via `personalNotes`), `BRAIN_LINK_CHECK_RULE`
-  ("BEFORE A TEAM CARD": search the personal brain for the topic before every team card and pass the notes
+  here, re-exported from `teamBrainTools.ts`), `BRAIN_ROUTING_RULE` (decide the home first; team knowledge may
+  also live in the personal brain while the user has not said yes or has not pressed its card, and is linked
+  via `personalNotes` when the card is drafted), `BRAIN_LINK_CHECK_RULE`
+  ("BEFORE A TEAM CARD": search the personal brain for the topic before every `prepare_team_changes` card —
+  new knowledge and corrections alike — and pass the notes
   that state the same fact — the execution point of one-fact-one-home, #82), `BRAIN_ONE_HOME_RULE`
-  (once approved the team page is canonical), `BRAIN_CONFLICT_RULE` (no precedence: show BOTH, labeled
-  내 브레인 / 팀 브레인, and ask), `PROMOTED_NOTE_RULE` (turning an approved note into a link is ASKED in plain
+  (once a fact is in the team brain the team page is canonical), `BRAIN_CONFLICT_RULE` (no precedence: show
+  BOTH, labeled 내 브레인 / 팀 브레인, and ask; the team-side fix is a correction card the user presses),
+  `PROMOTED_NOTE_RULE` (turning a note whose fact went into the team brain into a link is ASKED in plain
   words with five required points and done only on a yes — never forced, never by the server).
+  The wording follows the 2026-11-13 change (every teammate writes the team brain directly; nothing is
+  "submitted" or "approved" any more) — the rules themselves did not change.
   `brainPolicySection` renders the **Brain policy** prompt section per run (write rules only where the run can
   write; conflict/one-home only with both brains); read_manual's `knowledge` guide uses
   `brainPolicyManualText`; tool results quote the same constants. The brain-* + team-brain-curate skills and
@@ -210,20 +216,23 @@
   `brainPolicy.ts`.** `TEAM_SHARE_LEVEL_RULE` ("THE RIGHT LEVEL": the reusable conclusion, never the working
   detail; only the PART of a note that states it) sits next to the four tests in the team-brain prompt
   section and the manual, so it gates the everyday OFFER TO SHARE and the selection pass alike.
-  `TEAM_SHARE_PASS_RULE` ("SELECTING FOR THE TEAM", runs that can capture AND submit): asking for the pass
-  is the yes to DRAFT, never to share; at most `TEAM_SHARE_PASS_MAX` (3) cards per pass — a default the
-  admins' POLICY.md guidelines may replace (it is the avatar's own bound, so the server has nothing to
-  enforce; `max_open_proposals` stays the hard cap); never a LINK / PROMOTED / kept-personal note or a fact
-  already in the team brain or the queue, and a rejected one only once the note changed in the point the
-  rejection named; in a pass the source is the note's passage (verbatim) and the intake comes from the note
-  — the `propose_team_note` description says the same, so the two never pull apart. `BRAIN_KEPT_PERSONAL_RULE` ("KEPT PERSONAL"): a declined note gets
+  `TEAM_SHARE_PASS_RULE` ("SELECTING FOR THE TEAM", runs that can capture AND write the team brain): asking
+  for the pass is the yes to DRAFT, never to share; at most `TEAM_SHARE_PASS_MAX` (3) cards per pass — a
+  default the admins' POLICY.md guidelines may replace (it is the avatar's own bound, so the server has
+  nothing to enforce; `max_open_proposals` stays the hard cap) and, since nobody reviews a card after the
+  press, small enough to read before pressing; **each card is a `prepare_team_changes` card that writes the
+  team brain when pressed, so each is pressed on its own — there is no button for all of them (2026-11-13;
+  the 초안 N건 모두 제출 press went with the review queue)**; never a LINK / PROMOTED / kept-personal note or a
+  fact that the team brain or an unpressed card of this conversation already holds; in a pass the source is
+  the note's passage (verbatim) and the intake comes from the note
+  — the `prepare_team_changes` description says the same, so the two never pull apart. `BRAIN_KEPT_PERSONAL_RULE` ("KEPT PERSONAL"): a declined note (or one whose card the user cancelled and, asked once, wants left out) gets
   frontmatter `team_share: no` (`PERSONAL_TEAM_SHARE_KEY`), written by the avatar with `mcp__repo__edit_file`
   + commit — the owner's own decision in the owner's own repo, so it is not the "nothing writes the personal
-  repo" case (that one is about approvals). The server's one part: `personalNotes` refuses such a note
+  repo" case (that one is about applied cards). The server's one part: `personalNotes` refuses such a note
   (`isKeptPersonalNote`, `brainTools.ts`). The skill is procedure only — no number, no criteria, no key
-  spelling of its own (`tests/brain-policy.test.ts`); in a run without the submit tools it stops instead of
-  judging by rules the run does not carry. `brain-reflect` ends with ONE line pointing at it, on submit-capable
-  runs only. The cards and the one-press submit → [`team-brain.md`](team-brain.md) "Cards and routes".
+  spelling of its own (`tests/brain-policy.test.ts`); in a run without `prepare_team_changes` it stops instead
+  of judging by rules the run does not carry. `brain-reflect` ends with ONE line pointing at it, on runs that
+  can write the team brain only. The cards and their press → [`team-brain.md`](team-brain.md) "Cards and routes".
 - **`wiki/` notes state the CURRENT truth; change history lives in `raw/` + git.** `brain-lint` (the
   hygiene default-skill — skill-only, no server lint code; the `[[link]]` resolution the graph view uses
   lives in `knowledgeGraph.ts` — the brain view's clickable `[[links]]` re-resolve client-side in

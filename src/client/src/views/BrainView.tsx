@@ -13,11 +13,8 @@ import { api } from "../lib/api";
 import { renderMarkdown } from "../lib/format";
 import { cx, useAppState, useLatest } from "../lib/hooks";
 import { linkifyWikilinks, nodeLinks, sectionColor, sectionLabel, stripFrontmatter, stripTitleHeading, topNotes } from "../lib/knowledgeGraph";
-import { openSeededChat } from "../lib/chat";
 import { goView } from "../lib/nav";
-import { refreshTeamBrainStatus } from "../lib/teamBrain";
 import type { KnowledgeGraph, KnowledgeGraphNode, KnowledgeNote, User } from "../lib/types";
-import { TEAM_PAGE_TYPE_LABELS, type TeamBrainProposal } from "../../../shared/teamBrain";
 import "./BrainView.css";
 
 // Full-page second-brain graph, one rail item per brain: 내 브레인 (the owner's
@@ -25,39 +22,13 @@ import "./BrainView.css";
 // `scope="team"`). Pairs the reusable GraphCanvas with a note panel that
 // fetches + renders the clicked note's markdown — the richer surface over the
 // compact GraphViewModal in settings. The team scope shows the ONE team vault
-// read-only and — with no note selected — my proposals' status and, for an
-// admin, the pending queue; its 검토 시작 hands one proposal to the admin's own
-// avatar (decisions still go through the avatar + a card, never here).
+// read-only: every teammate writes it, but only through their own avatar + a
+// chat card, never here.
 type Scope = "personal" | "team";
 const ENDPOINTS: Record<Scope, { graph: string; note: string }> = {
   personal: { graph: "/api/me/knowledge-repo/graph", note: "/api/me/knowledge-repo/note" },
   team: { graph: "/api/team-brain/graph", note: "/api/team-brain/note" },
 };
-type ProposalRow = Omit<TeamBrainProposal, "content">;
-
-// Status → `.tag` tone (docs/DESIGN.md §4.3): text AND colour, never colour alone.
-const STATUS_TONE: Record<string, string> = { approved: "ok", rejected: "danger", pending: "read", needs_info: "write" };
-
-const STATUS_KO: Record<string, string> = {
-  draft: "제출 전",
-  pending: "검토 대기",
-  approved: "승인됨",
-  rejected: "반려됨",
-  needs_info: "보완 요청",
-  withdrawn: "철회됨",
-  expired: "만료됨",
-};
-
-// 검토 시작: a new chat with the admin's OWN avatar, its composer seeded with a
-// review request (not sent — the admin presses 보내기). Only the server-minted
-// id goes into the text: the title is teammate-written and would otherwise
-// reach the admin's avatar as the admin's own instruction.
-function startReview(p: ProposalRow): void {
-  void openSeededChat(
-    `팀 브레인 제안 ${p.id} 를 검토해줘. team-brain-curate 절차대로 내용을 확인하고 위키 페이지로 정리한 뒤, 승인·보완 요청·반려 중 무엇을 추천하는지 이유와 함께 알려줘.`,
-    "입력창에 검토 요청을 준비했습니다. 보내기를 누르면 아바타가 검토를 시작해요.",
-  );
-}
 
 // The reading pane's width. Nothing stored = the CSS default (`min(51%, 720px)`); a dragged width is px,
 // bounded here to what the graph can spare and again by the CSS clamp, so a stale value (a smaller
@@ -95,54 +66,11 @@ export interface BrainViewProps {
 export default function BrainView({ scope = "personal" }: BrainViewProps) {
   const state = useAppState();
   const user = state.user as User;
-  const isAdmin = Boolean(user?.roles?.includes("admin"));
   // The personal graph/note endpoints 404 without a connected repo.
   const hasRepo = Boolean(user?.knowledgeRepo);
   const showGraph = scope === "team" || hasRepo;
   // What the async functions below read AFTER an await.
-  const isAdminRef = useLatest(isAdmin);
   const scopeRef = useLatest(scope);
-
-  const [mine, setMine] = useState<ProposalRow[]>([]);
-  const [pending, setPending] = useState<ProposalRow[]>([]);
-  const [listsError, setListsError] = useState("");
-
-  async function loadLists(): Promise<void> {
-    setListsError("");
-    try {
-      const [m, p] = await Promise.all([
-        api<{ proposals: ProposalRow[] }>("/api/team-brain/proposals/mine"),
-        isAdminRef.current ? api<{ proposals: ProposalRow[] }>("/api/team-brain/proposals/pending") : Promise.resolve({ proposals: [] }),
-      ]);
-      setMine(m.proposals);
-      setPending(p.proposals);
-      // Opening my list marked the results seen server-side.
-      void refreshTeamBrainStatus();
-    } catch (err) {
-      setListsError((err as Error).message);
-    }
-  }
-
-  // A pending proposal can be taken back here too — its card may be gone with its conversation.
-  const [withdrawing, setWithdrawingState] = useState("");
-  const withdrawingRef = useRef("");
-  function setWithdrawing(id: string): void {
-    withdrawingRef.current = id;
-    setWithdrawingState(id);
-  }
-  async function withdraw(id: string): Promise<void> {
-    if (withdrawingRef.current) return;
-    setWithdrawing(id);
-    setListsError("");
-    try {
-      await api(`/api/team-brain/cards/${encodeURIComponent(id)}/withdraw`, { method: "POST" });
-      await loadLists();
-    } catch (err) {
-      setListsError((err as Error).message);
-    } finally {
-      setWithdrawing("");
-    }
-  }
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -259,12 +187,7 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
   const links = graph && selected ? nodeLinks(graph, selected.id) : { outgoing: [], incoming: [] };
 
   useEffect(() => {
-    if (scope === "team") {
-      void loadGraph();
-      void loadLists();
-      return;
-    }
-    if (!hasRepo) {
+    if (!showGraph) {
       setLoading(false);
       return;
     }
@@ -381,7 +304,7 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
           <p className="muted small">
             {scope === "team" ? (
               <>
-                팀원 모두가 읽는 공용 위키입니다. 노트 사이의 <code>[[링크]]</code> 연결을 보여주고, 노드를 누르면 내용을 읽을 수 있어요.
+                팀원 모두가 함께 읽고 쓰는 공용 위키입니다. 노트 사이의 <code>[[링크]]</code> 연결을 보여주고, 노드를 누르면 내용을 읽을 수 있어요.
               </>
             ) : (
               <>
@@ -397,10 +320,7 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
               type="button"
               title="다시 불러오기"
               disabled={loading}
-              onClick={() => {
-                void loadGraph();
-                if (scope === "team") void loadLists();
-              }}
+              onClick={() => void loadGraph()}
             >
               <Icon name="refresh" size={15} />
               <span>새로고침</span>
@@ -449,7 +369,7 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
               <div className="brain-state brain-graph-state muted">
                 <span>
                   {scope === "team"
-                    ? "팀 브레인에 아직 노트가 없습니다. 대화 중 아바타가 팀에 공유할지 물으면, 동의한 내용이 관리자 승인을 거쳐 여기에 쌓입니다."
+                    ? "팀 브레인에 아직 노트가 없습니다. 아바타에게 팀과 나눌 내용을 알려 주고, 아바타가 띄운 카드에서 ‘팀 브레인에 반영’을 누르면 여기에 쌓입니다."
                     : "아직 표시할 노트가 없습니다. 대화로 지식을 쌓으면 여기에 나타납니다."}
                 </span>
               </div>
@@ -580,88 +500,10 @@ export default function BrainView({ scope = "personal" }: BrainViewProps) {
             ) : (
               <>
                 {scope === "team" ? (
-                  <section className="brain-proposals" aria-label="팀 브레인 제안">
-                    <p className="brain-hint">팀 브레인은 팀원이 보낸 원본을 관리자의 아바타가 위키 페이지로 정리하고, 관리자가 승인한 내용입니다.</p>
-                    {listsError ? (
-                      <p className="error-note" role="alert">
-                        {listsError}
-                      </p>
-                    ) : null}
-                    {isAdmin ? (
-                      <>
-                        <h3>
-                          검토 대기 <span className="brain-count">{pending.length}</span>
-                        </h3>
-                        {pending.length ? (
-                          <>
-                            <p className="brain-hint">
-                              검토 시작을 누르면 내 아바타와의 새 대화에 검토 요청이 준비됩니다. 아바타가 정리한 뒤 띄우는 카드의 버튼으로 승인·보완 요청·반려를 결정합니다.
-                            </p>
-                            <ul className="brain-list">
-                              {pending.map((p) => (
-                                <li className="brain-card" key={p.id}>
-                                  <div className="brain-card-top">
-                                    <strong>{p.title}</strong>{" "}
-                                    <span className="tag">
-                                      {p.intake ? (p.intake.type ? TEAM_PAGE_TYPE_LABELS[p.intake.type] : "원본") : p.op === "create" ? "새 노트" : "수정"}
-                                    </span>
-                                  </div>{" "}
-                                  <span className="brain-card-meta">
-                                    {p.proposerName} · <code>{p.path}</code>
-                                  </span>{" "}
-                                  {p.summary ? <span className="brain-card-meta">{p.summary}</span> : null}{" "}
-                                  <button className="btn secondary sm brain-review-start" type="button" onClick={() => startReview(p)}>
-                                    검토 시작
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </>
-                        ) : (
-                          <p className="brain-hint">검토할 제안이 없습니다.</p>
-                        )}
-                      </>
-                    ) : null}
-                    <h3>
-                      내 제안 {mine.length ? <span className="brain-count">{mine.length}</span> : null}
-                    </h3>
-                    {mine.length ? (
-                      <ul className="brain-list">
-                        {mine.map((p) => (
-                          <li className="brain-card" key={p.id}>
-                            <div className="brain-card-top">
-                              <strong>{p.title}</strong>{" "}
-                              <span className={`tag brain-proposal-status status-${p.status} ${STATUS_TONE[p.status] ?? ""}`}>
-                                {STATUS_KO[p.status] ?? p.status}
-                              </span>
-                            </div>{" "}
-                            <span className="brain-card-meta">
-                              <code>{p.path}</code>
-                            </span>{" "}
-                            {p.status === "rejected" && p.decisionReason ? <p className="brain-card-reason">반려 사유: {p.decisionReason}</p> : null}{" "}
-                            {p.status === "needs_info" ? (
-                              <>
-                                <p className="brain-card-reason is-ask">관리자의 보완 요청{p.decisionReason ? `: ${p.decisionReason}` : ""}</p>{" "}
-                                <p className="brain-hint">대화에서 아바타에게 답을 알려 주면 제안 카드에 반영됩니다. 다시 제출해야 검토가 이어집니다.</p>
-                              </>
-                            ) : null}{" "}
-                            {p.status === "pending" || p.status === "needs_info" ? (
-                              <button
-                                className="btn ghost sm brain-proposal-withdraw"
-                                type="button"
-                                disabled={withdrawing === p.id}
-                                onClick={() => void withdraw(p.id)}
-                              >
-                                제안 철회
-                              </button>
-                            ) : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="brain-hint">아직 제안한 내용이 없습니다. 대화 중 아바타에게 “이거 팀에 공유해줘”라고 하면 제안 카드를 만들어 줍니다.</p>
-                    )}
-                  </section>
+                  <p className="brain-hint">
+                    팀 브레인은 팀원 모두가 함께 쓰는 위키입니다. 아바타에게 “이거 팀 브레인에 올려줘” 또는 “이 페이지 고쳐줘”라고 하면 변경 카드를 만들어
+                    주고, 카드의 ‘팀 브레인에 반영’을 누르면 바로 저장됩니다.
+                  </p>
                 ) : null}
                 {hubs.length ? (
                   <section className="brain-hubs" aria-label="주요 노트">

@@ -178,19 +178,24 @@ These are the invariants the project is built around. New work should reinforce 
   SAME repo, NOT a new store**; uncommitted = not persisted. → `repo-knowledge.md`.
 - **One fact, one home — and ONE home for the rules about it.** Team knowledge's canonical home is the team
   brain, personal context the personal brain; every personal-vs-team rule lives ONLY in
-  `agent/brainPolicy.ts` (skills and templates refer to it, never restate it). An approved submission
-  RECORDS its personal notes; nothing writes the personal repo for it — the avatar asks first. When the two
-  disagree, show both. → `repo-knowledge.md`, `team-brain.md`.
+  `agent/brainPolicy.ts` (skills and templates refer to it, never restate it). An applied team-brain card
+  RECORDS the personal notes it came from; nothing writes the personal repo for it — the avatar asks first.
+  When the two disagree, show both. → `repo-knowledge.md`, `team-brain.md`.
 - **The team brain gets the reusable conclusion, never the working detail — and selecting is not sharing.**
   ONE level rule gates the everyday offer and the `brain-share` selection pass alike; the pass only DRAFTS a
-  few cards (a "no" is remembered on the note as `team_share: no`), and they go to the admins with a human
-  press — one press may send all of a conversation's drafts, never zero. → `repo-knowledge.md`.
-- **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; teammates READ and SUBMIT
-  SOURCES, an admin's avatar COMPILES them, an admin decides.** It is a Karpathy-style LLM wiki: immutable
+  few cards (a "no" is remembered on the note as `team_share: no`), and each goes into the team brain only
+  with the user's own press on that card — one card, one press, never zero. → `repo-knowledge.md`.
+- **Team brain = ONE instance-wide LOCAL git vault that only Noah writes; EVERY teammate writes it through
+  their own avatar, and their OWN press commits.** It is a Karpathy-style LLM wiki: immutable
   server-rendered `raw/` sources → `wiki/` pages under a FIXED `SCHEMA.md` the SERVER validates (rules are
-  enforced, not just prompted); index/log are server-generated; a schema change = version bump + migration
-  pass, never a hand edit. Every state change is a human press on a chat card (the model only drafts); admin
-  power is judged on the VIEWER, never the avatar owner; no delete; the backup is a push-only, never-forced
+  enforced, not just prompted); index/log are server-generated; a schema change = version bump (+ a
+  migration pass when a page rule changed), never a hand edit. Any teammate may correct any page (a page
+  changed since it was read is refused, never overwritten). There is NO reviewer: every state change is a
+  human press on the DRAFTER's own chat
+  card (the model only drafts), and wiki text is UNTRUSTED input to every avatar that reads it. The review
+  queue is RETIRED (2026-11-13: its kinds, statuses, tools and routes are reserved; old cards stay readable,
+  rows left open were closed with a notice). Still admin-only, judged on the VIEWER, never the avatar owner:
+  `POLICY.md`, the backup, the `raw/legacy/` migration pass. No delete; the backup is a push-only, never-forced
   mirror to the internal git host with the saving admin's token. New team-brain names are `team_brain*`, never `group*`.
   The admins' `POLICY.md` (knobs the server enforces + guidelines) changes only through a card and can never
   override the fixed core or SCHEMA.md; a new adjustable rule becomes a POLICY.md knob, not a constant.

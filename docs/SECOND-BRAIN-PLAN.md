@@ -8,7 +8,9 @@
 > [`architecture/team-trust.md`](architecture/team-trust.md).
 >
 > **2026-11-06: a team brain is back — in a different shape.** ONE instance-wide, Noah-owned LOCAL git
-> vault (not a group repo): teammates read and propose, an admin decides on confirm cards. See
+> vault (not a group repo). Until 2026-11-13 teammates proposed and an admin decided on confirm cards;
+> **since 2026-11-13 every teammate writes it directly** — their avatar drafts the page changes and their
+> own press on the card commits them (the review queue is retired). See
 > [`architecture/team-brain.md`](architecture/team-brain.md); the group-repo design below stays retired.
 
 Evolve the per-user (and per-group) git knowledge repo from a passive skill store into

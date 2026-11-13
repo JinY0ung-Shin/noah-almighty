@@ -139,7 +139,7 @@ export type ViewName =
   | "chat"
   /** 내 브레인: the owner's personal knowledge-repo graph (`#/brain`). */
   | "brain"
-  /** 팀 브레인: the ONE team vault, my submissions and (admins) the review queue (`#/teamBrain`). */
+  /** 팀 브레인: the ONE team vault every teammate reads and writes (`#/teamBrain`). */
   | "teamBrain"
   | "inbox"
   | "routines"

@@ -58,8 +58,6 @@ export interface ClientState {
   conversations: ConversationSummary[];
   plugins: Plugin[];
   knowledgeRequests: KnowledgeRequest[];
-  /** Team-brain badge numbers (lib/teamBrain.ts); polled with the knowledge watch. */
-  teamBrainStatus: import("../../../shared/teamBrain").TeamBrainStatus;
   notifications: AvatarNotification[];
   inboxFilter: "all" | "unread" | "requests" | "notifications";
   routines: RoutineJob[];
@@ -135,7 +133,6 @@ export const appState = writable<ClientState>({
   conversations: [],
   plugins: [],
   knowledgeRequests: [],
-  teamBrainStatus: { unseenResults: 0, pendingReview: 0 },
   notifications: [],
   inboxFilter: "all",
   routines: [],

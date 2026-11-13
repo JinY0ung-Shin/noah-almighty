@@ -32,7 +32,7 @@ function policyResponse(url: string): Response | null {
 function serve(payload: Record<string, unknown>) {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
     policyResponse(String(input)) ??
-    new Response(JSON.stringify({ pendingReview: 0, backup, githubHost: "git.example", ...payload }), {
+    new Response(JSON.stringify({ backup, githubHost: "git.example", ...payload }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     }),
@@ -56,6 +56,16 @@ describe("AdminTeamBrainPanel counts", () => {
     expect(screen.getByText("미편찬 12건")).toBeTruthy();
     expect(screen.getByText(HINT)).toBeTruthy();
     expect((screen.getByRole("button", { name: "백업에서 복원" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("has no review-queue stat and says every teammate writes directly", async () => {
+    serve({ noteCount: 8, rawSources: 5, uncompiledSources: 0 });
+    const { container } = render(<AdminTeamBrainPanel active={true} />);
+
+    expect(await screen.findByText("위키 페이지")).toBeTruthy();
+    expect(container.querySelectorAll(".stat-card")).toHaveLength(2);
+    expect(screen.getByText(/팀원 누구나 자기 아바타가 띄운 카드에서 ‘팀 브레인에 반영’을 눌러 직접 반영합니다/)).toBeTruthy();
+    expect(container.textContent).not.toMatch(/검토|승인|반려|제안/);
   });
 
   it("hides the hint once everything is compiled", async () => {
@@ -86,7 +96,7 @@ describe("AdminTeamBrainPanel counts", () => {
         return new Response(JSON.stringify({ backup, noteCount: 0 }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const counts = restored ? { noteCount: 0, rawSources: 7, uncompiledSources: 7 } : { noteCount: 0, rawSources: 0, uncompiledSources: 0 };
-      return new Response(JSON.stringify({ pendingReview: 0, backup, githubHost: "git.example", ...counts }), {
+      return new Response(JSON.stringify({ backup, githubHost: "git.example", ...counts }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
@@ -167,7 +177,7 @@ describe("AdminTeamBrainPanel 팀 정책", () => {
       }
       return (
         policyResponse(url) ??
-        new Response(JSON.stringify({ pendingReview: 0, backup, githubHost: "git.example", ...counts }), {
+        new Response(JSON.stringify({ backup, githubHost: "git.example", ...counts }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         })

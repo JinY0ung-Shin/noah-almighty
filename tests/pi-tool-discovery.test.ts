@@ -19,7 +19,7 @@ import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import { createServices } from "../src/server/app.js";
 import type { AgentRequest, PiRuntimeConfig } from "../src/server/types.js";
 import { SteerChannel } from "../src/server/agent/steerChannel.js";
-import { McpRunRegistry, createMcpHttpRouter, unknownArgumentProblem } from "../src/server/mcpHttp/endpoint.js";
+import { McpRunRegistry, RETIRED_TOOL_MESSAGES, createMcpHttpRouter, unknownArgumentProblem } from "../src/server/mcpHttp/endpoint.js";
 import { PI_MCP_SERVER_NAMES, noahMcpCatalog, piKnownTools, piToolName } from "../src/server/agent/pi/mcpCatalog.js";
 import { PI_COMPACT_DESCRIPTIONS, PI_DISCOVERY_SENTENCES } from "../src/server/agent/pi/catalogText.js";
 import { PI_RUN_TOKEN_HEADER } from "../src/server/agent/pi/piRuntime.js";
@@ -336,6 +336,24 @@ describe("pi catalog text", () => {
     expect(find("canvas/show").description).toContain("it is sanitized away");
     expect(find("canvas/show").description).toContain("On this runtime the tool NEVER waits");
     for (const [key, sentence] of Object.entries(PI_DISCOVERY_SENTENCES)) expect(find(key).description!.endsWith(` ${sentence}`)).toBe(true);
+  });
+
+  it("lists the team brain's live tools and none of the retired review-queue ones", async () => {
+    const { store, config } = setup();
+    const catalog = await noahMcpCatalog(store, config);
+    const brain = (catalog as Record<string, Tool[]>).brain!.map((t) => t.name).sort();
+    // Widest form: every teammate's write tools and the admin's policy tool (handlers self-gate per call).
+    expect(brain).toEqual(["get_note", "prepare_team_changes", "prepare_team_policy", "search", "team_brain_health"]);
+    // Retired names are reserved and answered at /mcp with a redirect — never listed, never given a sentence.
+    for (const key of Object.keys(RETIRED_TOOL_MESSAGES)) {
+      const [server, tool] = key.split("/");
+      expect((catalog as Record<string, Tool[]>)[server!]!.some((t) => t.name === tool), key).toBe(false);
+      expect(PI_DISCOVERY_SENTENCES[key], key).toBeUndefined();
+    }
+    expect(PI_DISCOVERY_SENTENCES["brain/prepare_team_changes"]).toContain("the team brain");
+    const changes = (catalog as Record<string, Tool[]>).brain!.find((t) => t.name === "prepare_team_changes")!.description!;
+    expect(changes).not.toContain("Admin only");
+    expect(changes).toContain("NOTHING changes until the user presses 팀 브레인에 반영");
   });
 });
 

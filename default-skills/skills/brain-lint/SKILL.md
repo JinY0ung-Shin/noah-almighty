@@ -41,7 +41,7 @@ brain-reflect pass.
    the `team_page` path with `mcp__brain__get_note` (scope `"team"`); report each miss (never delete the
    note — ask the owner what it should say).
 8. **Promoted notes not yet linked** — notes `mcp__brain__get_note` marks as PROMOTED (also listed by
-   `mcp__brain__list_team_proposals`): report them; converting one to a link follows PROMOTED NOTES (the
+   `mcp__brain__team_brain_health`, in the owner's own chat): report them; converting one to a link follows PROMOTED NOTES (the
    owner's yes, asked with all five points) and is never a hygiene fix.
 
 ## Output

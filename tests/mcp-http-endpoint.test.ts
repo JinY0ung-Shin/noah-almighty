@@ -6,7 +6,7 @@ import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { McpRunRegistry, RUN_TOKEN_PREFIX, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
+import { McpRunRegistry, RETIRED_TOOL_MESSAGES, RUN_TOKEN_PREFIX, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
 
 const PNG_1PX =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -249,6 +249,45 @@ describe("McpRunRegistry + /mcp/:server", () => {
     expect(refused).toMatchObject({ isError: true, content: [{ type: "text", text: "Tool 'wait' is not available in this run." }] });
     const redacted = await client.callTool({ name: "secret", arguments: {} });
     expect(redacted.content).toEqual([{ type: "text", text: "token=[REDACTED]" }]);
+  });
+
+  it("a retired TOOL of a live server answers with where to go instead — whatever the gates say, and never listed", async () => {
+    // The team brain's review-queue tools were removed 2026-11-13; a conversation started before that has
+    // them in its frozen prompt and in pi's per-session tool list, so the call still arrives here.
+    const brain = () => {
+      const mcp = new McpServer({ name: "brain", version: "1.0.0" });
+      mcp.registerTool("prepare_team_changes", { description: "Draft a change", inputSchema: {} }, async () => ({
+        content: [{ type: "text", text: "card shown" }],
+      }));
+      return mcp;
+    };
+    const open = registry.register({ servers: { brain: brain() } });
+    const gated = registry.register({
+      servers: { brain: brain() },
+      gates: { allowCall: () => true, refusalMessage: () => "generic refusal" },
+    });
+    for (const token of [open, gated]) {
+      const client = await connect("brain", token);
+      expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["prepare_team_changes"]);
+      for (const key of Object.keys(RETIRED_TOOL_MESSAGES)) {
+        const tool = key.slice("brain/".length);
+        const refused = await client.callTool({ name: tool, arguments: { title: "t" } });
+        expect(refused.isError).toBe(true);
+        const text = (refused.content as Array<{ text: string }>)[0].text;
+        expect(text).toBe(RETIRED_TOOL_MESSAGES[key]);
+        expect(text).toContain(`Tool 'mcp__brain__${tool}' was removed`);
+        expect(text).toContain("draft the page changes with mcp__brain__prepare_team_changes");
+      }
+      // The live tool is untouched, and an unknown name is not mistaken for a retired one.
+      expect((await client.callTool({ name: "prepare_team_changes", arguments: {} })).content).toEqual([{ type: "text", text: "card shown" }]);
+    }
+    expect(Object.keys(RETIRED_TOOL_MESSAGES).sort()).toEqual(
+      ["answer_team_questions", "get_team_proposal", "list_team_proposals", "prepare_team_review", "propose_team_note"].map((t) => `brain/${t}`),
+    );
+    // Only on the server that had them.
+    const repo = await connect("repo", registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } }));
+    const elsewhere = await repo.callTool({ name: "propose_team_note", arguments: {} }).catch((error: unknown) => String(error));
+    expect(JSON.stringify(elsewhere)).not.toContain("was removed");
   });
 
   it("tokens are scoped to their own run's servers", async () => {

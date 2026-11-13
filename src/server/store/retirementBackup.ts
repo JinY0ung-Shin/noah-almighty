@@ -79,6 +79,17 @@ export const RETIRED_COLUMNS: readonly (readonly [table: string, column: string]
   ["conversations", "pi_session_profiles"],
 ];
 
+/**
+ * The team brain's review queue (retired 2026-11-13): the `team_brain_proposals`
+ * rows still OPEN in it — a submission not yet decided, a review card not yet
+ * pressed. Only a build from before the retirement leaves them; a boot step
+ * closes them behind the gate (`retireTeamBrainReviewQueueOnBoot`), and
+ * nothing mints one again. ONE predicate for the backup check below and the
+ * store's close (store/teamBrain.ts).
+ */
+export const OPEN_TEAM_BRAIN_QUEUE_ROWS_SQL =
+  "((kind = 'propose' AND status IN ('draft', 'pending', 'needs_info')) OR (kind = 'review' AND status = 'draft'))";
+
 /** Avatar-id namespaces of the retired avatar kinds. */
 const RETIRED_AVATAR_PREFIXES = ["personal:", "external:", "group:"] as const;
 
@@ -129,6 +140,12 @@ export function retirementDataPresent(db: Database.Database): boolean {
     if (db.prepare(`SELECT 1 FROM app_config WHERE key IN (${placeholders}) LIMIT 1`).get(...RETIRED_APP_CONFIG_KEYS)) {
       return true;
     }
+  }
+  if (
+    tableExists(db, "team_brain_proposals") &&
+    db.prepare(`SELECT 1 FROM team_brain_proposals WHERE ${OPEN_TEAM_BRAIN_QUEUE_ROWS_SQL} LIMIT 1`).get()
+  ) {
+    return true;
   }
   // Exact, case-sensitive prefix tests, like the purges' own predicates.
   const prefixed = RETIRED_AVATAR_PREFIXES.map(

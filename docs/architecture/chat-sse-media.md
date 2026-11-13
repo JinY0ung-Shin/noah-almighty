@@ -191,7 +191,9 @@
   **Endpoint:** `POST /api/chat/runs/:runId/message` — session cookie only (never a personal API key),
   plain text capped at `MAX_STEER_LENGTH` (20k chars); 400 empty/too long, 404 unknown/ended/other-user
   run, 409 `unsupported` (no channel) and `too_many`, 410 `closed`. **The one non-typed body:**
-  `{teamBrainCardPress: {proposalId}}` — a team-brain card pressed while the avatar is answering; the server
+  `{teamBrainCardPress: {proposalId}}` — a team-brain card's confirm button (`apply`: 팀 브레인에 반영 /
+  팀 정책 반영 — the only reported press since 2026-11-13; `submit` / `submit_all` went with the review queue)
+  pressed while the avatar is answering; the server
   pushes the recorded press report (`pushRunSteer(…, {displayText, cardPress, onDropped})`: English `text` for
   the model, the Korean bubble shown and stored as the presser's `kind:"steer"` row). `cardPress:
   {proposalId}` rides `SteerRecord` → `SteerPublic`: the viewer's own bubble, but a `dropped` one is NOT handed

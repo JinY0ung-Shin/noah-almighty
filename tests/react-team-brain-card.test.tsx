@@ -10,20 +10,20 @@ import type { TeamBrainCardView, TeamBrainIntake, TeamBrainProposal, TeamPageCha
 
 function proposal(over: Partial<TeamBrainProposal> = {}): TeamBrainProposal {
   return {
-    id: "p1",
-    kind: "propose",
+    id: "d1",
+    kind: "direct",
     status: "draft",
     proposerUserId: "u1",
     proposerName: "김팀원",
     conversationId: "c1",
-    path: "raw/2026/11/2026-11-06-p1.md",
+    path: "raw/2026/11/2026-11-06-d1.md",
     op: "create",
     title: "배포 서버 접속 방법",
     summary: "점프 호스트를 거쳐 접속한다",
     content: "점프 호스트 jump01 을 거쳐 deploy01 에 ssh 로 들어간다.",
     baseBlob: null,
     intake: null,
-    changeset: null,
+    changeset: { changes: [], conflicts: [] },
     personalNotes: [],
     targetId: null,
     decision: null,
@@ -50,148 +50,9 @@ function intake(over: Partial<TeamBrainIntake> = {}): TeamBrainIntake {
       verified: "2026-11-05 직접 접속",
     },
     gaps: ["validity"],
-    followups: [],
     ...over,
   };
 }
-
-function cardView(over: Partial<TeamBrainCardView> = {}): TeamBrainCardView {
-  return {
-    proposal: proposal(),
-    target: null,
-    stale: false,
-    pages: [],
-    actions: { submit: false, withdraw: false, apply: false, cancel: false },
-    provenance: null,
-    ...over,
-  };
-}
-
-let views: Record<string, TeamBrainCardView> = {};
-let posted: string[] = [];
-/** PUT /provenance bodies, and what the fake server answers to them. */
-let provenancePuts: unknown[] = [];
-let provenanceReply: ((body: unknown) => Response) | null = null;
-
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
-}
-
-beforeEach(() => {
-  views = {};
-  posted = [];
-  provenancePuts = [];
-  provenanceReply = null;
-  replaceState({ user: null });
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const url = String(input);
-    const prov = /^\/api\/team-brain\/cards\/([^/]+)\/provenance$/.exec(url);
-    if (prov) {
-      expect(init?.method).toBe("PUT");
-      const body = JSON.parse(String(init?.body));
-      provenancePuts.push(body);
-      return provenanceReply ? provenanceReply(body) : json({ error: "없음" }, 404);
-    }
-    const m =/^\/api\/team-brain\/cards\/([^/]+)(?:\/(submit|withdraw|apply))?$/.exec(url);
-    if (!m) return json({ error: "not found" }, 404);
-    const id = decodeURIComponent(m[1]);
-    const view = views[id];
-    if (!view) return json({ error: "없음" }, 404);
-    if (m[2]) {
-      expect(init?.method).toBe("POST");
-      posted.push(`${m[2]}:${id}`);
-    }
-    return json(view);
-  });
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-async function mount(view: TeamBrainCardView) {
-  views[view.proposal.id] = view;
-  const r = render(<TeamBrainCard proposalId={view.proposal.id} />);
-  await screen.findByText(view.proposal.title);
-  return r;
-}
-
-describe("TeamBrainCard — propose", () => {
-  it("shows the type chip, the source, the intake answers, the unknown chip and the gaps line", async () => {
-    await mount(cardView({ proposal: proposal({ intake: intake() }), actions: { submit: true, withdraw: true, apply: false, cancel: false } }));
-
-    expect(screen.getByText("방법·해결")).toBeTruthy();
-    expect(screen.getByText("원문 보기")).toBeTruthy();
-    expect(screen.getByText("점프 호스트 jump01 을 거쳐 deploy01 에 ssh 로 들어간다.").tagName).toBe("PRE");
-    expect(screen.getByText("보충 정보")).toBeTruthy();
-    expect(screen.getByText("출처")).toBeTruthy();
-    expect(screen.getByText("직접 해 봄")).toBeTruthy();
-    expect(screen.getByText("직접 확인 여부")).toBeTruthy();
-    // The "unknown" answer renders as the 모름 chip, not as the raw value.
-    expect(screen.queryByText("unknown")).toBeNull();
-    expect(screen.getByText("모름").classList.contains("tag")).toBe(true);
-    expect(screen.getByText("아직 모르는 정보: 유효 기간")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("아직 공유되지 않았습니다");
-    expect(screen.getByRole("button", { name: "관리자에게 제출" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
-  });
-
-  it("submits through the server and re-renders the returned state", async () => {
-    await mount(cardView({ proposal: proposal({ intake: intake() }), actions: { submit: true, withdraw: true, apply: false, cancel: false } }));
-    views.p1 = cardView({ proposal: proposal({ intake: intake(), status: "pending" }), actions: { submit: false, withdraw: true, apply: false, cancel: false } });
-
-    fireEvent.click(screen.getByRole("button", { name: "관리자에게 제출" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("관리자의 검토를 기다리고 있습니다"));
-    expect(posted).toEqual(["submit:p1"]);
-    expect(screen.getByRole("button", { name: "제안 철회" })).toBeTruthy();
-  });
-
-  it("states a needs_info request with the admin's questions", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({ intake: intake(), status: "needs_info", decisionReason: "어느 환경에서 확인했나요?" }),
-        actions: { submit: false, withdraw: true, apply: false, cancel: false },
-      }),
-    );
-    const status = screen.getByRole("status");
-    expect(status.textContent).toBe("관리자가 보완을 요청했습니다: 어느 환경에서 확인했나요? 아바타에게 답을 알려 주세요.");
-    expect(status.classList.contains("tone-warn")).toBe(true);
-    expect(screen.getByRole("button", { name: "제안 철회" })).toBeTruthy();
-  });
-
-  it("shows follow-up rounds and asks to submit again after an answer", async () => {
-    const followups = [{ questions: "누가 결정했나요?", answer: "인프라 주간 회의", askedAt: "2026-11-06T01:00:00Z", answeredAt: "2026-11-06T02:00:00Z" }];
-    await mount(cardView({ proposal: proposal({ intake: intake({ followups }) }), actions: { submit: true, withdraw: true, apply: false, cancel: false } }));
-
-    const rounds = screen.getByRole("list", { name: "보완 요청 기록" });
-    expect(within(rounds).getByText("보완 요청 1")).toBeTruthy();
-    expect(within(rounds).getByText("누가 결정했나요?")).toBeTruthy();
-    expect(within(rounds).getByText("인프라 주간 회의")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("답변을 반영했습니다. 다시 제출하세요.");
-    expect(screen.getByRole("button", { name: "관리자에게 제출" })).toBeTruthy();
-  });
-
-  it("renders a legacy row (no intake) as the old note proposal", async () => {
-    await mount(cardView({ proposal: proposal({ path: "wiki/howto/ssh.md", op: "update" }) }));
-    expect(screen.getByText("팀 브레인 제안 · 노트 수정")).toBeTruthy();
-    expect(screen.getByText("제안 내용 보기")).toBeTruthy();
-    expect(screen.queryByText("보충 정보")).toBeNull();
-    expect(screen.getByText("wiki/howto/ssh.md")).toBeTruthy();
-  });
-
-  it("never renders teammate markdown or HTML", async () => {
-    const hostile = '<img src=x onerror="alert(1)"> **굵게** <script>x()</script>';
-    const { container } = await mount(
-      cardView({ proposal: proposal({ content: hostile, intake: intake({ answers: { source: "<b>회의</b>", scope: "x", validity: "y", verified: "z" } }) }) }),
-    );
-    expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector("script")).toBeNull();
-    expect(container.querySelector("b")).toBeNull();
-    expect(container.querySelector("strong.team-brain-name")).toBeTruthy();
-    expect(screen.getByText(hostile)).toBeTruthy();
-    expect(screen.getByText("<b>회의</b>")).toBeTruthy();
-  });
-});
 
 function page(over: Partial<TeamPageChangeView> = {}): TeamPageChangeView {
   return {
@@ -206,39 +67,112 @@ function page(over: Partial<TeamPageChangeView> = {}): TeamPageChangeView {
   };
 }
 
-describe("TeamBrainCard — review / direct", () => {
-  const target = proposal({ status: "pending", intake: intake() });
+const DRAFT = { apply: true, cancel: true };
+const CLOSED = { apply: false, cancel: false };
 
-  function approveView(over: Partial<TeamBrainCardView> = {}): TeamBrainCardView {
-    return cardView({
-      proposal: proposal({
-        id: "r1",
-        kind: "review",
-        title: "배포 서버 접속 방법",
-        summary: "",
-        content: "",
-        path: target.path,
-        targetId: "p1",
-        decision: "approve",
-        changeset: { changes: [], conflicts: ["기존 페이지는 직접 접속이라고 적혀 있음 — 새 원본은 점프 호스트 경유"] },
+/** A teammate's own draft: a new source compiled into one changed page. */
+function cardView(over: Partial<TeamBrainCardView> = {}): TeamBrainCardView {
+  return {
+    proposal: proposal({ intake: intake() }),
+    stale: false,
+    pages: [page()],
+    actions: DRAFT,
+    provenance: { editable: true, issues: [] },
+    legacy: null,
+    ...over,
+  };
+}
+
+let views: Record<string, TeamBrainCardView> = {};
+let posted: string[] = [];
+/** Every request the card made, as "METHOD url". */
+let requests: string[] = [];
+/** PUT /provenance bodies, and what the fake server answers to them. */
+let provenancePuts: unknown[] = [];
+let provenanceReply: ((body: unknown) => Response) | null = null;
+/** Runs when a card is applied — what the commit changes for the other cards. */
+let onApply: ((id: string) => void) | null = null;
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+beforeEach(() => {
+  views = {};
+  posted = [];
+  requests = [];
+  provenancePuts = [];
+  provenanceReply = null;
+  onApply = null;
+  replaceState({ user: null });
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input);
+    requests.push(`${init?.method ?? "GET"} ${url}`);
+    const prov = /^\/api\/team-brain\/cards\/([^/]+)\/provenance$/.exec(url);
+    if (prov) {
+      expect(init?.method).toBe("PUT");
+      const body = JSON.parse(String(init?.body));
+      provenancePuts.push(body);
+      return provenanceReply ? provenanceReply(body) : json({ error: "없음" }, 404);
+    }
+    // The routes that are left: the card itself, apply and cancel.
+    const m = /^\/api\/team-brain\/cards\/([^/]+)(?:\/(apply|cancel))?$/.exec(url);
+    if (!m) return json({ error: "not found" }, 404);
+    const id = decodeURIComponent(m[1]);
+    if (!views[id]) return json({ error: "없음" }, 404);
+    if (m[2]) {
+      expect(init?.method).toBe("POST");
+      posted.push(`${m[2]}:${id}`);
+      if (m[2] === "apply") onApply?.(id);
+    }
+    return json(views[id]);
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+async function mount(view: TeamBrainCardView) {
+  views[view.proposal.id] = view;
+  const r = render(<TeamBrainCard proposalId={view.proposal.id} />);
+  await screen.findByText(view.proposal.title);
+  return r;
+}
+
+const ADMIN_WORDING = /관리자|승인|제출|검토|반려|철회/;
+
+describe("TeamBrainCard — a teammate's own changes (direct)", () => {
+  it("shows the source, the flagged conflicts, each changed page and the two buttons — to any member", async () => {
+    const { container } = await mount(
+      cardView({
+        proposal: proposal({
+          intake: intake(),
+          changeset: { changes: [], conflicts: ["기존 페이지는 직접 접속이라고 적혀 있음 — 새 원본은 점프 호스트 경유"] },
+        }),
+        pages: [
+          page(),
+          page({ path: "wiki/systems/jump01.md", op: "create", title: "jump01", type: "system", before: null, after: "---\ntitle: jump01\n---\n점프 호스트\n" }),
+        ],
       }),
-      target,
-      pages: [
-        page(),
-        page({ path: "wiki/systems/jump01.md", op: "create", title: "jump01", type: "system", before: null, after: "---\ntitle: jump01\n---\n점프 호스트\n" }),
-      ],
-      actions: { submit: false, withdraw: false, apply: true, cancel: true },
-      ...over,
-    });
-  }
+    );
 
-  it("summarizes the changeset, opens the conflicts box and lists each page", async () => {
-    const { container } = await mount(approveView());
-
-    expect(screen.getByText("팀 브레인 검토 · 승인")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "팀 브레인 변경" })).toBeTruthy();
+    expect(screen.getByText("팀 브레인 변경")).toBeTruthy();
     expect(screen.getByText("원본 1건 · 페이지 2개 (새 페이지 1 · 수정 1)")).toBeTruthy();
-    expect(screen.getByText("김팀원님의 제안 — 점프 호스트를 거쳐 접속한다")).toBeTruthy();
-    expect(screen.getByText("원본 보기")).toBeTruthy();
+    expect(screen.getByText("점프 호스트를 거쳐 접속한다")).toBeTruthy();
+
+    // The source: provenance out of the fold, the text and the other answers inside it.
+    expect(screen.getByText("출처 정보")).toBeTruthy();
+    expect(screen.getByText("직접 해 봄")).toBeTruthy();
+    const fold = screen.getByText("원본 보기").closest("details") as HTMLElement;
+    expect(within(fold).getByText("점프 호스트 jump01 을 거쳐 deploy01 에 ssh 로 들어간다.").tagName).toBe("PRE");
+    expect(within(fold).getByText("보충 정보")).toBeTruthy();
+    expect(within(fold).getByText("직접 확인 여부")).toBeTruthy();
+    // The "unknown" answer renders as the 모름 chip, not as the raw value.
+    expect(screen.queryByText("unknown")).toBeNull();
+    expect(within(fold).getByText("모름").classList.contains("tag")).toBe(true);
+    expect(within(fold).getByText("아직 모르는 정보: 유효 기간")).toBeTruthy();
 
     const conflicts = screen.getByRole("note");
     expect(conflicts.closest("details")).toBeNull(); // shown open, never folded away
@@ -253,103 +187,173 @@ describe("TeamBrainCard — review / direct", () => {
     expect(within(rows[0]).getByText("wiki/howto/deploy-ssh.md")).toBeTruthy();
     expect(within(rows[1]).getByText("새 페이지")).toBeTruthy();
     expect(within(rows[1]).getByText("시스템")).toBeTruthy();
-
     // The update's diff: the removed line is a <del>, the new one an <ins>.
-    const del = container.querySelector("del.team-brain-diff-line.is-del");
-    const ins = container.querySelector("ins.team-brain-diff-line.is-add");
-    expect(del?.textContent).toContain("직접 deploy01 에 접속한다.");
-    expect(ins?.textContent).toContain("점프 호스트 jump01 을 거쳐 deploy01 에 접속한다.");
+    expect(container.querySelector("del.team-brain-diff-line.is-del")?.textContent).toContain("직접 deploy01 에 접속한다.");
+    expect(container.querySelector("ins.team-brain-diff-line.is-add")?.textContent).toContain("점프 호스트 jump01 을 거쳐 deploy01 에 접속한다.");
     // The create shows its full content.
     expect(within(rows[1]).getByText(/점프 호스트$/, { selector: "pre" })).toBeTruthy();
 
-    expect(screen.getByRole("button", { name: "승인 반영" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("버튼을 눌러야 팀 브레인에 저장됩니다.");
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["수정", "팀 브레인에 반영", "취소"]);
+    // Nothing on the card speaks of a reviewer.
+    expect(container.textContent).not.toMatch(ADMIN_WORDING);
   });
 
-  it("applies the approval", async () => {
-    await mount(approveView());
-    views.r1 = approveView({
-      proposal: { ...approveView().proposal, status: "applied" },
-      actions: { submit: false, withdraw: false, apply: false, cancel: false },
+  it("applies through the server and re-renders the returned state", async () => {
+    await mount(cardView());
+    views.d1 = cardView({
+      proposal: proposal({ intake: intake(), status: "applied" }),
+      // After apply the server stops sending `before` (the committed page IS `after`).
+      pages: [page({ before: null })],
+      actions: CLOSED,
+      provenance: { editable: false, issues: [] },
     });
-    // After apply the server stops sending `before` (the committed page IS `after`).
-    views.r1.pages = views.r1.pages.map((p) => ({ ...p, before: null }));
-    fireEvent.click(screen.getByRole("button", { name: "승인 반영" }));
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("승인해서 팀 브레인에 반영했습니다."));
-    expect(posted).toEqual(["apply:r1"]);
+    fireEvent.click(screen.getByRole("button", { name: "팀 브레인에 반영" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("팀 브레인에 저장했습니다."));
+    expect(posted).toEqual(["apply:d1"]);
     expect(screen.queryByText("현재 페이지를 찾을 수 없어 새 내용만 보여 줍니다.")).toBeNull();
     expect(document.querySelector("del.team-brain-diff-line")).toBeNull();
-    expect(screen.queryByRole("button", { name: "승인 반영" })).toBeNull();
-  });
-
-  it("warns on a stale page", async () => {
-    await mount(approveView({ stale: true, pages: [page({ stale: true })] }));
-    expect(screen.getByText("그 사이 이 페이지가 바뀌었습니다.")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toContain("그 사이 팀 브레인이 바뀌었습니다");
-  });
-
-  it("renders an ask card with the questions and its button", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({ id: "r2", kind: "review", targetId: "p1", decision: "ask", decisionReason: "어느 환경인가요?\n언제부터인가요?", content: "" }),
-        target,
-        actions: { submit: false, withdraw: false, apply: true, cancel: true },
-      }),
-    );
-    expect(screen.getByText("팀 브레인 검토 · 보완 요청")).toBeTruthy();
-    expect(screen.getByText(/어느 환경인가요\?/).textContent).toBe("어느 환경인가요?\n언제부터인가요?");
-    expect(screen.getByRole("button", { name: "보완 요청 보내기" })).toBeTruthy();
-    expect(screen.queryByRole("list", { name: "바뀌는 페이지" })).toBeNull();
-  });
-
-  it("keeps the reject card as before", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({ id: "r3", kind: "review", targetId: "p1", decision: "reject", decisionReason: "이미 있는 내용입니다", content: "" }),
-        target,
-        actions: { submit: false, withdraw: false, apply: true, cancel: true },
-      }),
-    );
-    expect(screen.getByText("반려 사유: 이미 있는 내용입니다")).toBeTruthy();
-    expect(screen.queryByText("원본 보기")).toBeNull();
-    expect(screen.getByRole("button", { name: "반려 확정" })).toBeTruthy();
-  });
-
-  it("words a server-cancelled review card neutrally", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({ id: "r4", kind: "review", status: "cancelled", targetId: "p1", decision: "reject", decisionReason: "중복", content: "" }),
-        target: proposal({ status: "approved" }),
-      }),
-    );
-    expect(screen.getByRole("status").textContent).toContain("취소되었습니다.");
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("labels a direct maintenance changeset without a source", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({ id: "d1", kind: "direct", path: "", content: "", title: "링크 정리", summary: "", changeset: { changes: [], conflicts: [] } }),
-        pages: [page()],
-        actions: { submit: false, withdraw: false, apply: true, cancel: true },
-      }),
-    );
+  it("cancels a draft through the cancel route", async () => {
+    await mount(cardView());
+    views.d1 = cardView({ proposal: proposal({ intake: intake(), status: "cancelled" }), actions: CLOSED, provenance: { editable: false, issues: [] } });
+    fireEvent.click(screen.getByRole("button", { name: "취소" }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("취소했습니다."));
+    expect(posted).toEqual(["cancel:d1"]);
+  });
+
+  it("marks a stale page and says why there is no confirm button — without naming an admin", async () => {
+    const { container } = await mount(cardView({ stale: true, pages: [page({ stale: true })], actions: { apply: false, cancel: true } }));
+    expect(screen.getByText("그 사이 이 페이지가 바뀌었습니다.")).toBeTruthy();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("그 사이 팀 브레인이 바뀌었습니다. 아바타에게 현재 내용에 맞춰 다시 정리해 달라고 요청하세요.");
+    expect(status.classList.contains("tone-warn")).toBe(true);
+    expect(screen.queryByRole("button", { name: "팀 브레인에 반영" })).toBeNull();
+    expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
+    expect(container.textContent).not.toMatch(ADMIN_WORDING);
+  });
+
+  it("never blames a missing admin when the server gives a member's draft no confirm button", async () => {
+    const { container } = await mount(cardView({ actions: { apply: false, cancel: true } }));
+    expect(screen.getByRole("status").textContent).toBe("지금은 이 계정으로 팀 브레인에 반영할 수 없습니다.");
+    expect(screen.queryByRole("button", { name: "팀 브레인에 반영" })).toBeNull();
+    expect(container.textContent).not.toMatch(ADMIN_WORDING);
+  });
+
+  it("says an unpressed card expired", async () => {
+    await mount(cardView({ proposal: proposal({ intake: intake(), status: "expired" }), actions: CLOSED, provenance: { editable: false, issues: [] } }));
+    expect(screen.getByRole("status").textContent).toBe("누르지 않아 만료되었습니다.");
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("labels a changeset that only edits existing pages, without a source", async () => {
+    await mount(cardView({ proposal: proposal({ path: "", content: "", title: "링크 정리", summary: "" }), provenance: null }));
     expect(screen.getByText("페이지 1개 (수정 1)")).toBeTruthy();
     expect(screen.queryByText("원본 보기")).toBeNull();
+    expect(screen.queryByText("출처 정보")).toBeNull();
     expect(screen.queryByRole("note")).toBeNull();
     expect(screen.getByRole("button", { name: "팀 브레인에 반영" })).toBeTruthy();
   });
 
-  it("shows a direct card's own source", async () => {
-    await mount(
+  it("re-reads the other draft cards when one is applied (its commit may have made them stale)", async () => {
+    const other = cardView({ proposal: proposal({ id: "d2", title: "같은 페이지를 고치는 다른 초안", intake: intake() }) });
+    await mount(other);
+    await mount(cardView());
+    onApply = () => {
+      views.d1 = cardView({ proposal: proposal({ intake: intake(), status: "applied" }), actions: CLOSED, provenance: { editable: false, issues: [] } });
+      views.d2 = { ...other, stale: true, pages: [page({ stale: true })], actions: { apply: false, cancel: true } };
+    };
+    expect(screen.getAllByRole("button", { name: "팀 브레인에 반영" })).toHaveLength(2);
+    const card = screen.getByText("배포 서버 접속 방법").closest("section") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "팀 브레인에 반영" }));
+    await waitFor(() => expect(screen.getByText("그 사이 이 페이지가 바뀌었습니다.")).toBeTruthy());
+    expect(posted).toEqual(["apply:d1"]);
+    expect(screen.queryByRole("button", { name: "팀 브레인에 반영" })).toBeNull();
+  });
+
+  it("never renders teammate markdown or HTML", async () => {
+    const hostile = '<img src=x onerror="alert(1)"> **굵게** <script>x()</script>';
+    const { container } = await mount(
       cardView({
-        proposal: proposal({ id: "d2", kind: "direct", intake: intake(), changeset: { changes: [], conflicts: [] } }),
-        pages: [page({ op: "create", before: null })],
-        actions: { submit: false, withdraw: false, apply: true, cancel: true },
+        proposal: proposal({
+          content: hostile,
+          intake: intake({ answers: { source: "<b>회의</b>", scope: "x", validity: "y", verified: "z" } }),
+          changeset: { changes: [], conflicts: ["<i>충돌</i>"] },
+        }),
+        pages: [page({ op: "create", before: null, after: "<u>새 페이지</u>" })],
       }),
     );
-    expect(screen.getByText("원본 1건 · 페이지 1개 (새 페이지 1)")).toBeTruthy();
-    expect(screen.getByText("원본 보기")).toBeTruthy();
-    expect(screen.getByText("보충 정보")).toBeTruthy();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("b, i, u")).toBeNull();
+    expect(container.querySelector("strong.team-brain-name")).toBeTruthy();
+    expect(screen.getByText(hostile)).toBeTruthy();
+    expect(screen.getByText("<b>회의</b>")).toBeTruthy();
+    expect(screen.getByText("<i>충돌</i>")).toBeTruthy();
+    expect(screen.getByText("<u>새 페이지</u>")).toBeTruthy();
+  });
+});
+
+describe("TeamBrainCard — a card of the retired review queue (legacy)", () => {
+  // The row still carries everything the old card drew; none of it may come back.
+  const oldRow = (over: Partial<TeamBrainProposal>) =>
+    proposal({
+      id: "p1",
+      kind: "propose",
+      status: "cancelled",
+      intake: intake(),
+      changeset: null,
+      decisionReason: "closed_by_upgrade",
+      personalNotes: [{ path: "wiki/howto/ssh.md", blob: "a".repeat(40) }],
+      ...over,
+    });
+  const legacyView = (row: TeamBrainProposal, legacy: NonNullable<TeamBrainCardView["legacy"]>): TeamBrainCardView => ({
+    proposal: row,
+    stale: false,
+    pages: [],
+    actions: CLOSED,
+    provenance: null,
+    legacy,
+  });
+
+  it("draws the title and the server's notice, and nothing else, for a submission the upgrade closed", async () => {
+    const notice =
+      "팀 브레인 작성 방식이 바뀌어 이 제안은 종료되었습니다. 이제 누구나 팀 브레인에 직접 반영할 수 있으니, 아바타에게 이 내용을 팀 브레인에 다시 반영해 달라고 요청하세요.";
+    const { container } = await mount(legacyView(oldRow({}), { closedByUpgrade: true, notice }));
+
+    const card = screen.getByRole("region", { name: "지난 팀 브레인 카드" });
+    expect(card.textContent).toBe(`배포 서버 접속 방법${notice}`);
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(notice);
+    expect(status.classList.contains("tone-info")).toBe(true);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("list")).toBeNull();
+    expect(container.querySelector("details, form, pre, dl")).toBeNull();
+    // It only ever read itself.
+    expect(requests).toEqual(["GET /api/team-brain/cards/p1"]);
+  });
+
+  it("draws a decided row's final state the same way, muted", async () => {
+    const row = oldRow({
+      id: "r1",
+      kind: "review",
+      status: "applied",
+      decision: "ask",
+      decisionReason: "어느 환경인가요?",
+      targetId: "p1",
+      changeset: { changes: [], conflicts: ["충돌"] },
+    });
+    const { container } = await mount(legacyView(row, { closedByUpgrade: false, notice: "제안자에게 보완 요청을 보낸 검토 카드입니다." }));
+
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("제안자에게 보완 요청을 보낸 검토 카드입니다.");
+    expect(status.classList.contains("tone-muted")).toBe(true);
+    expect(screen.queryByText(/어느 환경인가요/)).toBeNull();
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector("details, form, pre, dl")).toBeNull();
   });
 });
 
@@ -360,7 +364,8 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
   it("shows the four provenance rows read-only, a missing one as 미기재", async () => {
     await mount(
       cardView({
-        proposal: proposal({ intake: intake({ answers: { ...intake().answers, author: "" } }), status: "pending" }),
+        proposal: proposal({ intake: intake({ answers: { ...intake().answers, author: "" } }), status: "applied" }),
+        actions: CLOSED,
         provenance: { editable: false, issues: ["author"] },
       }),
     );
@@ -373,18 +378,17 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
     expect(screen.queryByRole("form", { name: "출처 정보 입력" })).toBeNull();
   });
 
-  it("opens the editor by itself while provenance is missing, and keeps 제출 disabled until it is saved", async () => {
+  it("opens the editor by itself while provenance is missing, and keeps 반영 disabled until it is saved", async () => {
     await mount(
       cardView({
         proposal: proposal({ intake: bare() }),
-        actions: { submit: true, withdraw: true, apply: false, cancel: false },
         provenance: missingAll,
       }),
     );
     const form = screen.getByRole("form", { name: "출처 정보 입력" });
     expect(within(form).getByRole("combobox")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "관리자에게 제출" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/출처 정보\(출처 유형·출처·작성자·작성일\)를 채워야 제출할 수 있습니다/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "팀 브레인에 반영" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText("출처 정보(출처 유형·출처·작성자·작성일)를 채워야 반영할 수 있습니다.")).toBeTruthy();
     // No way out of the editor while something is missing.
     expect(within(form).queryByRole("button", { name: "취소" })).toBeNull();
   });
@@ -393,7 +397,6 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
     await mount(
       cardView({
         proposal: proposal({ intake: bare() }),
-        actions: { submit: true, withdraw: true, apply: false, cancel: false },
         provenance: missingAll,
       }),
     );
@@ -418,7 +421,6 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
       json(
         cardView({
           proposal: proposal({ intake: filled }),
-          actions: { submit: true, withdraw: true, apply: false, cancel: false },
           provenance: { editable: true, issues: [] },
         }),
       );
@@ -429,7 +431,8 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
     expect(provenancePuts).toEqual([{ sourceKind: "link", source: "https://wiki.internal/deploy", author: "인프라팀", authoredAt: "2026-10" }]);
     expect(screen.getByText("웹 링크")).toBeTruthy();
     expect(screen.getByText("https://wiki.internal/deploy")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "관리자에게 제출" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "팀 브레인에 반영" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(/채워야 반영할 수 있습니다/)).toBeNull();
     // Still a draft: the drafter can reopen the editor (prefilled) and leave it again.
     fireEvent.click(screen.getByRole("button", { name: "수정" }));
     const again = screen.getByRole("form", { name: "출처 정보 입력" });
@@ -442,7 +445,6 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
     await mount(
       cardView({
         proposal: proposal({ intake: bare() }),
-        actions: { submit: true, withdraw: true, apply: false, cancel: false },
         provenance: missingAll,
       }),
     );
@@ -458,9 +460,7 @@ describe("TeamBrainCard — 출처 정보 (provenance)", () => {
 });
 
 describe("TeamBrainCard — linked personal notes", () => {
-  const HINT = /팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다\./;
-
-  it("shows the submitter's linked 내 브레인 notes read-only on a propose card", async () => {
+  it("shows the drafter's linked 내 브레인 notes read-only, and nothing without links", async () => {
     const { container } = await mount(
       cardView({
         proposal: proposal({
@@ -470,32 +470,14 @@ describe("TeamBrainCard — linked personal notes", () => {
             { path: "raw/2026/11/jump.md", blob: "b".repeat(40) },
           ],
         }),
-        actions: { submit: true, withdraw: true, apply: false, cancel: false },
       }),
     );
     const line = container.querySelector(".team-brain-linked-line");
     expect(line?.textContent?.replace(/\s+/g, " ").trim()).toBe("연결된 내 브레인 노트: wiki/howto/ssh.md, raw/2026/11/jump.md");
-    expect(screen.getByText(HINT).textContent).toMatch(/^\s*승인되면/);
+    expect(screen.getByText("반영되면 팀 위키가 정본이 됩니다 — 내 노트는 바뀌지 않으며, 링크로 바꿀지는 아바타가 물어봅니다.")).toBeTruthy();
     expect(container.querySelector(".team-brain-linked-notes button, .team-brain-linked-notes a")).toBeNull();
-  });
 
-  it("words the hint for a direct card's own source, and shows nothing without links", async () => {
-    await mount(
-      cardView({
-        proposal: proposal({
-          id: "d3",
-          kind: "direct",
-          intake: intake(),
-          changeset: { changes: [], conflicts: [] },
-          personalNotes: [{ path: "wiki/howto/ssh.md", blob: "c".repeat(40) }],
-        }),
-        pages: [page({ op: "create", before: null })],
-        actions: { submit: false, withdraw: false, apply: true, cancel: true },
-      }),
-    );
-    expect(screen.getByText(HINT).textContent).toMatch(/^\s*반영되면/);
-
-    await mount(cardView({ proposal: proposal({ id: "p9", title: "링크 없는 제안", intake: intake() }) }));
+    await mount(cardView({ proposal: proposal({ id: "d9", title: "링크 없는 변경", intake: intake() }) }));
     expect(screen.getAllByText(/연결된 내 브레인 노트/)).toHaveLength(1);
   });
 });
@@ -515,9 +497,11 @@ describe("TeamBrainCard — team policy", () => {
         summary: "검토가 밀려 초안이 자주 만료된다",
         content: AFTER,
         baseBlob: "d".repeat(40),
+        intake: null,
+        changeset: null,
       }),
       pages: [{ path: "POLICY.md", op: "update", title: "팀 정책", type: null, before: BEFORE, after: AFTER, stale: false }],
-      actions: { submit: false, withdraw: false, apply: true, cancel: true },
+      provenance: null,
       ...over,
     });
   }
@@ -544,7 +528,7 @@ describe("TeamBrainCard — team policy", () => {
     views.pol1 = policyView({
       proposal: { ...policyView().proposal, status: "applied" },
       pages: [{ path: "POLICY.md", op: "update", title: "팀 정책", type: null, before: null, after: AFTER, stale: false }],
-      actions: { submit: false, withdraw: false, apply: false, cancel: false },
+      actions: CLOSED,
     });
     fireEvent.click(screen.getByRole("button", { name: "팀 정책 반영" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("팀 정책을 저장했습니다."));
@@ -553,22 +537,22 @@ describe("TeamBrainCard — team policy", () => {
     expect(screen.queryByText("현재 페이지를 찾을 수 없어 새 내용만 보여 줍니다.")).toBeNull();
   });
 
-  it("cancels a policy draft through withdraw", async () => {
+  it("cancels a policy draft through the cancel route", async () => {
     await mount(policyView());
     views.pol1 = policyView({
       proposal: { ...policyView().proposal, status: "cancelled" },
-      actions: { submit: false, withdraw: false, apply: false, cancel: false },
+      actions: CLOSED,
     });
     fireEvent.click(screen.getByRole("button", { name: "취소" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("취소했습니다."));
-    expect(posted).toEqual(["withdraw:pol1"]);
+    expect(posted).toEqual(["cancel:pol1"]);
   });
 
   it("shows a new POLICY.md in full and warns when it went stale", async () => {
     await mount(
       policyView({
         stale: true,
-        actions: { submit: false, withdraw: false, apply: false, cancel: true },
+        actions: { apply: false, cancel: true },
         pages: [{ path: "POLICY.md", op: "create", title: "팀 정책", type: null, before: null, after: AFTER, stale: true }],
       }),
     );
@@ -577,5 +561,12 @@ describe("TeamBrainCard — team policy", () => {
     expect(screen.getByText("그 사이 팀 정책 파일이 생겼습니다.")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("그 사이 팀 정책이 바뀌었습니다");
     expect(screen.queryByRole("button", { name: "팀 정책 반영" })).toBeNull();
+  });
+
+  it("tells a drafter who is no longer an admin that only an admin applies it", async () => {
+    await mount(policyView({ actions: { apply: false, cancel: true } }));
+    expect(screen.getByRole("status").textContent).toBe("관리자만 반영할 수 있습니다.");
+    expect(screen.queryByRole("button", { name: "팀 정책 반영" })).toBeNull();
+    expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
   });
 });

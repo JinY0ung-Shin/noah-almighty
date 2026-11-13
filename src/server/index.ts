@@ -18,7 +18,7 @@ import { retireAgentSessions } from "./retireAgentSessions.js";
 import { scrubServerOnlySecretEnv } from "./secretPolicy.js";
 import { sweepPiConsultationSandboxes } from "./agent/pi/piRuntime.js";
 import { migrateTeamBrainOnBoot } from "./teamBrain.js";
-import { sweepTeamBrainAppliesOnBoot } from "./teamBrainActions.js";
+import { retireTeamBrainReviewQueueOnBoot, sweepTeamBrainAppliesOnBoot } from "./teamBrainActions.js";
 import { warnRetiredModelEnv } from "./agent/pi/modelCatalog.js";
 import {
   deckToolchainLogFields,
@@ -80,11 +80,15 @@ if (sweptConsultations > 0) {
 // every pre-schema note to raw/legacy/; nothing is deleted). Fire-and-forget:
 // it never throws, every write path re-runs it under the vault lock anyway, and
 // a migration commit schedules a backup push.
+// Then the review queue's retirement (2026-11-13, every teammate writes directly):
+// the rows an older build left open in it are closed with a notice, after the DB
+// backup (`retirementGate`) and after an approval that was mid-commit is settled
+// by the vault's own history. A no-op once done, and on a DB that never had one.
 // Then a card whose apply died mid-write (no `Proposal:` commit) goes back to draft.
 const teamBrainBootAt = new Date().toISOString();
-void migrateTeamBrainOnBoot(services.config, () => services.teamBrainBackup?.schedule()).then(() =>
-  sweepTeamBrainAppliesOnBoot(services, teamBrainBootAt),
-);
+void migrateTeamBrainOnBoot(services.config, () => services.teamBrainBackup?.schedule())
+  .then(() => retireTeamBrainReviewQueueOnBoot(services))
+  .then(() => sweepTeamBrainAppliesOnBoot(services, teamBrainBootAt));
 // Trust an on-prem GitHub's internal CA (GITHUB_CA_CERT) for Node fetch and git
 // before anything reaches out over HTTPS. create_repo also passes it to gh.
 applyCustomGithubCa(services.config, logger);

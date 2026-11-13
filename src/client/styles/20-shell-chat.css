@@ -1621,7 +1621,7 @@ body.col-resizing .canvas-html-frame {
   background: var(--info-soft);
   color: var(--info);
   font-size: var(--t-xs);
-  /* Questions (needs_info) may span lines; every status is plain text. */
+  /* Every status is plain text; a server refusal may span lines. */
   white-space: pre-line;
   overflow-wrap: anywhere;
 }
@@ -1664,7 +1664,7 @@ body.col-resizing .canvas-html-frame {
   color: var(--muted);
   font-size: var(--t-xs);
 }
-/* The submitter's own 내 브레인 notes the source came from: a calm, read-only line. */
+/* The drafter's own 내 브레인 notes the changes came from: a calm, read-only line. */
 .team-brain-linked-notes {
   display: flex;
   flex-direction: column;
@@ -1742,37 +1742,7 @@ body.col-resizing .canvas-html-frame {
   color: var(--warn);
   font-size: var(--t-xs);
 }
-.team-brain-followups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-  margin: var(--s-1-5) 0 0;
-  padding: 0;
-  list-style: none;
-}
-.team-brain-followup {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-1);
-  padding: var(--s-2);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-sm);
-}
-.team-brain-qa {
-  display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--s-2);
-  margin: 0;
-  font-size: var(--t-xs);
-}
-.team-brain-qa-label {
-  color: var(--muted);
-}
-.team-brain-qa-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-/* Boxed callouts: the review's 보완 요청 questions and the compiler's conflicts. */
+/* A boxed callout: the conflicts the drafting avatar flagged. */
 .team-brain-box {
   display: flex;
   flex-direction: column;
@@ -1785,12 +1755,6 @@ body.col-resizing .canvas-html-frame {
 }
 .team-brain-box .team-brain-section-label {
   color: var(--warn);
-}
-.team-brain-box-text {
-  margin: 0;
-  color: var(--text);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .team-brain-box ul {
   display: flex;

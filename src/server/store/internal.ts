@@ -57,7 +57,10 @@ const ONBOARDED_ROUTINE_BACKFILL_VERSION = 2;
  *  2026-11-06): open legacy single-note proposals become raw SOURCES (path →
  *  teamRawPath, an empty intake, no base blob) and legacy direct/review DRAFTS
  *  are cancelled. Gated because the direct/review predicate matches drafts the
- *  app creates later. Next backfill: bump to 4 and gate on it. */
+ *  app creates later. Next backfill: bump to 4 and gate on it. (The review
+ *  queue's retirement, 2026-11-13, is NOT on this ladder: it needs the vault's
+ *  git log, so it is a boot step — `retireTeamBrainReviewQueueOnBoot` — and its
+ *  predicate matches only rows an older build left, so it stays value-guarded.) */
 const TEAM_BRAIN_WIKI_BACKFILL_VERSION = 3;
 
 function now(): string {
@@ -637,13 +640,16 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
-      -- Team brain (팀 브레인) proposals and card drafts (docs/architecture/team-brain.md).
-      -- APPROVED content lives in the local git vault <dataDir>/team-brain; this table
-      -- is the queue + the provenance (who, from which conversation, what). kind =
-      -- propose|direct|review, op = create|update (no delete). conversation_id is
-      -- read through a join that drops it once the conversation is gone (todo_items
-      -- precedent), so no conversation-deleting path needs a cascade. A brand-new
-      -- table: CREATE TABLE IF NOT EXISTS IS the existing-deployment migration.
+      -- Team brain (팀 브레인) cards (docs/architecture/team-brain.md). COMMITTED
+      -- content lives in the local git vault <dataDir>/team-brain; this table holds
+      -- each card's draft + its provenance (who, from which conversation, what).
+      -- kind = direct|policy (propose|review rows are the review queue retired
+      -- 2026-11-13: history only, never minted again — as are target_id, decision
+      -- and result_seen_at, which nothing writes any more). op = create|update (no
+      -- delete). conversation_id is read through a join that drops it once the
+      -- conversation is gone (todo_items precedent), so no conversation-deleting
+      -- path needs a cascade. A brand-new table: CREATE TABLE IF NOT EXISTS IS the
+      -- existing-deployment migration.
       CREATE TABLE IF NOT EXISTS team_brain_proposals (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
@@ -880,12 +886,12 @@ export class StoreBase {
     // trail is what keeps those copies matched to the row until their next
     // update rewrites the marker. NULL (and anything unparseable) reads as [].
     this.addColumnIfMissing("shared_skills", "previous_names", "TEXT");
-    // Team brain schema v1 (LLM wiki): a submission's intake answers (JSON
-    // TeamBrainIntake) and a compiled changeset (JSON TeamBrainChangeset) on
-    // review/direct rows. NULL = none (legacy rows; decoded defensively).
+    // Team brain schema v1 (LLM wiki): a source's intake answers (JSON
+    // TeamBrainIntake) and a compiled changeset (JSON TeamBrainChangeset).
+    // NULL = none (legacy rows; decoded defensively).
     this.addColumnIfMissing("team_brain_proposals", "intake_json", "TEXT");
     this.addColumnIfMissing("team_brain_proposals", "changes_json", "TEXT");
-    // The owner's personal second-brain notes a submission came from (JSON
+    // The owner's personal second-brain notes a card came from (JSON
     // TeamPersonalNoteLink[]): the server RECORDS the link, nothing writes the
     // personal repo (user decision 2026-11-10). NULL on every older row.
     this.addColumnIfMissing("team_brain_proposals", "personal_notes_json", "TEXT");
@@ -1270,8 +1276,8 @@ export class StoreBase {
 
   /** Wave-3 one-time migration (TEAM_BRAIN_WIKI_BACKFILL_VERSION). The vault
    *  itself moves every existing note to raw/legacy/ (teamBrain.ts); here an
-   *  OPEN legacy proposal (a whole wiki note) becomes a raw source the admin's
-   *  avatar compiles — its content stays verbatim. Legacy direct/review drafts
+   *  OPEN legacy proposal (a whole wiki note) becomes a raw source — its
+   *  content stays verbatim. Legacy direct/review drafts
    *  carry a single-note write the new apply path cannot take: cancelled.
    *  Decided rows stay untouched (history). */
   private migrateTeamBrainWikiRows(): void {
@@ -1280,7 +1286,7 @@ export class StoreBase {
     if (schemaVersion >= TEAM_BRAIN_WIKI_BACKFILL_VERSION) {
       return;
     }
-    const legacyIntake = JSON.stringify({ type: null, answers: {}, gaps: [], followups: [] });
+    const legacyIntake = JSON.stringify({ type: null, answers: {}, gaps: [] });
     this.db.transaction(() => {
       const rows = this.db
         .prepare(
@@ -1532,7 +1538,7 @@ export interface StoreBase {
   /** deleteUser cascade (store/teamBrain.ts). */
   deleteTeamBrainProposalsForUser(userId: string): void;
   /** The rewind cascade for team-brain draft cards (store/teamBrain.ts). */
-  withdrawTeamBrainDrafts(conversationId: string, ids: readonly string[]): number;
+  cancelTeamBrainDrafts(conversationId: string, ids: readonly string[]): number;
   getAppSecret(key: string): string | null;
   getAppSecretState(
     key: string,

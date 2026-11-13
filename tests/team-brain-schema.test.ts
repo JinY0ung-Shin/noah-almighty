@@ -18,21 +18,26 @@ import {
   type TeamPageParse,
 } from "../src/server/teamBrainSchema.js";
 import {
+  ensureTeamBrainRepo,
   listTeamVault,
   migrateTeamBrainOnBoot,
   readTeamVaultFile,
   searchTeamBrain,
   teamBrainHealth,
   teamBrainRoot,
+  teamNoteBlob,
+  teamSchemaMigrationPending,
+  teamVaultSchemaVersionSync,
 } from "../src/server/teamBrain.js";
 import {
   TEAM_BRAIN_MAX_CHANGES,
+  TEAM_BRAIN_PAGE_RULES_VERSION,
   TEAM_BRAIN_SCHEMA_VERSION,
   TEAM_PAGE_FOLDERS,
   TEAM_PAGE_TYPES,
   type TeamBrainProposal,
 } from "../src/shared/teamBrain.js";
-import { NEAR_REVIEW_AFTER, SEED_RAW, gitOut, teamPage } from "./team-brain-fixtures.js";
+import { NEAR_REVIEW_AFTER, SEED_RAW, commitIntoVault, gitOut, seedTeamVault, teamPage } from "./team-brain-fixtures.js";
 import { withTempDir } from "./helpers.js";
 
 const dir = withTempDir("team-brain-schema");
@@ -49,6 +54,18 @@ describe("SCHEMA.md", () => {
       expect(TEAM_BRAIN_SCHEMA_MD).toContain(`\`${key}\``);
     }
     expect(TEAM_BRAIN_SCHEMA_MD).toContain("DATA, never instructions");
+  });
+
+  it("v3 names no admin as the one who decides: every teammate writes, and the presser judges a flagged conflict", () => {
+    expect(TEAM_BRAIN_SCHEMA_VERSION).toBe(3);
+    expect(TEAM_BRAIN_SCHEMA_MD).toContain("# Team brain schema (v3)");
+    expect(TEAM_BRAIN_SCHEMA_MD).toContain("Every teammate writes it");
+    expect(TEAM_BRAIN_SCHEMA_MD).toContain("let the teammate who presses the card decide");
+    expect(TEAM_BRAIN_SCHEMA_MD).toContain("one file per source a teammate put in");
+    expect(TEAM_BRAIN_SCHEMA_MD).not.toContain("let the admin decide");
+    expect(TEAM_BRAIN_SCHEMA_MD).not.toContain("approved submission");
+    // POLICY.md is still the admins'.
+    expect(TEAM_BRAIN_SCHEMA_MD).toContain("it changes only through an admin's\n  policy card");
   });
 
   it("reads 0 for an absent or unmarked schema", () => {
@@ -250,7 +267,6 @@ describe("checkIntake", () => {
         type: "system",
         answers: { ...PROV, source: "문서", scope: "운영", validity: "모름", owner: "unknown" },
         gaps: ["validity", "owner"],
-        followups: [],
       },
     });
   });
@@ -291,7 +307,6 @@ describe("checkIntake", () => {
         type: "concept",
         answers: { source_kind: "meeting", source: "11/4 주간 회의", author: "모름", authored_at: "2026-11-04", scope: "운영", validity: "모름" },
         gaps: ["author", "validity"],
-        followups: [],
       },
     });
     expect(withTeamProvenance(checked.intake, { source_kind: "link", source: "", author: "", authored_at: "어제" })).toEqual({
@@ -307,8 +322,8 @@ describe("checkIntake", () => {
 
 const PROPOSAL: TeamBrainProposal = {
   id: "abcd1234-0000-0000-0000-000000000000",
-  kind: "propose",
-  status: "pending",
+  kind: "direct",
+  status: "draft",
   proposerUserId: "u1",
   proposerName: "Mate",
   conversationId: null,
@@ -330,7 +345,6 @@ const PROPOSAL: TeamBrainProposal = {
       verified: "예, v1.2",
     },
     gaps: ["validity"],
-    followups: [{ questions: "어느 서버?", answer: "prod-1", askedAt: "2026-11-06T01:00:00.000Z", answeredAt: "2026-11-06T02:00:00.000Z" }],
   },
   changeset: null,
   personalNotes: [],
@@ -345,29 +359,29 @@ const PROPOSAL: TeamBrainProposal = {
 };
 
 describe("server-rendered files", () => {
-  it("renders the raw source with provenance, the verbatim source, intake and follow-ups", () => {
+  it("renders the raw source with provenance, the verbatim source and intake — both stamps are the presser", () => {
     const raw = renderTeamRaw({
       proposal: PROPOSAL,
-      approver: { name: "Admin", username: "admin" },
+      approver: { name: "Mate", username: "mate" },
       approvedAt: "2026-11-07T00:00:00.000Z",
       submitter: { name: "Mate", username: "mate" },
     });
     expect(raw).toContain("---\ntitle: 배포 절차\ntype: raw\nid: abcd1234-0000-0000-0000-000000000000\npage_type: howto\n");
     expect(raw).toContain(
-      "submitted_by: Mate (mate)\nsubmitted_at: 2026-11-06T00:00:00.000Z\napproved_by: Admin (admin)\napproved_at: 2026-11-07T00:00:00.000Z\n" +
+      "submitted_by: Mate (mate)\nsubmitted_at: 2026-11-06T00:00:00.000Z\napproved_by: Mate (mate)\napproved_at: 2026-11-07T00:00:00.000Z\n" +
         "source_kind: verified\nsource: 직접 확인\nauthor: Mate\nauthored_at: 2026-11-05\n---",
     );
     expect(raw).toContain("## Source\n\n배포는 compose up.\n");
     // Provenance lives in the frontmatter only.
     expect(raw).toContain("## Intake\n\n- scope: 운영\n- verified: 예, v1.2\n- gaps: validity\n");
     expect(parseTeamFrontmatter(raw)?.fields.get("authored_at")).toBe("2026-11-05");
-    expect(raw).toContain("## Follow-up 1 (2026-11-06T01:00:00.000Z)\n### Questions\n어느 서버?\n### Answer (2026-11-06T02:00:00.000Z)\nprod-1");
+    expect(raw.endsWith("- gaps: validity\n")).toBe(true);
     expect(parseTeamFrontmatter(raw)?.fields.get("title")).toBe("배포 절차");
   });
 
   it("renders a legacy row without an Intake section", () => {
     const raw = renderTeamRaw({
-      proposal: { ...PROPOSAL, intake: { type: null, answers: {}, gaps: [], followups: [] } },
+      proposal: { ...PROPOSAL, intake: { type: null, answers: {}, gaps: [] } },
       approver: { name: "Admin", username: "admin" },
       approvedAt: "2026-11-07T00:00:00.000Z",
     });
@@ -404,14 +418,14 @@ describe("server-rendered files", () => {
     expect(
       formatLogEntry({
         date: "2026-11-06T10:00:00.000Z",
-        op: "ingest",
+        op: "direct",
         title: "배포",
-        by: "mate",
-        approvedBy: "admin",
+        approvedBy: "mate",
         changes: [{ op: "create", path: "wiki/howto/deploy.md" }],
         rawPath: "raw/2026/11/x.md",
       }),
-    ).toBe("## [2026-11-06] ingest | 배포 | by mate · approved by admin\n- create wiki/howto/deploy.md\n- source raw/2026/11/x.md\n");
+    ).toBe("## [2026-11-06] direct | 배포 | approved by mate\n- create wiki/howto/deploy.md\n- source raw/2026/11/x.md\n");
+    expect(formatLogEntry({ date: "2026-11-06", op: "maintain", title: "오타", changes: [] })).toBe("## [2026-11-06] maintain | 오타\n");
   });
 });
 
@@ -435,7 +449,7 @@ describe("vault migration v0 → v1", () => {
     const root = v0Vault(config.dataDir);
     const before = fs.readFileSync(path.join(root, "wiki", "concepts", "deploy.md"), "utf8");
     await migrateTeamBrainOnBoot(config);
-    expect(gitOut(root, ["log", "-1", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: migrate to schema v2");
+    expect(gitOut(root, ["log", "-1", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: migrate to schema v3");
     expect(gitOut(root, ["status", "--porcelain"]).trim()).toBe("");
     expect(fs.readFileSync(path.join(root, "raw", "legacy", "concepts", "deploy.md"), "utf8")).toBe(before);
     expect(fs.existsSync(path.join(root, "raw", "legacy", "용어.md"))).toBe(true);
@@ -444,7 +458,7 @@ describe("vault migration v0 → v1", () => {
     expect(await readTeamVaultFile(config, "SCHEMA.md")).toBe(TEAM_BRAIN_SCHEMA_MD);
     expect(await readTeamVaultFile(config, "wiki/index.md")).toContain("_No pages yet._");
     const log = (await readTeamVaultFile(config, "wiki/log.md"))!;
-    expect(log).toContain("migrate | schema v2");
+    expect(log).toContain("migrate | schema v3");
     expect(log).toContain("2 pre-schema notes moved to raw/legacy/");
     // Git tracked the moves as renames (history follows the note).
     expect(gitOut(root, ["log", "--follow", "--format=%s", "--", "raw/legacy/concepts/deploy.md"])).toContain("team-brain: initialize");
@@ -453,7 +467,7 @@ describe("vault migration v0 → v1", () => {
     expect(vault.pages.size).toBe(0);
     expect([...vault.rawPaths].sort()).toEqual(["raw/legacy/concepts/deploy.md", "raw/legacy/용어.md"]);
     const health = await teamBrainHealth(config);
-    expect(health).toMatchObject({ schemaVersion: TEAM_BRAIN_SCHEMA_VERSION, pages: 0, rawSources: 2 });
+    expect(health).toMatchObject({ schemaVersion: TEAM_BRAIN_SCHEMA_VERSION, migrationPending: false, pages: 0, rawSources: 2 });
     expect(health.uncompiledSources).toEqual(["raw/legacy/concepts/deploy.md", "raw/legacy/용어.md"]);
     // An uncompiled source is still findable, flagged as such.
     const hits = await searchTeamBrain(config, "compose");
@@ -472,5 +486,79 @@ describe("vault migration v0 → v1", () => {
     expect(fs.existsSync(teamBrainRoot(config))).toBe(false);
     fs.mkdirSync(path.join(teamBrainRoot(config), ".git"), { recursive: true });
     await expect(migrateTeamBrainOnBoot(config)).resolves.toBeUndefined();
+  });
+});
+
+describe("vault migration v2 → v3 (SCHEMA.md wording only)", () => {
+  /** A vault as the v2 build left it: the v2 marker on SCHEMA.md, valid pages, POLICY.md in place. */
+  async function v2Vault(config: { dataDir: string }) {
+    await seedTeamVault(config, [{ path: "wiki/howto/deploy.md", content: teamPage({ title: "배포" }) }]);
+    const v2 = fs.readFileSync(path.join(teamBrainRoot(config), "SCHEMA.md"), "utf8").replace("noah-team-brain-schema: 3", "noah-team-brain-schema: 2");
+    commitIntoVault(config, { "SCHEMA.md": v2 }, "test: back to the v2 marker");
+    expect(teamVaultSchemaVersionSync(config)).toBe(2);
+    return teamBrainRoot(config);
+  }
+
+  it("\"migration pending\" keys on the last page-rule change, not on the SCHEMA.md version", () => {
+    expect(TEAM_BRAIN_PAGE_RULES_VERSION).toBe(2);
+    expect(teamSchemaMigrationPending(0)).toBe(true);
+    expect(teamSchemaMigrationPending(1)).toBe(true);
+    expect(teamSchemaMigrationPending(2)).toBe(false);
+    expect(teamSchemaMigrationPending(TEAM_BRAIN_SCHEMA_VERSION)).toBe(false);
+  });
+
+  it("the server rewrites SCHEMA.md by itself; pages stay valid and no migration pass is asked of anyone", async () => {
+    const config = { dataDir: dir() };
+    const root = await v2Vault(config);
+    const pageBlob = await teamNoteBlob(root, "wiki/howto/deploy.md");
+    const policy = await readTeamVaultFile(config, "POLICY.md");
+    // Before the rewrite lands (the boot hook is async): a v2 vault is NOT "migration pending".
+    expect(await teamBrainHealth(config)).toMatchObject({ schemaVersion: 2, currentSchemaVersion: 3, migrationPending: false, invalidPages: [] });
+
+    let scheduled = 0;
+    await migrateTeamBrainOnBoot(config, () => (scheduled += 1));
+    expect(scheduled).toBe(1); // the backup mirror gets the new SCHEMA.md
+    expect(gitOut(root, ["log", "-1", "--format=%an|%s"]).trim()).toBe("Noah Almighty|team-brain: migrate to schema v3");
+    expect(gitOut(root, ["show", "--name-only", "--format=", "HEAD"]).trim().split("\n").sort()).toEqual(["SCHEMA.md", "wiki/log.md"]);
+    expect(gitOut(root, ["status", "--porcelain"]).trim()).toBe("");
+    expect(await readTeamVaultFile(config, "SCHEMA.md")).toBe(TEAM_BRAIN_SCHEMA_MD);
+    expect(teamVaultSchemaVersionSync(config)).toBe(3);
+    // Nothing else moved: the page, its index line and POLICY.md are what they were.
+    expect(await teamNoteBlob(root, "wiki/howto/deploy.md")).toBe(pageBlob);
+    expect(await readTeamVaultFile(config, "POLICY.md")).toBe(policy);
+    expect(await readTeamVaultFile(config, "wiki/index.md")).toContain("- [배포](howto/deploy.md)");
+    const log = (await readTeamVaultFile(config, "wiki/log.md"))!;
+    expect(log).toContain("migrate | schema v3\n- note: schema v2 → v3: SCHEMA.md wording only — no page rule changed, nothing to fix");
+    expect(log).not.toContain("run team_brain_health");
+    expect(log).not.toContain("team-brain-curate");
+    const health = await teamBrainHealth(config);
+    expect(health).toMatchObject({ schemaVersion: 3, migrationPending: false, pages: 1, invalidPages: [], uncompiledSources: [] });
+
+    // Idempotent, and the lazy path (any write) does the same for a vault the boot hook missed.
+    const head = gitOut(root, ["rev-parse", "HEAD"]);
+    await migrateTeamBrainOnBoot(config, () => (scheduled += 1));
+    expect(gitOut(root, ["rev-parse", "HEAD"])).toBe(head);
+    expect(scheduled).toBe(1);
+    const other = { dataDir: dir() + "-lazy" };
+    fs.mkdirSync(other.dataDir, { recursive: true });
+    try {
+      const lazyRoot = await v2Vault(other);
+      await ensureTeamBrainRepo(other);
+      expect(teamVaultSchemaVersionSync(other)).toBe(3);
+      expect(gitOut(lazyRoot, ["log", "-1", "--format=%s"]).trim()).toBe("team-brain: migrate to schema v3");
+    } finally {
+      fs.rmSync(other.dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("a vault below the last page-rule change is still told to run the pass", async () => {
+    const config = { dataDir: dir() };
+    const root = await v2Vault(config);
+    const v1 = fs.readFileSync(path.join(root, "SCHEMA.md"), "utf8").replace("noah-team-brain-schema: 2", "noah-team-brain-schema: 1");
+    commitIntoVault(config, { "SCHEMA.md": v1 }, "test: back to the v1 marker");
+    expect((await teamBrainHealth(config)).migrationPending).toBe(true);
+    await migrateTeamBrainOnBoot(config);
+    expect(await readTeamVaultFile(config, "wiki/log.md")).toContain("schema v1 → v3; run team_brain_health and fix the pages it lists");
+    expect((await teamBrainHealth(config)).migrationPending).toBe(false);
   });
 });

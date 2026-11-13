@@ -710,7 +710,7 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   `plugins`/`shared` 300 — remote/third-party). Browser ops fit easily (the bridge relay times out at 45 s).
   `--timeout-sec N` overrides every id. Every run also deletes this Noah's entries under a RETIRED id
   (`RETIRED_MCP_SERVER_NAMES`: `group_brain`, `group_repo` — retired 2026-10-30; `web` — the web fetch tool, removed 2026-11-10), and Noah's `/mcp` answers a
-  call that still reaches one with a "was removed" error (`RETIRED_SERVER_MESSAGES`, `mcpHttp/endpoint.ts`). Refuses to take over an id pointing elsewhere without `--force`. The admin
+  call that still reaches one with a "was removed" error (`RETIRED_SERVER_MESSAGES`, `mcpHttp/endpoint.ts`). A TOOL removed from a server that still exists is answered the same way, before the per-call gates (`RETIRED_TOOL_MESSAGES`, keyed `<server>/<tool>` — the five team-brain review-queue tools, 2026-11-13 → [`team-brain.md`](team-brain.md) "Tools"); tools/list never names one. Refuses to take over an id pointing elsewhere without `--force`. The admin
   key is read from the environment only and never stored by Noah.
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;

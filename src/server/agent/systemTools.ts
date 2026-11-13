@@ -30,7 +30,14 @@ import type {
 } from "../types.js";
 import { text } from "./mcpTools.js";
 import { HEX_SSH_NO_TRANSFER_SENTENCE, type HexSshViewerClass } from "../hexSshPolicy.js";
-import { countTeamNotesSync, readTeamPolicySync, teamBrainHealth, teamBrainInitialized, teamVaultSchemaVersionSync } from "../teamBrain.js";
+import {
+  countTeamNotesSync,
+  readTeamPolicySync,
+  teamBrainHealth,
+  teamBrainInitialized,
+  teamSchemaMigrationPending,
+  teamVaultSchemaVersionSync,
+} from "../teamBrain.js";
 import { teamGuidelinesAreEmpty, teamPolicyKnobsText } from "../teamBrainPolicy.js";
 import { TEAM_BRAIN_SCHEMA_VERSION } from "../../shared/teamBrain.js";
 import { readTeamBrainBackupState } from "../teamBrainBackup.js";
@@ -73,15 +80,16 @@ import {
  * avatar owner is present or an owner-scheduled routine is running with owner
  * tool access.
  */
-/** describe_system waits at most this long for the admin's health counts. */
+/** describe_system waits at most this long for the team brain's health counts. */
 const TEAM_BRAIN_HEALTH_DESCRIBE_TIMEOUT_MS = 3000;
 
 /**
  * describe_system's LIVE team-brain line (the prompt only states the capability,
  * never counts): the vault size + schema version, what THIS run may do (the
- * same booleans the brain tools key on), the live queue numbers for the person
- * it acts for and, for an admin (the curator), the health counts. Never throws:
- * a failed health read degrades to a pointer at team_brain_health.
+ * same booleans the brain tools key on) and, on a write-capable run — every
+ * teammate's own chat — the health counts, the policy in force and the owner's
+ * linked personal notes. Never throws: a failed health read degrades to a
+ * pointer at team_brain_health.
  */
 async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promise<string> {
   const tb = ctx.teamBrain;
@@ -91,14 +99,15 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   const pages = countTeamNotesSync(ctx.config);
   const exists = teamBrainInitialized(ctx.config);
   const version = exists ? teamVaultSchemaVersionSync(ctx.config) : TEAM_BRAIN_SCHEMA_VERSION;
+  // Pending = below the last PAGE-RULE change; a wording-only schema bump is Noah's own rewrite, never work for anyone.
   const schema = !exists
     ? "not created yet"
-    : version < TEAM_BRAIN_SCHEMA_VERSION
-      ? `schema v${version}, below the current v${TEAM_BRAIN_SCHEMA_VERSION} — Noah migrates it on boot, then the admin's migration pass (team-brain-curate skill) compiles the moved notes`
+    : teamSchemaMigrationPending(version)
+      ? `schema v${version}, below the current page rules — Noah migrates it on boot, then an admin's migration pass (team-brain-curate skill) compiles the moved notes`
       : `schema v${version}`;
   const head = `- Team brain (mcp__brain__search scope "team"): ${pages} wiki page${pages === 1 ? "" : "s"}, ${schema}`;
-  if (!tb.propose) {
-    return `${head}; read-only in this run (submitting works only in the owner's own interactive conversation)`;
+  if (!tb.write) {
+    return `${head}; read-only in this run (writing works only in the owner's own interactive conversation)`;
   }
   // The admins' POLICY.md, LIVE (the prompt carries the guidelines as of the conversation's start).
   const policy = readTeamPolicySync(ctx.config);
@@ -107,36 +116,33 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   }`;
   const promoted = store.listTeamBrainPersonalLinks(ctx.avatarUserId).length;
   const promotedLine = promoted
-    ? `; ${promoted} of the owner's approved submissions link personal notes — the team page is now canonical for them (PROMOTED NOTES in the Brain policy; list_team_proposals names them)`
+    ? `; ${promoted} of the owner's team-brain changes link personal notes — the team page is now canonical for them (PROMOTED NOTES in the Brain policy; mcp__brain__team_brain_health names them)`
     : "";
   // Not a number: the standing fact that a card press reaches the avatar by itself (teamBrainCardPress.ts).
   const pressLine = "; a press of a card's confirm button (not a cancel) is reported to you in this conversation as it happens (a message starting with [Team-brain card press)";
-  if (tb.admin) {
-    const pending = store.countPendingTeamBrainProposals();
-    const queue = `${pending} teammate submission${pending === 1 ? "" : "s"} await${pending === 1 ? "s" : ""} their review (mcp__brain__list_team_proposals → get_team_proposal → compile → prepare_team_review)`;
-    let health = "";
-    if (exists) {
-      try {
-        // teamBrainHealth is a bounded vault scan; describe_system must stay fast, so
-        // a slow vault degrades to the pointer instead of holding the report.
-        let timer: NodeJS.Timeout | undefined;
-        const h = await Promise.race([
-          teamBrainHealth(ctx.config),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("timeout")), TEAM_BRAIN_HEALTH_DESCRIBE_TIMEOUT_MS);
-            timer.unref?.();
-          }),
-        ]).finally(() => clearTimeout(timer));
-        const n = h.counts;
-        health = `; health: ${n.uncompiledSources} uncompiled source${n.uncompiledSources === 1 ? "" : "s"}, ${n.invalidPages} page${n.invalidPages === 1 ? "" : "s"} failing SCHEMA.md (need migration/fixes), ${n.overdue} past review_after — details and next steps with mcp__brain__team_brain_health + the team-brain-curate skill`;
-      } catch {
-        health = "; health: unavailable right now (mcp__brain__team_brain_health)";
-      }
+  let health = "";
+  if (exists) {
+    try {
+      // teamBrainHealth is a bounded vault scan; describe_system must stay fast, so
+      // a slow vault degrades to the pointer instead of holding the report.
+      let timer: NodeJS.Timeout | undefined;
+      const h = await Promise.race([
+        teamBrainHealth(ctx.config),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("timeout")), TEAM_BRAIN_HEALTH_DESCRIBE_TIMEOUT_MS);
+          timer.unref?.();
+        }),
+      ]).finally(() => clearTimeout(timer));
+      const n = h.counts;
+      health = `; health: ${n.uncompiledSources} uncompiled source${n.uncompiledSources === 1 ? "" : "s"}, ${n.invalidPages} page${n.invalidPages === 1 ? "" : "s"} failing SCHEMA.md (need fixes), ${n.overdue} past review_after — details and next steps with mcp__brain__team_brain_health + the team-brain-curate skill`;
+    } catch {
+      health = "; health: unavailable right now (mcp__brain__team_brain_health)";
     }
-    return `${head}; the owner is an ADMIN (the curator) — their own knowledge goes in through mcp__brain__prepare_team_changes, policy changes through mcp__brain__prepare_team_policy, and ${queue}; nothing changes until they press the card${pressLine}${health}${policyLine}${promotedLine}`;
   }
-  const unseen = store.countUnseenTeamBrainResults(ctx.avatarUserId);
-  return `${head}; you can submit sources with mcp__brain__propose_team_note after the user agrees and the intake (an admin's avatar compiles them; an admin decides)${pressLine}${unseen ? `; ${unseen} of the owner's submissions have a new result or an admin's questions (mcp__brain__list_team_proposals)` : ""}${policyLine}${promotedLine}`;
+  const adminLine = tb.admin
+    ? "; the owner is also an ADMIN: policy changes go through mcp__brain__prepare_team_policy, and the migration pass that compiles raw/legacy/ notes is theirs"
+    : "; changing POLICY.md, the backup and the raw/legacy/ migration pass stay with the admins (the server refuses them for anyone else)";
+  return `${head}; every teammate writes it — after the user agrees and the intake, draft the page changes with mcp__brain__prepare_team_changes; nothing changes until the user presses the card, and nobody reviews it${adminLine}${pressLine}${health}${policyLine}${promotedLine}`;
 }
 
 /** Admin-only: the push-only backup mirror's state. */
@@ -212,7 +218,7 @@ export interface SystemToolsContext {
    */
   shareLinksEnabled?: boolean;
   /** This run's team-brain capability (runCapabilities' teamBrain* booleans); undefined = none. */
-  teamBrain?: { read: boolean; propose: boolean; admin: boolean };
+  teamBrain?: { read: boolean; write: boolean; admin: boolean };
   /**
    * Whether THIS run registered the owner's to-do tools (`mcp__todo__*`,
    * runCapabilities' `todoToolsActive`) and, of those, `delete_todo`

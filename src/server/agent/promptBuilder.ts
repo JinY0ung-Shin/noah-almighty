@@ -24,10 +24,12 @@ import {
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
-  TEAM_ADMIN_FLOW,
-  TEAM_MEMBER_FLOW,
+  TEAM_ADMIN_EXTRAS,
+  TEAM_ADMIN_ONLY_NOTE,
+  TEAM_CARD_PRESS_NOTE,
   TEAM_NOTE_TRUST_NOTE,
   TEAM_OFFER_TO_SHARE,
+  TEAM_WRITE_FLOW,
   teamGuidelinesBlock,
 } from "./teamBrainTools.js";
 import { TEAM_KNOWLEDGE_DEFINITION, TEAM_SHARE_LEVEL_RULE, brainPolicySection } from "./brainPolicy.js";
@@ -284,23 +286,33 @@ function brainSection(
 /**
  * Team brain section (docs/architecture/team-brain.md): the ONE instance-wide
  * vault every run with a known approved principal may READ, the four
- * team-knowledge tests, and — only on a propose-capable run (the owner's own
- * interactive chat) — the standing OFFER-TO-SHARE guidance plus the member or
- * ADMIN flow. Keyed on `request.teamBrain`, stamped from the SAME booleans that
- * register the tools, so the prompt never names a tool the run lacks. Nothing
- * volatile (note/proposal counts live in describe_system).
+ * team-knowledge tests, and — only on a write-capable run (the owner's own
+ * interactive chat) — the standing OFFER-TO-SHARE guidance plus the ONE write
+ * flow every teammate has, closed by what an admin adds (or, for everyone else,
+ * what stays with the admins). Keyed on `request.teamBrain`, stamped from the
+ * SAME booleans that register the tools, so the prompt never names a tool the
+ * run lacks. Nothing volatile (page/health counts live in describe_system).
  */
 function teamBrainSection(request: AgentRequest): string | null {
   const tb = request.teamBrain;
   if (!tb?.read) return null;
   const base =
-    '**Team brain**: the team\'s ONE shared knowledge vault — a wiki an admin\'s avatar compiles from the sources teammates submit, under a fixed schema (`SCHEMA.md`) the server enforces; an admin approves every change. Search it with `mcp__brain__search` (scope "team", or the default "all") before answering a question about the team\'s decisions, systems, fixes, terms, conventions or owners, and read a hit with `mcp__brain__get_note` (scope "team"; `wiki/index.md` is the catalog). A hit labeled "uncompiled source" is a submitted text not yet compiled into a page — less settled. ' +
+    '**Team brain**: the team\'s ONE shared knowledge vault — a wiki every teammate writes through their own avatar and anyone may correct, under a fixed schema (`SCHEMA.md`) the server enforces; a change lands when the teammate who asked for it presses its card, with no review before or after. Search it with `mcp__brain__search` (scope "team", or the default "all") before answering a question about the team\'s decisions, systems, fixes, terms, conventions or owners, and read a hit with `mcp__brain__get_note` (scope "team"; `wiki/index.md` is the catalog). A hit labeled "uncompiled source" is a source no wiki page cites yet — less settled. ' +
     TEAM_NOTE_TRUST_NOTE;
-  if (!tb.propose) {
-    return `${base} Proposing team notes is not available in this run (only in the owner's own interactive conversation).`;
+  if (!tb.write) {
+    return `${base} Writing to the team brain is not available in this run (only in the owner's own interactive conversation).`;
   }
   const guidelines = teamGuidelinesBlock(tb.guidelines);
-  return [base, TEAM_KNOWLEDGE_DEFINITION, TEAM_SHARE_LEVEL_RULE, TEAM_OFFER_TO_SHARE, tb.admin ? TEAM_ADMIN_FLOW : TEAM_MEMBER_FLOW, ...(guidelines ? [guidelines] : [])].join(" ");
+  return [
+    base,
+    TEAM_KNOWLEDGE_DEFINITION,
+    TEAM_SHARE_LEVEL_RULE,
+    TEAM_OFFER_TO_SHARE,
+    TEAM_WRITE_FLOW,
+    tb.admin ? TEAM_ADMIN_EXTRAS : TEAM_ADMIN_ONLY_NOTE,
+    TEAM_CARD_PRESS_NOTE,
+    ...(guidelines ? [guidelines] : []),
+  ].join(" ");
 }
 
 /**
@@ -316,7 +328,7 @@ function brainPolicyBlock(request: AgentRequest, personalWrite: boolean): string
     personalRead: personal,
     personalWrite: personal && personalWrite,
     teamRead: Boolean(request.teamBrain?.read),
-    teamPropose: Boolean(request.teamBrain?.propose),
+    teamWrite: Boolean(request.teamBrain?.write),
   });
 }
 

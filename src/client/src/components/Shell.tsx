@@ -27,7 +27,6 @@ import { loadConversations, stopKnowledgeWatch } from "../lib/loaders";
 import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
 import { goView } from "../lib/nav";
 import { Presence, useTransition } from "../lib/presence";
-import { teamBrainBadgeCount, teamBrainBadgeTitle } from "../lib/teamBrain";
 import { trapTab } from "../lib/modalBehavior";
 import { notify, readState, replaceState, updateState } from "../lib/state";
 import { setThemePref } from "../lib/theme";
@@ -382,8 +381,6 @@ export default function Shell({
   // every open item; the tooltip spells the split out.
   const todoCounts = state.todos.counts;
   const todoBadgeCount = todoCounts.overdue + todoCounts.dueToday;
-  // 팀 브레인 badge: my decided-but-unseen team-brain proposals + (admins) pending reviews.
-  const teamBrainBadge = teamBrainBadgeCount(state.teamBrainStatus);
   const todoBadgeTitle = [
     todoCounts.overdue ? `마감 지남 ${todoCounts.overdue}개` : "",
     todoCounts.dueToday ? `오늘 마감 ${todoCounts.dueToday}개` : "",
@@ -1118,11 +1115,6 @@ export default function Shell({
                 {item.view === "todos" && todoBadgeCount > 0 ? (
                   <span className="nav-badge" title={todoBadgeTitle}>
                     {todoBadgeCount}
-                  </span>
-                ) : null}
-                {item.view === "teamBrain" && teamBrainBadge > 0 ? (
-                  <span className="nav-badge" title={teamBrainBadgeTitle(state.teamBrainStatus)}>
-                    {teamBrainBadge}
                   </span>
                 ) : null}
               </button>

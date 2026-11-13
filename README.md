@@ -39,13 +39,17 @@ which check owner/teammate trust themselves.
   the avatar can list/read/write files, scaffold skills (`skills/<name>/SKILL.md`), and
   commit & push — via the owner-only `mcp__repo__*` tools. Settings just points at the repo
   (a GitHub link); there is no in-app file editor.
-- **Team brain (팀 브레인)**: ONE shared knowledge vault for the whole team — decisions, system
-  facts, fixes, glossary, conventions, owners. Every avatar can search it; when a conversation
-  produces team knowledge the avatar offers to share it, the user checks the source's
-  출처 정보 (출처 유형·출처·작성자·작성일 — required, editable on the card) and confirms, and an
-  admin approves or rejects it (an admin's own notes go in on their card press). It lives on
-  the Noah server as a local git repository; an admin can mirror it to a backup repository on
-  the internal git host (관리자 → 팀 브레인).
+- **Team brain (팀 브레인)**: ONE shared knowledge wiki for the whole team — decisions, system
+  facts, fixes, glossary, conventions, owners. Every avatar can search it, and every teammate
+  writes it: when a conversation produces team knowledge the avatar offers to put it in and
+  drafts the wiki page changes as a card; the user checks the changes and the source's
+  출처 정보 (출처 유형·출처·작성자·작성일 — required, editable on the card) and presses
+  **팀 브레인에 반영** — their own press saves it, with no review step (anyone may correct any
+  page the same way; a page someone changed in the meantime is refused, never overwritten;
+  nothing is ever deleted). Admins keep the team policy (`POLICY.md`), the backup and the
+  one-time migration of pre-schema notes. It lives on the Noah server as a local git
+  repository; an admin can mirror it to a backup repository on the internal git host
+  (관리자 → 팀 브레인). Coming from a release that still had the review queue → "Upgrade".
 - **Delegation loop**: grow your avatar by turning repeated work, project rules, runbooks,
   and answers to teammate questions into skills / knowledge files / routines, then delegate
   more of that work back to the avatar over time.
@@ -390,6 +394,18 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   account created then comes back active, i.e. a trusted teammate, after the re-upgrade. After
   re-upgrading, re-check 관리자 ▸ 사용자 and suspend anyone who should not be on the team. Restore the
   `pre-retire-<stamp>.db` backup instead if the old groups must come back.
+- **Team brain: the review queue is retired (2026-11-13).** Every teammate now writes the team brain
+  directly (their avatar drafts a card, their own press saves it), so nothing waits for an admin any more.
+  The first boot of this release closes what an older release left open in the queue — submissions not yet
+  decided (draft, waiting for review, sent back with questions) and review cards nobody pressed — after the
+  retirement DB backup (`pre-retire-<stamp>.db`, below; a failed backup holds the step until the next boot).
+  Nothing is deleted: each row keeps its submitted text, and its card in the old conversation says the way
+  the team brain is written changed and to ask the avatar to put it in again (best in that conversation,
+  which still holds the user's words). An approval that was mid-commit when the old process stopped is
+  settled by the vault's own history first. One boot warning — `team brain: the review queue is retired —
+  its open rows were closed` — carries the counts and the backup path; a deployment with nothing open logs
+  nothing. Decided submissions and everything already in the vault are untouched; the vault's `SCHEMA.md` is
+  rewritten to schema v3 (wording only — no admin migration pass is needed for it).
 - **Data volume ownership (#79).** The `noah-almighty-data` volume's ROOT must belong to uid 1000. Docker
   copies the image's `/app/data` owner into a named volume only when it creates the volume, so a volume made
   by an image from before the non-root `node` user (2026-06-13) can keep a root-owned root: files already in
@@ -512,8 +528,9 @@ with the bundled pi-gateway: its firewall admits only its own proxy, so Noah can
 
 ### Retirement backups and quarantine
 
-Removed features (personal bots, external avatars, group shared agents, groups, server agents, Craft apps, STT)
-are cleaned out of an existing deployment at boot. Before any of that deletes data, Noah:
+Removed features (personal bots, external avatars, group shared agents, groups, server agents, Craft apps, STT,
+the team brain's review queue — its still-open submissions are closed, not deleted)
+are cleaned out of an existing deployment at boot. Before any of that deletes or closes data, Noah:
 
 - **backs up the whole SQLite DB** to `APP_DATA_DIR/backups/pre-retire-<UTC stamp>.db` (file 0600,
   folder 0700), once per boot that still has retired data — never on a clean or already-retired DB. The

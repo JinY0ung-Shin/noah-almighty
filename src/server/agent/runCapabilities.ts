@@ -364,7 +364,7 @@ export async function buildRunCapabilities(
     await import("./canvasTools.js");
   const { buildBrainServer, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } =
     await import("./brainTools.js");
-  const { TEAM_BRAIN_PROPOSE_TOOL_NAMES, TEAM_BRAIN_ADMIN_TOOL_NAMES } = await import("./teamBrainTools.js");
+  const { TEAM_BRAIN_WRITE_TOOL_NAMES, TEAM_BRAIN_ADMIN_TOOL_NAMES } = await import("./teamBrainTools.js");
   const {
     buildTodoServer,
     TODO_SERVER_NAME,
@@ -590,20 +590,21 @@ export async function buildRunCapabilities(
     browserActive && !consultationRun ? ownerState.browserSecrets : [];
   // Team brain (docs/architecture/team-brain.md): ONE instance-wide local vault.
   // READ on every run with a known approved principal (owner, trusted teammate,
-  // consultation, owner routine/API). PROPOSE only on an interactive owner run with
-  // a card sink (the share-link gate's shape). The ADMIN tools key on the VIEWER:
-  // a propose-capable run is the owner's own, so the viewer IS the owner here —
-  // a teammate chatting with an admin's avatar never gets them. Handlers re-check
-  // the admin role live. No tool group: a new group would be silently OFF for
-  // every user with a saved composer selection.
+  // consultation, owner routine/API). WRITE (draft page changes + the health
+  // report) only on an interactive owner run with a card sink (the share-link
+  // gate's shape) — every approved teammate, admin or not. The POLICY.md tool
+  // keys on the VIEWER: a write-capable run is the owner's own, so the viewer IS
+  // the owner here — a teammate chatting with an admin's avatar never gets it.
+  // Handlers re-check the account (and the admin role) live. No tool group: a
+  // new group would be silently OFF for every user with a saved composer selection.
   const teamBrainReadActive = elevatedToolAccess || consultationRun;
-  const teamBrainProposeActive =
+  const teamBrainWriteActive =
     Boolean(events?.onTeamBrainCard) &&
     ownerToolAccess &&
     !consultationRun &&
     !request.headless &&
     !request.externalTaskApi;
-  const teamBrainAdminActive = teamBrainProposeActive && store.isActiveAdmin(request.avatar.id);
+  const teamBrainAdminActive = teamBrainWriteActive && store.isActiveAdmin(request.avatar.id);
   const brainServerActive = brainActive || teamBrainReadActive;
   const brainServer = buildBrainServer(store, {
     avatarUserId: request.avatar.id,
@@ -613,11 +614,11 @@ export async function buildRunCapabilities(
     team: teamBrainReadActive
       ? {
           read: true,
-          propose: teamBrainProposeActive,
+          write: teamBrainWriteActive,
           admin: teamBrainAdminActive,
           viewerUserId: request.avatar.id,
           conversationId: request.conversationId ?? null,
-          onCard: teamBrainProposeActive
+          onCard: teamBrainWriteActive
             ? (e) => events?.onTeamBrainCard?.({ ...e, anchor: currentTextAnchor() })
             : undefined,
           config,
@@ -869,7 +870,7 @@ export async function buildRunCapabilities(
     shareLinksEnabled: shareLinkToolActive,
     // The SAME booleans the brain server and mcpAllowedTools key on.
     teamBrain: teamBrainReadActive
-      ? { read: true, propose: teamBrainProposeActive, admin: teamBrainAdminActive }
+      ? { read: true, write: teamBrainWriteActive, admin: teamBrainAdminActive }
       : undefined,
     // The to-do tools' registration (todoToolsActive / todoDeleteActive above).
     todoToolsEnabled: todoToolsActive,
@@ -1283,7 +1284,7 @@ export async function buildRunCapabilities(
       ...(gitRepoToolsEnabled && sandboxOwner !== "owner" ? GIT_REPO_READ_TOOL_NAMES : []),
       ...(skillsReadActive ? SKILLS_TOOL_NAMES : []),
       ...(brainServerActive ? BRAIN_TOOL_NAMES : []),
-      ...(teamBrainProposeActive ? TEAM_BRAIN_PROPOSE_TOOL_NAMES : []),
+      ...(teamBrainWriteActive ? TEAM_BRAIN_WRITE_TOOL_NAMES : []),
       ...(teamBrainAdminActive ? TEAM_BRAIN_ADMIN_TOOL_NAMES : []),
       ...(canvasActive ? CANVAS_TOOL_NAMES : []),
       ...(browserActive ? BROWSER_TOOL_NAMES : []),
@@ -1329,13 +1330,13 @@ export async function buildRunCapabilities(
     inlineUiActive,
     fileOutputActive,
     shareLinkToolActive,
-    // The admins' POLICY.md guidelines ride the propose-capable prompt (frozen with it).
+    // The admins' POLICY.md guidelines ride the write-capable prompt (frozen with it).
     teamBrainState: teamBrainReadActive
       ? {
           read: true,
-          propose: teamBrainProposeActive,
+          write: teamBrainWriteActive,
           admin: teamBrainAdminActive,
-          ...(teamBrainProposeActive ? { guidelines: readTeamPolicySync(config).guidelines } : {}),
+          ...(teamBrainWriteActive ? { guidelines: readTeamPolicySync(config).guidelines } : {}),
         }
       : undefined,
     skillExchangeActive,
