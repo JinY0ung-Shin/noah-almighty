@@ -1,0 +1,167 @@
+/* WorkspaceTab's own styles, scoped to .cmp-workspace-tab. The frame is the
+   side panel's canvas card (canvas-card / canvas-card-top / canvas-tool-btn);
+   these style only the folder tree and the file previews. Nothing here reaches
+   into a rendered Markdown file (.html-container): its author's classes must
+   not be dressed as app UI. */
+.ws-tree:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0-5);
+}
+.ws-list:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ws-row:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  min-width: 0;
+  border-radius: var(--r-xs);
+}
+.ws-row:hover:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)),
+.ws-row:focus-within:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: var(--panel-strong);
+}
+.ws-row-current:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: var(--accent-soft);
+}
+.ws-row-inert:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  opacity: 0.6;
+}
+.ws-row-inert:hover:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: none;
+}
+.ws-row-main:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1-5);
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-1) var(--s-1-5);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: start;
+}
+button.ws-row-main:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  cursor: pointer;
+}
+.ws-caret:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: inline-flex;
+  flex: none;
+  width: 12px;
+  color: var(--muted);
+}
+.ws-icon:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
+}
+.ws-name:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-sub:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  flex: none;
+  font-size: var(--t-2xs);
+  white-space: nowrap;
+}
+.ws-badge:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  flex: none;
+  padding: 0 var(--s-1-5);
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--on-accent, #fff);
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ws-size:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  flex: none;
+  font-size: var(--t-2xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ws-download:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-inline-end: var(--s-0-5);
+  border-radius: var(--r-xs);
+  color: var(--muted);
+}
+.ws-download:hover:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)),
+.ws-download:focus-visible:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: var(--panel);
+  color: var(--accent);
+}
+.ws-note:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  margin: 0;
+  padding-block: var(--s-1);
+  font-size: var(--t-xs);
+}
+.ws-note-error:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  color: var(--danger, #b42318);
+}
+
+/* The open file. */
+.ws-back:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-1);
+}
+/* One line under the title: a long path is cut, its `title` holds all of it. */
+.ws-subtitle:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-text:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  margin: 0;
+  padding: var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+}
+.ws-table-wrap:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.ws-table:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  border-collapse: collapse;
+  font-size: var(--t-xs);
+}
+.ws-table:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) :is(th, td) {
+  padding: var(--s-1) var(--s-2);
+  border-bottom: 1px solid var(--line-soft);
+  border-inline-end: 1px solid var(--line-soft);
+  text-align: start;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 28em;
+}
+.ws-table:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-strong);
+  font-weight: 600;
+}

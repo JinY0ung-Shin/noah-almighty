@@ -243,6 +243,25 @@ export class PinnedDir {
     return fs.readdirSync(`${this.base()}/.`, { withFileTypes: true });
   }
 
+  /**
+   * At most `max` of the folder's entries, in the order the filesystem hands
+   * them out, and whether it holds more — for a reader that must not spend
+   * time in proportion to a folder the agent can make as large as it likes.
+   */
+  listUpTo(max: number): { entries: fs.Dirent[]; more: boolean } {
+    const handle = fs.opendirSync(`${this.base()}/.`);
+    try {
+      const entries: fs.Dirent[] = [];
+      for (let entry = handle.readSync(); entry; entry = handle.readSync()) {
+        if (entries.length >= max) return { entries, more: true };
+        entries.push(entry);
+      }
+      return { entries, more: false };
+    } finally {
+      handle.closeSync();
+    }
+  }
+
   /** A direct child's bytes when it is a regular file (never through a link) of at most `maxBytes`, else null. */
   readFile(name: string, maxBytes = Number.MAX_SAFE_INTEGER): Buffer | null {
     let fd: number;
@@ -260,6 +279,29 @@ export class PinnedDir {
     } finally {
       fs.closeSync(fd);
     }
+  }
+
+  /**
+   * A direct child opened for reading when it is a regular file (never through
+   * a link; a FIFO or device is refused without blocking), with the size it
+   * had at the open. The CALLER closes `fd` — for a read too large to buffer
+   * (a download streamed to the client).
+   */
+  openFile(name: string): { fd: number; size: number } | null {
+    let fd: number;
+    try {
+      fd = fs.openSync(this.entry(name), READ_FLAGS);
+    } catch {
+      return null;
+    }
+    try {
+      const stat = fs.fstatSync(fd);
+      if (stat.isFile()) return { fd, size: stat.size };
+    } catch {
+      /* fall through: closed below */
+    }
+    fs.closeSync(fd);
+    return null;
   }
 
   /**

@@ -8,7 +8,7 @@ import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
 import { appState, newId, notify, readState, updateState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
-import { neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
+import { WORKSPACE_TAB, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState } from "./widgetState";
 import { inlineUiPlainText } from "../../../shared/widget/detect";
 import { formatTokenCount } from "./format";
@@ -187,6 +187,8 @@ function makePane(
       : [...DEFAULT_MCP_TOOL_GROUPS],
     canvases,
     fileTabs: [],
+    // The 파일 tab the viewer left open rides along to every new pane.
+    workspaceTab: Boolean(readState().workspaceTabOpen),
     sideTab: null,
     stickBottom: true,
     usage: null,
@@ -3093,6 +3095,37 @@ export function openFileTab(
 /** Close a file's side-panel tab (its card reopens it); the tab beside it shows instead. */
 export function closeFileTab(paneId: string, attachmentId: string): void {
   updatePane(paneId, (pane) => removeFileTab(pane, attachmentId));
+}
+
+/**
+ * Open the 파일 tab (the viewer's own sandbox workspace) in the side panel — or
+ * bring it forward — out of the collapsed strip if need be. A tab the viewer
+ * picked: the panel stops following the avatar until the next send. It stays
+ * open for the panes made after this one (`workspaceTabOpen`) until closed.
+ */
+export function openWorkspaceTab(paneId: string): void {
+  updateState((state) => {
+    state.workspaceTabOpen = true;
+    for (const pane of state.chatPanes) pane.workspaceTab = true;
+    const pane = state.chatPanes.find((item) => item.id === paneId);
+    if (!pane) return;
+    selectTab(pane, WORKSPACE_TAB);
+    pane.sideFollow = false;
+    pane.sideExpand = true;
+  });
+}
+
+/** Close the 파일 tab everywhere (the chat header's button reopens it); in each pane the tab beside it shows instead. */
+export function closeWorkspaceTab(): void {
+  updateState((state) => {
+    state.workspaceTabOpen = false;
+    for (const pane of state.chatPanes) {
+      if (!pane.workspaceTab) continue;
+      if (sameTab(resolveSideTab(pane), WORKSPACE_TAB)) pane.sideTab = neighborTab(pane, WORKSPACE_TAB);
+      pane.workspaceTab = false;
+      dropUnseen(pane, WORKSPACE_TAB);
+    }
+  });
 }
 
 /**

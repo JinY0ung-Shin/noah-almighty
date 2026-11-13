@@ -276,6 +276,12 @@ export interface ChatPane {
    * reload or another conversation starts with none.
    */
   fileTabs?: PaneFileTab[];
+  /**
+   * The 파일 tab is open: the viewer's own sandbox workspace as a folder tree
+   * (components/WorkspaceTab). Seeded from `ClientState.workspaceTabOpen`, so it
+   * stays open across conversations until the viewer closes it.
+   */
+  workspaceTab?: boolean;
   /** The selected side-panel tab; null/undefined = the default (lib/sidePanel `resolveSideTab`). */
   sideTab?: SideTabRef | null;
   /**
@@ -310,9 +316,13 @@ export interface PaneFileTab {
   slides: import("../../../server/types.js").MessageAttachment[];
 }
 
-/** One tab of the right-side panel: a canvas (artifact id) or an open file (attachment id). */
+/**
+ * One tab of the right-side panel: a canvas (artifact id), an open file
+ * (attachment id) or the ONE workspace file browser (`WORKSPACE_TAB_ID`,
+ * lib/sidePanel).
+ */
 export interface SideTabRef {
-  kind: "canvas" | "file";
+  kind: "canvas" | "file" | "workspace";
   id: string;
 }
 
@@ -397,6 +407,8 @@ export interface BootstrapInfo {
   confluenceConfigured: boolean;
   /** The attach button opens the upload relay's page (absent on an older server = off). */
   uploadRelay?: boolean;
+  /** The chat's 파일 button: the server can show the viewer their sandbox workspace (absent = off). */
+  workspaceFiles?: boolean;
   /**
    * Per-conversation model picker config: pi-gateway's live model list. Empty
    * under the local stub or when pi is unreachable (the picker is hidden).

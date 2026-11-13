@@ -59,6 +59,11 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY
   `deleteCanvasArtifactsForConversation` call. Mechanics → [`share-links.md`](share-links.md).
+- **The 파일 tab** (a user's own sandbox workspace, read-only) has its own router (`routes/workspaceFiles.ts`,
+  `createWorkspaceFilesRouter`, mounted right after the upload relay) over `src/server/workspaceBrowser.ts`; no
+  store mixin and no table — it reads the pi workspaces mount and nothing else. The wire shapes, path grammar
+  and caps are the import-free `src/shared/workspaceFiles.ts`. Mechanics →
+  [`pi-runtime.md`](pi-runtime.md) § The 파일 tab.
 - **할 일 (to-dos)** have their own router (`routes/todos.ts`, `createTodosRouter`, mounted right after
   routines) and store mixin (`store/todos.ts`, `withTodos`, composed outermost). Input validation is the
   pure `src/server/todos.ts` (error CODES), shared with the avatar's `mcp__todo__*` tools; the wire

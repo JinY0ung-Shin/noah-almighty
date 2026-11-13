@@ -2,16 +2,18 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as Rea
 import CanvasTab from "./CanvasTab";
 import FileTab from "./FileTab";
 import Icon from "./Icon";
-import { closeFileTab, selectSideTab } from "../lib/chat";
+import WorkspaceTab from "./WorkspaceTab";
+import { closeFileTab, closeWorkspaceTab, selectSideTab } from "../lib/chat";
 import { cx } from "../lib/hooks";
 import { resolveSideTab, sameTab, sideTabs, tabKey, type SideTab } from "../lib/sidePanel";
 import { updateState } from "../lib/state";
 import type { ChatPane, MessageAttachment, SideTabRef } from "../lib/types";
 
 // The right-side panel: ONE frame — width, collapse, tab strip — for
-// everything shown beside the chat. Canvases (#50) and the files opened from
-// their cards are tabs of the same strip, so a .drawio preview and a canvas
-// never take turns in the slot as two differently built panels. Every tab
+// everything shown beside the chat. Canvases (#50), the files opened from
+// their cards and the workspace file browser (파일) are tabs of the same strip,
+// so a .drawio preview and a canvas never take turns in the slot as two
+// differently built panels. Every tab
 // stays MOUNTED while another shows: a half-typed canvas answer and a
 // rendered diagram survive a switch. Resizable via the left-edge handle,
 // collapse state persisted in localStorage, stacked below the chat on narrow
@@ -54,6 +56,7 @@ function needsLook(tab: SideTab, shown: SideTabRef | null, marks: Set<string>): 
   return marks.has(tabKey(tab)) || (tab.kind === "canvas" && Boolean(tab.canvas.pending));
 }
 function tabLabel(tab: SideTab): string {
+  if (tab.kind === "workspace") return "작업 폴더";
   return tab.kind === "canvas" ? tab.canvas.title : tab.file.attachment.name || "파일";
 }
 function domId(paneId: string, prefix: string, key: string): string {
@@ -85,7 +88,7 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
   const current = resolveSideTab(pane);
   const currentKey = keyOf(current);
   const unseen = new Set(pane.sideUnseen ?? []);
-  const stripLabel = pane.fileTabs?.length
+  const stripLabel = pane.fileTabs?.length || pane.workspaceTab
     ? tabs.some((tab) => tab.kind === "canvas")
       ? "캔버스·파일 보기"
       : "파일 보기"
@@ -263,9 +266,9 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
                   onClick={() => selectSideTab(pane.id, tab)}
                   onKeyDown={(event) => onTabKeydown(event, tab)}
                 >
-                  {tab.kind === "file" ? (
+                  {tab.kind !== "canvas" ? (
                     <span className="canvas-tab-icon">
-                      <Icon name="file" size={12} />
+                      <Icon name={tab.kind === "workspace" ? "folder" : "file"} size={12} />
                     </span>
                   ) : null}{" "}
                   <span className="canvas-tab-label">{tabLabel(tab)}</span>{" "}
@@ -283,6 +286,16 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
                     aria-label={`미리보기 닫기: ${tabLabel(tab)}`}
                     title="미리보기 닫기"
                     onClick={() => closeFileTab(pane.id, tab.id)}
+                  >
+                    <Icon name="close" size={14} />
+                  </button>
+                ) : tab.kind === "workspace" ? (
+                  <button
+                    className="canvas-tab-close"
+                    type="button"
+                    aria-label="작업 폴더 닫기"
+                    title="작업 폴더 닫기"
+                    onClick={() => closeWorkspaceTab()}
                   >
                     <Icon name="close" size={14} />
                   </button>
@@ -308,8 +321,10 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
             >
               {tab.kind === "canvas" ? (
                 <CanvasTab pane={pane} canvas={tab.canvas} active={shown} />
-              ) : (
+              ) : tab.kind === "file" ? (
                 <FileTab pane={pane} file={tab.file} active={shown} onShare={onShare} />
+              ) : (
+                <WorkspaceTab pane={pane} active={shown} />
               )}
             </div>
           );

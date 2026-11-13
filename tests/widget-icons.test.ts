@@ -53,12 +53,12 @@ describe("widget icon names", () => {
 
   it("an unknown name is refused with the nearest valid names and the whole list", () => {
     const err = errorOf('<icon name="arrow" />');
-    expect(err).toMatch(/line 1:7 — Prop "name" of <icon> must be an existing name: "arrow" is not one — nearest: arrow-down\. All 57: compass, chat, user, /);
+    expect(err).toMatch(/line 1:7 — Prop "name" of <icon> must be an existing name: "arrow" is not one — nearest: arrow-down\. All 59: compass, chat, user, /);
     expect(err).toContain(`All ${WIDGET_ICON_NAMES.length}: ${WIDGET_ICON_NAMES.join(", ")}.`);
     expect(errorOf('<icon name="chevron" />')).toMatch(/"chevron" is not one — nearest: chevron-up, chevron-left, chevron-right\./);
     expect(errorOf('<icon name="serch" />')).toMatch(/"serch" is not one — nearest: search\./);
     expect(errorOf('<icon name="Trash" />')).toMatch(/"Trash" is not one — nearest: trash\./);
-    expect(errorOf('<icon name={"x-mark"} />')).toMatch(/Prop "name" of <icon> must be an existing name: "x-mark" is not one\. All 57: /);
+    expect(errorOf('<icon name={"x-mark"} />')).toMatch(/Prop "name" of <icon> must be an existing name: "x-mark" is not one\. All 59: /);
     expect(errorOf('<button send="a" icon="rocket">go</button>')).toMatch(/Prop "icon" of <button> must be an existing name: "rocket" is not one/);
     expect(errorOf('<callout icon="warn">x</callout>')).toMatch(/Prop "icon" of <callout> must be an existing name: "warn" is not one/);
     // not a way to reach an Object member, a path or markup

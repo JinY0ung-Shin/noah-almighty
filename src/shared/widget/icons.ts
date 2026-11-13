@@ -34,6 +34,8 @@ export const WIDGET_ICON_NAMES: readonly string[] = Object.freeze([
   "eye",
   "eye-off",
   "file",
+  "folder",
+  "download",
   "file-text",
   "link",
   "logout",

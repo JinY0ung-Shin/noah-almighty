@@ -12,6 +12,7 @@ import { apiError, safeString, MIN_PASSWORD_LENGTH, type RouterDeps } from "./_s
 import { catalogEffortSupport, noahDefaultModel, visionForCatalogModel } from "../agent/pi/modelCatalog.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { EFFORT_LEVELS, DEFAULT_EFFORT_LEVEL } from "../effortLevels.js";
+import { workspaceBrowserAvailable } from "../workspaceBrowser.js";
 
 /**
  * Instance-wide bounds on self-service signup, on top of the per-address
@@ -251,6 +252,9 @@ export function createAuthRouter({ config, store }: RouterDeps): Router {
       // browser's own file dialog (a fleet whose DRM agent only decrypts
       // uploads to a registered address).
       uploadRelay: Boolean(config.uploadRelay),
+      // The chat's 파일 button: this deployment can show a user their own
+      // sandbox workspace (pi runtime with the workspaces mounted).
+      workspaceFiles: workspaceBrowserAvailable(config),
       // Per-conversation model picker: the models pi-gateway offers right now.
       // A pick is a pi model id; none (or one pi stopped offering) runs the
       // default model (pi's `falcon` tier, else pi-gateway's own default). Image input is pi's own per-model setting

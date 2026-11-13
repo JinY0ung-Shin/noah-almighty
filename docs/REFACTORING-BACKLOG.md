@@ -261,6 +261,16 @@ The client moved from Svelte 5 to React 19 on 2026-11-12 as a 1:1 port (see
   The shared hook has to pick one answer for each (or take options), and every call site must be re-read.
 - **risk:** low–med · **effort:** S–M · **breaking:** no
 
+### RC2 — One draw.io painter for FileTab and the 파일 tab
+- **What:** `components/DrawioDiagram.tsx` (the workspace file preview, 2026-11-13) repeats FileTab's paint
+  rules — paint only into a box that has a width, repaint debounced on a width change, never an `mxgraph`
+  class — instead of sharing them. Make FileTab draw through `DrawioDiagram` (it keeps its own fetch, status
+  line and the XML copy button).
+- **Why deferred:** FileTab measures `.file-tab-body` (the host's parent) and flips its status with `flushSync`
+  before the first paint; `DrawioDiagram` measures its own wrapper and paints on the next frame. Swapping one
+  for the other changes when the first paint happens, which only a real browser shows (jsdom never lays out).
+- **risk:** low · **effort:** S · **breaking:** no
+
 ## Recommended order when picking this up
 1. Cheap + independent: the two coverage-gap tests, T3.9(a).
 2. After Tier-1/2 settle: T3.2 → T3.5 (test-guarded, medium).

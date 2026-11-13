@@ -2,15 +2,21 @@ import type { ChatPane, PaneCanvas, PaneFileTab, SideTabRef } from "./types";
 
 /**
  * The right-side panel's tabs, as ONE ordered list: the pane's canvases, then
- * the files opened in it. The tab strip, its keyboard navigation and the
- * fallback after a tab goes away all read this order, so a canvas and a .drawio
- * preview are never two panels taking turns in the same slot.
+ * the files opened in it, then the workspace file browser (파일) when the
+ * viewer opened it. The tab strip, its keyboard navigation and the fallback
+ * after a tab goes away all read this order, so a canvas and a .drawio preview
+ * are never two panels taking turns in the same slot.
  */
 export type SideTab =
   | { kind: "canvas"; id: string; canvas: PaneCanvas }
-  | { kind: "file"; id: string; file: PaneFileTab };
+  | { kind: "file"; id: string; file: PaneFileTab }
+  | { kind: "workspace"; id: string };
 
-type TabSource = Pick<ChatPane, "canvases" | "fileTabs">;
+/** There is one workspace tab per pane, so its id is fixed. */
+export const WORKSPACE_TAB_ID = "workspace";
+export const WORKSPACE_TAB: SideTabRef = { kind: "workspace", id: WORKSPACE_TAB_ID };
+
+type TabSource = Pick<ChatPane, "canvases" | "fileTabs" | "workspaceTab">;
 
 /** The canvases the side panel shows as tabs: every canvas of the pane. */
 export function panelCanvases(pane: TabSource): PaneCanvas[] {
@@ -29,14 +35,16 @@ export function sideTabs(pane: TabSource): SideTab[] {
   return [
     ...panelCanvases(pane).map((canvas) => ({ kind: "canvas" as const, id: canvas.id, canvas })),
     ...(pane.fileTabs ?? []).map((file) => ({ kind: "file" as const, id: file.attachment.id, file })),
+    ...(pane.workspaceTab ? [{ kind: "workspace" as const, id: WORKSPACE_TAB_ID }] : []),
   ];
 }
 
 export function hasSideTabs(pane: TabSource): boolean {
-  return Boolean(pane.fileTabs?.length || panelCanvases(pane).length);
+  return Boolean(pane.fileTabs?.length || panelCanvases(pane).length || pane.workspaceTab);
 }
 
 function tabExists(pane: TabSource, ref: SideTabRef): boolean {
+  if (ref.kind === "workspace") return Boolean(pane.workspaceTab);
   return ref.kind === "canvas"
     ? panelCanvases(pane).some((canvas) => canvas.id === ref.id)
     : (pane.fileTabs ?? []).some((file) => file.attachment.id === ref.id);
@@ -46,7 +54,9 @@ function tabExists(pane: TabSource, ref: SideTabRef): boolean {
  * The tab the panel shows: the selected one while it still exists; else the
  * latest canvas still waiting for an answer (a pane returning to a parked run
  * selects nothing from the replayed log, and the ask may have refined an older
- * canvas in place); else the latest canvas, else the latest open file.
+ * canvas in place); else the latest canvas, else the latest open file, else
+ * the workspace tab (what the avatar shows always comes before the browser the
+ * viewer left open).
  */
 export function resolveSideTab(pane: TabSource & Pick<ChatPane, "sideTab">): SideTabRef | null {
   const ref = pane.sideTab;
@@ -57,6 +67,7 @@ export function resolveSideTab(pane: TabSource & Pick<ChatPane, "sideTab">): Sid
   if (canvases.length) return { kind: "canvas", id: canvases[canvases.length - 1].id };
   const files = pane.fileTabs ?? [];
   if (files.length) return { kind: "file", id: files[files.length - 1].attachment.id };
+  if (pane.workspaceTab) return { kind: "workspace", id: WORKSPACE_TAB_ID };
   return null;
 }
 

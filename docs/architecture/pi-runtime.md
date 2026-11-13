@@ -278,7 +278,7 @@ component by NAME:
   `ensurePiConversationDir`, the D3 move (destination side), attachment staging (`stageChatImageFilesFromAttachments`
   / `stagePiAttachmentFiles`), browser captures, Confluence `save_to_workspace` (`workspaceAnchor` = the user
   root), the rewind cascade (`deleteStagedAttachmentCopies`), repo copies + `.prev*` + the commit's `.git` refresh,
-  conversation and account deletion. The generic writers take an `anchor` (the deepest folder the agent cannot
+  conversation and account deletion, the 파일 tab's reads (below). The generic writers take an `anchor` (the deepest folder the agent cannot
   replace) — the pi user root, or the scratch workspace itself when Noah cannot reach the sandbox workspaces (no
   `PI_WORKSPACES_DIR`: the route stages into Noah's own `dataDir/workspaces` folder, which the sandbox cannot see).
 - **Residual (documented, not closable from Node):** a missing folder created on the way can be raced only into a
@@ -286,6 +286,49 @@ component by NAME:
   (entries would be addressed by name, check-then-act), so `AGENT_RUNTIME=pi` REFUSES TO BOOT there
   (`assertProcFdPinning` in `loadPiRuntimeConfig`). **A new host-side operation below a sandbox root MUST go through `piSandboxDir` /
   `PinnedDir`** — `removeNoFollow` and by-name `fs.*` calls are only for paths whose every ancestor is Noah's.
+
+### The 파일 tab: a user's own workspace, read-only (`workspaceBrowser.ts`, `routes/workspaceFiles.ts`, 2026-11-13)
+
+The chat header's 파일 button opens a side-panel tab that shows the signed-in user their WHOLE sandbox workspace
+(`/workspace`) as a folder tree, with a download for every file and a preview of the simple ones. It is a window for
+PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system` fact, no tool).
+
+- **Whose files:** the caller's own, always. Every run of a user's conversation executes as that user
+  (`piRunPrincipal`: the viewer of a chat — a colleague chat included —, the owner of a routine or an API task), so the
+  principal is `req.user.id` and the routes take no user or conversation id that selects files. A consultation's
+  throwaway sandbox is never reachable (no session user has that principal).
+- **Two GETs, nothing else** — `GET /api/me/workspace?path=&conversation=` (one folder) and
+  `GET /api/me/workspace/file?path=&preview=1` (one file), session-only (`requireAuth`), `Cache-Control: private,
+  no-store`. The surface never creates, writes, renames or deletes, so it stores no copy and adds nothing to the
+  deletion cascades. `bootstrap.workspaceFiles` (= `workspaceBrowserAvailable`: `AGENT_RUNTIME=pi` AND
+  `PI_WORKSPACES_DIR`) decides whether the button exists; without it both routes answer 404.
+- **Path grammar** (`parseWorkspacePath`, `src/shared/workspaceFiles.ts`): a relative path of plain segments — no
+  `..`, `.`, empty segment, backslash or NUL, ≤ 64 segments, ≤ 4096 chars — else 400.
+- **Pinned all the way** (`piUserSandboxDir` → `PinnedDir`): the user root and every folder on the way are opened by
+  descriptor without following a link, a file is opened through its folder's descriptor (`PinnedDir.openFile`:
+  `O_NOFOLLOW|O_NONBLOCK`, regular files only) and STREAMED from that descriptor (`createReadStream({ fd })`, exactly
+  the bytes counted at the open). A link is LISTED as `kind: "link"` (lstat — never its target's kind or size) and can
+  be neither entered nor read; a root that is itself a link reads as a sandbox that does not exist.
+- **Listing:** folders first, then names in natural order; ≤ 1000 entries (`WORKSPACE_LIST_MAX_ENTRIES`) with `total` +
+  `truncated`; size and mtime only for the returned entries. The work is BOUNDED whatever the agent put there (the
+  handler is synchronous): at most 20 000 entries of a folder are read (`PinnedDir.listUpTo`,
+  `WORKSPACE_SCAN_MAX_ENTRIES`) — past that the listing is the first ones the filesystem handed out and `total` is a
+  floor (`totalIsMinimum`). In `c/` the user's conversations lead, most recently used
+  first, each carrying `conversation: { id, title }`; a folder shaped like a conversation's that matches none the user
+  still has is `orphan` (shown as 삭제된 대화 — a deleted conversation's agent-written files stay by design). `current`
+  (`c/<piConversationSegment(conversation)>`) is only a path: it is named whether or not the folder exists yet, and no
+  ownership check is needed for it (it can only ever address the caller's own root).
+- **The bytes are the agent's**, so the file route never serves something this origin would render: always
+  `Content-Disposition: attachment`, `nosniff`, `Content-Security-Policy: default-src 'none'; style-src
+  'unsafe-inline'; img-src data:; sandbox`, and `application/octet-stream` for everything except the image extensions
+  the tab shows in an `<img>` (`workspaceImageMediaType`; an SVG in an `<img>` runs nothing). `preview=1` refuses a
+  file over 10 MiB with 413 instead of streaming it; a download has no cap. `HEAD` gets the headers alone. A file
+  cut short after the open DROPS the connection (the bytes sent are counted against the size at the open) instead of
+  hanging under the declared length until the keep-alive timeout. Shell-exposed secrets written into a file
+  are NOT redacted (pi does not redact file contents either) — the reader is the sandbox's own user.
+- **Tests:** `tests/routes-workspace-files.test.ts` (self-scoping, planted links at every level, the path grammar, the
+  response headers, the cap), `tests/workspace-files.test.ts` (the shared contract), `tests/react-workspace-tab.test.tsx`.
+  Client side: `client.md` § Side panel.
 
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)
 

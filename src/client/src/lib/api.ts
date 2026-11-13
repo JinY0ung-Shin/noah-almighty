@@ -35,6 +35,15 @@ export function setSessionExpiredHandler(handler: () => void): void {
   sessionExpiredHandler = handler;
 }
 
+/**
+ * A 401 met OUTSIDE `api()` (a raw fetch of bytes): the same sign-out and the
+ * same sentence a JSON call gets.
+ */
+export function sessionExpiredError(): ApiError {
+  if (readState().user) sessionExpiredHandler?.();
+  return new ApiError("세션이 만료되었습니다. 다시 로그인해 주세요.", 401);
+}
+
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
   try {

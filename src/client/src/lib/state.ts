@@ -49,6 +49,12 @@ export interface ClientState {
   chatPanes: ChatPane[];
   activePaneId: string | null;
   chatLayout: ChatLayout;
+  /**
+   * The viewer opened the side panel's 파일 tab and has not closed it: every
+   * pane made from now on starts with it (`ChatPane.workspaceTab`). Not
+   * persisted — a reload starts without it.
+   */
+  workspaceTabOpen?: boolean;
   conversations: ConversationSummary[];
   plugins: Plugin[];
   knowledgeRequests: KnowledgeRequest[];

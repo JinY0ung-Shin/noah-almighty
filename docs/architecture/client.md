@@ -548,6 +548,32 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   which cancels a parked ask first). The strip's × only ever closes a FILE tab, which its card reopens.
 - **Split view keeps file cards as downloads** and the live `.drawio` auto-open single-pane only: the one
   side panel serves the ACTIVE pane, and a tab opened unasked in another pane would surface later.
+- **The 파일 tab (`WorkspaceTab.tsx`, 2026-11-13) is the third tab kind** (`SideTabRef.kind: "workspace"`, ONE per
+  pane, fixed id; `WORKSPACE_TAB`): the viewer's own sandbox workspace as a folder tree (server side:
+  `pi-runtime.md` § The 파일 tab). The chat header's 파일 button (`bootstrap.workspaceFiles`) opens it with
+  `openWorkspaceTab` — like any tab the viewer picks it stops the panel following — and its × closes it
+  (`closeWorkspaceTab`). Open-ness is `ClientState.workspaceTabOpen`, copied to every pane and seeded by `makePane`,
+  because a pane is REPLACED on a new or another conversation and the workspace is the user's, not the
+  conversation's; not persisted. It is last in the strip and the default tab only when nothing else is open
+  (`resolveSideTab`), and the avatar never opens, selects or dots it. The tab reads ONE folder per request when it is
+  unfolded, opens the way to the pane's conversation folder once per conversation (`current`, when that folder
+  exists; it leads its siblings with a 현재 대화 badge and is never labelled 삭제된 대화), hides dot entries behind
+  숨김 항목, and while the pane streams re-reads the unfolded folders every 4 s (not with the panel folded or the
+  browser tab hidden) and once more when the answer ends. ONE re-read pass runs at a time, four folders per batch;
+  a re-read asked for meanwhile (another conversation in the pane, the answer ending, 새로고침) is remembered and
+  runs as one more pass — never dropped. Folding a folder folds what is inside it, so `expanded` is exactly what
+  is on screen and a pass asks for nothing hidden. Per-folder request counters drop a stale answer, and a folder
+  that 404s on a re-read is folded away. `WorkspaceTab` hands only primitives (`conversationId`, `streaming`,
+  `active`) to the `memo`'d tree, so a long listing is not rebuilt per streamed token. The header button is a
+  toggle (pressed while the tab is the one showing; `workspaceTabOpen` is cleared at logout and session expiry).
+  Focus moves to 목록 when a file opens and back to its row. A file opens INSIDE the tab (the tree stays mounted behind it): images through the file route in an
+  `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML through the canvas's script-less
+  sandboxed frame (`canvasHtmlDocument` + `CanvasHtmlFrame`), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×
+  50 columns), JSON re-indented, `.drawio` through `DrawioDiagram`, anything else as text — judged by its BYTES
+  (`decodeWorkspaceText`: UTF-8/UTF-16 by BOM, UTF-8, then CP949; a NUL = binary), never fetched for a known binary
+  extension, ≤ 1 MiB (images ≤ 10 MiB). 원문 보기 shows the source of a rendered kind. Names are drawn through
+  `workspaceDisplayName` (control characters and bidi overrides become a mark). Relative images inside a Markdown or
+  HTML file do not resolve (the file route is query-addressed).
 
 ## Client ↔ server contracts mirrored by hand
 - **New cross-boundary code goes into `src/shared/*`** (modules both sides compile, e.g. the import-free

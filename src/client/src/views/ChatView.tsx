@@ -8,11 +8,11 @@ import Icon from "../components/Icon";
 import PromptModal from "../components/PromptModal";
 import ShareLinkDialog from "../components/ShareLinkDialog";
 import SidePanel from "../components/SidePanel";
-import { closePane, newChat } from "../lib/chat";
+import { closePane, closeWorkspaceTab, newChat, openWorkspaceTab } from "../lib/chat";
 import { cx } from "../lib/hooks";
 import { goView } from "../lib/nav";
 import { Presence } from "../lib/presence";
-import { hasSideTabs } from "../lib/sidePanel";
+import { WORKSPACE_TAB, hasSideTabs, resolveSideTab, sameTab } from "../lib/sidePanel";
 import { updateState } from "../lib/state";
 import { Composer } from "./chat/Composer";
 import { PaneTranscript, fileDropOverlay } from "./chat/Transcript";
@@ -74,6 +74,26 @@ function splitControls(ctx: ChatController): ReactNode {
   );
 }
 
+// 파일: the viewer's own sandbox workspace as a tab of the side panel (the
+// ACTIVE pane's, like every side tab). Only where the server can show it.
+// Pressed while that tab is the one showing; pressing it then closes the tab.
+function workspaceButton(ctx: ChatController): ReactNode {
+  const { state, pane } = ctx;
+  if (!pane || !state.bootstrap?.workspaceFiles) return null;
+  const shown = Boolean(pane.workspaceTab) && sameTab(resolveSideTab(pane), WORKSPACE_TAB);
+  return (
+    <button
+      className="ghost-sm workspace-open"
+      type="button"
+      title="아바타가 작업하는 폴더의 파일 보기"
+      aria-pressed={shown ? "true" : "false"}
+      onClick={() => (shown ? closeWorkspaceTab() : openWorkspaceTab(pane.id))}
+    >
+      <Icon name="folder" size={14} /> 파일
+    </button>
+  );
+}
+
 export default function ChatView() {
   const ctx = useChatController();
   const { state, panes, pane, dropActive } = ctx;
@@ -115,7 +135,7 @@ export default function ChatView() {
             </div>
           </div>{" "}
           <div className="chat-head-actions">
-            {splitControls(ctx)}{" "}
+            {splitControls(ctx)} {workspaceButton(ctx)}{" "}
             <button className="ghost-sm" type="button" disabled={pane.streaming} onClick={() => newChat(pane.id)}>
               새 대화
             </button>
@@ -228,7 +248,7 @@ export default function ChatView() {
               </div>
             </div>{" "}
             <div className="chat-head-actions">
-              {splitControls(ctx)}{" "}
+              {splitControls(ctx)} {workspaceButton(ctx)}{" "}
               <button className="ghost-sm" type="button" disabled={pane.streaming} onClick={() => newChat(pane.id)}>
                 새 대화
               </button>

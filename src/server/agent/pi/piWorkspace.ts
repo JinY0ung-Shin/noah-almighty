@@ -139,6 +139,23 @@ export function piSandboxDir(
   return withPinnedDir(pinnedUserRoot(workspace, options.create ?? false), (root) => root?.dir(rel, options) ?? null);
 }
 
+/**
+ * A folder of `principal`'s sandbox workspace for READING (`rel`: plain
+ * segments below `/workspace`, `[]` = the root), pinned like
+ * {@link piSandboxDir} and never created. Null when the mount is not
+ * configured, the sandbox does not exist yet, or any segment is a link or not
+ * a folder. The caller closes it. For a reader that has no conversation (the
+ * workspace file tab).
+ */
+export function piUserSandboxDir(config: AppConfig, principal: string, rel: readonly string[]): PinnedDir | null {
+  const workspacesDir = config.pi?.workspacesDir;
+  if (!workspacesDir) return null;
+  return piSandboxDir(
+    { principal, conversationDir: PI_SANDBOX_ROOT, hostRoot: path.join(workspacesDir, piUserKey(principal)) },
+    rel,
+  );
+}
+
 /** `c/<seg>` of the workspace as segments. */
 function conversationSegments(workspace: PiWorkspace): string[] {
   return ["c", path.posix.basename(workspace.conversationDir)];

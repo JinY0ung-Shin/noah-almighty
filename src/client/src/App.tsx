@@ -170,6 +170,7 @@ export default function App() {
       s.currentAvatar = null;
       s.chatPanes = [];
       s.activePaneId = null;
+      s.workspaceTabOpen = false;
       s.conversations = [];
       s.notifications = [];
       s.knowledgeRequests = [];

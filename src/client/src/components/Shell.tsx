@@ -514,6 +514,7 @@ export default function Shell({
       state.currentAvatar = null;
       state.chatPanes = [];
       state.activePaneId = null;
+      state.workspaceTabOpen = false;
       state.conversations = [];
       state.notifications = [];
       state.knowledgeRequests = [];
