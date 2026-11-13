@@ -42,9 +42,12 @@ import "./WorkspaceTab.css";
 // docx as page images the SERVER renders (`workspacePreviews.ts`). A link is
 // listed and never opened.
 //
-// It opens on 이 대화 — the conversation's own folder as the root — and 전체
-// switches to the whole workspace; a line under the switch says what each one
-// shows, so the layout (a folder per conversation under `c/`) need not be known.
+// The tree is the workspace root with ONE change: `c/`, which holds a folder
+// per conversation, is replaced by this conversation's own folder, pinned at
+// the top and unfolded. The folders every conversation shares (`uploads`,
+// `repos`, …) stay where they are; the other conversations' folders show only
+// behind 다른 대화. A line above the tree says so, so the layout need not be
+// known.
 //
 // One folder is read at a time, when it is opened. While the avatar answers,
 // the open folders are re-read every few seconds so files appear as they are
@@ -54,9 +57,6 @@ export interface WorkspaceTabProps {
   /** This tab is the one the panel shows. */
   active?: boolean;
 }
-
-/** What the tree shows: the pane's conversation folder alone, or the whole workspace. */
-type WorkspaceScope = "conversation" | "all";
 
 interface FolderState {
   /** `missing`: the server said there is no such folder (a conversation that has made nothing yet). */
@@ -78,11 +78,8 @@ const ROOT_FOLDER_NOTES: Record<string, string> = {
 
 const NOTHING_MADE_YET = "이 대화에서는 아직 만든 파일이 없습니다.";
 
-/** What each scope shows, said in the tab: nobody should have to know how the workspace is laid out. */
-const SCOPE_NOTES: Record<WorkspaceScope, string> = {
-  conversation: "이 대화에서 아바타가 만든 파일입니다. 첨부한 문서와 다른 대화의 파일은 ‘전체’에서 볼 수 있습니다.",
-  all: "내 작업 폴더 전체입니다. 대화마다 c 아래에 폴더가 하나씩 생기고, 첨부한 문서는 uploads에 모입니다.",
-};
+/** What the tree shows, said in the tab: nobody should have to know how the workspace is laid out. */
+const TREE_NOTE = "맨 위는 이 대화의 작업 폴더이고, 그 아래는 모든 대화가 함께 쓰는 폴더입니다. 첨부한 문서는 uploads에 모입니다.";
 
 const PREVIEW_REFUSALS: Record<string, string> = {
   TOO_LARGE: "미리보기에는 너무 큰 파일입니다. 다운로드해서 확인해 주세요.",
@@ -104,10 +101,8 @@ function isHidden(entry: WorkspaceEntry): boolean {
   return entry.name.startsWith(".");
 }
 
-function entryLabel(entry: WorkspaceEntry, isCurrent: boolean): string {
+function entryLabel(entry: WorkspaceEntry): string {
   if (entry.conversation) return entry.conversation.title || "제목 없는 대화";
-  // The conversation on screen is not "deleted" just because it was never saved yet.
-  if (isCurrent) return "새 대화";
   if (entry.orphan) return "삭제된 대화";
   return workspaceDisplayName(entry.name);
 }
@@ -139,11 +134,13 @@ const WorkspaceTree = memo(function WorkspaceTree({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
   const [showHidden, setShowHidden] = useState(false);
   /**
-   * 이 대화 (the default) shows the conversation's folder as the root — what a
-   * viewer asks first is "what did the avatar make here", and they need not
-   * know how the workspace is laid out. 전체 is the whole tree.
+   * 다른 대화: also list `c`, the folder that holds every conversation's
+   * work folder. Off by default — the tree shows THIS conversation's folder
+   * (pinned at the top) next to the folders every conversation shares
+   * (`uploads`, `repos`, …); the other conversations' folders are only noise
+   * here.
    */
-  const [scope, setScope] = useState<WorkspaceScope>("conversation");
+  const [showOthers, setShowOthers] = useState(false);
   /** The conversation's own folder (`c/<segment>`), once the server named it. */
   const [current, setCurrentState] = useState("");
   /** The same path for the passes below, which run between renders. */
@@ -162,7 +159,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const expandedRef = useLatest(expanded);
-  const scopeRef = useLatest(scope);
+  const showOthersRef = useLatest(showOthers);
+  const foldersRef = useLatest(folders);
   const conversationRef = useLatest(conversationId);
   /** Per-folder request counter: an older answer never overwrites a newer one. */
   const requests = useRef(new Map<string, number>());
@@ -211,11 +209,11 @@ const WorkspaceTree = memo(function WorkspaceTree({
   }
 
   /**
-   * Read the root (it names the conversation's folder), then what the scope
-   * shows first. 이 대화: that folder — a conversation that has made nothing
-   * yet has none, which is recorded, not an error. 전체: the first time the
-   * folder exists, open the way to it (`c`, then the folder); the next re-read
-   * tries again while it does not.
+   * Read the root (it names the conversation's folder), then that folder: it
+   * is pinned at the top of the tree and unfolded by itself — once per
+   * conversation, and again when a folder that did not exist appears. A
+   * conversation that has made nothing yet has none: recorded as `missing`,
+   * never an error, and asked for again on every pass.
    */
   async function loadRoot(quiet: boolean): Promise<void> {
     const forConversation = conversationRef.current;
@@ -223,38 +221,39 @@ const WorkspaceTree = memo(function WorkspaceTree({
     if (!root || forConversation !== conversationRef.current) return;
     const mine = root.current ?? "";
     setCurrent(mine);
-    if (scopeRef.current === "conversation") {
-      if (!mine) return;
-      if (root.exists) await loadFolder(mine, quiet);
-      else setFolders((prev) => ({ ...prev, [mine]: { status: "missing" } }));
+    if (!mine) return;
+    const first = !revealedFor.current.has(forConversation);
+    const wasMissing = foldersRef.current[mine]?.status === "missing";
+    if (!first && !wasMissing && !expandedRef.current.has(mine)) return; // the viewer folded it
+    revealedFor.current.add(forConversation);
+    if (!root.exists) {
+      setFolders((prev) => ({ ...prev, [mine]: { status: "missing" } }));
       return;
     }
-    if (!mine || revealedFor.current.has(forConversation)) return;
-    if (!root.entries.some((entry) => entry.name === "c" && entry.kind === "dir")) return;
-    const conversations = await loadFolder("c", quiet || expandedRef.current.has("c"));
-    const name = mine.slice(mine.lastIndexOf("/") + 1);
-    if (!conversations?.entries.some((entry) => entry.name === name && entry.kind === "dir")) return;
-    if (forConversation !== conversationRef.current) return;
-    revealedFor.current.add(forConversation);
-    setExpanded((prev) => new Set([...prev, "c", mine]));
-    void loadFolder(mine, quiet);
+    const listing = await loadFolder(mine, quiet);
+    if (listing && (first || wasMissing) && forConversation === conversationRef.current) {
+      setExpanded((prev) => new Set([...prev, mine]));
+    }
   }
 
   /**
-   * The unfolded folders that are on screen in this scope: below the scope's
-   * top folder, with every folder on the way unfolded too. (A folder unfolded
-   * in one scope can sit under a folded one in the other.)
+   * The unfolded folders that are on screen, other than the conversation's own
+   * (`loadRoot` reads that one): every folder on the way up is unfolded too,
+   * up to a top-level row — the pinned conversation folder, or an entry of the
+   * root (`c` only while 다른 대화 is on).
    */
   function visiblePaths(): string[] {
     const open = expandedRef.current;
-    const top = scopeRef.current === "conversation" ? currentPath.current : "";
-    if (scopeRef.current === "conversation" && !top) return [];
+    const mine = currentPath.current;
     return [...open].filter((path) => {
-      if (top && !path.startsWith(`${top}/`)) return false;
-      for (let parent = parentOf(path); parent !== top; parent = parentOf(parent)) {
-        if (!parent || !open.has(parent)) return false;
+      if (path === mine) return false;
+      for (let at = path; ; ) {
+        if (at === mine) return true;
+        const parent = parentOf(at);
+        if (parent === "") return at !== "c" || showOthersRef.current;
+        if (!open.has(parent)) return false;
+        at = parent;
       }
-      return true;
     });
   }
 
@@ -290,8 +289,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
   const refreshRef = useLatest(refresh);
 
   // A new conversation in the pane: the same workspace, another "current"
-  // folder (the old one must not show as this conversation's meanwhile). The
-  // other scope: read what it shows.
+  // folder (the old one must not show as this conversation's meanwhile).
   const shownConversation = useRef(conversationId);
   useEffect(() => {
     if (shownConversation.current !== conversationId) {
@@ -300,7 +298,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
     }
     void refreshRef.current(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId, scope]);
+  }, [conversationId]);
 
   // While the avatar answers, files appear: re-read what is open, and once more when it ends.
   const wasStreaming = useRef(streaming);
@@ -368,20 +366,41 @@ const WorkspaceTree = memo(function WorkspaceTree({
     setOpened(next);
   }
 
-  /** 이 대화: the conversation's folder as the root, or why there is nothing to show yet. */
-  function renderConversation(): ReactNode {
-    const root = folders[""];
-    if (!current) {
-      return root?.status === "error" ? (
-        <p className="ws-note ws-note-error">{root.error}</p>
-      ) : (
-        <p className="ws-note muted">불러오는 중…</p>
-      );
-    }
-    if ((root?.listing && !root.listing.exists) || folders[current]?.status === "missing") {
-      return <p className="ws-note muted">{NOTHING_MADE_YET}</p>;
-    }
-    return renderFolder(current, 0, NOTHING_MADE_YET);
+  /** The conversation's own folder, pinned as the first row of the tree. */
+  function renderCurrent(): ReactNode {
+    if (!current) return null;
+    const root = folders[""]?.listing;
+    const missing = folders[current]?.status === "missing" || (root ? !root.exists : false);
+    const open = !missing && expanded.has(current);
+    return (
+      <li key="/current">
+        <div className="ws-row ws-row-current">
+          <button
+            className="ws-row-main"
+            type="button"
+            aria-expanded={open}
+            title={`/workspace/${current}`}
+            onClick={() => toggleFolder(current)}
+          >
+            <span className="ws-caret">
+              <Icon name={open ? "chevron-down" : "chevron-right"} size={12} />
+            </span>
+            <span className="ws-icon">
+              <Icon name="folder" size={14} />
+            </span>
+            <span className="ws-name">이 대화의 작업 폴더</span>
+            <span className="ws-badge">현재 대화</span>
+          </button>
+        </div>
+        {missing ? (
+          <p className="ws-note muted" style={{ paddingInlineStart: "36px" }}>
+            {NOTHING_MADE_YET}
+          </p>
+        ) : open ? (
+          renderFolder(current, 1, NOTHING_MADE_YET)
+        ) : null}
+      </li>
+    );
   }
 
   function renderFolder(path: string, depth: number, emptyText = "비어 있습니다."): ReactNode {
@@ -395,12 +414,12 @@ const WorkspaceTree = memo(function WorkspaceTree({
       );
     }
     let entries = showHidden ? listing.entries : listing.entries.filter((entry) => !isHidden(entry));
-    // The conversation on screen leads its siblings.
-    if (path === "c" && current) {
-      const mine = entries.find((entry) => joinWorkspacePath(path, entry.name) === current);
-      if (mine) entries = [mine, ...entries.filter((entry) => entry !== mine)];
-    }
     const hiddenCount = listing.entries.length - entries.length;
+    // `c` holds every conversation's folder: this conversation's is the pinned
+    // row, and the others show only on request.
+    if (path === "") entries = entries.filter((entry) => showOthers || entry.name !== "c");
+    if (path === "c") entries = entries.filter((entry) => joinWorkspacePath(path, entry.name) !== current);
+    const pinned = path === "" ? renderCurrent() : null;
     return (
       <>
         {state?.status === "error" ? (
@@ -408,8 +427,9 @@ const WorkspaceTree = memo(function WorkspaceTree({
             {state.error}
           </p>
         ) : null}
-        {entries.length ? (
+        {entries.length || pinned ? (
           <ul className="ws-list">
+            {pinned}
             {entries.map((entry) => renderEntry(joinWorkspacePath(path, entry.name), entry, depth))}
           </ul>
         ) : (
@@ -432,16 +452,15 @@ const WorkspaceTree = memo(function WorkspaceTree({
   }
 
   function renderEntry(path: string, entry: WorkspaceEntry, depth: number): ReactNode {
-    const isCurrent = path === current && entry.kind === "dir";
-    const label = entryLabel(entry, isCurrent);
+    const label = entryLabel(entry);
     const indent = { paddingInlineStart: `${depth * 14}px` };
     const note = !path.includes("/") && entry.kind === "dir" ? ROOT_FOLDER_NOTES[entry.name] : undefined;
-    const renamed = Boolean(entry.conversation || entry.orphan || isCurrent);
+    const renamed = Boolean(entry.conversation || entry.orphan);
     if (entry.kind === "dir") {
       const open = expanded.has(path);
       return (
         <li key={entry.name}>
-          <div className={cx("ws-row", isCurrent && "ws-row-current")} style={indent}>
+          <div className="ws-row" style={indent}>
             <button
               className="ws-row-main"
               type="button"
@@ -456,7 +475,6 @@ const WorkspaceTree = memo(function WorkspaceTree({
                 <Icon name="folder" size={14} />
               </span>
               <span className="ws-name">{label}</span>
-              {isCurrent ? <span className="ws-badge">현재 대화</span> : null}
               {renamed ? <span className="ws-sub muted">{workspaceDisplayName(entry.name).slice(0, 8)}</span> : null}
               {note ? <span className="ws-sub muted">{note}</span> : null}
             </button>
@@ -524,10 +542,19 @@ const WorkspaceTree = memo(function WorkspaceTree({
           <div className="file-tab-title">
             <div className="canvas-title">작업 폴더</div>
             <span className="muted file-tab-size ws-subtitle" title="아바타가 내 요청을 처리하며 쓰는 폴더입니다. 여기서는 보기와 다운로드만 됩니다.">
-              보기 전용 · {scope === "conversation" && current ? `/workspace/${current}` : "/workspace"}
+              보기 전용 · /workspace
             </span>
           </div>
           <div className="canvas-toolbar">
+            <button
+              className="canvas-tool-btn"
+              type="button"
+              aria-pressed={showOthers}
+              title="다른 대화의 작업 폴더(c)도 보기"
+              onClick={() => setShowOthers((value) => !value)}
+            >
+              다른 대화
+            </button>
             <button
               className="canvas-tool-btn"
               type="button"
@@ -542,21 +569,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
             </button>
           </div>
         </div>
-        <div className="ws-scope" role="group" aria-label="보기 범위">
-          {(["conversation", "all"] as const).map((item) => (
-            <button
-              key={item}
-              className={cx("ws-scope-btn", scope === item && "active")}
-              type="button"
-              aria-pressed={scope === item}
-              onClick={() => setScope(item)}
-            >
-              {item === "conversation" ? "이 대화" : "전체"}
-            </button>
-          ))}
-        </div>
-        <p className="ws-note ws-scope-note muted">{SCOPE_NOTES[scope]}</p>
-        <div className="canvas-content ws-tree">{scope === "conversation" ? renderConversation() : renderFolder("", 0)}</div>
+        <p className="ws-note ws-tree-note muted">{TREE_NOTE}</p>
+        <div className="canvas-content ws-tree">{renderFolder("", 0)}</div>
       </div>
       {opened ? (
         <div>
