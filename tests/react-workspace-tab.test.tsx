@@ -9,7 +9,7 @@ import SidePanel from "../src/client/src/components/SidePanel";
 import WorkspaceTab from "../src/client/src/components/WorkspaceTab";
 import { closeWorkspaceTab, openWorkspaceTab } from "../src/client/src/lib/chat";
 import { WORKSPACE_TAB, hasSideTabs, resolveSideTab, sideTabs } from "../src/client/src/lib/sidePanel";
-import { readState, replaceState } from "../src/client/src/lib/state";
+import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import type { WorkspaceEntry, WorkspaceListing } from "../src/shared/workspaceFiles";
 
 const PRISTINE = structuredClone(readState());
@@ -304,6 +304,47 @@ describe("WorkspaceTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
     expect(await screen.findByRole("button", { name: "later.txt" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "new.txt" })).toBeNull();
+  });
+
+  it("keeps re-reading while ANOTHER pane's avatar is answering, and once more when it ends", async () => {
+    // Split view: the panel serves p1 (idle); p2's avatar is writing files.
+    const shown = pane({ id: "p1" });
+    const busy = pane({ id: "p2", conversationId: OTHER, streaming: true });
+    replaceState({ ...structuredClone(PRISTINE), chatPanes: [shown, busy] as any, activePaneId: "p1" });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // jsdom never lays out, and the poll skips a panel that is folded away (no boxes): give it one.
+    const boxes = vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
+    try {
+      render(<WorkspaceTab pane={readState().chatPanes[0]} active />);
+      await screen.findByRole("button", { name: "report.html" });
+      fireEvent.click(screen.getByRole("button", { name: /uploads/ }));
+      await screen.findByText("비어 있습니다.");
+
+      // The other conversation's avatar drops a file into the shared folder.
+      folders.uploads = listing("uploads", [file("from-pane-2.txt", 5)]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4100);
+      });
+      expect(await screen.findByRole("button", { name: "from-pane-2.txt" })).toBeTruthy();
+
+      // Its answer ends: one more re-read, then no more polling.
+      folders.uploads = listing("uploads", [file("from-pane-2.txt", 5), file("last.txt", 1)]);
+      await act(async () => {
+        updateState((state) => {
+          state.chatPanes[1].streaming = false;
+        });
+      });
+      expect(await screen.findByRole("button", { name: "last.txt" })).toBeTruthy();
+      await waitFor(() => expect((screen.getByRole("button", { name: "새로고침" }) as HTMLButtonElement).disabled).toBe(false));
+      requests.length = 0;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(9000);
+      });
+      expect(requests).toEqual([]);
+    } finally {
+      boxes.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("follows the pane to another conversation even while a re-read is running", async () => {

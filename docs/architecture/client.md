@@ -567,8 +567,9 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   error — and is asked for again on every pass (it unfolds when it appears; a folder the viewer folded stays
   folded). Switching the pane to another conversation clears `current` first, so the old folder never shows as
   the new conversation's. The tab reads ONE folder per request when it is unfolded. It hides dot entries behind
-  숨김 항목, and while the pane streams re-reads the unfolded folders every 4 s (not with the panel folded or the
-  browser tab hidden) and once more when the answer ends. ONE re-read pass runs at a time, four folders per batch;
+  숨김 항목, and while an avatar answers in ANY pane (`answering` = the number of streaming panes — in split view a
+  pane that is not the active one writes into the same workspace) re-reads the unfolded folders every 4 s (not
+  with the panel folded or the browser tab hidden) and once more each time one of the answers ends. ONE re-read pass runs at a time, four folders per batch;
   a re-read asked for meanwhile (another conversation in the pane, the answer ending, 새로고침) is remembered and
   runs as one more pass — never dropped. Folding a folder folds what is inside it, and a pass re-reads only
   `visiblePaths()` — the unfolded folders whose every ancestor up to a top-level row is unfolded too (`c` counts

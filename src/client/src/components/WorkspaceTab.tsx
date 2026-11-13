@@ -5,7 +5,7 @@ import Icon from "./Icon";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
-import { cx, useLatest, useStore } from "../lib/hooks";
+import { cx, useAppState, useLatest, useStore } from "../lib/hooks";
 import { theme as themeStore } from "../lib/theme";
 import {
   fetchWorkspaceBytes,
@@ -49,9 +49,10 @@ import "./WorkspaceTab.css";
 // behind 다른 대화. A line above the tree says so, so the layout need not be
 // known.
 //
-// One folder is read at a time, when it is opened. While the avatar answers,
-// the open folders are re-read every few seconds so files appear as they are
-// written; a file's preview is re-read only on 새로고침.
+// One folder is read at a time, when it is opened. While an avatar answers —
+// in ANY pane of a split, not only the one the panel serves — the open folders
+// are re-read every few seconds so files appear as they are written; a file's
+// preview is re-read only on 새로고침.
 export interface WorkspaceTabProps {
   pane: ChatPane;
   /** This tab is the one the panel shows. */
@@ -108,9 +109,17 @@ function entryLabel(entry: WorkspaceEntry): string {
 }
 
 export default function WorkspaceTab({ pane, active = false }: WorkspaceTabProps) {
+  // How many panes have an avatar answering right now — ANY pane, not only the
+  // one the panel serves: the workspace is the user's, and in split view a pane
+  // that is not the active one writes into it just the same (its files land in
+  // `uploads`, `repos` or its own folder, all of which this tree can show).
+  const answering = Math.max(
+    useAppState().chatPanes.filter((item) => item.streaming).length,
+    pane.streaming ? 1 : 0, // a pane the store does not hold (a test, a pane being replaced)
+  );
   // The pane is store state, published again on every streamed token: only the
   // primitives the tree needs go down, so a long listing is not rebuilt per token.
-  return <WorkspaceTree conversationId={pane.conversationId} streaming={pane.streaming} active={active} />;
+  return <WorkspaceTree conversationId={pane.conversationId} answering={answering} active={active} />;
 }
 
 /** How many folders one re-read asks for at a time. */
@@ -123,11 +132,12 @@ function parentOf(path: string): string {
 
 const WorkspaceTree = memo(function WorkspaceTree({
   conversationId,
-  streaming,
+  answering,
   active,
 }: {
   conversationId: string;
-  streaming: boolean;
+  /** Panes whose avatar is answering right now (any pane of the split). */
+  answering: number;
   active: boolean;
 }) {
   const [folders, setFolders] = useState<Record<string, FolderState>>({});
@@ -300,12 +310,13 @@ const WorkspaceTree = memo(function WorkspaceTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId]);
 
-  // While the avatar answers, files appear: re-read what is open, and once more when it ends.
-  const wasStreaming = useRef(streaming);
+  // While an avatar answers — in any pane — files appear: re-read what is on
+  // screen, and once more each time one of the answers ends.
+  const wasAnswering = useRef(answering);
   useEffect(() => {
-    if (wasStreaming.current && !streaming) void refreshRef.current(true);
-    wasStreaming.current = streaming;
-    if (!streaming || !active) return;
+    if (answering < wasAnswering.current) void refreshRef.current(true);
+    wasAnswering.current = answering;
+    if (!answering || !active) return;
     const timer = setInterval(() => {
       // Not while the panel is folded away or the browser tab is in the background.
       if (document.hidden || !rootRef.current?.getClientRects().length) return;
@@ -313,7 +324,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
     }, LIVE_REFRESH_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streaming, active]);
+  }, [answering, active]);
 
   function toggleFolder(path: string): void {
     if (expanded.has(path)) {
