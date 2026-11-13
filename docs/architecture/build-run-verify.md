@@ -263,6 +263,19 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   no page error, CSP violation or failed request, the font actually loaded, and no sideways page scroll at
   400px. Worth repeating whenever pi's UI changes. The admin-ui build now pulls `@fontsource/pretendard`
   from the npm registry — a deployment that builds behind an npm mirror needs that package there.
+  **pi `359f1ba` (2026-11-13, the usage badge's context figure — `context_tokens` = the last call's input +
+  output, and an honest figure right after a compaction):** `run-all.sh` all PASS on the fresh stack
+  (`~/.noah-work/boot-test-2026-11-13/`; tracing scripts not re-run), plus `80-context-usage.mjs` there
+  (19/19): an ordinary turn reports input + output; a turn whose usage crosses `window − 16,384` ends in pi's
+  automatic compaction and a `/compact` compacts on demand, and in both the reported context matches
+  `system + (usage before − system) × (conversation after ÷ before)` recomputed from what pi sent the fake
+  LLM (within 0.1%); the next turn reports the model's real usage again. Notes for the next run: a
+  compaction whose cut splits a turn asks the model TWICE (history, then the turn's head) — enqueue two
+  summary turns, and tell summary requests apart by their empty `tools`; put the fake-LLM marker in EVERY
+  user message (the one in a summarized message is gone afterwards); make the summarized part large (a
+  cut keeps ~20,000 estimated tokens of the tail, so two ~130K-char answers summarize only the first).
+  Re-running `run-all.sh` on a stack that already ran it fails ONE check by design (`30-documents`: "the
+  owner's sandbox is the only one" — the first run's other sandboxes are still there).
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

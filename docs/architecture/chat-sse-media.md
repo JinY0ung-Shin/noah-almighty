@@ -119,7 +119,15 @@
   while it runs and fires `onCompact({ ok, trigger: "auto" })` at the end, which the chat route emits as the
   `compact` frame (server-minted id, deduped on replay) → the client's persisted `compact` activity row + chip
   (a manual one rides the same frame with `trigger: "manual"` and its sizes).
-  The usage badge's window is pi's `usage.context_window` (`AgentUsage.contextWindow`).
+  The usage badge's window is pi's `usage.context_window` (`AgentUsage.contextWindow`); its context figure is
+  pi's `input_tokens_details.context_tokens` — since pi `359f1ba` the LAST model call's input + output, the
+  value pi itself compares with `window − reserve` (16,384; a quarter of a small window) to start a compaction,
+  so the badge tops out near that line, never at 100%. Right after a compaction (automatic at a turn's end, or
+  `/compact`) it is an estimate until the next turn's real usage replaces it: the pre-compaction usage, with
+  the system prompt's share kept and the rest scaled by how much the conversation's chars/4 estimate shrank
+  (pi's own after-estimate is not used — it counts the declarations of EVERY registered tool, 109 in a Noah
+  stack where 12 reach the model). pi reports usage only on the terminal event: the badge does not move
+  during a long turn, and a stopped turn keeps the previous reading.
 - **Tool gate: built-ins are pi's, MCP tools are gated per call at `/mcp`.** pi's built-ins
   (read/write/edit/bash/ls/find/grep) run in the RUN PRINCIPAL's own sandbox (viewer for a colleague chat, the
   owner otherwise — `piRunPrincipal`; a consultation gets a fresh, empty `consult-<random>` sandbox of its own). pi

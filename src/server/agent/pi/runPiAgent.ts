@@ -270,10 +270,11 @@ async function compactPiSession(
   }
   events?.onSessionId?.(result.responseId);
   events?.onResumePoint?.({ sessionId: result.responseId, uuid: result.responseId });
-  // "Before" is the model's own usage, "after" pi's estimate of the kept
-  // messages. An estimate at or above what it replaced is not a size anyone
-  // should read (the estimate runs high on some text): the next turn's usage
-  // is the first honest figure then.
+  // "Before" is the model's own usage, "after" pi-gateway's estimate from it
+  // (the conversation's share scaled by how much the conversation shrank). An
+  // "after" at or above what it replaced (the summary outgrew the little it
+  // summarized) is not a size anyone should read: the next turn's usage is the
+  // first honest figure then.
   const tokensAfter =
     result.tokensBefore && result.tokensAfter && result.tokensAfter < result.tokensBefore ? result.tokensAfter : undefined;
   events?.onCompact?.({
