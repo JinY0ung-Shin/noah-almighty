@@ -5,3 +5,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---- 시스템 tab: 관리자 공지 card ---- */
+.admin-notice-form:is(.cmp-admin-view, .cmp-admin-view *) {
+  display: grid;
+  gap: var(--s-3);
+}
+.admin-notice-row:is(.cmp-admin-view, .cmp-admin-view *) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+}
+.admin-notice-label:is(.cmp-admin-view, .cmp-admin-view *) {
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--text-soft);
+}
+.admin-notice-check:is(.cmp-admin-view, .cmp-admin-view *) {
+  justify-self: start;
+  gap: var(--s-2);
+  min-height: 32px;
+  cursor: pointer;
+}
+.admin-notice-check:is(.cmp-admin-view, .cmp-admin-view *) input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.admin-notice-preview:is(.cmp-admin-view, .cmp-admin-view *) {
+  display: grid;
+  gap: var(--s-1-5);
+}

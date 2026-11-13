@@ -3,11 +3,13 @@ import AuthView from "./components/AuthView";
 import ConfirmationDialog from "./components/ConfirmationDialog";
 import { ViewBoundary } from "./components/ErrorBoundary";
 import FeatureHintLayer from "./components/FeatureHintLayer";
+import NoticeBar from "./components/NoticeBar";
 import OnboardingModal from "./components/OnboardingModal";
 import PromptModal from "./components/PromptModal";
 import Shell from "./components/Shell";
 import Toasts from "./components/Toasts";
 import WhatsNewModal from "./components/WhatsNewModal";
+import { dismissAdminNotice } from "./lib/adminNotice";
 import { api, setSessionExpiredHandler } from "./lib/api";
 import { selectConversation } from "./lib/chat";
 import { cx, useAppState } from "./lib/hooks";
@@ -243,6 +245,7 @@ export default function App() {
     state.notifications.filter((notification) => !notification.readAt).length;
   const activeViewLabel = viewLabels[state.view];
   const ActiveView = activeView.component;
+  const adminNotice = state.adminNotice;
 
   let screen;
   if (!state.booted) {
@@ -283,6 +286,10 @@ export default function App() {
           onMobileRailOpenChange={setMobileRailOpen}
         />
         <main id="main" className="main" tabIndex={-1} inert={mobileRailOpen} aria-busy={!ActiveView}>
+          {/* 관리자 공지: above whichever view is open, until this account closes it. */}
+          {adminNotice ? (
+            <NoticeBar key={adminNotice.id} notice={adminNotice} onDismiss={() => void dismissAdminNotice(adminNotice.id)} />
+          ) : null}
           {ActiveView ? (
             <ViewBoundary resetKey={state.view}>
               <ActiveView />

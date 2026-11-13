@@ -353,6 +353,33 @@ is new next to it, the first time the user is on a screen where that control can
   jsdom has no layout: `tests/react-feature-hints.test.tsx` gives each control a box by hand; real
   placement was checked in Chromium (1280 px, 390 px, dark, 움직임 줄이기).
 
+## 관리자 공지 — the bar at the top of every screen (#admin-notice)
+Server half and the contract: [server-core.md](server-core.md) (#admin-notice).
+- **`components/NoticeBar.tsx` (+ `NoticeBar.css`, `cmp-notice-bar`) is the FIRST child of `<main>`** in
+  `App.tsx` — `.main` is a flex column, so the band takes its own height (`flex: none`) and whichever view
+  is open keeps the rest; nothing is positioned over the view. Level → tint (`--info-*` / `--warn-*` /
+  `--danger-*` tokens, laid over `--bg` so it is opaque on the translucent chrome) AND the label in words
+  (안내/주의/긴급). The text is a React text node — never markup, never a link. Long text: four lines, then
+  the text itself scrolls. The text is a live region (`status`; `alert` for 긴급). No entrance/exit motion.
+- **The bar publishes its height as `--notice-bar-height` on `<html>`** (a `ResizeObserver` in `NoticeBar`,
+  removed on unmount; never the preview). The rail's open button (`.rail-open-toggle`, `src/styles.css`) is
+  `position: fixed` at the window's top-left — on phones and with a collapsed desktop rail — exactly where
+  the bar is, so its `top` adds that variable and it stays on the view header that reserves room for it.
+  **Anything else fixed to the top of the window must add the variable too.** jsdom has no `ResizeObserver`
+  (the effect is skipped there); checked in Chromium at 1280 px and 390 px, light and dark.
+- **`lib/adminNotice.ts` owns `state.adminNotice`.** `refreshAdminNotice` rides the once-a-minute tick in
+  `lib/loaders.ts` (and its seed in `startKnowledgeWatch`), best-effort: a failed poll — or a server from
+  before the feature (404) — keeps what is shown. `dismissAdminNotice(id)` hides at once, remembers the id
+  for the session (an answer fetched before the close was recorded must not bring the bar back) and takes the
+  POST's answer as the notice now in force. `resetAdminNoticeClientState` runs on logout.
+- **The admin card (관리자 ▸ 시스템 ▸ 공지, `AdminView.tsx`)** edits a draft (`noticeDraft`), seeded and
+  dirty-guarded like the other 시스템 cards (`savedNoticeOf` / `noticeDirtyOf`, `panelsSeeded`), previews it
+  with the same `NoticeBar` (no `onDismiss` = preview: no close button, no live region) and saves only a
+  CHANGED draft — so every save is a new announcement. After a save it calls `refreshAdminNotice` so the
+  admin's own bar follows without waiting for the tick.
+- Tests: `tests/react-admin-notice.test.tsx` (bar + client state), `tests/react-admin-system-tab.test.tsx`
+  (card), `tests/routes-admin.test.ts` ("admin: notice").
+
 ## Chat transcript auto-scroll (stick-to-bottom)
 - **User intent is read from INPUT events (wheel/touch/pointer), never inferred from scroll deltas.**
   Scroll-event heuristics lost twice over: mid-stream re-pins reset the viewport between wheel notches

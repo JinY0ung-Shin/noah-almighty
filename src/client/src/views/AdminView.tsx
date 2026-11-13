@@ -7,12 +7,22 @@ import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel";
 import AdminTeamBrainPanel from "../components/AdminTeamBrainPanel";
 import AdminToolPolicyPanel from "../components/AdminToolPolicyPanel";
 import AdminSharedSkillsPanel from "../components/AdminSharedSkillsPanel";
+import NoticeBar from "../components/NoticeBar";
+import { refreshAdminNotice } from "../lib/adminNotice";
 import { api } from "../lib/api";
 import { cx, useAppState } from "../lib/hooks";
 import { loadAdminOverview } from "../lib/loaders";
 import { notify, readState, replaceState, updateState, type ClientState } from "../lib/state";
 import { timeLabel } from "../lib/format";
 import type { AdminTab, AdminUserSummary, SignupMode } from "../lib/types";
+import {
+  ADMIN_NOTICE_LEVELS,
+  ADMIN_NOTICE_LEVEL_LABELS,
+  ADMIN_NOTICE_MAX_LENGTH,
+  isAdminNoticeLevel,
+  normalizeAdminNoticeText,
+  type AdminNoticeLevel,
+} from "../../../shared/adminNotice";
 
 type UserFilterId = ClientState["adminUserFilter"];
 type HexMatrix = Record<string, Record<string, boolean>>;
@@ -20,6 +30,8 @@ type HexMatrix = Record<string, Record<string, boolean>>;
 const signupStatusId = "admin-signup-status";
 const hexStatusId = "admin-hex-policy-status";
 const toolSkillStatusId = "admin-tool-skill-status";
+const noticeStatusId = "admin-notice-status";
+const noticeLevelLabelId = "admin-notice-level-label";
 
 // Groups were retired (single team, 2026-11-06): their admin powers live in
 // 사용자 (approval = joining the team) and 도구·스킬 (tool policy + shared-skill
@@ -68,6 +80,22 @@ function unwrapSystem(raw: Record<string, unknown> | null): Record<string, any> 
   return (inner && typeof inner === "object" ? inner : raw) as Record<string, any>;
 }
 
+// 관리자 공지 card: the saved notice as the form reads it (none saved = an
+// empty, hidden 안내), and whether the draft differs from it.
+type NoticeDraft = { text: string; level: AdminNoticeLevel; enabled: boolean };
+function savedNoticeOf(sys: Record<string, any>): NoticeDraft {
+  const saved = sys.notice;
+  return {
+    text: typeof saved?.text === "string" ? saved.text : "",
+    level: isAdminNoticeLevel(saved?.level) ? saved.level : "info",
+    enabled: saved?.enabled === true,
+  };
+}
+function noticeDirtyOf(sys: Record<string, any>, draft: NoticeDraft): boolean {
+  const saved = savedNoticeOf(sys);
+  return normalizeAdminNoticeText(draft.text) !== saved.text || draft.level !== saved.level || draft.enabled !== saved.enabled;
+}
+
 const filterLabel = (id: string) => userFilters.find((f) => f.id === id)?.label || "전체";
 
 // Display-only Korean labels for the audit `action`/`status` ids the server
@@ -85,6 +113,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   suspend_user: "사용자 정지",
   activate_user: "사용자 정지 해제",
   set_signup_mode: "가입 방식 변경",
+  set_admin_notice: "공지 변경",
   set_avatar_visibility: "아바타 공개 범위 변경",
   set_claude_token: "구독 토큰 저장",
   clear_claude_token: "구독 토큰 해제",
@@ -291,6 +320,10 @@ export default function AdminView() {
   const [disabledSkillChecks, setDisabledSkillChecks, disabledSkillChecksRef] = useLive<Record<string, boolean>>({});
   const [customDisabledSkills, setCustomDisabledSkills, customDisabledSkillsRef] = useLive<string[]>([]);
   const [customSkillInput, setCustomSkillInput] = useState("");
+  // 관리자 공지 draft
+  const [noticeBusy, setNoticeBusy] = useState(false);
+  const [noticeError, setNoticeError] = useState("");
+  const [noticeDraft, setNoticeDraft, noticeDraftRef] = useLive<NoticeDraft>({ text: "", level: "info", enabled: false });
 
   // audit action filter
   const [auditAction, setAuditAction] = useState("");
@@ -347,6 +380,23 @@ export default function AdminView() {
         ? "저장하지 않은 정책 변경 사항이 있습니다."
         : "저장된 정책과 같습니다.";
   const piModels = (Array.isArray(sys.piModels) ? sys.piModels : []) as PiModelRow[];
+  const noticeText = normalizeAdminNoticeText(noticeDraft.text);
+  const noticeDirty = noticeDirtyOf(sys, noticeDraft);
+  // A shown notice needs text; a hidden one may be saved empty.
+  const noticeMissingText = noticeDraft.enabled && !noticeText;
+  const noticeCanSave = Boolean(!noticeBusy && noticeDirty && !noticeMissingText);
+  const noticeShownNow = savedNoticeOf(sys).enabled && Boolean(savedNoticeOf(sys).text);
+  const noticeStatus = noticeBusy
+    ? "공지를 저장 중입니다."
+    : noticeError
+      ? `저장 실패: ${noticeError}`
+      : noticeMissingText
+        ? "표시하려면 공지 내용을 입력해 주세요."
+        : noticeDirty
+          ? "저장하지 않은 변경 사항이 있습니다."
+          : noticeShownNow
+            ? "지금 모든 팀원의 화면 위쪽에 표시되고 있습니다."
+            : "지금 표시 중인 공지가 없습니다.";
 
   // overview stat cards
   const statCards = [
@@ -384,6 +434,7 @@ export default function AdminView() {
       if (!panelsSeeded.current || !toolSkillDirtyOf(fresh, disabledSkillChecksRef.current, customDisabledSkillsRef.current)) {
         syncToolSkillFromSys();
       }
+      if (!panelsSeeded.current || !noticeDirtyOf(fresh, noticeDraftRef.current)) syncNoticeFromSys();
       panelsSeeded.current = true;
     } catch (err) {
       setError((err as Error).message);
@@ -482,6 +533,57 @@ export default function AdminView() {
       notify(`회원가입 정책은 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
     } finally {
       setSignupBusy(false);
+    }
+  }
+
+  // ---- system: 관리자 공지 ----
+  function syncNoticeFromSys() {
+    setNoticeDraft(savedNoticeOf(unwrapSystem(readState().adminSystem)));
+  }
+
+  function editNotice(patch: Partial<NoticeDraft>) {
+    setNoticeDraft({ ...noticeDraftRef.current, ...patch });
+    setNoticeError("");
+  }
+
+  function onNoticeLevelKeydown(event: ReactKeyboardEvent, current: AdminNoticeLevel) {
+    const keys = ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"];
+    if (!keys.includes(event.key)) return;
+    event.preventDefault();
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1;
+    const index = ADMIN_NOTICE_LEVELS.indexOf(current);
+    const next = ADMIN_NOTICE_LEVELS[(index + step + ADMIN_NOTICE_LEVELS.length) % ADMIN_NOTICE_LEVELS.length];
+    editNotice({ level: next });
+    requestAnimationFrame(() => document.getElementById(`admin-notice-level-${next}`)?.focus());
+  }
+
+  async function saveNotice() {
+    if (!noticeCanSave) return;
+    const draft = noticeDraftRef.current;
+    setNoticeBusy(true);
+    setNoticeError("");
+    try {
+      await api("/api/admin/notice", {
+        method: "PUT",
+        body: JSON.stringify({ text: normalizeAdminNoticeText(draft.text), level: draft.level, enabled: draft.enabled }),
+      });
+    } catch (err) {
+      const message = (err as Error).message;
+      setNoticeBusy(false);
+      setNoticeError(message);
+      notify(`저장 실패: ${message}`);
+      return;
+    }
+    // The admin is a teammate too: their own bar follows the save at once.
+    void refreshAdminNotice();
+    try {
+      await loadAdminOverview();
+      syncNoticeFromSys();
+      notify(draft.enabled ? "공지를 저장했습니다. 모든 팀원에게 표시됩니다." : "공지를 저장했습니다. 지금은 표시하지 않습니다.", "ok");
+    } catch (err) {
+      notify(`공지는 저장했지만 상태 새로고침에 실패했습니다: ${(err as Error).message}`, "warn");
+    } finally {
+      setNoticeBusy(false);
     }
   }
 
@@ -873,6 +975,102 @@ export default function AdminView() {
                         </div>
                       </div>
                     </div>
+
+                    {/* 관리자 공지: the one notice at the top of every teammate's screen */}
+                    <section className="settings-card">
+                      <div className="panel-section-head">
+                        <div>
+                          <h3>공지</h3>
+                          <p className="muted">
+                            모든 팀원의 화면 위쪽에 띠로 표시되는 공지 한 건입니다. 팀원은 공지를 닫을 수 있고, 공지를 다시 저장하면 닫았던 팀원에게도 다시 보입니다. 내용은 글자
+                            그대로 표시됩니다(링크·서식 없음).
+                          </p>
+                        </div>
+                      </div>
+                      <form
+                        className="settings-form admin-notice-form"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          void saveNotice();
+                        }}
+                      >
+                        <label className="field">
+                          <span>
+                            공지 내용{" "}
+                            <small className="muted">
+                              {noticeText.length}/{ADMIN_NOTICE_MAX_LENGTH}
+                            </small>
+                          </span>
+                          <textarea
+                            rows={2}
+                            value={noticeDraft.text}
+                            maxLength={ADMIN_NOTICE_MAX_LENGTH}
+                            placeholder="예: 11월 20일(금) 22시부터 1시간 동안 서버 점검이 있습니다."
+                            aria-describedby={noticeStatusId}
+                            aria-invalid={noticeError || noticeMissingText ? "true" : undefined}
+                            disabled={noticeBusy}
+                            onChange={(event) => editNotice({ text: event.currentTarget.value })}
+                          />
+                        </label>
+                        <div className="admin-notice-row">
+                          <span id={noticeLevelLabelId} className="admin-notice-label">
+                            중요도
+                          </span>
+                          <div className="seg-control" role="radiogroup" aria-labelledby={noticeLevelLabelId}>
+                            {ADMIN_NOTICE_LEVELS.map((level) => (
+                              <button
+                                key={level}
+                                id={`admin-notice-level-${level}`}
+                                className={cx("seg-btn", noticeDraft.level === level && "active")}
+                                type="button"
+                                role="radio"
+                                aria-checked={noticeDraft.level === level ? "true" : "false"}
+                                tabIndex={noticeDraft.level === level ? 0 : -1}
+                                disabled={noticeBusy}
+                                onClick={() => editNotice({ level })}
+                                onKeyDown={(event) => onNoticeLevelKeydown(event, level)}
+                              >
+                                {ADMIN_NOTICE_LEVEL_LABELS[level]}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <label className="admin-notice-row admin-notice-check">
+                          <input
+                            type="checkbox"
+                            checked={noticeDraft.enabled}
+                            disabled={noticeBusy}
+                            aria-describedby={noticeStatusId}
+                            onChange={(event) => editNotice({ enabled: event.currentTarget.checked })}
+                          />
+                          <span>팀원 화면에 표시</span>
+                        </label>
+                        {noticeText ? (
+                          <div className="admin-notice-preview">
+                            <span className="admin-notice-label">미리 보기</span>
+                            <NoticeBar notice={{ text: noticeText, level: noticeDraft.level }} />
+                          </div>
+                        ) : null}
+                        <div className="settings-save-row">
+                          <span
+                            id={noticeStatusId}
+                            className={cx(
+                              "settings-save-status",
+                              noticeDirty && !noticeBusy && !noticeError && "dirty",
+                              noticeBusy && "pending",
+                              Boolean(noticeError) && "invalid",
+                            )}
+                            role="status"
+                            aria-live="polite"
+                          >
+                            {noticeStatus}
+                          </span>
+                          <button className="primary" type="submit" disabled={!noticeCanSave}>
+                            {noticeBusy ? "저장 중…" : "공지 저장"}
+                          </button>
+                        </div>
+                      </form>
+                    </section>
 
                     {/* pi-gateway's models: read-only (pi's admin LLM page owns them) */}
                     <section className="settings-card">

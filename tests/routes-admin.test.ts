@@ -656,3 +656,96 @@ describe("audit feed", () => {
     );
   });
 });
+
+// ---- Admin: 관리자 공지 (the one notice at the top of every screen) -------
+
+describe("admin: notice", () => {
+  it("is admin-only to set, validated, audited, and reaches every teammate", async () => {
+    const { app, services } = boot();
+    const admin = await mkUser(app, "admin");
+    const member = await mkUser(app, "member");
+
+    // Nothing saved yet: no notice for anyone, and the admin card reads null.
+    expect((await member.agent.get("/api/me/notice").expect(200)).body).toEqual({ notice: null });
+    expect((await admin.agent.get("/api/admin/system").expect(200)).body.system.notice).toBeNull();
+
+    // Only an admin sets it; an anonymous caller reads nothing.
+    await member.agent.put("/api/admin/notice").send({ text: "x", level: "info", enabled: true }).expect(403);
+    await request(app).put("/api/admin/notice").send({ text: "x", level: "info", enabled: true }).expect(401);
+    await request(app).get("/api/me/notice").expect(401);
+
+    // Shape, level, length, and "a shown notice has text".
+    await admin.agent.put("/api/admin/notice").send({ text: "x", level: "loud", enabled: true }).expect(400);
+    await admin.agent.put("/api/admin/notice").send({ text: "x", level: "info", enabled: "yes" }).expect(400);
+    await admin.agent.put("/api/admin/notice").send({ text: 1, level: "info", enabled: true }).expect(400);
+    await admin.agent.put("/api/admin/notice").send({ text: "   ", level: "info", enabled: true }).expect(400);
+    await admin.agent.put("/api/admin/notice").send({ text: "가".repeat(301), level: "info", enabled: true }).expect(400);
+    expect(services.store.getAdminNotice()).toBeNull();
+
+    // Saved: whitespace (line breaks too) collapses to one paragraph.
+    const saved = await admin.agent
+      .put("/api/admin/notice")
+      .send({ text: "  금요일 22시\n서버 점검  ", level: "warn", enabled: true })
+      .expect(200);
+    expect(saved.body.notice).toMatchObject({ text: "금요일 22시 서버 점검", level: "warn", enabled: true });
+    const id = saved.body.notice.id as string;
+    expect(id).toBeTruthy();
+
+    // Every teammate (the admin included) gets it — the id, text and level only.
+    for (const user of [admin, member]) {
+      const seen = await user.agent.get("/api/me/notice").expect(200);
+      expect(seen.body.notice).toEqual({ id, text: "금요일 22시 서버 점검", level: "warn" });
+    }
+    expect((await admin.agent.get("/api/admin/system").expect(200)).body.system.notice).toMatchObject({ id, enabled: true });
+
+    // Audited in Korean, with the level's label.
+    const audit = await admin.agent.get("/api/audit").expect(200);
+    const row = audit.body.audit.find((r: { action: string }) => r.action === "set_admin_notice");
+    expect(row.detail).toBe("공지 표시 (주의): 금요일 22시 서버 점검");
+  });
+
+  it("is closed per account, and a new save shows again", async () => {
+    const { app, services } = boot();
+    const admin = await mkUser(app, "admin");
+    const member = await mkUser(app, "member");
+    const first = await admin.agent.put("/api/admin/notice").send({ text: "첫 공지", level: "info", enabled: true }).expect(200);
+    const firstId = first.body.notice.id as string;
+
+    // A close needs the id the user saw; an unknown id closes nothing.
+    await member.agent.post("/api/me/notice/dismiss").send({}).expect(400);
+    const stale = await member.agent.post("/api/me/notice/dismiss").send({ id: "not-the-notice" }).expect(200);
+    expect(stale.body.notice).toMatchObject({ id: firstId });
+
+    // The member closes it: gone for them, still there for the admin.
+    expect((await member.agent.post("/api/me/notice/dismiss").send({ id: firstId }).expect(200)).body).toEqual({ notice: null });
+    expect((await member.agent.get("/api/me/notice").expect(200)).body.notice).toBeNull();
+    expect((await admin.agent.get("/api/me/notice").expect(200)).body.notice).toMatchObject({ id: firstId });
+
+    // Saving again is a new announcement: a new id, shown to the member again.
+    const second = await admin.agent.put("/api/admin/notice").send({ text: "둘째 공지", level: "urgent", enabled: true }).expect(200);
+    expect(second.body.notice.id).not.toBe(firstId);
+    expect((await member.agent.get("/api/me/notice").expect(200)).body.notice).toEqual({
+      id: second.body.notice.id,
+      text: "둘째 공지",
+      level: "urgent",
+    });
+    // The id the member closed earlier no longer closes anything.
+    const late = await member.agent.post("/api/me/notice/dismiss").send({ id: firstId }).expect(200);
+    expect(late.body.notice).toMatchObject({ id: second.body.notice.id });
+
+    // Hidden: nobody sees it, the text is kept for the admin card, and a hidden
+    // notice may also be saved empty.
+    await admin.agent.put("/api/admin/notice").send({ text: "둘째 공지", level: "urgent", enabled: false }).expect(200);
+    expect((await member.agent.get("/api/me/notice").expect(200)).body.notice).toBeNull();
+    expect((await admin.agent.get("/api/me/notice").expect(200)).body.notice).toBeNull();
+    expect(services.store.getAdminNotice()).toMatchObject({ text: "둘째 공지", enabled: false });
+    await admin.agent.put("/api/admin/notice").send({ text: "", level: "info", enabled: false }).expect(200);
+    const audit = await admin.agent.get("/api/audit").expect(200);
+    expect(audit.body.audit.some((r: { action: string; detail: string }) => r.action === "set_admin_notice" && r.detail === "공지 숨김")).toBe(true);
+
+    // A stored value that cannot be read is simply no notice.
+    services.store.setAppSecret("admin_notice", "{not json");
+    expect(services.store.getAdminNotice()).toBeNull();
+    expect((await member.agent.get("/api/me/notice").expect(200)).body.notice).toBeNull();
+  });
+});

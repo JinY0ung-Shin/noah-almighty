@@ -171,6 +171,7 @@ export interface UserRow {
   onboarded_at: string | null;
   last_seen_release: string | null;
   seen_feature_hints: string | null;
+  dismissed_notice_id: string | null;
 }
 
 export interface PluginRow {
@@ -241,6 +242,12 @@ export interface RoutineJobRow {
  * a pending signup IS joining the team, so self-service can never skip it.
  */
 export const SIGNUP_MODE_KEY = "signup_mode";
+
+/**
+ * app_config key: the ONE 관리자 공지 (JSON `AdminNoticeSetting`, see
+ * `shared/adminNotice.ts`; absent = no notice was ever saved).
+ */
+export const ADMIN_NOTICE_KEY = "admin_notice";
 
 /**
  * app_config key: the ONE deployment-wide admin MCP tool policy (JSON array of
@@ -773,6 +780,10 @@ export class StoreBase {
     // existing accounts are the audience. New signups are seeded with every
     // hint in force instead (createUser).
     this.addColumnIfMissing("users", "seen_feature_hints", "TEXT");
+    // Id of the 관리자 공지 (shared/adminNotice.ts) the user closed. NULL = none.
+    // Every save of the notice mints a new id, so a stale value simply matches
+    // nothing — no backfill and no cleanup.
+    this.addColumnIfMissing("users", "dismissed_notice_id", "TEXT");
     // Session of the conversation's last turn (on pi its latest `resp_…`
     // response id, continued as `previous_response_id`). Null until the first
     // turn completes; a CLI session id left by the removed SDK runner is ignored.

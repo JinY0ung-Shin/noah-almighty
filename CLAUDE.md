@@ -158,6 +158,10 @@ These are the invariants the project is built around. New work should reinforce 
   알겠어요 or uses the control — recorded per account, never for a bubble that merely could not be shown.
   One at a time, never over a dialog. **A hint id is never reused; a new anchor is marked with
   `featureHintAnchor` and gets a side.** → `server-core.md`, `client.md` ("Feature hints").
+- **관리자 공지 is ONE plain-text notice for PEOPLE, across the top of every screen.** An admin sets it
+  (text + 안내/주의/긴급 + on/off); each account may close it, and every save is a new announcement that
+  shows again. It is never markup or a link, never shown before login, and never reaches the avatar (no
+  prompt, no `describe_system`). → `server-core.md`, `client.md` ("관리자 공지").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

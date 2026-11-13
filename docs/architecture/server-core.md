@@ -381,3 +381,20 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   the `FeatureHintAnchor` union — a new value needs its control marked in the client and a side in
   `FEATURE_HINT_SIDES` (the typecheck and `tests/release-notes.test.ts` fail otherwise). Client half:
   [client.md](client.md) § Feature hints.
+- **관리자 공지 (#admin-notice, 2026-11-13) — ONE notice across the top of every teammate's screen.** Shared
+  contract in `src/shared/adminNotice.ts` (levels `info`/`warn`/`urgent` = 안내/주의/긴급, their labels,
+  `ADMIN_NOTICE_MAX_LENGTH` 300, `normalizeAdminNoticeText`: every whitespace run incl. line breaks → one
+  space). Stored as ONE `app_config` row (`ADMIN_NOTICE_KEY` = `admin_notice`, JSON `AdminNoticeSetting`
+  `{ id, text, level, enabled, updatedAt }`, encrypted like every app setting — an unreadable or malformed
+  value is simply no notice). `store/admin.ts`: `getAdminNotice` (the admin card's view, shown or not),
+  `setAdminNotice` (**every save mints a new `id`** — a save is a new announcement), `activeAdminNoticeFor(userId)`
+  (enabled + non-empty + not closed by that user → `{ id, text, level }`), `dismissAdminNotice(userId, id)`
+  (only the id in force is recorded; a stale id is ignored so a notice saved meanwhile is not closed unread).
+  The close is per ACCOUNT: `users.dismissed_notice_id` (one id, not a list — an old id matches nothing, so
+  no cleanup and no backfill; new signups see the current notice). Routes: `PUT /api/admin/notice`
+  `{ text, level, enabled }` (admin; 400 on shape/level/length or a shown notice without text; a HIDDEN
+  notice may keep its text or be empty; audit `set_admin_notice`), `GET /api/admin/system` carries
+  `system.notice`, `GET /api/me/notice` → `{ notice }` for the caller, `POST /api/me/notice/dismiss` `{ id }`
+  → the notice now in force for the caller. Deliberately NOT here: several notices, expiry, a link, the login
+  screen (bootstrap is unauthenticated), Markdown, and any route to the avatar — the text is for people only
+  and never enters a prompt or `describe_system`. Client half: [client.md](client.md) § 관리자 공지.

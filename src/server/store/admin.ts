@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import type {
   AdminPresence,
@@ -11,6 +12,7 @@ import {
   type Constructor,
   type StoreBase,
   type UserRow,
+  ADMIN_NOTICE_KEY,
   MCP_TOOL_POLICY_KEY,
   PRESENCE_WINDOW_MS,
   SIGNUP_MODE_KEY,
@@ -18,6 +20,13 @@ import {
   parseNameList,
 } from "./internal.js";
 import logger from "../logger.js";
+import {
+  isAdminNoticeLevel,
+  normalizeAdminNoticeText,
+  type AdminNotice,
+  type AdminNoticeLevel,
+  type AdminNoticeSetting,
+} from "../../shared/adminNotice.js";
 import {
   effectiveMcpToolGroups,
   normalizeMcpToolGroups,
@@ -210,6 +219,82 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     setSignupMode(mode: SignupMode): void {
       this.setAppSecret(SIGNUP_MODE_KEY, mode === "closed" ? "closed" : "approval");
+    }
+
+    // ---- 관리자 공지 (the one notice at the top of every screen) ---------
+
+    /**
+     * The stored notice, shown or not — what the admin card edits. Null when
+     * none was ever saved, or when the stored value cannot be read (a rotated
+     * SESSION_SECRET, malformed JSON): an unreadable notice is simply no notice.
+     */
+    getAdminNotice(): AdminNoticeSetting | null {
+      const raw = this.getAppSecret(ADMIN_NOTICE_KEY);
+      if (!raw) {
+        return null;
+      }
+      try {
+        const parsed = JSON.parse(raw) as Partial<AdminNoticeSetting> | null;
+        if (
+          !parsed ||
+          typeof parsed.id !== "string" ||
+          !parsed.id ||
+          typeof parsed.text !== "string" ||
+          !isAdminNoticeLevel(parsed.level)
+        ) {
+          return null;
+        }
+        return {
+          id: parsed.id,
+          text: parsed.text,
+          level: parsed.level,
+          enabled: parsed.enabled === true,
+          updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    /**
+     * Save the notice. EVERY save mints a new id, so whoever closed the
+     * previous one sees this one — a save is a new announcement. The caller
+     * validates (text length, a shown notice has text).
+     */
+    setAdminNotice(input: { text: string; level: AdminNoticeLevel; enabled: boolean }): AdminNoticeSetting {
+      const saved: AdminNoticeSetting = {
+        id: crypto.randomUUID(),
+        text: normalizeAdminNoticeText(input.text),
+        level: input.level,
+        enabled: input.enabled,
+        updatedAt: now(),
+      };
+      this.setAppSecret(ADMIN_NOTICE_KEY, JSON.stringify(saved));
+      return saved;
+    }
+
+    /** The notice a user should see right now: shown, non-empty and not closed by them. */
+    activeAdminNoticeFor(userId: string): AdminNotice | null {
+      const notice = this.getAdminNotice();
+      if (!notice || !notice.enabled || !notice.text) {
+        return null;
+      }
+      if (this.userRowById(userId)?.dismissed_notice_id === notice.id) {
+        return null;
+      }
+      return { id: notice.id, text: notice.text, level: notice.level };
+    }
+
+    /**
+     * Record that the user closed the notice with this id. Only the notice in
+     * force can be closed: a stale id (the admin saved again meanwhile) is
+     * ignored, so the new notice still shows.
+     */
+    dismissAdminNotice(userId: string, noticeId: string): void {
+      if (this.getAdminNotice()?.id !== noticeId) {
+        return;
+      }
+      this.db.prepare("UPDATE users SET dismissed_notice_id = ? WHERE id = ?").run(noticeId, userId);
     }
 
     /**

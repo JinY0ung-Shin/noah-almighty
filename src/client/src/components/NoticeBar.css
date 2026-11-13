@@ -1,0 +1,71 @@
+/* NoticeBar's own styles, scoped to .cmp-notice-bar.
+   A thin band across the top of <main> (a flex column: the band takes its own
+   height, the view below keeps the rest). The level picks the tint; the label
+   next to the icon says the same thing in words. */
+.notice-bar:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  --notice-tone: var(--info);
+  --notice-soft: var(--info-soft);
+  --notice-line: var(--info-line);
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-1-5) var(--s-3) var(--s-1-5) var(--s-4);
+  /* Opaque: the tint is laid over the page colour, so the band reads the same
+     on the translucent app chrome as on a plain card. */
+  background: linear-gradient(var(--notice-soft), var(--notice-soft)), var(--bg);
+  border-bottom: 1px solid var(--notice-line);
+  color: var(--text);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}
+.notice-bar.level-warn:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  --notice-tone: var(--warn);
+  --notice-soft: var(--warn-soft);
+  --notice-line: var(--warn-line);
+}
+.notice-bar.level-urgent:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  --notice-tone: var(--danger);
+  --notice-soft: var(--danger-soft);
+  --notice-line: var(--danger-line);
+}
+
+/* Icon, label and close button sit on the FIRST line of a text that wraps. */
+.notice-bar-icon:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  height: 1.5em;
+  color: var(--notice-tone);
+}
+.notice-bar-level:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  flex: none;
+  color: var(--notice-tone);
+  font-weight: 700;
+}
+.notice-bar-text:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  /* A long notice never takes the screen: four lines, then it scrolls. */
+  max-height: 6em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.notice-bar-close:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: -4px 0;
+  color: var(--muted);
+}
+.notice-bar-close:is(.cmp-notice-bar, .cmp-notice-bar *) svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* The admin card's preview: the same band, drawn as a card of its own. */
+.notice-bar.preview:is(.cmp-notice-bar, .cmp-notice-bar *) {
+  border: 1px solid var(--notice-line);
+  border-radius: var(--r-md);
+}

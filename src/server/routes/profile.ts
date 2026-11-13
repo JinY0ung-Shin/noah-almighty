@@ -130,6 +130,25 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
+  // 관리자 공지 for THIS user: the notice in force, or null (none, hidden, or
+  // already closed by them). The client polls it with its once-a-minute tick.
+  router.get("/api/me/notice", requireAuth(store), (req: AuthenticatedRequest, res) => {
+    res.json({ notice: store.activeAdminNoticeFor(req.user!.id) });
+  });
+
+  // Close the notice (per account). Body: `{ id }` — the id the user SAW, so a
+  // notice the admin saved meanwhile is not closed unread; the answer is the
+  // notice now in force for them (normally null).
+  router.post("/api/me/notice/dismiss", requireAuth(store), (req: AuthenticatedRequest, res) => {
+    const id = (req.body as { id?: unknown } | undefined)?.id;
+    if (typeof id !== "string" || !id) {
+      apiError(res, 400, "닫을 공지를 알 수 없습니다.");
+      return;
+    }
+    store.dismissAdminNotice(req.user!.id, id);
+    res.json({ notice: store.activeAdminNoticeFor(req.user!.id) });
+  });
+
   // Owner's remembered chat-composer defaults (pi model id / reasoning effort / MCP
   // tool groups). The composer pickers write here so each choice seeds the NEXT new
   // conversation — the per-conversation `selected_*` value (chat POST) still

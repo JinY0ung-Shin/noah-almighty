@@ -79,6 +79,55 @@ async function openSystemTab(): Promise<void> {
   await screen.findByText("시스템 정보");
 }
 
+describe("admin 시스템 tab: 공지 card", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("starts from the saved notice and saves a changed draft as one paragraph", async () => {
+    stubAdminFetch({
+      notice: { id: "n-1", text: "금요일 점검", level: "warn", enabled: true, updatedAt: "2026-11-13T00:00:00.000Z" },
+    });
+    await openSystemTab();
+
+    const text = screen.getByLabelText(/공지 내용/) as HTMLTextAreaElement;
+    expect(text.value).toBe("금요일 점검");
+    expect(screen.getByRole("radio", { name: "주의" }).getAttribute("aria-checked")).toBe("true");
+    expect((screen.getByLabelText("팀원 화면에 표시") as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText("지금 모든 팀원의 화면 위쪽에 표시되고 있습니다.")).toBeTruthy();
+    // Nothing changed yet: nothing to save.
+    const save = screen.getByRole("button", { name: "공지 저장" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    // The draft is previewed with the real bar (no close button there).
+    expect(screen.getByRole("complementary", { name: "공지 미리 보기" }).textContent).toContain("금요일 점검");
+
+    fireEvent.change(text, { target: { value: "  토요일\n점검  " } });
+    fireEvent.click(screen.getByRole("radio", { name: "긴급" }));
+    expect(screen.getByText("저장하지 않은 변경 사항이 있습니다.")).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: "공지 미리 보기" }).classList.contains("level-urgent")).toBe(true);
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+
+    await waitFor(() => expect(calls.some((c) => c.url.includes("/api/admin/notice") && c.method === "PUT")).toBe(true));
+    const put = calls.find((c) => c.url.includes("/api/admin/notice"))!;
+    expect(JSON.parse(put.body || "{}")).toEqual({ text: "토요일 점검", level: "urgent", enabled: true });
+  });
+
+  it("with no notice saved starts hidden and empty, and will not show an empty notice", async () => {
+    stubAdminFetch({ notice: null });
+    await openSystemTab();
+
+    expect((screen.getByLabelText(/공지 내용/) as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByRole("radio", { name: "안내" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("지금 표시 중인 공지가 없습니다.")).toBeTruthy();
+    expect(screen.queryByRole("complementary", { name: "공지 미리 보기" })).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("팀원 화면에 표시"));
+    expect(screen.getByText("표시하려면 공지 내용을 입력해 주세요.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "공지 저장" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe("admin 시스템 tab seeding", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

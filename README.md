@@ -137,7 +137,8 @@ which check owner/teammate trust themselves.
   - Streaming, markdown rendering, conversations, and per-message actions (copy,
     regenerate, edit-and-resend) are supported for all viewer classes.
 - **Admin**: list users, approve pending signups (joining the team), suspend, grant/revoke the
-  `admin` role and delete accounts; set the signup mode (관리자 ▸ 가입·접근 ▸ 회원가입 정책: 승인제 / 가입 차단); set the ONE MCP tool
+  `admin` role and delete accounts; set the signup mode (관리자 ▸ 가입·접근 ▸ 회원가입 정책: 승인제 / 가입 차단); post ONE notice across the top of every
+  teammate's screen (관리자 ▸ 시스템 ▸ **공지**: plain text, 안내/주의/긴급, closable per account); set the ONE MCP tool
   policy that applies to every user, admins included (관리자 ▸ 도구·스킬 ▸ **MCP 도구 정책**); and
   block a user's shared skill for the whole team (관리자 ▸ 도구·스킬 ▸ **공유 스킬 관리**). The LLM endpoints are configured
   in pi-gateway's own admin page (README "Deployment").

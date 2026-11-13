@@ -69,7 +69,9 @@
 
 .rail-open-toggle {
   position: fixed;
-  top: calc(var(--s-3) + env(safe-area-inset-top, 0px));
+  /* Below the 관리자 공지 bar when one is shown (NoticeBar.tsx publishes its
+     height), so the button stays on the view header it has a place in. */
+  top: calc(var(--s-3) + env(safe-area-inset-top, 0px) + var(--notice-bar-height, 0px));
   left: calc(var(--s-3) + env(safe-area-inset-left, 0px));
   z-index: calc(var(--z-rail) - 1);
   background: var(--bg-elevated);

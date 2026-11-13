@@ -1,3 +1,4 @@
+import { refreshAdminNotice, resetAdminNoticeClientState } from "./adminNotice";
 import { api, refreshMe } from "./api";
 import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
@@ -180,6 +181,8 @@ function onKnowledgeVisible(): void {
     // The to-do list rides the same tick: routines and external-task runs edit it
     // with no chat stream open, so this is how their changes reach the overlay.
     void refreshTodos();
+    // 관리자 공지: a notice saved while this tab is open shows within a minute.
+    void refreshAdminNotice();
   }
 }
 /** Stop the poll only. Leaves the account's state alone (startKnowledgeWatch reuses it on boot). */
@@ -204,6 +207,7 @@ export function startKnowledgeWatch(): void {
   void refreshAdminPresence();
   void refreshTodos();
   void refreshTeamBrainStatus();
+  void refreshAdminNotice();
 }
 /** Stop the poll AND forget the account's state — the logout / session-expiry / teardown path. */
 export function stopKnowledgeWatch(): void {
@@ -211,6 +215,7 @@ export function stopKnowledgeWatch(): void {
   // Don't leave another account's presence list (or to-do list) in state.
   resetTodoClientState();
   resetTeamBrainClientState();
+  resetAdminNoticeClientState();
   replaceState({
     adminPresence: null,
     todos: emptyTodoState(),

@@ -23,6 +23,12 @@ import { loadDefaultPluginRoots } from "../plugins.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
 import { normalizeSkillSlug } from "../skillTransfer.js";
 import {
+  ADMIN_NOTICE_LEVEL_LABELS,
+  ADMIN_NOTICE_MAX_LENGTH,
+  isAdminNoticeLevel,
+  normalizeAdminNoticeText,
+} from "../../shared/adminNotice.js";
+import {
   apiError,
   avatarDir,
   isAvatarVisibility,
@@ -73,8 +79,41 @@ export function createAdminRouter(deps: RouterDeps): Router {
         skillDiscovery,
         // Self-service signup gating, admin-managed (see PUT /api/admin/signup-mode).
         signupMode: store.getSignupMode(),
+        // 관리자 공지 as stored (shown or not) — see PUT /api/admin/notice.
+        notice: store.getAdminNotice(),
       },
     });
+  });
+
+  // 관리자 공지: the ONE notice shown at the top of every teammate's screen
+  // (plain text + importance + on/off; teammates read it at GET /api/me/notice).
+  // Body: `{ text, level, enabled }`. Every save is a new announcement — it
+  // shows again to whoever closed the previous one. A hidden notice may keep
+  // its text (or have none), so it can be switched back on later.
+  router.put("/api/admin/notice", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {
+    const body = (req.body ?? {}) as { text?: unknown; level?: unknown; enabled?: unknown };
+    if (typeof body.text !== "string" || typeof body.enabled !== "boolean" || !isAdminNoticeLevel(body.level)) {
+      apiError(res, 400, "공지 형식이 올바르지 않습니다.");
+      return;
+    }
+    const text = normalizeAdminNoticeText(body.text);
+    if (text.length > ADMIN_NOTICE_MAX_LENGTH) {
+      apiError(res, 400, `공지는 ${ADMIN_NOTICE_MAX_LENGTH}자까지 쓸 수 있습니다.`);
+      return;
+    }
+    if (body.enabled && !text) {
+      apiError(res, 400, "표시할 공지 내용을 입력해 주세요.");
+      return;
+    }
+    const saved = store.setAdminNotice({ text, level: body.level, enabled: body.enabled });
+    const excerpt = saved.text.length > 80 ? `${saved.text.slice(0, 80)}…` : saved.text;
+    auditAs(
+      req,
+      "set_admin_notice",
+      saved.enabled ? `공지 표시 (${ADMIN_NOTICE_LEVEL_LABELS[saved.level]}): ${excerpt}` : "공지 숨김",
+    );
+    logger.info({ actorId: req.user!.id, enabled: saved.enabled, level: saved.level }, "admin notice changed");
+    res.json({ notice: saved });
   });
 
   router.put("/api/admin/hex-ssh-policy", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {

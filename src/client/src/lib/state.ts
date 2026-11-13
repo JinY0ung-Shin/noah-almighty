@@ -71,6 +71,8 @@ export interface ClientState {
   adminSystem: Record<string, unknown> | null;
   /** Live "who's here now" for the admin-only rail badge; null until first poll. */
   adminPresence: AdminPresence | null;
+  /** 관리자 공지 in force for this account (lib/adminNotice.ts); null = nothing to show. */
+  adminNotice: import("../../../shared/adminNotice").AdminNotice | null;
   audit: AuditEvent[];
   /** Interactive question prompts awaiting the owner (one shown at a time). */
   promptQueue: PromptRequest[];
@@ -144,6 +146,7 @@ export const appState = writable<ClientState>({
   adminStats: null,
   adminSystem: null,
   adminPresence: null,
+  adminNotice: null,
   audit: [],
   promptQueue: [],
   browserGuideRequested: false,
