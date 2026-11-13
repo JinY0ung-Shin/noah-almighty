@@ -679,6 +679,12 @@ export class StoreBase {
       CREATE INDEX IF NOT EXISTS idx_git_repositories_user ON git_repositories(user_id);
       CREATE INDEX IF NOT EXISTS idx_canvas_artifacts_conversation ON canvas_artifacts(conversation_id);
       CREATE INDEX IF NOT EXISTS idx_canvas_artifacts_owner ON canvas_artifacts(owner_user_id);
+      -- The audit log is read newest-first with a LIMIT (listAudit) and its rows
+      -- are never deleted: without these the read scans and sorts the WHOLE
+      -- table, which blocks the process for seconds once it has left the page
+      -- cache. One index per read: the admin's (all rows) and a user's own.
+      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit(created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor_created ON audit(actor_user_id, created_at);
     `);
     // Additive column migrations for pre-existing DBs (CREATE TABLE above only
     // applies to fresh installs). Each is a no-op once the column exists.

@@ -2202,3 +2202,58 @@ describe("store adminPresence (admin rail badge)", () => {
     expect(store.adminPresence().users).toEqual([]);
   });
 });
+
+describe("store audit log reads", () => {
+  type AuditDb = { db: Database.Database };
+
+  function makeStore(dir: string) {
+    return createServices({ dataDir: path.join(tempDir, dir), agentRuntime: "local", sessionSecret: "t" }).store;
+  }
+
+  function plan(store: ReturnType<typeof makeStore>, sql: string, ...params: unknown[]): string {
+    const rows = (store as unknown as AuditDb).db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[];
+    return rows.map((row) => row.detail).join(" | ");
+  }
+
+  // The audit table only grows, and listAudit runs on every admin-screen load:
+  // a full scan plus a sort there blocks the whole process once the table is cold.
+  it("reads the newest rows through an index, never a scan and sort of the whole table", () => {
+    const store = makeStore("audit-plan");
+    const all = plan(store, "SELECT * FROM audit ORDER BY created_at DESC LIMIT ?", 200);
+    expect(all).toContain("idx_audit_created");
+    expect(all).not.toContain("TEMP B-TREE");
+
+    const own = plan(store, "SELECT * FROM audit WHERE actor_user_id = ? ORDER BY created_at DESC LIMIT ?", "u", 200);
+    expect(own).toContain("idx_audit_actor_created");
+    expect(own).not.toContain("TEMP B-TREE");
+  });
+
+  it("adds the indexes to a database created before they existed", () => {
+    const first = makeStore("audit-upgrade");
+    const raw = (first as unknown as AuditDb).db;
+    raw.exec("DROP INDEX idx_audit_created; DROP INDEX idx_audit_actor_created;");
+    first.close();
+
+    const reopened = makeStore("audit-upgrade");
+    const names = (reopened as unknown as AuditDb).db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'audit'")
+      .all()
+      .map((row) => (row as { name: string }).name);
+    expect(names).toEqual(expect.arrayContaining(["idx_audit_created", "idx_audit_actor_created"]));
+  });
+
+  it("still lists newest first, all rows for an admin and only their own for a user", () => {
+    const store = makeStore("audit-order");
+    const raw = (store as unknown as AuditDb).db;
+    const insert = raw.prepare(
+      "INSERT INTO audit (id, actor_user_id, actor_name, action, status, detail, created_at) VALUES (?, ?, ?, ?, 'success', '', ?)",
+    );
+    insert.run("a1", "u1", "One", "first", "2026-01-01T00:00:00.000Z");
+    insert.run("a2", "u2", "Two", "second", "2026-01-02T00:00:00.000Z");
+    insert.run("a3", "u1", "One", "third", "2026-01-03T00:00:00.000Z");
+
+    expect(store.listAudit("u1", true).map((event) => event.action)).toEqual(["third", "second", "first"]);
+    expect(store.listAudit("u1", false).map((event) => event.action)).toEqual(["third", "first"]);
+    expect(store.listAudit("u1", true, 2).map((event) => event.action)).toEqual(["third", "second"]);
+  });
+});
