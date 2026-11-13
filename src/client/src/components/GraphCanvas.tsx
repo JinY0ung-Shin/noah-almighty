@@ -5,7 +5,7 @@ import { useLatest, useStore } from "../lib/hooks";
 import { prefersReducedMotion } from "../lib/motion";
 import { cssColor, cssToken, currentTheme, theme } from "../lib/theme";
 import type { ResolvedTheme } from "../lib/theme";
-import { SECTION_COLORS, SECTION_ORDER, nodeDegrees, sectionColor, sectionLabel } from "../lib/knowledgeGraph";
+import { SECTION_COLORS, SECTION_ORDER, defaultHiddenSections, nodeDegrees, sectionColor, sectionKey, sectionLabel } from "../lib/knowledgeGraph";
 import type { KnowledgeGraph, KnowledgeGraphNode } from "../lib/types";
 import "./GraphCanvas.css";
 
@@ -37,7 +37,7 @@ const LABEL_ALL_MAX_NODES = 20;
 function countSections(nodes: KnowledgeGraphNode[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const n of nodes) {
-    const s = n.section in SECTION_COLORS ? n.section : "other";
+    const s = sectionKey(n.section);
     counts.set(s, (counts.get(s) ?? 0) + 1);
   }
   return counts;
@@ -176,14 +176,27 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
   const degrees = graph ? nodeDegrees(graph) : new Map<string, number>();
   const sectionCounts = countSections(nodeList);
   const presentSections = SECTION_ORDER.filter((s) => sectionCounts.has(s));
-  const [hiddenSections, setHiddenSections] = useState<Set<string>>(() => new Set());
-  // A new graph (refresh, scope switch) starts with every section shown.
+  const [hiddenSections, setHiddenSections] = useState<Set<string>>(() => defaultHiddenSections(nodeList));
+  // A new graph (refresh, scope switch) starts from the default again: every
+  // section shown but raw/ (the sources), which the legend turns back on.
   const [seenGraph, setSeenGraph] = useState(graph);
   if (seenGraph !== graph) {
     setSeenGraph(graph);
-    if (graph) setHiddenSections(new Set());
+    if (graph) setHiddenSections(defaultHiddenSections(graph.nodes));
+  }
+  // A note opened from OUTSIDE the canvas (the side panel's lists, a [[link]] in
+  // the note) must be on the graph too: show its section if it is hidden.
+  const [seenSelectedId, setSeenSelectedId] = useState(selectedId);
+  if (seenSelectedId !== selectedId) {
+    setSeenSelectedId(selectedId);
+    const picked = selectedId ? nodeList.find((n) => n.id === selectedId) : undefined;
+    const s = picked ? sectionKey(picked.section) : "";
+    if (s && hiddenSections.has(s)) toggleSection(s);
   }
   const hiddenSectionsRef = useLatest(hiddenSections);
+  // Set by the legend when it SHOWS a section: its nodes were laid out outside
+  // the framed view, so the next hidden-section pass re-frames what is shown.
+  const fitAfterShow = useRef(false);
 
   // ---- Search (combobox): the keyboard route to any node ----
   const [searchId] = useState(() => `graph-search-${Math.random().toString(36).slice(2, 8)}`);
@@ -252,8 +265,7 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
     const cy = cyRef.current;
     cy.batch(() => {
       cy.nodes().forEach((n: { data(k: string): string; toggleClass(c: string, on: boolean): void }) => {
-        const s = n.data("section");
-        n.toggleClass("section-hidden", hidden.has(s in SECTION_COLORS ? s : "other"));
+        n.toggleClass("section-hidden", hidden.has(sectionKey(n.data("section"))));
       });
     });
   }
@@ -387,6 +399,9 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
       });
       updateZoomLabels();
       applyHiddenSections(hiddenSectionsRef.current);
+      // The layout placed (and fitted) every node; frame what is actually shown.
+      const shown = cy.elements(":visible");
+      if (hiddenSectionsRef.current.size && shown.nonempty()) cy.fit(shown, 56);
       syncSelection(selectedIdRef.current);
     } catch (err) {
       if (token !== renderToken.current) return;
@@ -422,7 +437,11 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
   });
 
   useEffect(() => {
-    if (cyRef.current) applyHiddenSections(hiddenSections);
+    if (cyRef.current) {
+      applyHiddenSections(hiddenSections);
+      if (fitAfterShow.current) fitAll();
+    }
+    fitAfterShow.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hiddenSections, cyEpoch]);
 
@@ -464,7 +483,7 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
 
   function pick(node: KnowledgeGraphNode): void {
     // A hidden section would hide the pick: show it again.
-    const s = node.section in SECTION_COLORS ? node.section : "other";
+    const s = sectionKey(node.section);
     if (hiddenSections.has(s)) toggleSection(s);
     setQuery("");
     setSearchOpen(false);
@@ -595,7 +614,10 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
               className={hiddenSections.has(s) ? "legend-chip off" : "legend-chip"}
               aria-pressed={hiddenSections.has(s) ? "false" : "true"}
               title={hiddenSections.has(s) ? `${sectionLabel(s)} 보이기` : `${sectionLabel(s)} 숨기기`}
-              onClick={() => toggleSection(s)}
+              onClick={() => {
+                fitAfterShow.current = hiddenSections.has(s);
+                toggleSection(s);
+              }}
             >
               <span
                 className={s === "unresolved" ? "legend-dot dangling" : "legend-dot"}

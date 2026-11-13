@@ -53,6 +53,14 @@
 - `<dataDir>/team-brain`, branch `main`, created lazily (`ensureTeamBrainRepo` = init-or-migrate under
   the lock). Search (`rankBrainNotes`, now with an additive `{prefix}` option) and the graph
   (`buildKnowledgeGraph`) are reused with this root.
+- **The graph colors a page by its TYPE (user, 2026-11-13).** `teamBrainGraph` passes `teamSectionOf`: a
+  node's `section` is the page's `TeamPageType` (`decision` … `contact`) — taken from the FOLDER
+  (`teamPageTypeForPath`), which the schema keeps equal to the frontmatter `type`, so nothing is re-parsed;
+  `raw` for a source, `wiki` only for a file the schema would not accept. The client gives each type its
+  color, its Korean label (`TEAM_PAGE_TYPE_LABELS`) and a legend chip that also filters by type
+  (`lib/knowledgeGraph.ts`). **A new page type needs a color there** — `tests/client-knowledge-graph.test.ts`
+  fails without one. The type ids never collide with the personal vault's folder sections (`concept` vs
+  `concepts`), so the client needs no "which brain" flag. Raw sources start hidden → `repo-knowledge.md`.
 - **Layout (schema v2):** `SCHEMA.md` (`TEAM_BRAIN_SCHEMA_MD`, first line `<!-- noah-team-brain-schema: N -->`);
   `POLICY.md` (`TEAM_POLICY_PATH`, the admins' policy — see "Team policy" below; never a page-changeset target,
   in `TEAM_STRUCTURAL_PATHS`);

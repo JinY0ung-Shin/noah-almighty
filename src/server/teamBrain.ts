@@ -40,6 +40,7 @@ import {
   renderTeamIndex,
   schemaVersionOf,
   teamNameKey,
+  teamPageTypeForPath,
   validateChangeset,
   validateTeamNotePath,
   type ChangesetCheckContext,
@@ -781,7 +782,17 @@ export function countTeamRawSync(config: Config): number {
 
 export async function teamBrainGraph(config: Config): Promise<KnowledgeGraph> {
   if (!teamBrainInitialized(config)) return { nodes: [], edges: [] };
-  return buildKnowledgeGraph(teamBrainRoot(config));
+  return buildKnowledgeGraph(teamBrainRoot(config), { sectionOf: teamSectionOf });
+}
+
+/**
+ * A team-vault node's color bucket: the page's TYPE. The folder IS the type (the
+ * schema refuses a page outside its type's folder), so no frontmatter is read.
+ * `raw` for the sources; `wiki` only for a file the schema would not accept.
+ */
+export function teamSectionOf(relPath: string): string {
+  if (relPath.startsWith("raw/")) return "raw";
+  return teamPageTypeForPath(relPath) ?? (relPath.startsWith("wiki/") ? "wiki" : "other");
 }
 
 // ── Apply a changeset ────────────────────────────────────────────────────────

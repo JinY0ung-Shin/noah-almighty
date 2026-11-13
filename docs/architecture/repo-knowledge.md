@@ -240,6 +240,18 @@
   the `currentTruth` sentence) on every WRITE-capable run — owner/routine, shared-account teammate —
   and on no read-only one (plain teammate, consultation), because the avatar also
   edits `wiki/` directly with the repo tools, where a skill-only rule would never reach.
+- **The graph opens with `raw/` hidden (user, 2026-11-13), both brains.** The server still returns every
+  `raw/` node (`buildKnowledgeGraph` is unchanged); the client's `defaultHiddenSections`
+  (`lib/knowledgeGraph.ts`) starts the legend with the raw chip OFF — unless raw notes are all the vault
+  has — and every newly loaded graph starts from that default again. Hiding is view-only: search, the
+  side lists and the note counts still include raw. `GraphCanvas` frames the visible nodes after the
+  layout, re-frames when the legend SHOWS a section, and shows a hidden section by itself when a note in
+  it is opened from outside the canvas (search, a side list, a `[[link]]`).
+- **A node's `section` is its color and its legend chip.** The personal vault's is the folder
+  (`vaultSectionOf`: `raw` / `sources` / `entities` / `concepts` / `synthesis`, else `wiki`); the team
+  vault passes its own (`buildKnowledgeGraph(root, { sectionOf })`) → [`team-brain.md`](team-brain.md).
+  Colors, labels and legend order live in ONE place, `lib/knowledgeGraph.ts` (`SECTION_COLORS` — read its
+  comment before changing a hue: the set is measured, not picked by eye).
 - **Capture notice ("기억" chip):** a SUCCESSFUL `write_file`/`edit_file` under `wiki/` of the personal repo fires `AgentEvents.onMemory` (`MemoryEvent`, gated in the tool
   handlers via `isBrainNotePath`) → SSE `memory` (server-minted `id` so reattach replays dedupe) → a
   `kind:"memory"` activity row (label "기억 추가·갱신됨", detail = note path) that persists

@@ -355,6 +355,10 @@ describe("team brain cards", () => {
     await seedTeamVault(s.config, [{ path: PAGE_PATH, content: teamPage({ title: "배포" }) }]);
     const graph = (await s.mate.get("/api/team-brain/graph").expect(200)).body.graph;
     expect(graph.nodes.map((n: { id: string }) => n.id)).toContain(PAGE_PATH);
+    // A node's section is the page's TYPE (its folder), so the graph can colour by type; a source is `raw`.
+    const sectionOf = (id: string) => graph.nodes.find((n: { id: string }) => n.id === id)?.section;
+    expect(sectionOf(PAGE_PATH)).toBe("howto");
+    expect(sectionOf(SEED_RAW)).toBe("raw");
     const note = await s.mate.get("/api/team-brain/note").query({ path: PAGE_PATH }).expect(200);
     expect(note.body.note.content).toContain("title: 배포");
     expect((await s.mate.get("/api/team-brain/note").query({ path: SEED_RAW }).expect(200)).body.note.content).toContain("Seed source");

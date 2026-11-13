@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  SECTION_COLORS,
+  SECTION_ORDER,
+  defaultHiddenSections,
   linkifyWikilinks,
   nodeLinks,
   resolveWikilink,
+  sectionLabel,
   stripFrontmatter,
   stripTitleHeading,
   topNotes,
 } from "../src/client/src/lib/knowledgeGraph.js";
 import type { KnowledgeGraph } from "../src/server/types.js";
+import { TEAM_PAGE_TYPE_LABELS, TEAM_PAGE_TYPES } from "../src/shared/teamBrain.js";
 
 const graph: KnowledgeGraph = {
   nodes: [
@@ -74,5 +79,34 @@ describe("graph summaries", () => {
       ["wiki/concepts/deploy.md", 3],
       ["raw/2026-10-02.md", 1],
     ]);
+  });
+});
+
+describe("defaultHiddenSections", () => {
+  it("starts with raw/ hidden when the vault has pages to show", () => {
+    expect([...defaultHiddenSections(graph.nodes)]).toEqual(["raw"]);
+  });
+
+  it("hides nothing without raw notes, or when raw notes are all there is", () => {
+    expect(defaultHiddenSections(graph.nodes.filter((n) => n.section !== "raw")).size).toBe(0);
+    // A dangling link target is not a page: captures alone (and what they point at) stay drawn.
+    expect(defaultHiddenSections(graph.nodes.filter((n) => n.section === "raw" || n.dangling)).size).toBe(0);
+    expect(defaultHiddenSections([]).size).toBe(0);
+  });
+});
+
+describe("team page types as sections", () => {
+  it("gives every type its own color, its Korean label and a legend slot", () => {
+    // What a team graph can show together: the six types and the raw sources.
+    const shown = ["raw", ...TEAM_PAGE_TYPES];
+    const colors = shown.map((s) => SECTION_COLORS[s]);
+    expect(colors.every(Boolean)).toBe(true);
+    expect(new Set(colors).size).toBe(shown.length);
+    for (const type of TEAM_PAGE_TYPES) {
+      expect(sectionLabel(type)).toBe(TEAM_PAGE_TYPE_LABELS[type]);
+      expect(SECTION_ORDER).toContain(type);
+      // Never the gray of an unknown folder.
+      expect(SECTION_COLORS[type]).not.toBe(SECTION_COLORS.wiki);
+    }
   });
 });

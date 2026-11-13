@@ -35,8 +35,11 @@ export function isVaultNotePath(relPath: unknown): relPath is string {
   );
 }
 
-/** Section bucket for node coloring, derived from the note's vault path. */
-function sectionOf(relPath: string): string {
+/**
+ * Section bucket for node coloring, derived from the note's vault path — the
+ * PERSONAL second-brain layout. The team vault passes its own (`teamSectionOf`).
+ */
+export function vaultSectionOf(relPath: string): string {
   if (relPath.startsWith("raw/")) return "raw";
   for (const s of ["sources", "entities", "concepts", "synthesis"]) {
     if (relPath.startsWith(`wiki/${s}/`)) return s;
@@ -67,7 +70,11 @@ function linkTarget(raw: string): string {
  * client can point the owner at brain-migrate — distinct from a present-but-empty
  * vault (`nodes:[]` with `noVault` unset).
  */
-export async function buildKnowledgeGraph(repoRoot: string): Promise<KnowledgeGraph> {
+export async function buildKnowledgeGraph(
+  repoRoot: string,
+  opts: { sectionOf?: (relPath: string) => string } = {},
+): Promise<KnowledgeGraph> {
+  const sectionOf = opts.sectionOf ?? vaultSectionOf;
   const entries = await listTree(repoRoot);
   const hasVault = entries.some(
     (e) => e.path === "wiki" || e.path.startsWith("wiki/") || e.path === "raw" || e.path.startsWith("raw/"),
