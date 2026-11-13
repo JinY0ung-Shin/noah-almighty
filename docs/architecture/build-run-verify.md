@@ -297,6 +297,25 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   `71-tracing-turn.mjs` 25/25, `75-trace-stats.mjs` 31/31 — the new check recomputes the speed from Jaeger's
   raw `chat` spans (820 output tokens over 420 ms → 1,953 token/s, equal to the route's) — and
   `25-admin-ui-real-gateway.mjs` 42/42 (the page states how the speed is counted, light and dark).
+  **pi `e0681aa` (2026-11-13, that page as charts: a turn-time trend over time from a new `timeline` in the
+  statistics answer, a split bar for where the time went, bars in its three tables — pi's commit looked at it
+  with MOCK data only):** `run-all.sh` all PASS on a fresh stack (`~/.noah-work/boot-test-2026-11-13d/`,
+  one `drive.sh` for the whole run), `71-tracing-turn.mjs` 25/25, `75-trace-stats.mjs` 37/37 — the six new
+  checks hold the timeline to the answer it rides in (a step pi offers, buckets on UTC boundaries of the step,
+  ascending and contiguous, their turns adding up to the turn count, no bucket's p95 above the slowest turn) —
+  and `25-admin-ui-real-gateway.mjs` 48/48: through Noah's `/admin` proxy against the real gateway the trend
+  draws (two lines, a count bar per bucket), hovering a bucket puts its values in the legend line, light and
+  dark, with no page error or CSP violation. NOT seen with real data: more than one bucket — the stack was
+  minutes old, so all 19 turns fell into ONE 5-minute bucket (two dots, no line segment, no gap).
+  **The same run is the first build of Noah's image with `libreoffice-writer`** and carries
+  `85-workspace-files.mjs` (26/26), the 파일 tab against the real stack: the listing and the file route read the
+  owner's sandbox workspace through the workspaces mount (`uploads/` holds the documents of the document
+  turns; `c/` names all 14 conversations by title), and a pdf (3 pages), a pptx (3) and a **docx (1 — it could
+  not load before this image)** render through `/api/me/workspace/preview` to PNG pages with a 1600 px long
+  side in about a second each; a second ask is the cache; the pages are a 404 for another user and a 401
+  without a session; nothing is left under `.work` and no soffice process stays. Notes for the next run: the
+  dind's BusyBox `chown` has no `--reference` (use `chown "$(stat -c %u:%g dir)"`), and Noah's image has no
+  `ps` (count `/proc/[0-9]*/comm`).
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

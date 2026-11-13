@@ -365,7 +365,8 @@ PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system
   - **Availability** is `probeDocumentPreviews()` (soffice + pdftoppm at boot), else `{ status: "failed", reason:
     "UNAVAILABLE" }`. Each LibreOffice application loads only its own formats: the image installs `-impress` AND
     `-writer` (added with this feature — before it a `.docx` failed with "source file could not be loaded", for
-    share_file cards too); `-calc` is not installed, so `.xlsx` is not offered here.
+    share_file cards too); `-calc` is not installed, so `.xlsx` is not offered here. The three formats were rendered THROUGH the app in
+    a freshly built image by the combined-stack boot test (`85-workspace-files.mjs`, `build-run-verify.md`).
 - **Tests:** `tests/routes-workspace-files.test.ts` (self-scoping, planted links at every level, the path grammar, the
   response headers, the cap, the preview routes), `tests/workspace-previews.test.ts` (the converter's copy, bounds,
   remembered failures, the sidecar, the cache), `tests/workspace-files.test.ts` (the shared contract),
