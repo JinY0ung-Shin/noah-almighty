@@ -244,6 +244,15 @@ user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`,
 | Noah → model (capture `savedPath`, Confluence `savedPath`) | `toSandboxPath` (`piSandboxPath`) | host path under the user's root → `/workspace/…` |
 | deck previews | `share_file` → `loadConverterPreviews(allowedRoots = [user root])` | the hash-bound `<stem>.preview/` sidecar is read through the host path, like today |
 
+- **Files an MCP tool returns (pi `5adb8e5`):** a binary `resource` block in a broker or sandbox MCP result is
+  saved BY PI into `/workspace/artifacts/<pi session id>/<name>-<sha256[:8]><ext>` of the run's principal and
+  the model gets `saved_path`/`size`/`sha256`/`mime` in the tool result (no prompt text: the result names the
+  path). Files of one result: 28 MiB together, the rest of the result 4 MiB as before; past either, pi answers a
+  tool error. A `read_only` session (a colleague's chat) saves nothing. The folder is keyed by pi's SESSION id,
+  not Noah's conversation: the 파일 tab shows `artifacts/` as one more shared folder (other conversations'
+  session folders included), and no conversation-deleting path removes it — these are the agent's own files,
+  like `uploads/`. None of Noah's own MCP servers returns such a block today; a relayed server (`plugins`,
+  `shared`) may. Checked on the real stack by the boot test (`86-mcp-files.mjs`, `build-run-verify.md`).
 - **D3 (first pi turn of an old conversation):** `moveLegacyConversationWorkspace` moves `dataDir/workspaces/<avatar>/<conv>`
   into the sandbox folder — links/specials never followed (left behind), an existing sandbox file never overwritten,
   capped (256 MB / 10 000 entries / depth 16; past the cap the rest stays and the next turn continues), moved files

@@ -316,6 +316,25 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   without a session; nothing is left under `.work` and no soffice process stays. Notes for the next run: the
   dind's BusyBox `chown` has no `--reference` (use `chown "$(stat -c %u:%g dir)"`), and Noah's image has no
   `ps` (count `/proc/[0-9]*/comm`).
+  **pi `5adb8e5` (2026-11-13, files in MCP tool results — a binary `resource` block is saved into the run's
+  sandbox at `/workspace/artifacts/<pi session id>/<name>-<sha8><ext>`; the broker counts files apart, 28 MiB
+  per result; pi's own tests saw only a FAKE sandbox):** `run-all.sh` all PASS on a fresh stack
+  (`~/.noah-work/boot-test-2026-11-13e/`), `71-` 25/25, `75-` 37/37, `25-` 48/48, `85-` 26/26, and the new
+  `86-mcp-files.mjs` 20/20 against a file-returning fixture MCP server registered in pi's broker
+  (`06-mcp-fixture.sh`: a sibling container, `PUT /admin/api/mcp/servers/filefix` with pi's admin key): the
+  model's tool result carries the path, size, sha256 and MIME and none of the base64; the file is byte-identical
+  through the model's own shell, `docker exec` in the OWNER's sandbox container and the host workspace; the
+  same file again is the same path, another conversation is another session folder; **a 28 MiB file goes
+  through the real sandboxd in a 1.4 s turn** and 28 MiB + 1 byte comes back as a tool error naming the limit
+  with nothing saved; a declared size or sha256 that differs is refused with the reason; a uri ending in
+  `../../.home/.bashrc` lands as `artifact-<sha8>.bin` inside the folder; a colleague's chat (`read_only`) runs
+  the tool and saves nothing; no `.part-` file is left; the gateway, broker and sandboxd logs carry no uri and
+  no content. The 파일 tab lists `artifacts/` at the workspace root with one folder per pi session — the other
+  conversations' folders show too — and downloads the file byte-identical. After the run: gateway 428 MiB,
+  broker 277 MiB (one 28 MiB transfer at a time; several at once were not measured). Notes for the next run:
+  the fake LLM routes by the FIRST `[[fake:KEY]]` marker of a request, so every turn of one conversation must
+  reuse ONE key (a new key per turn silently gets the echo default — a 40 ms "turn" with no tool call); the
+  sandbox writes files 0666 in 0777 folders (its umask), the workspace root above them stays 0700.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
