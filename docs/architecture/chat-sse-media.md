@@ -483,7 +483,9 @@
      deleted and the card falls back to LibreOffice.
   2. **LibreOffice otherwise** — no sidecar (`none`), `stale` (the .pptx changed after the build: a copy, a
      rename, a python-pptx edit), `invalid`, and every docx/xlsx/pdf: `renderDocumentPreviews` (deckRender.ts
-     — async execFile soffice→pdf with an isolated profile, then `pdftoppm -l 30`; **direct pptx→png
+     — async execFile soffice→pdf with an isolated profile, forced through the format's own import filter with
+     linked content, link updates and macros off (the document is untrusted: `secrets-ssh.md`), then
+     `pdftoppm -scale-to 1600 -l 30`; **direct pptx→png
      converts only the FIRST slide**; pdf skips soffice) attaches the pages via `savePreviewImages`
      (chatImages.ts, trusted-input hidden PNGs) — best-effort, a render failure still delivers the file.
      It is gated on `probeDocumentPreviews` (soffice + pdftoppm) ONLY: python-pptx gates the legacy
@@ -502,8 +504,9 @@
   `fileOutputEnabled`: `AgentRequest.deckConverterEnabled` / `deckRenderingEnabled` (toolchain && fileOutput
   && authoring `allowed`) pick the promptBuilder `deckSection` branch, and `SystemToolsContext.deckToolchain`
   + `deckAuthoring` drive the describe_system line with its `converter: INSTALLED` / `converter: NOT
-  INSTALLED` markers. Noah's own image keeps `libreoffice-impress` + `fonts-nanum` + `poppler-utils` for those
-  previews; the converter's Chromium, fonts and pinned Python set live in the sandbox image
+  INSTALLED` markers. Noah's own image keeps `libreoffice-impress` + `libreoffice-writer` (2026-11-13: a `.docx`
+  cannot load without it) + `fonts-nanum` + `poppler-utils` for those previews — `-calc` is not installed, so an
+  `.xlsx` card gets none; the converter's Chromium, fonts and pinned Python set live in the sandbox image
   (`docker/pi-sandbox`, [`pptx-converter.md`](pptx-converter.md)).
 - **draw.io viewer (.drawio share): preview is CLIENT-side, not a deckRender format.** `drawio` sits in
   the `chatFiles.ts` allowlist (mediaType `application/vnd.jgraph.mxfile`, no magic — text like csv/md/txt)

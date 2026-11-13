@@ -165,9 +165,10 @@ These are the invariants the project is built around. New work should reinforce 
 - **The chat's 파일 tab is a READ-ONLY window for PEOPLE onto their OWN sandbox workspace.** It opens on THIS
   conversation's folder (전체 is one switch away) and says what each view shows, so nobody has to know the
   layout. Pinned descriptors only (a link is shown, never followed), no id that selects another user's files,
-  every byte a sandboxed download, a file drawn only as text or through the chat's sanitizers. It never writes,
-  deletes or reaches the avatar. **A new preview kind goes through a sanitizer or its own script-less frame.**
-  → `pi-runtime.md`, `client.md`.
+  every byte a sandboxed download, a file drawn only as text or through the chat's sanitizers. It never writes
+  or deletes in the workspace and never reaches the avatar. A pdf/pptx/docx is rendered from Noah's own COPY of
+  the bytes into an expiring per-user cache — never from a workspace path. **A new preview kind goes through a
+  sanitizer, its own script-less frame, or that copy-then-convert path.** → `pi-runtime.md`, `client.md`.
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

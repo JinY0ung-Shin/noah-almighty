@@ -2,7 +2,11 @@
 // file's bytes. The contract — shapes, caps, what may be previewed — is
 // `src/shared/workspaceFiles.ts`; nothing here writes.
 import { ApiError, api, sessionExpiredError } from "./api";
-import { WORKSPACE_TEXT_PREVIEW_MAX_BYTES, type WorkspaceListing } from "../../../shared/workspaceFiles";
+import {
+  WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
+  type WorkspaceDocumentPreview,
+  type WorkspaceListing,
+} from "../../../shared/workspaceFiles";
 
 /** One folder (`""` = the workspace root). `conversationId` only asks for `current`, that conversation's folder. */
 export function loadWorkspaceFolder(path: string, conversationId: string, signal?: AbortSignal): Promise<WorkspaceListing> {
@@ -54,4 +58,24 @@ export async function fetchWorkspaceBytes(path: string, signal?: AbortSignal): P
     throw new ApiError("미리보기에는 너무 큰 파일입니다. 다운로드해서 확인해 주세요.", 413);
   }
   return bytes;
+}
+
+/**
+ * A pdf, pptx or docx as page images, rendered by the server. It answers
+ * within seconds whatever the conversion takes: `rendering` means ask again.
+ * `retry` (the viewer pressed 새로고침) has it forget a remembered failure.
+ */
+export function loadWorkspaceDocumentPreview(
+  path: string,
+  retry: boolean,
+  signal?: AbortSignal,
+): Promise<WorkspaceDocumentPreview> {
+  const query = new URLSearchParams({ path });
+  if (retry) query.set("retry", "1");
+  return api<WorkspaceDocumentPreview>(`/api/me/workspace/preview?${query.toString()}`, { signal });
+}
+
+/** One rendered page (1-based) of a `ready` document preview, for an `<img>`. */
+export function workspacePreviewPageUrl(id: string, page: number): string {
+  return `/api/me/workspace/preview/page?${new URLSearchParams({ id, n: String(page) }).toString()}`;
 }

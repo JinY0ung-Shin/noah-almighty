@@ -30,6 +30,8 @@ const listing = (path: string, entries: WorkspaceEntry[], extra: Partial<Workspa
 let folders: Record<string, WorkspaceListing>;
 let files: Record<string, string | Uint8Array>;
 let requests: string[];
+/** What `/api/me/workspace/preview` answers, one per ask (the last one repeats). */
+let previewAnswers: unknown[];
 
 function stubFetch(): void {
   requests = [];
@@ -47,6 +49,10 @@ function stubFetch(): void {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
+      }
+      if (url.pathname === "/api/me/workspace/preview") {
+        const answer = previewAnswers.length > 1 ? previewAnswers.shift() : previewAnswers[0];
+        return new Response(JSON.stringify(answer), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const content = files[path];
       if (content === undefined) return new Response(JSON.stringify({ error: "파일을 찾을 수 없습니다." }), { status: 404 });
@@ -72,7 +78,12 @@ beforeEach(() => {
       dir(CONVERSATION, { conversation: { id: CONVERSATION, title: "분기 보고 준비" } }),
       dir("33333333-3333-4333-8333-333333333333", { orphan: true }),
     ]),
-    [`c/${CONVERSATION}`]: listing(`c/${CONVERSATION}`, [file("report.html", 40), file("data.csv", 20), file("deck.pptx", 900)]),
+    [`c/${CONVERSATION}`]: listing(`c/${CONVERSATION}`, [
+      file("report.html", 40),
+      file("data.csv", 20),
+      file("deck.pptx", 900),
+      file("archive.zip", 300),
+    ]),
     uploads: listing("uploads", []),
   };
   files = {
@@ -80,6 +91,7 @@ beforeEach(() => {
     [`c/${CONVERSATION}/report.html`]: "<h1>보고서</h1><script>window.pwned = 1</script>",
     [`c/${CONVERSATION}/data.csv`]: '이름,값\n"가,나",1\n',
   };
+  previewAnswers = [{ status: "ready", id: "a".repeat(64), pages: 2 }];
   stubFetch();
 });
 
@@ -234,10 +246,53 @@ describe("WorkspaceTab", () => {
 
   it("does not fetch a file it will not preview", async () => {
     render(<WorkspaceTab pane={pane()} active />);
-    fireEvent.click(await screen.findByRole("button", { name: "deck.pptx" }));
+    fireEvent.click(await screen.findByRole("button", { name: "archive.zip" }));
     expect(await screen.findByText(/미리보기를 제공하지 않습니다/)).toBeTruthy();
-    expect(requests.some((url) => url.includes("deck.pptx"))).toBe(false);
+    expect(requests.some((url) => url.includes("archive.zip"))).toBe(false);
     expect(screen.getByRole("link", { name: "다운로드" })).toBeTruthy();
+  });
+
+  it("shows a document as the page images the server rendered, asking until they are ready", async () => {
+    previewAnswers = [{ status: "rendering" }, { status: "ready", id: "b".repeat(64), pages: 3 }];
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      fireEvent.click(await screen.findByRole("button", { name: "deck.pptx" }));
+      expect(await screen.findByText(/문서를 미리보기로 변환하는 중입니다/)).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2100);
+      });
+      await waitFor(() => expect(container.querySelectorAll(".ws-preview img")).toHaveLength(3));
+      const sources = Array.from(container.querySelectorAll(".ws-preview img")).map((img) => img.getAttribute("src"));
+      expect(sources[2]).toBe(`/api/me/workspace/preview/page?id=${"b".repeat(64)}&n=3`);
+      expect(screen.getByText("3 / 3")).toBeTruthy();
+      expect(screen.getByText(/글꼴·배치가 조금 다를 수 있습니다/)).toBeTruthy();
+      // The file's bytes were never fetched for the preview: only the conversion was asked for.
+      const asked = requests.filter((url) => url.includes("deck.pptx"));
+      expect(asked.every((url) => url.startsWith("/api/me/workspace/preview?"))).toBe(true);
+      expect(asked).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says why a document has no preview, and 새로고침 asks the server to try again", async () => {
+    previewAnswers = [{ status: "failed", reason: "RENDER_FAILED" }];
+    render(<WorkspaceTab pane={pane()} active />);
+    fireEvent.click(await screen.findByRole("button", { name: "deck.pptx" }));
+    expect(await screen.findByText(/미리보기를 만들지 못했습니다/)).toBeTruthy();
+    expect(requests.filter((url) => url.includes("/preview?")).every((url) => !url.includes("retry=1"))).toBe(true);
+
+    previewAnswers = [{ status: "ready", id: "c".repeat(64), pages: 1 }];
+    const refresh = screen.getAllByRole("button", { name: "새로고침" }).find((button) => button.closest("[hidden]") === null)!;
+    fireEvent.click(refresh);
+    await waitFor(() => expect(requests.some((url) => url.includes("/preview?") && url.includes("retry=1"))).toBe(true));
+    await waitFor(() => expect(document.querySelectorAll(".ws-preview img")).toHaveLength(1));
+
+    previewAnswers = [{ status: "failed", reason: "UNAVAILABLE" }];
+    fireEvent.click(screen.getByRole("button", { name: /목록/ }));
+    fireEvent.click(screen.getByRole("button", { name: "deck.pptx" }));
+    expect(await screen.findByText(/이 서버에서는 문서 미리보기를 제공하지 않습니다/)).toBeTruthy();
   });
 
   it("calls bytes that are not text binary instead of drawing them", async () => {

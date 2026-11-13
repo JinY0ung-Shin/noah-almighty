@@ -185,6 +185,15 @@
     reads every user's pi history and sandbox files, and runs bash in any user's sandbox through pi's admin chat.
     Marginal today (the same children already reach the rw workspaces bind mount and the data volume — this is
     not uid isolation), and closed only by #71's uid separation.
+    **LibreOffice is the one child that PARSES agent-written bytes** (share_file previews, the 파일 tab's document
+    previews), so those files are reachable through the DOCUMENT, not only by code: left alone it follows a
+    document's external links — a `.pptx`/`.docx` whose picture is `file:///…` gets that file drawn into the
+    preview, one pointing at `http://…` makes Noah's container send the request (both reproduced on the image's
+    LibreOffice 7.4, 2026-11-13). `renderDocumentPreviews` therefore forces the format's own import filter
+    (`--infilter`: an OpenDocument file wearing an OOXML name is refused) and seeds every conversion's throwaway
+    profile with `BlockUntrustedRefererLinks` + no link updates + no macros (`deckRender.ts`
+    `LIBREOFFICE_PROFILE_SETTINGS`); with both, the same documents render with no linked content and no request
+    (matrix in `pi-runtime.md` § The 파일 tab). It still has no memory limit of its own (a 120 s stage budget only).
 - **Two git tokens, vault-backed, host-routed.** Each user can store TWO git tokens as named
   `user_secrets`: `GIT_TOKEN` (`INTERNAL_GIT_TOKEN_SECRET_NAME`) for the internal `GITHUB_HOST`, and
   `GITHUB_TOKEN` (`EXTERNAL_GIT_TOKEN_SECRET_NAME`) for github.com. `tokenForGitUrl` in

@@ -7,14 +7,22 @@ import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
 import { cx, useLatest, useStore } from "../lib/hooks";
 import { theme as themeStore } from "../lib/theme";
-import { fetchWorkspaceBytes, loadWorkspaceFolder, workspaceFileUrl } from "../lib/workspaceFiles";
 import {
+  fetchWorkspaceBytes,
+  loadWorkspaceDocumentPreview,
+  loadWorkspaceFolder,
+  workspaceFileUrl,
+  workspacePreviewPageUrl,
+} from "../lib/workspaceFiles";
+import {
+  WORKSPACE_DOCUMENT_PREVIEW_MAX_PAGES,
   decodeWorkspaceText,
   joinWorkspacePath,
   parseDelimitedText,
   workspaceDisplayName,
   workspaceExtension,
   workspacePreviewKind,
+  type WorkspaceDocumentPreviewFailure,
   type WorkspaceEntry,
   type WorkspaceListing,
   type WorkspacePreviewKind,
@@ -30,7 +38,8 @@ import "./WorkspaceTab.css";
 // Everything listed or shown is the agent's (or a page the agent saved): a
 // name is drawn as text, a file as text or through the sanitizers the chat
 // already uses (markdown → DOMPurify, html → the canvas's script-less sandboxed
-// frame), an image through the file route (never inline data). A link is
+// frame), an image through the file route (never inline data), a pdf, pptx or
+// docx as page images the SERVER renders (`workspacePreviews.ts`). A link is
 // listed and never opened.
 //
 // It opens on 이 대화 — the conversation's own folder as the root — and 전체
@@ -79,6 +88,17 @@ const PREVIEW_REFUSALS: Record<string, string> = {
   TOO_LARGE: "미리보기에는 너무 큰 파일입니다. 다운로드해서 확인해 주세요.",
   BINARY: "이 파일 형식은 미리보기를 제공하지 않습니다. 다운로드해서 확인해 주세요.",
 };
+
+/** Why a pdf, pptx or docx has no page images. */
+const DOCUMENT_FAILURES: Record<WorkspaceDocumentPreviewFailure, string> = {
+  UNAVAILABLE: "이 서버에서는 문서 미리보기를 제공하지 않습니다. 다운로드해서 확인해 주세요.",
+  TOO_LARGE: PREVIEW_REFUSALS.TOO_LARGE,
+  BAD_FORMAT: "파일 내용이 확장자와 맞지 않아 미리보기를 만들 수 없습니다. 다운로드해서 확인해 주세요.",
+  RENDER_FAILED: "미리보기를 만들지 못했습니다. 새로고침으로 다시 시도하거나 다운로드해서 확인해 주세요.",
+};
+/** How often the tab asks whether a document's pages are ready, and for how long. */
+const DOCUMENT_POLL_MS = 2000;
+const DOCUMENT_POLL_LIMIT_MS = 5 * 60_000;
 
 function isHidden(entry: WorkspaceEntry): boolean {
   return entry.name.startsWith(".");
@@ -344,6 +364,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
   function showFile(next: { path: string; entry: WorkspaceEntry } | null): void {
     setRaw(false);
     setRawOffered(false);
+    setPreviewVersion(0); // a file opened afresh is not a 새로고침 of the last one
     setOpened(next);
   }
 
@@ -588,6 +609,9 @@ const WorkspaceTree = memo(function WorkspaceTree({
 type PreviewState =
   | { status: "loading" }
   | { status: "text"; text: string }
+  /** A document the server is still turning into page images (`waiting`: behind other documents). */
+  | { status: "converting"; waiting: boolean }
+  | { status: "pages"; id: string; pages: number }
   | { status: "none"; message: string };
 
 const RAW_TOGGLE_KINDS: ReadonlySet<WorkspacePreviewKind> = new Set(["markdown", "html", "csv", "json", "drawio"]);
@@ -612,7 +636,7 @@ function WorkspacePreview({
 }) {
   const kind = workspacePreviewKind(entry.name, entry.size ?? 0);
   const refusal = PREVIEW_REFUSALS[kind];
-  const textual = !refusal && kind !== "image";
+  const textual = !refusal && kind !== "image" && kind !== "document";
   const [state, setState] = useState<PreviewState>(() =>
     refusal ? { status: "none", message: refusal } : { status: "loading" },
   );
@@ -640,6 +664,41 @@ function WorkspacePreview({
     );
     return () => controller.abort();
     // One read per mount: the parent remounts this for another file or a re-read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A pdf, pptx or docx: the server renders it; ask until the pages are ready.
+  useEffect(() => {
+    if (kind !== "document") return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const started = Date.now();
+    const ask = async (retry: boolean): Promise<void> => {
+      try {
+        const answer = await loadWorkspaceDocumentPreview(path, retry, controller.signal);
+        if (controller.signal.aborted) return;
+        if (answer.status === "ready") {
+          setState({ status: "pages", id: answer.id, pages: answer.pages });
+        } else if (answer.status === "failed") {
+          setState({ status: "none", message: DOCUMENT_FAILURES[answer.reason] ?? DOCUMENT_FAILURES.RENDER_FAILED });
+        } else if (Date.now() - started > DOCUMENT_POLL_LIMIT_MS) {
+          setState({ status: "none", message: "미리보기 변환이 너무 오래 걸립니다. 다운로드해서 확인해 주세요." });
+        } else {
+          setState({ status: "converting", waiting: Boolean(answer.waiting) });
+          timer = setTimeout(() => void ask(false), DOCUMENT_POLL_MS);
+        }
+      } catch (err) {
+        if (controller.signal.aborted || (err as Error)?.name === "AbortError") return;
+        setState({ status: "none", message: err instanceof Error ? err.message : "미리보기를 불러오지 못했습니다." });
+      }
+    };
+    // 새로고침 (a re-read of the same file) also retries a conversion that failed.
+    void ask(version > 0);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+    // One conversation with the server per mount: the parent remounts this for another file or a re-read.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -711,6 +770,43 @@ function WorkspacePreview({
     );
   } else if (state.status === "loading") {
     body = <p className="muted">불러오는 중…</p>;
+  } else if (state.status === "converting") {
+    body = (
+      <p className="muted" role="status">
+        {state.waiting
+          ? "다른 문서를 변환하고 있어 순서를 기다리는 중입니다…"
+          : "문서를 미리보기로 변환하는 중입니다. 잠시만 기다려 주세요…"}
+      </p>
+    );
+  } else if (state.status === "pages") {
+    const { id, pages } = state;
+    body = (
+      <>
+        {Array.from({ length: pages }, (_, index) => (
+          <figure className="file-preview-slide" key={index}>
+            <img
+              src={workspacePreviewPageUrl(id, index + 1)}
+              alt={`${workspaceDisplayName(entry.name)} ${index + 1}쪽`}
+              loading="lazy"
+            />
+            {pages > 1 ? (
+              <figcaption className="muted">
+                {index + 1} / {pages}
+              </figcaption>
+            ) : null}
+          </figure>
+        ))}
+        {pages >= WORKSPACE_DOCUMENT_PREVIEW_MAX_PAGES ? (
+          <p className="ws-note muted">
+            처음 {WORKSPACE_DOCUMENT_PREVIEW_MAX_PAGES}쪽까지만 표시합니다. 전체는 다운로드해서 확인해 주세요.
+          </p>
+        ) : null}
+        {/* LibreOffice's rendering of an office file is an approximation; a pdf's pages are the pages. */}
+        {workspaceExtension(entry.name) !== "pdf" ? (
+          <p className="ws-note muted">미리보기는 실제 파일과 글꼴·배치가 조금 다를 수 있습니다.</p>
+        ) : null}
+      </>
+    );
   } else if (state.status === "none") {
     body = <p className="muted">{state.message}</p>;
   } else if (kind === "drawio" && !raw) {

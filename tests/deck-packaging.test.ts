@@ -86,6 +86,7 @@ describe("Dockerfile — the Noah image carries no deck converter", () => {
       "git",
       "gh",
       "libreoffice-impress",
+      "libreoffice-writer",
       "poppler-utils",
       "python3",
       "python3-cryptography",

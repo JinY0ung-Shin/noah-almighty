@@ -41,7 +41,9 @@ import {
   probeDeckRendering,
   probeDeckToolchain,
   probeDocumentPreviews,
+  libreOfficeConvertArgs,
   renderDocumentPreviews,
+  seedLibreOfficeProfile,
   type DeckToolchainState,
 } from "../src/server/deckRender.js";
 
@@ -883,7 +885,35 @@ describe("share_file preview gate (LibreOffice + pdftoppm, not python-pptx)", ()
     const pages = await renderDocumentPreviews(samplePdf(), "pdf");
     expect(pages).toHaveLength(1);
     expect(pages[0].subarray(0, 4).toString("latin1")).toBe("\x89PNG");
-    expect(fs.readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+    const invocations = fs.readFileSync(calls, "utf8").trim().split("\n");
+    expect(invocations).toHaveLength(1);
+    // A fixed pixel size, never a resolution: a pdf may declare a page of any size.
+    expect(invocations[0]).toContain("-scale-to 1600");
+    expect(invocations[0]).not.toMatch(/(^| )-r /);
+    expect(invocations[0]).toContain("-l 30");
+  });
+
+  it("converts an office file through its own import filter, with linked content and macros off", async () => {
+    const work = path.join(tempDir(), "work");
+    expect(libreOfficeConvertArgs(work, "/x/document.pptx", "pptx")).toEqual([
+      "--headless",
+      "--norestore",
+      `-env:UserInstallation=file://${work}/lo-profile`,
+      "--infilter=Impress MS PowerPoint 2007 XML",
+      "--convert-to",
+      "pdf",
+      "--outdir",
+      work,
+      "/x/document.pptx",
+    ]);
+    // The filter is forced per format: LibreOffice would otherwise load an OpenDocument file named .docx as OpenDocument.
+    expect(libreOfficeConvertArgs(work, "/x/a.DOCX", "DOCX")).toContain("--infilter=MS Word 2007 XML");
+    expect(libreOfficeConvertArgs(work, "/x/a.xlsx", "xlsx")).toContain("--infilter=Calc MS Excel 2007 XML");
+    await seedLibreOfficeProfile(work);
+    const settings = fs.readFileSync(path.join(work, "lo-profile", "user", "registrymodifications.xcu"), "utf8");
+    expect(settings).toMatch(/oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</);
+    expect(settings).toMatch(/oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</);
+    expect(settings).toMatch(/oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</);
   });
 
   it("skips previews without spawning when pdftoppm is missing", async () => {

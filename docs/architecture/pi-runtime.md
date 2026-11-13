@@ -297,10 +297,11 @@ PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system
   (`piRunPrincipal`: the viewer of a chat — a colleague chat included —, the owner of a routine or an API task), so the
   principal is `req.user.id` and the routes take no user or conversation id that selects files. A consultation's
   throwaway sandbox is never reachable (no session user has that principal).
-- **Two GETs, nothing else** — `GET /api/me/workspace?path=&conversation=` (one folder) and
+- **GETs only** — `GET /api/me/workspace?path=&conversation=` (one folder) and
   `GET /api/me/workspace/file?path=&preview=1` (one file), session-only (`requireAuth`), `Cache-Control: private,
-  no-store`. The surface never creates, writes, renames or deletes, so it stores no copy and adds nothing to the
-  deletion cascades. `bootstrap.workspaceFiles` (= `workspaceBrowserAvailable`: `AGENT_RUNTIME=pi` AND
+  no-store` (plus the two document-preview GETs below). The surface never creates, writes, renames or deletes
+  anything IN THE WORKSPACE and adds nothing to the deletion cascades; the one thing Noah writes for it is the
+  document previews' own expiring cache. `bootstrap.workspaceFiles` (= `workspaceBrowserAvailable`: `AGENT_RUNTIME=pi` AND
   `PI_WORKSPACES_DIR`) decides whether the button exists; without it both routes answer 404.
 - **Path grammar** (`parseWorkspacePath`, `src/shared/workspaceFiles.ts`): a relative path of plain segments — no
   `..`, `.`, empty segment, backslash or NUL, ≤ 64 segments, ≤ 4096 chars — else 400.
@@ -326,8 +327,49 @@ PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system
   cut short after the open DROPS the connection (the bytes sent are counted against the size at the open) instead of
   hanging under the declared length until the keep-alive timeout. Shell-exposed secrets written into a file
   are NOT redacted (pi does not redact file contents either) — the reader is the sandbox's own user.
+- **Document previews (pdf, pptx, docx → page images; `workspacePreviews.ts`, 2026-11-13).** The tab cannot draw these,
+  so `GET /api/me/workspace/preview?path=&retry=1` has the SERVER render them with the file cards' converter
+  (`renderDocumentPreviews`: LibreOffice → pdf → `pdftoppm`, first 30 pages; a pdf skips LibreOffice) and
+  `GET /api/me/workspace/preview/page?id=&n=` serves each page (`image/png|jpeg`, `nosniff`, CSP sandbox, `private,
+  max-age=21600, immutable`; a page that expired mid-send is a `no-store` 404). What is different from every other read here:
+  - **Noah converts a COPY, never the workspace file.** The bytes are read ONCE through the pinned descriptor,
+    bounded by the 30 MiB cap ITSELF (`readBounded` — never by a stat the sandbox can change before the read), must
+    open with the format's magic (`%PDF` / `PK`), and go to a private file under a FIXED name
+    (`<dataDir>/workspace-previews/.work/doc-*/document.<ext>` — the workspace name never reaches a command line);
+    only that file is handed to `soffice` / `pdftoppm`, and it is removed when the conversion ends (boot clears
+    what a crash left).
+  - **The document is untrusted and is converted in Noah's container**, so the converter is hardened for every
+    caller (`renderDocumentPreviews`, share_file cards included): `--infilter` forces the format's own import
+    filter and each conversion's throwaway profile is seeded with `BlockUntrustedRefererLinks`, no link updates,
+    no macros (`libreOfficeConvertArgs`, `seedLibreOfficeProfile`). Checked on the image's LibreOffice 7.4.7 with
+    `-writer` (2026-11-13), before → after: a real pptx/docx with an `r:link` picture to `file:///…` drew that
+    local file into the pdf → no image; the same link to `http://127.0.0.1` made 2–3 requests → 0; an ODP / ODT
+    named `.pptx` / `.docx` (linked picture) loaded and leaked → "source file could not be loaded"; a normal
+    pptx/docx kept its embedded picture; `INCLUDETEXT` / `INCLUDEPICTURE` fields leaked nothing either way. Pages
+    are a fixed 1600 px long side (`pdftoppm -scale-to`, not a resolution: a 14400 pt MediaBox is 1600×1600 and
+    ~25 MB of memory instead of a 24000 px bitmap) and ≤ 64 MiB per document.
+  - **A deck the `pptx` skill built uses its own renders**: `loadConverterPreviews` on the `<stem>.preview/` sidecar
+    next to the file the kernel says was opened (`/proc/self/fd`), accepted only when its `pptxSha256` equals the
+    bytes just read — else LibreOffice.
+  - **The renders are an expiring CACHE**, `<dataDir>/workspace-previews/<u-key>/<id>/` (`page-N.<ext>` + `meta.json`,
+    published by one rename). `id` = sha256(user, device, inode, size, mtime, ext) of the OPENED file, so a rewritten
+    file is a new entry; it is not a content hash (a file forced back to the same size and mtime keeps its old pages
+    until expiry — the user's own file; the download is always the real bytes). Entries go after 6 h or past 20 per
+    user (swept every 10 min by an unref'd timer and on requests), the whole root at boot, and a user's folder with the account
+    (`deleteWorkspacePreviewsForUser`, `routes/admin.ts`). No table or message points at it: nothing to cascade.
+  - **A request never waits out a conversion**: it waits ≤ 8 s and then answers `{ status: "rendering" }` (the client
+    asks again every 2 s, up to 5 min), so a reverse proxy's timeout never cuts one. ≤ 2 conversions run at once, 1
+    per user (`waiting: true` otherwise); one job per file however often it is asked; a failure is remembered 5 min
+    so a poll does not restart it (`retry=1`, the tab's 새로고침, forgets it). State lives on ONE
+    `WorkspaceDocumentPreviews` made by the router factory.
+  - **Availability** is `probeDocumentPreviews()` (soffice + pdftoppm at boot), else `{ status: "failed", reason:
+    "UNAVAILABLE" }`. Each LibreOffice application loads only its own formats: the image installs `-impress` AND
+    `-writer` (added with this feature — before it a `.docx` failed with "source file could not be loaded", for
+    share_file cards too); `-calc` is not installed, so `.xlsx` is not offered here.
 - **Tests:** `tests/routes-workspace-files.test.ts` (self-scoping, planted links at every level, the path grammar, the
-  response headers, the cap), `tests/workspace-files.test.ts` (the shared contract), `tests/react-workspace-tab.test.tsx`.
+  response headers, the cap, the preview routes), `tests/workspace-previews.test.ts` (the converter's copy, bounds,
+  remembered failures, the sidecar, the cache), `tests/workspace-files.test.ts` (the shared contract),
+  `tests/react-workspace-tab.test.tsx`.
   Client side: `client.md` § Side panel.
 
 ## Skills (`agent/pi/piSkills.ts`, `agent/skillsTools.ts`)

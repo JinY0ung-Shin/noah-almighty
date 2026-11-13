@@ -579,7 +579,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   Focus moves to 목록 when a file opens and back to its row. A file opens INSIDE the tab (the tree stays mounted behind it): images through the file route in an
   `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML through the canvas's script-less
   sandboxed frame (`canvasHtmlDocument` + `CanvasHtmlFrame`), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×
-  50 columns), JSON re-indented, `.drawio` through `DrawioDiagram`, anything else as text — judged by its BYTES
+  50 columns), JSON re-indented, `.drawio` through `DrawioDiagram`, a pdf / pptx / docx as the page images the SERVER renders
+  (`kind: "document"`: the tab asks `/api/me/workspace/preview` every 2 s while it answers `rendering`, for at most
+  5 min, then draws one lazy `<img>` per page; an office file carries a line that its preview is approximate;
+  새로고침 re-asks with `retry=1`), anything else as text — judged by its BYTES
   (`decodeWorkspaceText`: UTF-8/UTF-16 by BOM, UTF-8, then CP949; a NUL = binary), never fetched for a known binary
   extension, ≤ 1 MiB (images ≤ 10 MiB). 원문 보기 shows the source of a rendered kind. Names are drawn through
   `workspaceDisplayName` (control characters and bidi overrides become a mark). Relative images inside a Markdown or

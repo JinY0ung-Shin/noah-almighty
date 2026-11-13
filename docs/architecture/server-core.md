@@ -60,8 +60,10 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY
   `deleteCanvasArtifactsForConversation` call. Mechanics → [`share-links.md`](share-links.md).
 - **The 파일 tab** (a user's own sandbox workspace, read-only) has its own router (`routes/workspaceFiles.ts`,
-  `createWorkspaceFilesRouter`, mounted right after the upload relay) over `src/server/workspaceBrowser.ts`; no
-  store mixin and no table — it reads the pi workspaces mount and nothing else. The wire shapes, path grammar
+  `createWorkspaceFilesRouter`, mounted right after the upload relay) over `src/server/workspaceBrowser.ts` and
+  `src/server/workspacePreviews.ts` (document page images; the router factory owns its ONE instance); no store
+  mixin and no table — it reads the pi workspaces mount, and writes only the previews' expiring cache under
+  `<dataDir>/workspace-previews/` (a per-user folder: swept in the `routes/admin.ts` delete handler). The wire shapes, path grammar
   and caps are the import-free `src/shared/workspaceFiles.ts`. Mechanics →
   [`pi-runtime.md`](pi-runtime.md) § The 파일 tab.
 - **할 일 (to-dos)** have their own router (`routes/todos.ts`, `createTodosRouter`, mounted right after

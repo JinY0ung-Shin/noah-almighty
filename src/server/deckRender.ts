@@ -837,6 +837,71 @@ export const MAX_PREVIEW_PAGES = 30;
 const RENDER_STAGE_TIMEOUT_MS = 120_000;
 
 /**
+ * Long side of a rendered page, in pixels (`pdftoppm -scale-to`): a 16:9 slide
+ * comes out 1600×900, as it did at 120 dpi. A fixed size, not a resolution —
+ * a pdf may declare a page of any size (a 200-inch MediaBox at 120 dpi is a
+ * 24000-pixel bitmap and gigabytes of memory in pdftoppm).
+ */
+const PREVIEW_PAGE_PIXELS = 1600;
+/** Bytes of page images one document may hand back (the rest of its pages are dropped). */
+const MAX_PREVIEW_TOTAL_BYTES = 64 * 1024 * 1024;
+
+/**
+ * The import filter each office format is FORCED through (`--infilter`).
+ * LibreOffice otherwise picks the filter from the CONTENT, so an OpenDocument
+ * file named `.pptx` would load as OpenDocument — a format whose linked
+ * content the profile switch below does not stop.
+ */
+const OFFICE_IMPORT_FILTERS: Record<string, string> = {
+  pptx: "Impress MS PowerPoint 2007 XML",
+  docx: "MS Word 2007 XML",
+  xlsx: "Calc MS Excel 2007 XML",
+};
+
+/**
+ * The settings every conversion runs with (`registrymodifications.xcu` of its
+ * throwaway profile). The document is written by an agent or a third party
+ * and is converted INSIDE Noah's container: left alone, LibreOffice follows a
+ * document's external links, so a deck whose picture is `file:///…` gets that
+ * file drawn into its preview and one that points at `http://…` makes Noah's
+ * container send the request. `BlockUntrustedRefererLinks` refuses linked
+ * content of a document that is not in a trusted location (nothing is);
+ * links are never updated on load; macros never run.
+ */
+const LIBREOFFICE_PROFILE_SETTINGS = `<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="MacroSecurityLevel" oor:op="fuse"><value>3</value></prop></item>
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="DisableMacrosExecution" oor:op="fuse"><value>true</value></prop></item>
+<item oor:path="/org.openoffice.Office.Writer/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>0</value></prop></item>
+<item oor:path="/org.openoffice.Office.Calc/Content/Update"><prop oor:name="Link" oor:op="fuse"><value>1</value></prop></item>
+</oor:items>
+`;
+
+/** Exported for tests and the operator's checks: the exact soffice arguments of one conversion. */
+export function libreOfficeConvertArgs(workDir: string, sourcePath: string, ext: string): string[] {
+  const filter = OFFICE_IMPORT_FILTERS[ext.toLowerCase()];
+  return [
+    "--headless",
+    "--norestore",
+    `-env:UserInstallation=file://${workDir}/lo-profile`,
+    ...(filter ? [`--infilter=${filter}`] : []),
+    "--convert-to",
+    "pdf",
+    "--outdir",
+    workDir,
+    sourcePath,
+  ];
+}
+
+/** Write the conversion's throwaway profile with {@link LIBREOFFICE_PROFILE_SETTINGS} before soffice first runs in it. */
+export async function seedLibreOfficeProfile(workDir: string): Promise<void> {
+  const userDir = path.join(workDir, "lo-profile", "user");
+  await fs.promises.mkdir(userDir, { recursive: true });
+  await fs.promises.writeFile(path.join(userDir, "registrymodifications.xcu"), LIBREOFFICE_PROFILE_SETTINGS);
+}
+
+/**
  * Order pdftoppm outputs numerically: it emits `slide-1.png`…`slide-10.png`
  * for short docs but zero-pads (`slide-01.png`) for longer ones, so a plain
  * lexicographic sort would interleave pages. Exported for tests.
@@ -854,8 +919,12 @@ export function sortSlideFiles(names: string[]): string[] {
  * SERVER-SIDE — the agent never has to render/publish slides itself. pdf goes
  * straight through pdftoppm; office formats convert to pdf first via a
  * profile-isolated headless soffice (parallel conversions would otherwise
- * fight over the shared profile lock). Returns [] when the toolchain is
- * missing or anything fails — callers treat previews as best-effort.
+ * fight over the shared profile lock), forced through the format's own import
+ * filter and with linked content, link updates and macros switched off — the
+ * document is untrusted and the conversion runs in Noah's own container.
+ * Pages are a fixed pixel size and a bounded number of bytes whatever the
+ * document declares. Returns [] when the toolchain is missing or anything
+ * fails — callers treat previews as best-effort.
  */
 export async function renderDocumentPreviews(
   sourcePath: string,
@@ -869,27 +938,25 @@ export async function renderDocumentPreviews(
     workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "deck-preview-"));
     let pdfPath = sourcePath;
     if (ext.toLowerCase() !== "pdf") {
-      await execFileAsync(
-        "soffice",
-        [
-          "--headless",
-          "--norestore",
-          `-env:UserInstallation=file://${workDir}/lo-profile`,
-          "--convert-to",
-          "pdf",
-          "--outdir",
-          workDir,
-          sourcePath,
-        ],
-        { timeout: RENDER_STAGE_TIMEOUT_MS },
-      );
+      await seedLibreOfficeProfile(workDir);
+      await execFileAsync("soffice", libreOfficeConvertArgs(workDir, sourcePath, ext), {
+        timeout: RENDER_STAGE_TIMEOUT_MS,
+      });
       const base = path.basename(sourcePath);
       pdfPath = path.join(workDir, `${base.slice(0, base.lastIndexOf("."))}.pdf`);
     }
     await fs.promises.access(pdfPath);
     await execFileAsync(
       "pdftoppm",
-      ["-png", "-r", "120", "-l", String(MAX_PREVIEW_PAGES), pdfPath, path.join(workDir, "slide")],
+      [
+        "-png",
+        "-scale-to",
+        String(PREVIEW_PAGE_PIXELS),
+        "-l",
+        String(MAX_PREVIEW_PAGES),
+        pdfPath,
+        path.join(workDir, "slide"),
+      ],
       { timeout: RENDER_STAGE_TIMEOUT_MS },
     );
     const entries = await fs.promises.readdir(workDir);
@@ -898,8 +965,12 @@ export async function renderDocumentPreviews(
       MAX_PREVIEW_PAGES,
     );
     const buffers: Buffer[] = [];
+    let total = 0;
     for (const name of slides) {
-      buffers.push(await fs.promises.readFile(path.join(workDir, name)));
+      const file = path.join(workDir, name);
+      total += (await fs.promises.stat(file)).size;
+      if (total > MAX_PREVIEW_TOTAL_BYTES) break;
+      buffers.push(await fs.promises.readFile(file));
     }
     return buffers;
   } catch (err) {

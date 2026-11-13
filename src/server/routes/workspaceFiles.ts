@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { Router } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import {
@@ -6,6 +7,7 @@ import {
   openWorkspaceFile,
   workspaceConversationPath,
 } from "../workspaceBrowser.js";
+import { WorkspaceDocumentPreviews } from "../workspacePreviews.js";
 import {
   WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
   parseWorkspacePath,
@@ -17,6 +19,8 @@ const UNAVAILABLE_MESSAGE = "이 서버에서는 작업 폴더를 볼 수 없습
 const BAD_PATH_MESSAGE = "경로가 올바르지 않습니다.";
 const FOLDER_NOT_FOUND_MESSAGE = "폴더를 찾을 수 없습니다.";
 const FILE_NOT_FOUND_MESSAGE = "파일을 찾을 수 없습니다.";
+const NOT_DOCUMENT_MESSAGE = "미리보기로 변환할 수 있는 문서가 아닙니다.";
+const PAGE_NOT_FOUND_MESSAGE = "미리보기 페이지를 찾을 수 없습니다. 파일을 다시 열어 주세요.";
 const PREVIEW_TOO_LARGE_MESSAGE = "미리보기에는 너무 큰 파일입니다. 다운로드해서 확인해 주세요.";
 
 /** A conversation id as the `conversation` query may carry it (only ever hashed or used as one folder name). */
@@ -25,10 +29,13 @@ const CONVERSATION_ID = /^[\x21-\x7e]{1,200}$/;
 // ---- 파일 tab (the signed-in user's own sandbox workspace, read-only) ------
 // Session-only and strictly self-scoped: the workspace is the caller's own
 // (`req.user.id` is the principal every run of theirs executes as), so there is
-// no id to pass and no cross-user read to gate. Two GETs and nothing else —
-// this surface never writes, renames or deletes.
+// no id to pass and no cross-user read to gate. GETs only — this surface never
+// writes, renames or deletes anything in the workspace. (A document preview
+// renders into Noah's own expiring cache: `workspacePreviews.ts`.)
 export function createWorkspaceFilesRouter({ config, store }: RouterDeps): Router {
   const router = Router();
+  // The document converter's jobs and cache belong to this app instance.
+  const documentPreviews = new WorkspaceDocumentPreviews(config);
   router.use("/api/me/workspace", requireAuth(store), (_req, res, next) => {
     // A listing or a file is whatever the sandbox holds right now.
     res.setHeader("Cache-Control", "private, no-store");
@@ -115,6 +122,54 @@ export function createWorkspaceFilesRouter({ config, store }: RouterDeps): Route
     });
     res.on("close", () => stream.destroy());
     stream.pipe(res, { end: false });
+  });
+
+  // A pdf, pptx or docx as page images, rendered server-side (the tab cannot
+  // draw them). Never holds the request for a conversion: `rendering` means
+  // "ask again". `retry=1` (the viewer pressed 새로고침) forgets a remembered failure.
+  router.get("/api/me/workspace/preview", async (req: AuthenticatedRequest, res) => {
+    const segments = parseWorkspacePath(req.query.path);
+    if (!segments || segments.length === 0) {
+      apiError(res, 400, BAD_PATH_MESSAGE);
+      return;
+    }
+    const preview = await documentPreviews.request(req.user!.id, segments, { retry: req.query.retry === "1" });
+    if (preview === "unavailable") {
+      apiError(res, 404, UNAVAILABLE_MESSAGE);
+      return;
+    }
+    if (preview === "not_found") {
+      apiError(res, 404, FILE_NOT_FOUND_MESSAGE);
+      return;
+    }
+    if (preview === "not_document") {
+      apiError(res, 400, NOT_DOCUMENT_MESSAGE);
+      return;
+    }
+    res.json(preview);
+  });
+
+  // One rendered page: an image Noah's own converter wrote, of the CALLER's own
+  // document (the cache is keyed by the user), for an <img>. The id names one
+  // version of the file, so the image under it never changes.
+  router.get("/api/me/workspace/preview/page", (req: AuthenticatedRequest, res) => {
+    const page = documentPreviews.page(req.user!.id, req.query.id, req.query.n);
+    if (!page) {
+      apiError(res, 404, PAGE_NOT_FOUND_MESSAGE);
+      return;
+    }
+    res.type(page.mediaType);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+    res.setHeader("Cache-Control", "private, max-age=21600, immutable");
+    res.sendFile(path.resolve(page.path), { dotfiles: "allow" }, (error) => {
+      // Expired between the lookup and the send. Not cacheable: the same id
+      // names the same pages once they are rendered again.
+      if (error && !res.headersSent) {
+        res.setHeader("Cache-Control", "private, no-store");
+        apiError(res, 404, PAGE_NOT_FOUND_MESSAGE);
+      }
+    });
   });
 
   return router;

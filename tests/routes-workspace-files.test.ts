@@ -9,8 +9,24 @@ import fs from "node:fs";
 import path from "node:path";
 import request from "supertest";
 import { execFileSync } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { signup, withTempDir } from "./helpers.js";
+
+// The document converter is LibreOffice: a fake stands in (two pages per document).
+const RENDER = vi.hoisted(() => ({
+  page: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64"),
+  available: true,
+  calls: [] as string[],
+}));
+vi.mock("../src/server/deckRender.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/server/deckRender.js")>()),
+  probeDocumentPreviews: () => RENDER.available,
+  renderDocumentPreviews: vi.fn(async (sourcePath: string) => {
+    RENDER.calls.push(sourcePath);
+    return [RENDER.page, RENDER.page];
+  }),
+}));
+
 import { createApp, createServices } from "../src/server/app.js";
 import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
 import { PinnedDir } from "../src/server/pinnedFs.js";
@@ -312,5 +328,69 @@ describe("GET /api/me/workspace/file", () => {
     // The download itself is not capped (HEAD: the 10 MiB body is not pulled through the test).
     const res = await agent.head("/api/me/workspace/file?path=big.bin").expect(200);
     expect(res.headers["content-length"]).toBe(String(WORKSPACE_IMAGE_PREVIEW_MAX_BYTES + 1));
+  });
+});
+
+describe("GET /api/me/workspace/preview", () => {
+  const PDF = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+
+  it("renders a document to page images that only its owner can fetch", async () => {
+    RENDER.available = true;
+    RENDER.calls.length = 0;
+    const { app, workspacesDir } = boot();
+    const alice = request.agent(app);
+    const aliceId = (await signup(alice, "alice").expect(201)).body.user.id as string;
+    const bob = request.agent(app);
+    await signup(bob, "bob").expect(201);
+    seed(workspacesDir, aliceId, { "c/x/보고서.pdf": PDF, "notes.txt": "text" });
+
+    await request(app).get("/api/me/workspace/preview?path=a.pdf").expect(401);
+    const preview = await alice.get("/api/me/workspace/preview").query({ path: "c/x/보고서.pdf" }).expect(200);
+    expect(preview.body).toMatchObject({ status: "ready", pages: 2 });
+    expect(RENDER.calls).toHaveLength(1);
+    expect(RENDER.calls[0].startsWith(workspacesDir)).toBe(false);
+
+    const page = await alice.get("/api/me/workspace/preview/page").query({ id: preview.body.id, n: 2 }).expect(200);
+    expect(page.headers["content-type"]).toBe("image/png");
+    expect(page.headers["x-content-type-options"]).toBe("nosniff");
+    expect(page.headers["content-security-policy"]).toContain("sandbox");
+    expect(page.headers["cache-control"]).toContain("private");
+    expect(Buffer.compare(page.body, RENDER.page)).toBe(0);
+
+    await alice.get("/api/me/workspace/preview/page").query({ id: preview.body.id, n: 3 }).expect(404);
+    await alice.get("/api/me/workspace/preview/page").query({ id: "../../x", n: 1 }).expect(404);
+    await bob.get("/api/me/workspace/preview/page").query({ id: preview.body.id, n: 1 }).expect(404);
+    await bob.get("/api/me/workspace/preview").query({ path: "c/x/보고서.pdf" }).expect(404);
+
+    await alice.get("/api/me/workspace/preview").query({ path: "notes.txt" }).expect(400);
+    await alice.get("/api/me/workspace/preview").query({ path: "../x.pdf" }).expect(400);
+    await alice.get("/api/me/workspace/preview").expect(400);
+    await alice.get("/api/me/workspace/preview").query({ path: "missing.pdf" }).expect(404);
+  });
+
+  it("says so when the server has no converter", async () => {
+    RENDER.available = false;
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    seed(workspacesDir, me, { "a.pdf": PDF });
+    const res = await agent.get("/api/me/workspace/preview?path=a.pdf").expect(200);
+    expect(res.body).toEqual({ status: "failed", reason: "UNAVAILABLE" });
+    RENDER.available = true;
+  });
+
+  it("removes a deleted user's rendered pages", async () => {
+    RENDER.available = true;
+    const { app, workspacesDir, services } = boot();
+    const admin = request.agent(app);
+    await signup(admin, "admin").expect(201);
+    const bob = request.agent(app);
+    const bobId = (await signup(bob, "bob").expect(201)).body.user.id as string;
+    seed(workspacesDir, bobId, { "a.pdf": PDF });
+    await bob.get("/api/me/workspace/preview?path=a.pdf").expect(200);
+    const cache = path.join(services.config.dataDir, "workspace-previews", piUserKey(bobId));
+    expect(fs.existsSync(cache)).toBe(true);
+    await admin.delete(`/api/admin/users/${bobId}`).expect(200);
+    expect(fs.existsSync(cache)).toBe(false);
   });
 });

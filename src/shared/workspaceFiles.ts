@@ -26,6 +26,10 @@ export const WORKSPACE_PATH_MAX_LENGTH: number = 4096;
 export const WORKSPACE_TEXT_PREVIEW_MAX_BYTES: number = 1024 * 1024;
 /** Bytes of an image the tab shows (also the server's cap for any `preview=1` read). */
 export const WORKSPACE_IMAGE_PREVIEW_MAX_BYTES: number = 10 * 1024 * 1024;
+/** Bytes of a document (pdf, pptx, docx) the server converts to page images for a preview. */
+export const WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES: number = 30 * 1024 * 1024;
+/** Pages of a document a preview shows (the converter stops there). */
+export const WORKSPACE_DOCUMENT_PREVIEW_MAX_PAGES: number = 30;
 /** Rows / columns a CSV preview draws. */
 export const WORKSPACE_TABLE_MAX_ROWS: number = 500;
 export const WORKSPACE_TABLE_MAX_COLUMNS: number = 50;
@@ -110,7 +114,7 @@ export function workspaceImageMediaType(name: string): string | null {
  * (Anything else is read and judged by its bytes — {@link decodeWorkspaceText}.)
  */
 const BINARY_EXTENSIONS = new Set([
-  "pdf", "pptx", "ppt", "docx", "doc", "xlsx", "xls", "hwp", "hwpx",
+  "ppt", "doc", "xlsx", "xls", "hwp", "hwpx",
   "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "jar", "whl",
   "ico", "tif", "tiff", "heic", "avif", "psd",
   "mp3", "wav", "ogg", "flac", "m4a", "mp4", "mov", "avi", "mkv", "webm",
@@ -119,8 +123,43 @@ const BINARY_EXTENSIONS = new Set([
   "sqlite", "sqlite3", "db", "parquet", "npy", "npz", "pkl", "pt", "onnx",
 ]);
 
+/**
+ * Documents the SERVER turns into page images (`GET /api/me/workspace/preview`):
+ * the tab cannot draw them itself. The extension is the lookup key; the bytes
+ * must open with the format's magic (`%PDF`, a zip's `PK`).
+ */
+export const WORKSPACE_DOCUMENT_EXTENSIONS = ["pdf", "pptx", "docx"] as const;
+export type WorkspaceDocumentExtension = (typeof WORKSPACE_DOCUMENT_EXTENSIONS)[number];
+
+/** The document extension of a file name, or null when it is not one the server converts. */
+export function workspaceDocumentExtension(name: string): WorkspaceDocumentExtension | null {
+  const ext = workspaceExtension(name);
+  return (WORKSPACE_DOCUMENT_EXTENSIONS as readonly string[]).includes(ext) ? (ext as WorkspaceDocumentExtension) : null;
+}
+
+/** Why a document has no page images. */
+export type WorkspaceDocumentPreviewFailure =
+  /** This server has no converter (LibreOffice + pdftoppm). */
+  | "UNAVAILABLE"
+  | "TOO_LARGE"
+  /** The bytes are not what the extension says. */
+  | "BAD_FORMAT"
+  | "RENDER_FAILED";
+
+/**
+ * The answer of `GET /api/me/workspace/preview`. Converting takes seconds to
+ * tens of seconds, so the route never holds a request for it: `rendering`
+ * means "ask again" (`waiting`: the converter is busy with other documents and
+ * this one has not started). `ready` names the page images
+ * (`GET /api/me/workspace/preview/page?id=&n=`, 1-based).
+ */
+export type WorkspaceDocumentPreview =
+  | { status: "ready"; id: string; pages: number }
+  | { status: "rendering"; waiting?: boolean }
+  | { status: "failed"; reason: WorkspaceDocumentPreviewFailure };
+
 /** How the tab draws a file. */
-export type WorkspacePreviewKind = "image" | "markdown" | "html" | "csv" | "json" | "drawio" | "text";
+export type WorkspacePreviewKind = "image" | "document" | "markdown" | "html" | "csv" | "json" | "drawio" | "text";
 
 /** Why a file has no preview (the tab says so and offers the download). */
 export type WorkspacePreviewRefusal = "TOO_LARGE" | "BINARY";
@@ -132,6 +171,7 @@ export type WorkspacePreviewRefusal = "TOO_LARGE" | "BINARY";
 export function workspacePreviewKind(name: string, size: number): WorkspacePreviewKind | WorkspacePreviewRefusal {
   const ext = workspaceExtension(name);
   if (IMAGE_MEDIA_TYPES[ext]) return size > WORKSPACE_IMAGE_PREVIEW_MAX_BYTES ? "TOO_LARGE" : "image";
+  if (workspaceDocumentExtension(name)) return size > WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES ? "TOO_LARGE" : "document";
   if (BINARY_EXTENSIONS.has(ext)) return "BINARY";
   if (size > WORKSPACE_TEXT_PREVIEW_MAX_BYTES) return "TOO_LARGE";
   if (ext === "md" || ext === "markdown") return "markdown";

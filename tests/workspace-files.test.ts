@@ -3,6 +3,7 @@
 // it, and the CSV reader.
 import { describe, expect, it } from "vitest";
 import {
+  WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES,
   WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
   WORKSPACE_PATH_MAX_DEPTH,
   WORKSPACE_PATH_MAX_LENGTH,
@@ -12,6 +13,7 @@ import {
   parseDelimitedText,
   parseWorkspacePath,
   workspaceDisplayName,
+  workspaceDocumentExtension,
   workspaceExtension,
   workspaceImageMediaType,
   workspacePreviewKind,
@@ -69,9 +71,16 @@ describe("what a file's name says", () => {
     expect(workspacePreviewKind("main.py", 10)).toBe("text");
     expect(workspacePreviewKind("Makefile", 10)).toBe("text");
     expect(workspacePreviewKind("main.py", WORKSPACE_TEXT_PREVIEW_MAX_BYTES + 1)).toBe("TOO_LARGE");
+    // Documents the server renders to page images.
+    expect(workspacePreviewKind("deck.PPTX", 10)).toBe("document");
+    expect(workspacePreviewKind("a.pdf", 10)).toBe("document");
+    expect(workspacePreviewKind("a.docx", 10)).toBe("document");
+    expect(workspacePreviewKind("a.pdf", WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES + 1)).toBe("TOO_LARGE");
+    expect(workspaceDocumentExtension("a.docx")).toBe("docx");
+    expect(workspaceDocumentExtension("a.xlsx")).toBeNull();
     // A known binary is never fetched to find out, whatever its size.
-    expect(workspacePreviewKind("deck.pptx", 10)).toBe("BINARY");
-    expect(workspacePreviewKind("a.pdf", 10)).toBe("BINARY");
+    expect(workspacePreviewKind("a.xlsx", 10)).toBe("BINARY");
+    expect(workspacePreviewKind("old.ppt", 10)).toBe("BINARY");
     expect(workspacePreviewKind("a.zip", 10)).toBe("BINARY");
   });
 

@@ -14,10 +14,13 @@ ARG NPM_CONFIG_REGISTRY=
 # registration (the image has no ssh-keygen/ssh-keyscan); installed via apt to
 # avoid PEP 668 pip restrictions on Debian and to resolve through the apt mirror.
 #
-# libreoffice-impress + poppler-utils back the server's APPROXIMATE document
-# previews (share_file): soffice --headless converts pptx/docx/xlsx->pdf, then
-# pdftoppm renders pdf->png, with fonts-nanum supplying Korean fonts so Hangul
-# renders in headless conversions. fontconfig's fc-cache registers the deck fonts
+# libreoffice-impress + libreoffice-writer + poppler-utils back the server's
+# APPROXIMATE document previews (share_file cards and the 파일 tab): soffice
+# --headless converts pptx/docx->pdf, then pdftoppm renders pdf->png, with
+# fonts-nanum supplying Korean fonts so Hangul renders in headless conversions.
+# Each LibreOffice application loads only its own formats: without -writer a
+# .docx fails with "source file could not be loaded" (checked in this image,
+# 2026-11-13). -calc is not installed, so expect the same of an .xlsx. fontconfig's fc-cache registers the deck fonts
 # below. git backs every server-side repository operation, gh the create_repo tool.
 #
 # No agent runs in this container any more: every turn runs on pi-gateway, whose
@@ -48,6 +51,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     git \
     gh \
     libreoffice-impress \
+    libreoffice-writer \
     poppler-utils \
     python3 \
     python3-cryptography \
