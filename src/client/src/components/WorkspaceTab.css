@@ -114,6 +114,36 @@ button.ws-row-main:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html
   color: var(--danger, #b42318);
 }
 
+/* 이 대화 | 전체: a two-button switch, then one line saying what it shows. */
+.ws-scope:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: inline-flex;
+  margin-block: var(--s-2) var(--s-1);
+  padding: var(--s-0-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-strong);
+}
+.ws-scope-btn:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  padding: var(--s-0-5) var(--s-3);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--t-xs);
+  cursor: pointer;
+}
+.ws-scope-btn.active:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+.ws-scope-note:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  margin-block-end: var(--s-2);
+  line-height: 1.5;
+}
+
 /* The open file. */
 .ws-back:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
   display: inline-flex;

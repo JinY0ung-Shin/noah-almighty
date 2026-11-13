@@ -55,6 +55,11 @@ function stubFetch(): void {
   );
 }
 
+/** Switch the tab from 이 대화 (its default) to the whole workspace. */
+function showAll(): void {
+  fireEvent.click(screen.getByRole("button", { name: "전체" }));
+}
+
 function pane(overrides: Record<string, unknown> = {}): any {
   return { id: "p1", conversationId: CONVERSATION, streaming: false, canvases: [], fileTabs: [], workspaceTab: true, ...overrides };
 }
@@ -84,8 +89,49 @@ afterEach(() => {
 });
 
 describe("WorkspaceTab", () => {
-  it("opens the way to the conversation's own folder and puts it first", async () => {
+  it("opens on the conversation's own folder, and says what it is showing", async () => {
     render(<WorkspaceTab pane={pane()} active />);
+    // The conversation's files are the root: no `c`, no other conversation, no uploads.
+    expect(await screen.findByRole("button", { name: "report.html" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "이 대화" }) as HTMLButtonElement).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText(/이 대화에서 아바타가 만든 파일입니다/)).toBeTruthy();
+    expect(screen.queryByText("다른 대화")).toBeNull();
+    expect(screen.queryByRole("button", { name: /uploads/ })).toBeNull();
+    expect(screen.queryByText("현재 대화")).toBeNull();
+    // It asked for the root (which names the folder) and the folder — not for `c`.
+    expect(requests).toEqual([
+      `/api/me/workspace?conversation=${CONVERSATION}`,
+      `/api/me/workspace?path=${encodeURIComponent(`c/${CONVERSATION}`)}&conversation=${CONVERSATION}`,
+    ]);
+
+    showAll();
+    expect(await screen.findByRole("button", { name: /uploads/ })).toBeTruthy();
+    expect(screen.getByText(/내 작업 폴더 전체입니다/)).toBeTruthy();
+    expect(await screen.findByText("현재 대화")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "이 대화" }));
+    expect(screen.queryByRole("button", { name: /uploads/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "report.html" })).toBeTruthy();
+  });
+
+  it("says a conversation has made nothing yet instead of showing an error", async () => {
+    render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    expect(await screen.findByText("이 대화에서는 아직 만든 파일이 없습니다.")).toBeTruthy();
+    // An existing but empty folder (Noah makes it at the first turn) reads the same.
+    folders["c/not-run-yet"] = listing("c/not-run-yet", []);
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "새로고침" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByText("이 대화에서는 아직 만든 파일이 없습니다.")).toBeTruthy();
+    // And its files show once it has some.
+    folders["c/not-run-yet"] = listing("c/not-run-yet", [file("first.txt", 1)]);
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    expect(await screen.findByRole("button", { name: "first.txt" })).toBeTruthy();
+  });
+
+  it("전체 opens the way to the conversation's own folder and puts it first", async () => {
+    render(<WorkspaceTab pane={pane()} active />);
+    await screen.findByRole("button", { name: "report.html" });
+    showAll();
     const current = await screen.findByRole("button", { name: /분기 보고 준비/ });
     expect(current.getAttribute("aria-expanded")).toBe("true");
     expect(within(current).getByText("현재 대화")).toBeTruthy();
@@ -104,6 +150,8 @@ describe("WorkspaceTab", () => {
     // A folder exists before the conversation row does (or the list has not caught up).
     folders.c = listing("c", [dir(CONVERSATION, { orphan: true }), dir(OTHER, { orphan: true })]);
     render(<WorkspaceTab pane={pane()} active />);
+    await screen.findByRole("button", { name: "report.html" });
+    showAll();
     const current = await screen.findByRole("button", { name: /현재 대화/ });
     expect(within(current).getByText("새 대화")).toBeTruthy();
     expect(within(current).queryByText("삭제된 대화")).toBeNull();
@@ -112,6 +160,7 @@ describe("WorkspaceTab", () => {
 
   it("reads a folder only when it is opened, and hides dot entries until asked", async () => {
     render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    showAll();
     await screen.findByRole("button", { name: /uploads/ });
     expect(requests.some((url) => url.includes("path=uploads"))).toBe(false);
     expect(screen.queryByRole("button", { name: /\.noah/ })).toBeNull();
@@ -126,6 +175,7 @@ describe("WorkspaceTab", () => {
 
   it("lists a link without a way to open or download it", async () => {
     render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    showAll();
     const row = (await screen.findByText("out")).closest(".ws-row") as HTMLElement;
     expect(within(row).getByText("링크 · 열 수 없음")).toBeTruthy();
     expect(row.querySelector("button, a")).toBeNull();
@@ -142,6 +192,7 @@ describe("WorkspaceTab", () => {
 
   it("draws Markdown through the sanitizer and comes back to the same tree", async () => {
     const { container } = render(<WorkspaceTab pane={pane()} active />);
+    showAll();
     fireEvent.click(await screen.findByRole("button", { name: "notes.md" }));
     expect(await screen.findByRole("heading", { name: "제목" })).toBeTruthy();
     const md = container.querySelector(".md") as HTMLElement;
@@ -193,6 +244,7 @@ describe("WorkspaceTab", () => {
     folders[""] = listing("", [file("blob", 4)]);
     files.blob = new Uint8Array([0x00, 0x01, 0x02, 0x03]);
     render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    showAll();
     fireEvent.click(await screen.findByRole("button", { name: "blob" }));
     expect(await screen.findByText(/미리보기를 제공하지 않습니다/)).toBeTruthy();
   });
@@ -232,14 +284,38 @@ describe("WorkspaceTab", () => {
     await act(async () => {
       release();
     });
+    // 이 대화 now means the other conversation: its files, none of the first one's.
+    expect(await screen.findByRole("button", { name: "other.txt" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "report.html" })).toBeNull();
+    showAll();
     const current = await screen.findByRole("button", { name: /현재 대화/ });
     expect(within(current).getByText("다른 대화")).toBeTruthy();
-    expect(await screen.findByRole("button", { name: "other.txt" })).toBeTruthy();
+  });
+
+  it("re-reads only what its scope shows", async () => {
+    folders[`c/${CONVERSATION}`] = listing(`c/${CONVERSATION}`, [dir("out"), file("report.html", 40)]);
+    folders[`c/${CONVERSATION}/out`] = listing(`c/${CONVERSATION}/out`, [file("a.txt", 1)]);
+    render(<WorkspaceTab pane={pane()} active />);
+    fireEvent.click(await screen.findByRole("button", { name: "out" }));
+    await screen.findByRole("button", { name: "a.txt" });
+    showAll();
+    fireEvent.click(await screen.findByRole("button", { name: /uploads/ }));
+    await screen.findByText("비어 있습니다.");
+    fireEvent.click(screen.getByRole("button", { name: "이 대화" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "새로고침" }) as HTMLButtonElement).disabled).toBe(false));
+    requests.length = 0;
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect((screen.getByRole("button", { name: "새로고침" }) as HTMLButtonElement).disabled).toBe(false));
+    const asked = requests.map((url) => new URL(url, "http://noah.test").searchParams.get("path") ?? "");
+    expect(asked.sort()).toEqual(["", `c/${CONVERSATION}`, `c/${CONVERSATION}/out`]);
   });
 
   it("folds what is inside a folded folder, so a re-read asks for nothing hidden", async () => {
     render(<WorkspaceTab pane={pane()} active />);
     await screen.findByRole("button", { name: "report.html" });
+    showAll();
+    await screen.findByText("현재 대화");
     fireEvent.click(screen.getByRole("button", { name: /대화별 작업 폴더/ })); // fold c
     expect(screen.queryByRole("button", { name: "report.html" })).toBeNull();
     requests.length = 0;
@@ -261,12 +337,15 @@ describe("WorkspaceTab", () => {
   it("says a huge folder holds more than it counted", async () => {
     folders[""] = listing("", [file("a.txt")], { total: 20000, totalIsMinimum: true, truncated: true });
     render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    showAll();
     expect(await screen.findByText(/20,000개 이상 중/)).toBeTruthy();
   });
 
   it("says so when the sandbox has never been used", async () => {
     folders[""] = listing("", [], { exists: false });
     render(<WorkspaceTab pane={pane({ conversationId: "not-run-yet" })} active />);
+    expect(await screen.findByText("이 대화에서는 아직 만든 파일이 없습니다.")).toBeTruthy();
+    showAll();
     expect(await screen.findByText(/아직 작업 폴더가 없습니다/)).toBeTruthy();
   });
 });
@@ -305,6 +384,6 @@ describe("the 파일 tab in the side panel", () => {
     const tab = screen.getByRole("tab", { name: /작업 폴더/ });
     expect(tab.getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("button", { name: "작업 폴더 닫기" })).toBeTruthy();
-    expect(await screen.findByRole("button", { name: /분기 보고 준비/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "report.html" })).toBeTruthy();
   });
 });

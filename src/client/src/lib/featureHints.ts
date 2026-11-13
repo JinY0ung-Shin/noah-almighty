@@ -21,6 +21,8 @@ export const FEATURE_HINT_SIDES: Record<FeatureHintAnchor, FeatureHintSide> = {
   // The rail is the left edge; the bubble opens over the view next to it.
   "nav-brain": "right",
   "nav-teamBrain": "right",
+  // The 파일 button sits in the chat header, at the top of the window.
+  "chat-workspace": "bottom",
 };
 
 // ---- Anchors --------------------------------------------------------------

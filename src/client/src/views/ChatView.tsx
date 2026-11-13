@@ -9,6 +9,7 @@ import PromptModal from "../components/PromptModal";
 import ShareLinkDialog from "../components/ShareLinkDialog";
 import SidePanel from "../components/SidePanel";
 import { closePane, closeWorkspaceTab, newChat, openWorkspaceTab } from "../lib/chat";
+import { featureHintAnchor } from "../lib/featureHints";
 import { cx } from "../lib/hooks";
 import { goView } from "../lib/nav";
 import { Presence } from "../lib/presence";
@@ -87,6 +88,7 @@ function workspaceButton(ctx: ChatController): ReactNode {
       type="button"
       title="아바타가 작업하는 폴더의 파일 보기"
       aria-pressed={shown ? "true" : "false"}
+      ref={featureHintAnchor("chat-workspace")}
       onClick={() => (shown ? closeWorkspaceTab() : openWorkspaceTab(pane.id))}
     >
       <Icon name="folder" size={14} /> 파일

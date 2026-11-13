@@ -37,7 +37,7 @@ export type ReleaseNoteAction = "browser-guide";
  * `FEATURE_HINT_SIDES` (a missing side fails the client typecheck; a missing
  * mount fails tests/release-notes.test.ts).
  */
-export type FeatureHintAnchor = "composer-attach" | "nav-brain" | "nav-teamBrain";
+export type FeatureHintAnchor = "composer-attach" | "nav-brain" | "nav-teamBrain" | "chat-workspace";
 
 /**
  * A speech bubble shown AT the feature (#feature-hints), on top of the one-time

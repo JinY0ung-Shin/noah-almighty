@@ -555,17 +555,27 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   (`closeWorkspaceTab`). Open-ness is `ClientState.workspaceTabOpen`, copied to every pane and seeded by `makePane`,
   because a pane is REPLACED on a new or another conversation and the workspace is the user's, not the
   conversation's; not persisted. It is last in the strip and the default tab only when nothing else is open
-  (`resolveSideTab`), and the avatar never opens, selects or dots it. The tab reads ONE folder per request when it is
-  unfolded, opens the way to the pane's conversation folder once per conversation (`current`, when that folder
-  exists; it leads its siblings with a 현재 대화 badge and is never labelled 삭제된 대화), hides dot entries behind
+  (`resolveSideTab`), and the avatar never opens, selects or dots it. The tab has TWO scopes (2026-11-13, user
+  decision): 이 대화 — the default — shows the pane's conversation folder (`current`, `c/<segment>`) AS THE ROOT, so
+  a viewer need not know the workspace is laid out as a folder per conversation; 전체 is the whole tree. A line
+  under the switch says what each shows (`SCOPE_NOTES`: attached documents and other conversations' files are in
+  전체). A conversation whose folder does not exist yet (a 404, recorded as `status: "missing"`), whose sandbox
+  does not exist, or whose folder is empty reads "이 대화에서는 아직 만든 파일이 없습니다." — never an error.
+  Switching the pane to another conversation clears `current` first, so the old folder never shows as the new
+  conversation's. The tab reads ONE folder per request when it is
+  unfolded; in 전체 it opens the way to the pane's conversation folder once per conversation (when that folder
+  exists; it leads its siblings with a 현재 대화 badge and is never labelled 삭제된 대화). It hides dot entries behind
   숨김 항목, and while the pane streams re-reads the unfolded folders every 4 s (not with the panel folded or the
   browser tab hidden) and once more when the answer ends. ONE re-read pass runs at a time, four folders per batch;
   a re-read asked for meanwhile (another conversation in the pane, the answer ending, 새로고침) is remembered and
-  runs as one more pass — never dropped. Folding a folder folds what is inside it, so `expanded` is exactly what
-  is on screen and a pass asks for nothing hidden. Per-folder request counters drop a stale answer, and a folder
+  runs as one more pass — never dropped. Folding a folder folds what is inside it, and a pass re-reads only
+  `visiblePaths()` — the unfolded folders below the scope's top whose ancestors are unfolded too — so it asks for
+  nothing hidden (이 대화 never lists `c`). Per-folder request counters drop a stale answer, and a folder
   that 404s on a re-read is folded away. `WorkspaceTab` hands only primitives (`conversationId`, `streaming`,
   `active`) to the `memo`'d tree, so a long listing is not rebuilt per streamed token. The header button is a
-  toggle (pressed while the tab is the one showing; `workspaceTabOpen` is cleared at logout and session expiry).
+  toggle (pressed while the tab is the one showing; `workspaceTabOpen` is cleared at logout and session expiry)
+  and is marked `featureHintAnchor("chat-workspace")` (side: bottom) — the anchor is mounted, the release note item
+  that carries its hint is added at release.
   Focus moves to 목록 when a file opens and back to its row. A file opens INSIDE the tab (the tree stays mounted behind it): images through the file route in an
   `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML through the canvas's script-less
   sandboxed frame (`canvasHtmlDocument` + `CanvasHtmlFrame`), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×
