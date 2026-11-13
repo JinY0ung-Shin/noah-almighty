@@ -46,6 +46,7 @@ import {
   type ChangesetCheckContext,
   type TeamPageParse,
   type TeamVaultIndexEntry,
+  parseTeamFrontmatter,
 } from "./teamBrainSchema.js";
 import { TEAM_POLICY_DEFAULT_MD, parseTeamPolicy, reviewAfterCeiling, type TeamPolicyParse } from "./teamBrainPolicy.js";
 import {
@@ -519,6 +520,35 @@ export async function readTeamVaultFile(config: Config, rawPath: string): Promis
   }
 }
 
+export const TEAM_LEGACY_PREFIX = "raw/legacy/";
+
+/** The `raw/legacy/…` sources a page's frontmatter cites (lenient: a page that fails the schema still lists what it cites). */
+function legacySources(content: string): string[] {
+  const value = parseTeamFrontmatter(content)?.fields.get("sources");
+  const list = Array.isArray(value) ? value : value ? [value] : [];
+  return list.filter((s): s is string => typeof s === "string" && s.startsWith(TEAM_LEGACY_PREFIX));
+}
+
+/**
+ * The pages of a changeset that NEWLY cite a `raw/legacy/` note — one the page
+ * at HEAD does not already cite (every citation of a created page is new).
+ * Compiling those notes is the migration pass, which stays with the admins
+ * (owner decision 2026-11-13): the tool refuses such a draft from anyone else,
+ * and the press refuses it again (the drafter may have stopped being an admin).
+ * Correcting a page that already cites one stays open to everybody.
+ */
+export async function newLegacyCitations(config: Config, changes: readonly TeamPageChange[]): Promise<{ path: string; sources: string[] }[]> {
+  const added: { path: string; sources: string[] }[] = [];
+  for (const c of changes) {
+    const cited = legacySources(c.content);
+    if (cited.length === 0) continue;
+    const before = c.op === "update" ? new Set(legacySources((await readTeamVaultFile(config, c.path)) ?? "")) : new Set<string>();
+    const fresh = cited.filter((source) => !before.has(source));
+    if (fresh.length > 0) added.push({ path: c.path, sources: fresh });
+  }
+  return added;
+}
+
 /** A wiki note's content, or null (alias of readTeamVaultFile kept for wiki callers). */
 export async function readTeamNote(config: Config, notePath: string): Promise<string | null> {
   return readTeamVaultFile(config, notePath);
@@ -744,6 +774,11 @@ export async function searchTeamBrain(config: Config, query: string, limit?: num
 export async function teamBrainCounts(config: Config): Promise<{ pages: number; rawSources: number; uncompiledSources: number }> {
   const vault = await listTeamVault(config);
   return { pages: vault.pagePaths.size, rawSources: vault.rawPaths.size, uncompiledSources: uncompiledOf(vault).length };
+}
+
+/** The vault exists and has history — only then does an EMPTY `teamBrainProposalCommits` mean "no such commit". */
+export async function teamVaultHasHistory(config: Config): Promise<boolean> {
+  return teamBrainInitialized(config) && (await headHasCommit(teamBrainRoot(config)));
 }
 
 /**

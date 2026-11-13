@@ -19,8 +19,8 @@
   was read is refused, never overwritten) and there is still no delete.
 - **Still admin-only:** `POLICY.md` (`prepare_team_policy`, kind `policy`), the backup (settings, push,
   restore) and the migration pass that compiles the pre-schema notes under `raw/legacy/`. The migration pass
-  is ENFORCED, not only prompted (owner sub-decision): `legacyCitationRefusal` refuses a non-admin's
-  changeset that newly cites a `raw/legacy/` note (→ "Tools").
+  is ENFORCED, not only prompted (owner sub-decision): a non-admin's changeset that newly cites a
+  `raw/legacy/` note is refused when it is drafted AND again at the press (`newLegacyCitations` → "Tools").
 - **One card, one press** (owner sub-decision): there is no "모두 제출 / 모두 반영" button. Each card is a vault
   commit, so each is read and pressed on its own — the `brain-share` pass included.
 - **Rows left open in production were closed with a notice** (owner sub-decision), not converted: a
@@ -261,7 +261,9 @@
   **`draft` rows per user** (the only open state now; checked in the insert transaction, `LIMIT` → the tool's
   "press or cancel earlier ones first"); drafts expire `draft_ttl_days` (built-in 7) days after their last
   update (`updated_at` — a provenance edit on the card restarts the clock) OR once their conversation (and so
-  their card) is gone (`expireTeamBrainDrafts`, lazy, run before reads that count or act).
+  their card) is gone (`expireTeamBrainDrafts`, lazy, run before reads that count or act). The cap, the
+  expiry and the rewind cascade (`cancelTeamBrainDrafts`) touch LIVE kinds only: a draft of the retired queue
+  is closed by the upgrade step alone, so its card always carries the upgrade notice (never "만료").
 - `transitionTeamBrainProposal` is compare-and-set on the current status and only ever moves a row to a LIVE
   status — the ONE way two presses at once still apply a card once. Apply CLAIMS the card (`draft → applied`
   with the decision stamps), writes, and RELEASES the claim on a failed write (`applied → draft`,
@@ -300,7 +302,9 @@
   commit LANDED → the submission becomes `approved` (stamped with the admin who pressed; its personal notes
   stay marked); it never landed → the approve card decided nothing and is closed
   (`cancelled` + `closed_by_upgrade`, decision stamps cleared). **A vault that cannot be read holds the whole
-  step** until the next boot — nothing is closed on a guess.
+  step** until the next boot — nothing is closed on a guess: a git failure, and also a vault that is MISSING
+  or has no history while approvals are in flight (`teamVaultHasHistory` — `teamBrainProposalCommits` answers
+  an empty set there, which would read as "no commit landed" and void real approvals).
 - **Then every open row is closed** in the same transaction (`retireTeamBrainReviewQueue(landed)`): status
   `cancelled`, `decision_reason = TEAM_BRAIN_CLOSED_BY_UPGRADE`; the source text and every other column stay.
   Decided rows (`approved`, `rejected`, `withdrawn`, applied reviews) and live cards are untouched. One `warn`
@@ -308,11 +312,15 @@
 - **Between process start and the step** (or while it is held) an open legacy row is already inert:
   `legacyCard` treats a still-open legacy row as closed-by-upgrade, and a press on any legacy card is a 409
   (`RETIRED`).
-- **What the drafter sees** — `TeamBrainCardView.legacy = { closedByUpgrade, notice }`, the notice a Korean
+- **What the drafter sees** — `TeamBrainCardView.legacy = { closedByUpgrade, notice, source }`, the notice a Korean
   one-liner the SERVER composes (`legacyCard`): a closed submission says the way the team brain is written
   changed, the submission was closed, and to ask the avatar to put it into the team brain again; a closed
   review card says the review step is gone; a decided row states its final state (승인되어 반영 / 반려 / 철회 /
-  만료, or which decision a review card applied). The card draws the title + that line and nothing else.
+  만료, or which decision a review card applied). The card draws the title + that line and nothing else —
+  except on a SUBMISSION the upgrade closed, where `source` (the row's own submitted text; null on every
+  other legacy card) is shown folded behind 제출했던 원문 보기, as plain text: the queue's lists and
+  `get_team_proposal` are gone, so the card is the one place that text can still be read and handed to the
+  avatar again. It is the viewer's own text (a card is its drafter's alone), so it needs no wrapper.
 - Tests: `tests/team-brain.test.ts` ("the review queue's retirement (boot step)"), legacy rows via
   `insertLegacyTeamBrainRow` (`tests/team-brain-fixtures.ts`).
 
@@ -351,12 +359,15 @@
     non-admin is told instead that the `raw/legacy/` sources are the admins' migration pass. It ends with
     the caller's own personal notes linked to team pages (`listTeamBrainPersonalLinks`, ≤ 20).
 - **Admins (`TEAM_BRAIN_ADMIN_TOOL_NAMES`):** `prepare_team_policy` ("Team policy" above).
-- **The migration pass is enforced for admins at DRAFT time — `legacyCitationRefusal`.** After validation,
-  for a caller who is not an active admin RIGHT NOW (`store.isActiveAdmin(viewer)`, not the run-start
-  boolean), `prepare_team_changes` refuses a changeset in which a page newly cites a `raw/legacy/…` source
-  it did not cite at HEAD (every citation of a CREATED page is new). Correcting a page that already cites
-  one stays open to everybody, and the refusal says the rest of the changeset can still be drafted. It is
-  NOT re-checked at the apply press → "Known gaps".
+- **The migration pass is enforced for admins, at the draft and at the press — `newLegacyCitations`
+  (`teamBrain.ts`).** The predicate: the pages of a changeset that newly cite a `raw/legacy/…` source they
+  did not cite at HEAD (every citation of a CREATED page is new). After validation, for a caller who is not
+  an active admin RIGHT NOW (`store.isActiveAdmin(viewer)`, not the run-start boolean),
+  `prepare_team_changes` refuses such a changeset (`legacyCitationRefusal`: the English refusal, which says
+  the rest can still be drafted), and `applyTeamBrainCard` refuses such a `direct` card for a presser who is
+  not an active admin (403 "예전 노트(raw/legacy)를 위키로 옮기는 변경은 관리자만 반영할 수 있습니다.", the card
+  stays a draft) — an admin who drafted it and was demoted before pressing does not commit it. Correcting a
+  page that already cites a legacy note stays open to everybody.
 - **Per-call self-gates** (tools/list is a static catalog): the write tools refuse without `ctx.write` / a
   card sink (`NOT_HERE_WRITE` — "only in the owner's own interactive conversation") and for an account that
   is not `isActiveUser` NOW (`SUSPENDED`); `prepare_team_policy` re-checks `isActiveAdmin(viewer)`
@@ -539,7 +550,8 @@
   line instead of showing the button. A draft re-reads when the tab becomes visible again and when another
   card on screen is applied.
 - **A card of the retired queue is history:** the title + the server's ONE line (`view.legacy.notice`; the
-  closed-by-upgrade notice in the info tone), no buttons, no provenance form, no diff.
+  closed-by-upgrade notice in the info tone), no buttons, no provenance form, no diff; a submission the
+  upgrade closed also folds its own text behind 제출했던 원문 보기 (`view.legacy.source`, plain text in a `<pre>`).
 - Team notes render through `renderMarkdown(…, { forbidInlineStyle: true })` — teammate-written HTML must
   not position itself over the app (fake UI); the card shows raw text in `<pre>`.
 - **Two rail items (user, 2026-11-06): 내 브레인 (`brain`, `#/brain`) and 팀 브레인 (`teamBrain`,
@@ -583,10 +595,15 @@ Retired with the review queue on 2026-11-13. Never mint, mount or reuse one for 
   reserved ids — listed so a grep of an old note lands here).
 
 ## Known gaps and what nobody verified
-- **The migration-pass rule is a DRAFT-time check only.** `legacyCitationRefusal` runs in
-  `prepare_team_changes`; `applyTeamBrainCard` asks only `isActiveUser` for a `direct` card. A drafter who was
-  an admin when the card was drafted and was demoted before pressing still commits it. (The policy card IS
-  re-checked at the press.)
+- **A personal note's mark names a team page by PATH only** (`teamPageLabel`, `agent/brainTools.ts`): the
+  LINK-note and PROMOTED marks ride personal `get_note` / `search` results OUTSIDE the untrusted wrapper, and
+  a page's title is now any teammate's text (an independent review reproduced a title forging a "Noah
+  notice" there, 2026-11-13). A path is server-validated (letters, digits, space, `. _ - /`), so it cannot
+  carry punctuation — but it can still spell words; treat it as a name, not as prose.
+- An EXISTING vault keeps the POLICY.md stub it was seeded with (its comment still says "what reviewers
+  check"): the server never rewrites the admins' file. One policy card fixes the wording.
+- While the retirement step is HELD (a failed backup; approvals in flight with no readable vault) every boot
+  takes another full `pre-retire-*.db` backup; Noah never prunes them.
 - POLICY.md's review ceiling is a draft-time rule too (by design — see "Team policy").
 - A press report lives in process memory: one lost to a restart costs a look.
 - A conversation started before 2026-11-13 keeps its frozen queue wording; only tool results and

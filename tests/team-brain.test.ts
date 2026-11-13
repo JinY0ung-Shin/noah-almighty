@@ -526,6 +526,58 @@ describe("the review queue's retirement (boot step)", () => {
     expect(backups(dataDir)).toHaveLength(1);
   });
 
+  it("holds the whole step while approvals are in flight and the vault cannot be read — an empty answer would void them", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const admin = s.store.createUser({ username: "boss", displayName: "Boss", password: "password123" });
+    const target = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "pending", proposerUserId: mate.id });
+    const targetPath = s.store.getTeamBrainProposal(target)!.path;
+    const review = insertLegacyTeamBrainRow(s.store, {
+      kind: "review",
+      status: "applied",
+      proposerUserId: admin.id,
+      path: targetPath,
+      targetId: target,
+      decision: "approve",
+      changeset: changesetFor(targetPath),
+      decidedBy: admin.id,
+      decidedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const other = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "draft", proposerUserId: mate.id });
+
+    // No vault on disk (a volume not mounted, a restore not finished): nothing is closed, nothing approved.
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 0 });
+    expect(s.store.getTeamBrainProposal(target)?.status).toBe("pending");
+    expect(s.store.getTeamBrainProposal(review)?.status).toBe("applied");
+    expect(s.store.getTeamBrainProposal(other)?.status).toBe("draft");
+
+    // The vault is back, with the approval's commit in it: the next boot settles it and closes the rest.
+    await applyTeamChangeset(s.config, {
+      raw: { path: targetPath, content: "# 배포 원본\n" },
+      changes: changesetFor(targetPath).changes,
+      title: "배포",
+      proposalId: target,
+      logOp: "direct",
+      author: ADMIN,
+    });
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 1, closed: 1 });
+    expect(s.store.getTeamBrainProposal(target)?.status).toBe("approved");
+    expect(status(s.store, other)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+  });
+
+  it("the live housekeeping leaves a draft of the retired queue alone: it neither expires nor counts toward the cap", async () => {
+    const s = boot();
+    const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+    const old = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "draft", proposerUserId: mate.id });
+    // Far past any draft TTL.
+    rawDb(s.store).prepare("UPDATE team_brain_proposals SET updated_at = ? WHERE id = ?").run("2020-01-01T00:00:00.000Z", old);
+    expect(s.store.expireTeamBrainDrafts()).toBe(0);
+    expect(s.store.getTeamBrainProposal(old)?.status).toBe("draft");
+    // Only the upgrade step closes it — with its own marker.
+    expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 1 });
+    expect(status(s.store, old)).toEqual(["cancelled", TEAM_BRAIN_CLOSED_BY_UPGRADE]);
+  });
+
   it("settles an approval that was mid-commit by the vault: landed → approved (its notes stay linked); never landed → closed with the rest", async () => {
     const s = boot();
     const mate = s.store.createUser({ username: "mate", displayName: "Mate", password: "password123" });

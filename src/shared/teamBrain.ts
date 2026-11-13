@@ -554,8 +554,8 @@ export interface TeamPageChangeView {
 
 /**
  * A card of the RETIRED review queue (a `propose` or `review` row): history
- * only. Render the row's title and `notice`, and nothing else — no buttons, no
- * provenance form, no diff.
+ * only. Render the row's title and `notice` (plus `source`, collapsed, when it
+ * is set), and nothing else — no buttons, no provenance form, no diff.
  */
 export interface TeamBrainLegacyCard {
   /**
@@ -567,6 +567,13 @@ export interface TeamBrainLegacyCard {
   closedByUpgrade: boolean;
   /** The ONE final-state line (Korean, user-facing), composed by the server. */
   notice: string;
+  /**
+   * The source text the drafter submitted — set only on a SUBMISSION (`propose`)
+   * the upgrade closed (`closedByUpgrade`), null on every other legacy card. It
+   * is the viewer's own text (a card is visible to its drafter only): the card
+   * shows it collapsed, as plain text, so it can be handed to the avatar again.
+   */
+  source: string | null;
 }
 
 /**

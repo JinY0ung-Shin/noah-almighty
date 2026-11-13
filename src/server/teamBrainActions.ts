@@ -18,8 +18,10 @@ import {
   TeamNoteConflictError,
   applyTeamChangeset,
   applyTeamPolicy,
+  newLegacyCitations,
   teamBrainProposalCommits,
   teamPageStates,
+  teamVaultHasHistory,
   teamPolicyState,
 } from "./teamBrain.js";
 import {
@@ -35,6 +37,7 @@ import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
 import {
   TEAM_BRAIN_CLOSED_BY_UPGRADE,
+  TEAM_BRAIN_LIVE_KINDS,
   TEAM_POLICY_PATH,
   isTeamBrainLegacyKind,
   teamProvenanceIssues,
@@ -199,7 +202,7 @@ function legacyCard(row: TeamBrainProposal): TeamBrainLegacyCard {
   const closedByUpgrade = open || (row.status === "cancelled" && row.decisionReason === TEAM_BRAIN_CLOSED_BY_UPGRADE);
   if (row.kind === "review") {
     if (closedByUpgrade) {
-      return { closedByUpgrade, notice: "팀 브레인 작성 방식이 바뀌어(검토 절차가 없어졌습니다) 이 검토 카드는 종료되었습니다." };
+      return { closedByUpgrade, notice: "팀 브레인 작성 방식이 바뀌어(검토 절차가 없어졌습니다) 이 검토 카드는 종료되었습니다.", source: null };
     }
     const notice =
       row.status === "applied"
@@ -211,11 +214,13 @@ function legacyCard(row: TeamBrainProposal): TeamBrainLegacyCard {
         : row.status === "expired"
           ? "누르지 않아 만료된 검토 카드입니다."
           : "취소된 검토 카드입니다.";
-    return { closedByUpgrade, notice };
+    return { closedByUpgrade, notice, source: null };
   }
   if (closedByUpgrade) {
     return {
       closedByUpgrade,
+      // The drafter's own submitted text (the view is drafter-only): shown so it can be handed to the avatar again.
+      source: row.content.trim() ? row.content : null,
       notice:
         "팀 브레인 작성 방식이 바뀌어 이 제안은 종료되었습니다. 이제 누구나 팀 브레인에 직접 반영할 수 있으니, 아바타에게 이 내용을 팀 브레인에 다시 반영해 달라고 요청하세요.",
     };
@@ -230,7 +235,7 @@ function legacyCard(row: TeamBrainProposal): TeamBrainLegacyCard {
           : row.status === "expired"
             ? "제출하지 않아 만료된 제안입니다."
             : "종료된 제안입니다.";
-  return { closedByUpgrade, notice };
+  return { closedByUpgrade, notice, source: null };
 }
 
 /**
@@ -341,9 +346,10 @@ export async function sweepTeamBrainAppliesOnBoot(
   const { store, config } = deps;
   try {
     const since = new Date(Date.parse(startedAt) - BOOT_SWEEP_WINDOW_MS).toISOString();
-    const rows = store
-      .listTeamBrainProposals({ statuses: ["applied"], limit: 200 })
-      .filter((r) => isLiveCard(r) && r.decidedAt !== null && r.decidedAt >= since && r.decidedAt < startedAt);
+    // Per live kind, so rows of the retired queue (and the other kind) never crowd a card out of the newest 200.
+    const rows = TEAM_BRAIN_LIVE_KINDS.flatMap((kind) => store.listTeamBrainProposals({ kind, statuses: ["applied"], limit: 200 })).filter(
+      (r) => r.decidedAt !== null && r.decidedAt >= since && r.decidedAt < startedAt,
+    );
     if (rows.length === 0) return 0;
     const landed = await teamBrainProposalCommits(config, new Date(Date.parse(since) - 24 * 60 * 60 * 1000).toISOString());
     let fixed = 0;
@@ -395,6 +401,15 @@ export async function retireTeamBrainReviewQueueOnBoot(
     const inFlight = store.listTeamBrainInFlightApprovals();
     let landed: Set<string> = new Set();
     if (inFlight.length > 0) {
+      // A vault that is missing or has no history cannot say whether an approval landed: "no commit" would
+      // void approvals that really were committed. Hold the whole step until the vault is back.
+      if (!(await teamVaultHasHistory(config))) {
+        logger.error(
+          { open, inFlight: inFlight.length },
+          "team brain: the review queue's open rows are NOT closed on this boot — approvals were in flight and the vault cannot be read",
+        );
+        return none;
+      }
       const oldest = inFlight.reduce((min, f) => (f.decidedAt && f.decidedAt < min ? f.decidedAt : min), new Date().toISOString());
       landed = await teamBrainProposalCommits(config, new Date(Date.parse(oldest) - 24 * 60 * 60 * 1000).toISOString());
     }
@@ -507,6 +522,17 @@ export async function applyTeamBrainCard(
       status: 409,
       message: "반영할 변경 내용이 없습니다. 아바타에게 다시 정리해 달라고 요청하세요.",
       agent: "This card carries no page changes to commit. Draft it again with the pages it creates or updates.",
+    };
+  }
+  // The migration pass stays with the admins: the tool refuses such a draft from anyone else, and the press
+  // looks again — whoever drafted it as an admin may not be one any more.
+  if (!store.isActiveAdmin(actor.id) && (await newLegacyCitations(config, row.changeset.changes)).length > 0) {
+    return {
+      ok: false,
+      status: 403,
+      message: "예전 노트(raw/legacy)를 위키로 옮기는 변경은 관리자만 반영할 수 있습니다.",
+      agent:
+        "This card newly cites pre-schema notes under raw/legacy/ — the migration pass, which only an admin applies — and the user is not an active admin (any more). Nothing was changed. Tell the user to ask an admin; the other pages can be drafted again without those citations.",
     };
   }
   if (!store.transitionTeamBrainProposal(id, ["draft"], "applied", { decidedBy: actor.id, decided: true })) {

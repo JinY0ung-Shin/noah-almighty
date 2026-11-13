@@ -3,7 +3,8 @@
 // (팀 브레인에 반영 — a teammate's own page changes; 팀 정책 반영 — an admin's POLICY.md
 // change) commits, 취소 drops the draft. Its state is read LIVE from the server
 // (/api/team-brain/cards/:id) and every button re-checks there. A card of the
-// retired review queue (`view.legacy`) is history: its title and one line.
+// retired review queue (`view.legacy`) is history: its title and one line (plus, folded, the text of a
+// submission the upgrade closed).
 //
 // Everything shown here is teammate- or model-written text: it is rendered as
 // TEXT only (`<pre>`, diff lines, list items) — never as markdown or HTML.
@@ -532,6 +533,13 @@ export default function TeamBrainCard({ proposalId }: TeamBrainCardProps) {
           <p className={`team-brain-status tone-${view.legacy.closedByUpgrade ? "info" : "muted"}`} role="status">
             {view.legacy.notice}
           </p>
+        ) : null}
+        {/* A submission the upgrade closed: the drafter's own text, folded, as plain text — to hand to the avatar again. */}
+        {view.legacy?.source ? (
+          <details className="team-brain-details">
+            <summary>제출했던 원문 보기</summary>
+            <pre className="team-brain-pre">{view.legacy.source}</pre>
+          </details>
         ) : null}
       </section>
     );

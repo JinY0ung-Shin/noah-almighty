@@ -81,12 +81,14 @@ export function isKeptPersonalNote(content: string): boolean {
   return word === PERSONAL_TEAM_SHARE_DECLINED || word === "false";
 }
 
-/** "wiki/decisions/x.md (Title)" — the team page's title when it still exists. */
+/**
+ * The team page's path, and whether it still exists. Never its title: a page is
+ * written by any teammate, and these marks are printed OUTSIDE the untrusted
+ * wrapper — the title is read with get_note (scope "team"), inside it.
+ */
 async function teamPageLabel(config: AppConfig, pagePath: string): Promise<string> {
   const content = await readTeamVaultFile(config, pagePath).catch(() => null);
-  if (content === null) return `${pagePath} (not in the team brain any more)`;
-  const title = parseTeamFrontmatter(content)?.fields.get("title");
-  return typeof title === "string" && title ? `${pagePath} ("${title}")` : pagePath;
+  return content === null ? `${pagePath} (not in the team brain any more)` : pagePath;
 }
 
 /**

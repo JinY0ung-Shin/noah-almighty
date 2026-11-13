@@ -20,7 +20,7 @@ import {
   type TeamBrainChangeset,
 } from "../src/shared/teamBrain.js";
 import { pressTeamBrainCard, retireTeamBrainReviewQueueOnBoot, sweepTeamBrainAppliesOnBoot } from "../src/server/teamBrainActions.js";
-import { ADMIN_IDENTITY, SEED_RAW, gitOut, insertLegacyTeamBrainRow, seedTeamVault, teamPage } from "./team-brain-fixtures.js";
+import { ADMIN_IDENTITY, SEED_RAW, commitIntoVault, gitOut, insertLegacyTeamBrainRow, seedTeamVault, teamPage } from "./team-brain-fixtures.js";
 import { signup, withTempDir } from "./helpers.js";
 
 const dir = withTempDir("routes-team-brain");
@@ -90,6 +90,47 @@ async function draftUpdate(s: Awaited<ReturnType<typeof boot>>, proposerUserId: 
     changeset: { changes: [{ path: PAGE_PATH, op: "update", content: teamPage({ title: "배포", body }), baseBlob: base }], conflicts: [] },
   });
 }
+
+describe("the migration pass stays with the admins at the press too", () => {
+  it("refuses a card that newly cites raw/legacy once its drafter is no admin, and lets anyone correct a page that already cites one", async () => {
+    const s = await boot();
+    const LEGACY = "raw/legacy/concepts/old.md";
+    await seedTeamVault(s.config, [{ path: "wiki/howto/seed.md", content: teamPage({ title: "Seed" }) }]);
+    commitIntoVault(s.config, { [LEGACY]: "---\ntitle: 롤백 방법\n---\n\nrollback은 helm rollback으로 한다.\n" });
+    const compile = (path: string, title: string): TeamBrainChangeset => ({
+      changes: [{ path, op: "create", content: teamPage({ title, sources: [LEGACY] }), baseBlob: null }],
+      conflicts: [],
+    });
+
+    // An admin drafts the migration card, stops being an admin, then presses: refused, nothing written.
+    const card = draft(s.store, s.adminUser.id, { changeset: compile("wiki/howto/rollback.md", "롤백") });
+    s.store.setRole(s.adminUser.id, "admin", false);
+    const refused = await s.admin.post(`/api/team-brain/cards/${card.id}/apply`).expect(403);
+    expect(refused.body.error).toBe("예전 노트(raw/legacy)를 위키로 옮기는 변경은 관리자만 반영할 수 있습니다.");
+    expect(s.store.getTeamBrainProposal(card.id)?.status).toBe("draft");
+    expect(await readTeamVaultFile(s.config, "wiki/howto/rollback.md")).toBeNull();
+
+    // An admin again: the same card applies.
+    s.store.setRole(s.adminUser.id, "admin", true);
+    await s.admin.post(`/api/team-brain/cards/${card.id}/apply`).expect(200);
+    expect(await readTeamVaultFile(s.config, "wiki/howto/rollback.md")).toContain(LEGACY);
+
+    // A member correcting that page (it already cites the legacy note) is an ordinary edit.
+    const base = await teamNoteBlob(teamBrainRoot(s.config), "wiki/howto/rollback.md");
+    const fix = draft(s.store, s.mateUser.id, {
+      changeset: { changes: [{ path: "wiki/howto/rollback.md", op: "update", content: teamPage({ title: "롤백", sources: [LEGACY], body: "고친 본문" }), baseBlob: base }], conflicts: [] },
+    });
+    await s.mate.post(`/api/team-brain/cards/${fix.id}/apply`).expect(200);
+    expect(await readTeamVaultFile(s.config, "wiki/howto/rollback.md")).toContain("고친 본문");
+    // …but a member's card that adds the citation to another page is refused.
+    const seedBlob = await teamNoteBlob(teamBrainRoot(s.config), "wiki/howto/seed.md");
+    const add = draft(s.store, s.mateUser.id, {
+      changeset: { changes: [{ path: "wiki/howto/seed.md", op: "update", content: teamPage({ title: "Seed", sources: [SEED_RAW, LEGACY] }), baseBlob: seedBlob }], conflicts: [] },
+    });
+    await s.mate.post(`/api/team-brain/cards/${add.id}/apply`).expect(403);
+    expect(await readTeamVaultFile(s.config, "wiki/howto/seed.md")).not.toContain(LEGACY);
+  });
+});
 
 describe("team brain cards", () => {
   it("every teammate applies their OWN card: only the drafter sees and presses it, and the press commits in their name", async () => {
@@ -374,18 +415,19 @@ describe("team brain cards — the retired review queue is history", () => {
     };
 
     const approved = submission("approved");
-    expect(await legacyOf(s.mate, approved)).toEqual({ closedByUpgrade: false, notice: "승인되어 팀 브레인에 반영된 제안입니다." });
+    expect(await legacyOf(s.mate, approved)).toEqual({ closedByUpgrade: false, notice: "승인되어 팀 브레인에 반영된 제안입니다.", source: null });
     expect((await view(s.mate, approved)).proposal).toMatchObject({ id: approved, kind: "propose", title: "옛 제안", content: SOURCE });
-    expect(await legacyOf(s.mate, submission("rejected", { decisionReason: "중복입니다" }))).toEqual({ closedByUpgrade: false, notice: "반려된 제안입니다." });
-    expect(await legacyOf(s.mate, submission("withdrawn"))).toEqual({ closedByUpgrade: false, notice: "철회한 제안입니다." });
-    expect(await legacyOf(s.mate, submission("expired"))).toEqual({ closedByUpgrade: false, notice: "제출하지 않아 만료된 제안입니다." });
+    expect(await legacyOf(s.mate, submission("rejected", { decisionReason: "중복입니다" }))).toEqual({ closedByUpgrade: false, notice: "반려된 제안입니다.", source: null });
+    expect(await legacyOf(s.mate, submission("withdrawn"))).toEqual({ closedByUpgrade: false, notice: "철회한 제안입니다.", source: null });
+    expect(await legacyOf(s.mate, submission("expired"))).toEqual({ closedByUpgrade: false, notice: "제출하지 않아 만료된 제안입니다.", source: null });
     expect(await legacyOf(s.admin, review("applied", "approve", approved))).toEqual({
       closedByUpgrade: false,
       notice: "제안을 승인해 팀 브레인에 반영한 검토 카드입니다.",
+      source: null,
     });
-    expect(await legacyOf(s.admin, review("applied", "ask", approved))).toEqual({ closedByUpgrade: false, notice: "제안자에게 보완 요청을 보낸 검토 카드입니다." });
-    expect(await legacyOf(s.admin, review("applied", "reject", approved))).toEqual({ closedByUpgrade: false, notice: "제안을 반려한 검토 카드입니다." });
-    expect(await legacyOf(s.admin, review("cancelled", "reject", approved))).toEqual({ closedByUpgrade: false, notice: "취소된 검토 카드입니다." });
+    expect(await legacyOf(s.admin, review("applied", "ask", approved))).toEqual({ closedByUpgrade: false, notice: "제안자에게 보완 요청을 보낸 검토 카드입니다.", source: null });
+    expect(await legacyOf(s.admin, review("applied", "reject", approved))).toEqual({ closedByUpgrade: false, notice: "제안을 반려한 검토 카드입니다.", source: null });
+    expect(await legacyOf(s.admin, review("cancelled", "reject", approved))).toEqual({ closedByUpgrade: false, notice: "취소된 검토 카드입니다.", source: null });
 
     // Still the drafter's alone.
     await s.other.get(`/api/team-brain/cards/${approved}`).expect(404);
@@ -415,15 +457,17 @@ describe("team brain cards — the retired review queue is history", () => {
     expect(await retireTeamBrainReviewQueueOnBoot(s)).toEqual({ approved: 0, closed: 3 });
     const closed = await view(s.mate, pending);
     expect(closed.proposal).toMatchObject({ status: "cancelled", decisionReason: TEAM_BRAIN_CLOSED_BY_UPGRADE, content: SOURCE });
-    expect(closed.legacy).toEqual({ closedByUpgrade: true, notice: UPGRADE_NOTICE });
-    expect((await view(s.mate, needsInfo)).legacy).toEqual({ closedByUpgrade: true, notice: UPGRADE_NOTICE });
+    // The closed submission still shows the text its drafter submitted.
+    expect(closed.legacy).toEqual({ closedByUpgrade: true, notice: UPGRADE_NOTICE, source: SOURCE });
+    expect((await view(s.mate, needsInfo)).legacy).toEqual({ closedByUpgrade: true, notice: UPGRADE_NOTICE, source: SOURCE });
     expect((await view(s.admin, reviewDraft)).legacy).toEqual({
       closedByUpgrade: true,
       notice: "팀 브레인 작성 방식이 바뀌어(검토 절차가 없어졌습니다) 이 검토 카드는 종료되었습니다.",
+      source: null,
     });
     // A card a person cancelled before the upgrade is not the upgrade's doing.
     const own = insertLegacyTeamBrainRow(s.store, { kind: "propose", status: "cancelled", proposerUserId: s.mateUser.id });
-    expect((await view(s.mate, own)).legacy).toEqual({ closedByUpgrade: false, notice: "종료된 제안입니다." });
+    expect((await view(s.mate, own)).legacy).toEqual({ closedByUpgrade: false, notice: "종료된 제안입니다.", source: null });
   });
 });
 

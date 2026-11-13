@@ -321,7 +321,7 @@ describe("TeamBrainCard — a card of the retired review queue (legacy)", () => 
   it("draws the title and the server's notice, and nothing else, for a submission the upgrade closed", async () => {
     const notice =
       "팀 브레인 작성 방식이 바뀌어 이 제안은 종료되었습니다. 이제 누구나 팀 브레인에 직접 반영할 수 있으니, 아바타에게 이 내용을 팀 브레인에 다시 반영해 달라고 요청하세요.";
-    const { container } = await mount(legacyView(oldRow({}), { closedByUpgrade: true, notice }));
+    const { container } = await mount(legacyView(oldRow({}), { closedByUpgrade: true, notice, source: null }));
 
     const card = screen.getByRole("region", { name: "지난 팀 브레인 카드" });
     expect(card.textContent).toBe(`배포 서버 접속 방법${notice}`);
@@ -335,6 +335,20 @@ describe("TeamBrainCard — a card of the retired review queue (legacy)", () => 
     expect(requests).toEqual(["GET /api/team-brain/cards/p1"]);
   });
 
+  it("shows the text of a closed submission folded, as plain text, and still no button", async () => {
+    const source = "배포는 <b>setup-host.sh</b> 후 **compose up**.\n[링크](https://example.com)";
+    const { container } = await mount(legacyView(oldRow({}), { closedByUpgrade: true, notice: "종료되었습니다.", source }));
+
+    const details = container.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")!.textContent).toBe("제출했던 원문 보기");
+    // The drafter's text is text: no markup or Markdown is rendered from it.
+    expect(details.querySelector("pre")!.textContent).toBe(source);
+    expect(details.querySelector("b, strong, a")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector("form, dl")).toBeNull();
+  });
+
   it("draws a decided row's final state the same way, muted", async () => {
     const row = oldRow({
       id: "r1",
@@ -345,7 +359,7 @@ describe("TeamBrainCard — a card of the retired review queue (legacy)", () => 
       targetId: "p1",
       changeset: { changes: [], conflicts: ["충돌"] },
     });
-    const { container } = await mount(legacyView(row, { closedByUpgrade: false, notice: "제안자에게 보완 요청을 보낸 검토 카드입니다." }));
+    const { container } = await mount(legacyView(row, { closedByUpgrade: false, notice: "제안자에게 보완 요청을 보낸 검토 카드입니다.", source: null }));
 
     const status = screen.getByRole("status");
     expect(status.textContent).toBe("제안자에게 보완 요청을 보낸 검토 카드입니다.");

@@ -278,21 +278,23 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
      * provenance edit on the card restarts it) — or whose conversation (and so
      * their card) is gone — become `expired` (lazy — run before reads that
      * count/act). The join stands in for a cascade on every
-     * conversation-deleting path.
+     * conversation-deleting path. LIVE cards only: a draft of the retired review
+     * queue is closed by the upgrade step alone (which may be held), so its
+     * card always says the way changed — never "expired".
      */
     expireTeamBrainDrafts(): number {
       const cutoff = new Date(Date.now() - this.teamBrainLimits().draftTtlMs).toISOString();
       return this.db
         .prepare(
           `UPDATE team_brain_proposals SET status = 'expired', updated_at = ?
-           WHERE status = 'draft' AND (updated_at < ? OR (conversation_id IS NOT NULL
+           WHERE status = 'draft' AND kind IN ('direct', 'policy') AND (updated_at < ? OR (conversation_id IS NOT NULL
              AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.id = team_brain_proposals.conversation_id)))`,
         )
         .run(now(), cutoff).changes;
     }
 
     /**
-     * Create a draft. The cap (THIS drafter's unpressed drafts, every kind) is
+     * Create a draft. The cap (THIS drafter's unpressed drafts, every LIVE kind) is
      * checked inside the transaction so two concurrent tool calls can't both
      * squeeze past it.
      */
@@ -304,7 +306,7 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
         const open = (
           this.db
             .prepare(
-              "SELECT COUNT(*) AS c FROM team_brain_proposals WHERE proposer_user_id = ? AND status = 'draft'",
+              "SELECT COUNT(*) AS c FROM team_brain_proposals WHERE proposer_user_id = ? AND status = 'draft' AND kind IN ('direct', 'policy')",
             )
             .get(input.proposerUserId) as { c: number }
         ).c;
@@ -433,14 +435,15 @@ export function withTeamBrain<TBase extends Constructor<StoreBase>>(Base: TBase)
     /**
      * The rewind cascade of `conversationId`: draft cards whose message the
      * rewind discarded — and that live in THAT conversation — are cancelled. An
-     * applied card stays (a rewind never undoes the world).
+     * applied card stays (a rewind never undoes the world), and so does a draft
+     * of the retired review queue (the upgrade step closes those, with its notice).
      */
     cancelTeamBrainDrafts(conversationId: string, ids: readonly string[]): number {
       if (ids.length === 0) return 0;
       return this.db
         .prepare(
           `UPDATE team_brain_proposals SET status = 'cancelled', updated_at = ?
-           WHERE status = 'draft' AND conversation_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
+           WHERE status = 'draft' AND kind IN ('direct', 'policy') AND conversation_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
         )
         .run(now(), conversationId, ...ids).changes;
     }

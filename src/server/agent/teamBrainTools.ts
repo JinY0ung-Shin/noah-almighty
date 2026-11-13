@@ -10,7 +10,9 @@ import {
   ensureTeamBrainRepo,
   findSecretInText,
   normalizeTeamVaultPath,
+  newLegacyCitations,
   readTeamVaultFile,
+  TEAM_LEGACY_PREFIX,
   searchTeamBrain,
   teamBrainHealth,
   teamBrainRoot,
@@ -354,31 +356,14 @@ async function prepareChangeset(
 }
 
 /** Where the pre-schema notes live; compiling them into the wiki is the admins' migration pass. */
-const TEAM_LEGACY_PREFIX = "raw/legacy/";
-
-/** The `raw/legacy/…` sources a page's frontmatter cites (lenient: a page that fails the schema still lists what it cites). */
-function legacySources(content: string): string[] {
-  const value = parseTeamFrontmatter(content)?.fields.get("sources");
-  const list = Array.isArray(value) ? value : value ? [value] : [];
-  return list.filter((s) => s.startsWith(TEAM_LEGACY_PREFIX));
-}
-
 /**
  * The migration pass is the admins' (owner decision 2026-11-13): for anyone
- * else, a page may not NEWLY cite a `raw/legacy/` note — one the page at HEAD
- * did not already cite (every citation of a created page is new). Correcting a
- * page that already cites one stays open to everybody. Returns the refusal, or
- * null. Run on a VALIDATED changeset (its sources are canonical paths).
+ * else a page may not NEWLY cite a `raw/legacy/` note (`newLegacyCitations`).
+ * Returns the refusal, or null. Run on a VALIDATED changeset (its sources are
+ * canonical paths).
  */
 async function legacyCitationRefusal(config: AppConfig, changes: readonly TeamPageChange[]): Promise<string | null> {
-  const added: string[] = [];
-  for (const c of changes) {
-    const cited = legacySources(c.content);
-    if (cited.length === 0) continue;
-    const before = c.op === "update" ? new Set(legacySources((await readTeamVaultFile(config, c.path)) ?? "")) : new Set<string>();
-    const fresh = cited.filter((s) => !before.has(s));
-    if (fresh.length > 0) added.push(`- ${c.path}: ${fresh.join(", ")}`);
-  }
+  const added = (await newLegacyCitations(config, changes)).map((c) => `- ${c.path}: ${c.sources.join(", ")}`);
   if (added.length === 0) return null;
   return `Refused: this changeset newly cites pre-schema notes under ${TEAM_LEGACY_PREFIX}. Compiling those notes into the wiki is the migration pass, which only an admin's avatar does (the team-brain-curate skill) — the server refuses it for everyone else:\n${added.join("\n")}\nTell the user to ask an admin to migrate these notes. The rest of this changeset can still be drafted: call prepare_team_changes again without those citations (a page that already cited a ${TEAM_LEGACY_PREFIX} note before your change keeps it).`;
 }
