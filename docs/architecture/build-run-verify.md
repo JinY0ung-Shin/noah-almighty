@@ -291,6 +291,12 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   at the 500-turn cap (scripted turns of 6–7 spans each): 80–145 ms and ~2.2 KB per open — real turns carry
   more spans, so this is a floor, not the production figure. Note for the next run: a Node client that
   waits out a `compose stop` (10 s) meets Noah's closed keep-alive socket (`other side closed`) — retry once.
+  **pi `fed9753` (2026-11-13, a fix to that page: a model's output speed is its output tokens ÷ its call
+  time, no longer ÷ the time after the first token):** the bug was visible in the run above (the scripted
+  model at 32,050 token/s). `run-all.sh` all PASS on a fresh stack (`~/.noah-work/boot-test-2026-11-13c/`),
+  `71-tracing-turn.mjs` 25/25, `75-trace-stats.mjs` 31/31 — the new check recomputes the speed from Jaeger's
+  raw `chat` spans (820 output tokens over 420 ms → 1,953 token/s, equal to the route's) — and
+  `25-admin-ui-real-gateway.mjs` 42/42 (the page states how the speed is counted, light and dark).
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
