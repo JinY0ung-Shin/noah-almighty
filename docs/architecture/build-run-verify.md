@@ -355,6 +355,25 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   attribute ("clock skew adjustment disabled; not applying calculated delta of -33 ms") — a child span
   stamped a few ms before its parent, nothing pi wrote; a check that lists attribute keys should skip
   `@jaeger@*`. After the run: gateway 205 MiB, broker 195 MiB.
+  **pi `08d35cb` (2026-11-14, plugin marketplaces — a refresh reinstalls the plugins that have a new version
+  (its answer gains `updated`), and the gateway refreshes every marketplace once an hour; pi's tests drive the
+  service in-process, and its commit looked at neither the panel's notice nor the running timer):**
+  `run-all.sh` all PASS on a fresh stack (`~/.noah-work/boot-test-2026-11-14b/`), `71-` 25/25, `75-` 37/37,
+  `25-` 48/48, `85-` 26/26, `86-` 20/20, `87-` 19/19, and the new `88-plugin-refresh.mjs` against a marketplace
+  a fixture serves over smart HTTP (`07-git-fixture.sh`: `git http-backend` behind a small CGI server, a sibling
+  container on the host's own pi gateway image — node, git and the backend in one image). Through Noah's
+  `/admin` proxy: the marketplace is added and two plugins installed; a refresh with nothing new answers
+  `updated: []` and reinstalls nothing; a version committed afterwards is unknown to the gateway until the
+  refresh, which answers `updated: ["alpha@bootmk v1.1.0"]` and leaves the other plugin untouched; a member gets
+  403; in a real browser the notice names the updated plugin and, for a plugin whose `plugin.json` cannot be
+  read, says it is left as it was, with the reason — that plugin stays on its installed version with an
+  업데이트 있음 badge and its skill stays readable; a conversation that began before the update is told the OLD
+  skill description on its next turn, a new conversation the new one; every pressed refresh is a
+  `pi_admin_proxy` audit row. 21/23 in the run: the two misses were the script asking for a skill by its bare
+  name — pi lists a plugin's skill as `<plugin>:<skill>` (`alpha:alpha-skill`); asked again by that name, both
+  answered. **NOT seen: the hourly timer.** `89-plugin-timer.mjs` there leaves a version unfetched and waits for
+  the gateway's first tick, one hour after it starts; the run was stopped before the tick, so that the timer
+  fires in the real gateway, and what it logs, still rest on pi's code and tests alone.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

@@ -793,6 +793,14 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   browser left before pi answered is recorded as an error marked 반영 여부 미확인 (pi may have applied it). The
   audit write runs in socket listeners outside Express, so it is caught and logged — a `SQLITE_BUSY` there must
   never become an uncaughtException that stops Noah.
+- **Plugin updates nobody pressed (pi `08d35cb`)** — refreshing a marketplace in the panel now also reinstalls
+  each of its plugins that has a new version (a plugin that cannot be installed stays on its installed version,
+  marked 업데이트 있음), and the gateway refreshes every marketplace once an hour by itself — a fixed interval
+  with no switch. The hourly refresh is not a proxied call: Noah's audit log has NO row for it and nobody gets a
+  notice, so what it updated or failed to update is in the GATEWAY's log only (`marketplace refreshed`,
+  `plugin installed`; by pi's code a warn line `marketplace refresh had warnings` / `marketplace refresh failed`).
+  A conversation already going keeps the skill list it began with; a new one gets the new version. The gateway
+  must be able to reach each marketplace's git host for it.
 - **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
   broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
   the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,
