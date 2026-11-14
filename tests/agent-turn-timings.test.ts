@@ -34,7 +34,7 @@ function slowTurn(turn: number, startedAt: string): PiTurnTrace {
       span({ id: "bash", parentId: "root", name: "execute_tool bash", startMs: 5_000, durationMs: 40_000 }),
       span({ id: "exec", parentId: "bash", service: "sandboxd", name: "sandboxd /exec", startMs: 5_100, durationMs: 39_800 }),
       span({ id: "create", parentId: "exec", service: "sandboxd", name: "sandbox create", startMs: 5_200, durationMs: 8_000 }),
-      span({ id: "mcp", parentId: "root", name: "execute_tool mcp_call", startMs: 5_000, durationMs: 20_000, error: true, attributes: { "pi_gateway.mcp_tool": "mcp__repo__sync_repo" } }),
+      span({ id: "mcp", parentId: "root", name: "execute_tool mcp_call", startMs: 5_000, durationMs: 20_000, error: true, attributes: { "pi_gateway.mcp_tool": "repo/sync_repo" } }),
       span({ id: "broker", parentId: "mcp", service: "mcp-broker", name: "mcp-broker tools/call", startMs: 5_050, durationMs: 19_900, attributes: { "pi_gateway.mcp_server": "repo" } }),
       span({ id: "chat2", parentId: "root", name: "chat falcon", startMs: 45_000, durationMs: 5_000, attributes: { "pi_gateway.first_token_ms": 400, "gen_ai.usage.output_tokens": 1_000 } }),
     ],
@@ -60,13 +60,13 @@ describe("summarizeTurnTimings", () => {
     expect(report).toContain("the turn you are in now is not listed");
   });
 
-  it("names the slowest steps, an MCP call by its real tool, with what ran inside and one-off setup", () => {
+  it("names the slowest steps, an MCP call by the tool it called (pi's server/tool label), with what ran inside and one-off setup", () => {
     const report = summarizeTurnTimings([slowTurn(7, "2026-11-14T02:00:00.000Z")]);
     const lines = report.split("\n");
     const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
     expect(at("1. execute_tool bash — 40.0 s")).toBeGreaterThan(-1);
     expect(lines[at("1. execute_tool bash — 40.0 s") + 1]).toContain("inside it: sandboxd /exec 39.8 s; sandboxd sandbox create 8.0 s");
-    expect(at("2. execute_tool mcp_call → mcp__repo__sync_repo — 20.0 s (error)")).toBeGreaterThan(at("1. execute_tool bash"));
+    expect(at("2. execute_tool mcp_call → repo/sync_repo — 20.0 s (error)")).toBeGreaterThan(at("1. execute_tool bash"));
     expect(lines[at("2. execute_tool mcp_call") + 1]).toContain("inside it: mcp-broker tools/call (repo) 19.9 s");
     expect(report).toContain("3. chat falcon — 5.0 s — first token after 400 ms; 1,000 output tokens, 200 tokens/s over the call");
     expect(report).toContain("4. chat falcon — 3.0 s — first token after 1.5 s; 12,000 input tokens (9,000 read from cache); 300 output tokens, 100 tokens/s over the call");
