@@ -186,6 +186,19 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   project's `.env` inside the included file — hence the shared-keys list in `.env.example`; (2) a service of
   the same name in a later `-f` file MERGES into the included one silently — never reuse a pi service name
   (`gateway`, `sandboxd`, `mcp-broker`, `egress-proxy`, `sandbox-image`) in an overlay.
+- **The boot test is scripted in the repo: `.claude/skills/pi-bump/boot-test/`** (the `pi-bump` skill — its
+  `SKILL.md` is the bump procedure). `prepare.sh <run-dir>` makes a self-contained run directory OUTSIDE the
+  repo (a copy of `scripts/` and `fixtures/`, `git archive HEAD` with `vendor/pi-gateway` at the commit the
+  submodule is checked out at, a throwaway `.env`, `tested-state.txt`); `<run-dir>/scripts/drive.sh` (or
+  `drive.sh build`, then `drive.sh checks`) carries out the recipe below and every per-bump check that is
+  quick, printing one `<step> exit=<rc>  <n>/<m> passed` line each; `99-teardown.sh` removes the run's
+  `noahcompose-*` resources by name. The scripts find the run directory from their own location — no path is
+  written into them. The dated `~/.noah-work/boot-test-*` directories named in the notes below are the RUN
+  directories of past bumps (their evidence), not where the scripts come from: never copy scripts forward
+  from one of them, and put a new check into the skill folder. Two steps the default run adds to those
+  notes: `65-shell-step-verdicts.mjs` judges the steps that only print (pi-setup's re-run, the `/mcp` source
+  checks, the same-origin gate, pi's security check) and `95-final-state.sh` counts error-level log lines per
+  service and prints the memory figures.
 - **Combined-stack boot test — in a private dind, not on the host daemon** (the host runs the user's own dev
   pi-gateway — the bundled stack from this checkout, or a standalone one, ONE per daemon: a second sandboxd
   adopts/removes its sandboxes and the egress socket volume name is fixed). Use a private
@@ -473,10 +486,11 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   stopped at the limit (pi's tests), the value surviving a gateway restart (pi's DB — not restarted here), a
   change made while a turn is running, any turn with a real model. After the run: gateway 265 MiB, broker
   155 MiB.
-  **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
-  (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
+  **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
+  `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
+  as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
-  Noah's published port from the host (`~/.noah-work/pi-compose/boot-1110/compact-e2e.mjs`; the first signup
+  Noah's published port from the host (`80-context-usage.mjs` is the compaction check; the first signup
   is the admin — a second one waits for approval, so later runs log in). For a compaction to have anything
   to summarize, the OLDER part must be a turn BEFORE the message that crosses pi's `keepRecentTokens`: pi cuts
   at a message boundary and keeps the crossing message itself, so one huge first message is all "recent".

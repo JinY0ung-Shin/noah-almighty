@@ -245,7 +245,7 @@ These are the invariants the project is built around. New work should reinforce 
   EXISTING-deployment migration path.
 - **Noah ships WITH its pi-gateway as ONE compose stack** (`vendor/pi-gateway` submodule; pi's code and
   compose file are never edited). What `pi-setup` applies is re-applied on every `up`, so the repo stays
-  its source. A pi bump moves the submodule to a PUSHED commit and re-runs the dind boot test. Every upgrade
+  its source. A pi bump moves the submodule to a PUSHED commit and re-runs the dind boot test (the `pi-bump` skill). Every upgrade
   re-runs `docker/pi/setup-host.sh` before `docker compose up`. → `pi-runtime.md`, `build-run-verify.md`.
 - **Project name diverges by layer:** "Noah Almighty" / `noah-almighty` / working dir `avatar-chat` — grep
   both slugs when auditing names.
