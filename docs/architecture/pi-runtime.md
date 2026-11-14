@@ -253,6 +253,14 @@ user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`,
   session folders included), and no conversation-deleting path removes it — these are the agent's own files,
   like `uploads/`. None of Noah's own MCP servers returns such a block today; a relayed server (`plugins`,
   `shared`) may. Checked on the real stack by the boot test (`86-mcp-files.mjs`, `build-run-verify.md`).
+- **Files an MCP tool takes (pi `89a69bd`):** the other direction. A tool property the SERVER marks
+  `"x-workspace-file": true` is shown to the model as a `/workspace` path, and pi fills it at call time with
+  `{filename, mimeType, size, sha256, data}` read from the run's sandbox — the model never writes file content
+  and no credential enters the sandbox. Only a regular, non-empty file under `/workspace` reached without a
+  symlink, of an `input_file` extension; 10 files and 28 MiB per call; never in a `read_only` session; an
+  unmarked argument is left alone. The mark is pi's own convention, not MCP. None of Noah's own MCP servers
+  uses it; a server registered in pi's broker (or relayed through `plugins` / `shared`, whose 8 MiB relay
+  message cap then applies) may. Checked on the real stack by the boot test (`87-mcp-file-args.mjs`).
 - **D3 (first pi turn of an old conversation):** `moveLegacyConversationWorkspace` moves `dataDir/workspaces/<avatar>/<conv>`
   into the sandbox folder — links/specials never followed (left behind), an existing sandbox file never overwritten,
   capped (256 MB / 10 000 entries / depth 16; past the cap the rest stays and the next turn continues), moved files

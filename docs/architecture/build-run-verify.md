@@ -335,6 +335,26 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   the fake LLM routes by the FIRST `[[fake:KEY]]` marker of a request, so every turn of one conversation must
   reuse ONE key (a new key per turn silently gets the echo default — a 40 ms "turn" with no tool call); the
   sandbox writes files 0666 in 0777 folders (its umask), the workspace root above them stays 0700.
+  **pi `89a69bd` (2026-11-14, workspace files as MCP tool arguments — a property a server marks
+  `"x-workspace-file": true` is shown to the model as a `/workspace` path and filled by the gateway with
+  `{filename, mimeType, size, sha256, data}`; the broker's request limit is 48 MiB; pi's own tests saw only a
+  FAKE sandbox):** `run-all.sh` all PASS on a fresh stack (`~/.noah-work/boot-test-2026-11-14/`), `75-` 37/37,
+  `25-` 48/48, `85-` 26/26, `86-mcp-files.mjs` 20/20, and the new `87-mcp-file-args.mjs` 19/19 against a
+  `stage` tool added to the fixture MCP server (`06-mcp-fixture.sh`): `mcp_search` shows the argument as a
+  path string; two files the model made in its sandbox (a binary with NULs, a csv under a relative path with a
+  space) arrive with the bytes hashing to the sandbox's own `sha256sum` and name, MIME, size and checksum
+  declared; **a 28 MiB file goes through the real sandboxd and broker in a 2.1 s turn**; 28 MiB plus one more
+  file is refused with the limit named; a path outside `/workspace` (absolute, `..`, `/tmp`), a missing file,
+  an empty one, an `.exe`, a directory, a symlink and a path THROUGH a symlinked folder are each refused with
+  their own sentence, and a good file in the same call is not sent either (the tool is never called); a
+  colleague's chat (`read_only`) is refused; the model's own requests and the gateway, broker and sandboxd
+  logs carry the path, never the base64. This is also the first boot of the stack with the team brain's
+  direct-write change (`e61ba4f`): Noah logged no error-level line (a fresh database — the queue-retirement
+  step has nothing to close there, so the upgrade path itself was NOT exercised). `71-tracing-turn.mjs` was
+  24/25 in the run and 25/25 alone afterwards: the one miss was Jaeger's own `@jaeger@warnings` span
+  attribute ("clock skew adjustment disabled; not applying calculated delta of -33 ms") — a child span
+  stamped a few ms before its parent, nothing pi wrote; a check that lists attribute keys should skip
+  `@jaeger@*`. After the run: gateway 205 MiB, broker 195 MiB.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
