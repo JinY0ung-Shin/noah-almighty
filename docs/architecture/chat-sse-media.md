@@ -537,6 +537,8 @@
   into a body that has a width (a hidden tab or collapsed panel measures 0) and its ResizeObserver repaints
   (debounced) when that width changes; (6) compressed `<diagram>` payloads render fine (the viewer inflates them), but
   the `drawio` skill tells the agent to AUTHOR uncompressed so later turns can edit the XML.
+  What the avatar does BEFORE sharing — the skill's `drawio.sh layout | route | check`, run in its sandbox —
+  is in [`drawio-skill.md`](drawio-skill.md); its `BUNDLED_STENCILS` list must match gotcha (2).
 - **Rewind/regenerate caveat:** the dropped rows' attachments (images AND files) and the share links of
   their file cards are deleted, so a canvas that embedded their slide images loses them — accepted (the new
   run re-renders and re-shows); the canvases themselves roll back to the anchor time.

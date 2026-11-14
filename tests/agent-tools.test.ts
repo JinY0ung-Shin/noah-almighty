@@ -2510,6 +2510,7 @@ describe("system tools (avatar system management)", () => {
     const on = await callTool(onTools, "describe_system", {});
     expect(on.content[0].text).toContain("Diagram files (.drawio): supported");
     expect(on.content[0].text).toContain("`drawio` skill");
+    expect(on.content[0].text).toContain("`drawio.sh layout` places the shapes and routes the connectors");
   });
 
   it("describe_system never blames the admin SSH policy for a run class that gets no SSH", async () => {

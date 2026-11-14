@@ -87,7 +87,11 @@ which check owner/teammate trust themselves.
 - **draw.io diagrams**: the avatar can author `.drawio` diagrams (or pass along ones it fetched,
   e.g. Confluence attachments) and hand them over as download cards; the chat renders them as
   interactive diagrams (zoom/pan/pages) in the file side panel, fully offline via a vendored
-  draw.io viewer.
+  draw.io viewer. Before sharing, the avatar runs the skill's own tool in its sandbox: it places
+  the shapes (ELK) or keeps the avatar's placement and routes the connectors around the shapes
+  (libavoid), and reports overlaps, lines through shapes and labels that do not fit. The engine
+  ships inside the skill and needs only the sandbox's Node. Mechanics:
+  [`docs/architecture/drawio-skill.md`](docs/architecture/drawio-skill.md).
 - **Scheduled routines**: owners can create one-time or recurring chat jobs (`/api/me/routines`)
   for a specific KST date/time, daily/weekly slots, or a fixed interval. The avatar executes
   them headlessly and keeps each run's result in a dedicated routine conversation.

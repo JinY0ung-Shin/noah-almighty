@@ -622,13 +622,17 @@ function todoSnapshotBlock(snapshot: TodoPromptSnapshot): string {
 /**
  * Standing guidance for draw.io diagram work. Unlike decks there is no
  * per-deployment toolchain gate: the client renders shared .drawio files
- * itself, so this only needs the run to be able to publish files.
+ * itself, and the skill's layout/routing/check tool (default-skills/skills/
+ * drawio/engine, docs/architecture/drawio-skill.md) is vendored whole into
+ * the skill and needs only the Node every pi sandbox has — so this only needs
+ * the run to be able to publish files.
  */
 function drawioSection(request: AgentRequest): string | null {
   // Authoring a .drawio file needs `write`, which a read-only session lacks.
   if (!request.fileOutputEnabled || request.piRuntime?.readOnlyBuiltins) return null;
   return (
     "**draw.io diagrams**: when the user asks for a diagram they can keep editing (architecture, flowchart, sequence, org chart, …) or wants to SEE a .drawio file you can reach (e.g. downloaded from a Confluence page), use the `drawio` skill — author UNCOMPRESSED mxfile XML, save it as a `.drawio` file, and deliver it with `mcp__file_output__share_file`. " +
+    "Do not work out coordinates or bend lines by hand: draw.io's own router runs a connector straight through any shape between its ends. The skill ships a tool you run with the shell in your sandbox (`drawio.sh layout` places the shapes and routes the connectors, `drawio.sh route` keeps your placement and routes the connectors around the shapes, `drawio.sh check` reports overlaps, lines through shapes and labels that do not fit; Node only, nothing to install) — run it on every diagram you author or edit before you share it; a file you only pass along is shared as it is. " +
     "The file card's side panel renders the diagram interactively on the client (zoom/pan/pages, no server toolchain involved), so do NOT export or publish PNG previews just for delivery, and never paste raw mxfile XML into the chat as a substitute."
   );
 }

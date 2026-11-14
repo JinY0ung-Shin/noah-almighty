@@ -137,6 +137,10 @@ These are the invariants the project is built around. New work should reinforce 
   MCP tool — Noah's container holds the DB and every secret); share_file previews are hash-bound to the
   .pptx. Toolchain state is the operator's `PI_DECK_SANDBOX` flag, never a host probe, reported with the
   exact `converter: INSTALLED` / `converter: NOT INSTALLED` markers the skill keys on. → `pptx-converter.md`.
+- **A `.drawio` diagram is DECLARED by the avatar and laid out by the skill's own tool, SHELL-side in the
+  sandbox** (`drawio.sh layout | route | check`; never an MCP tool, never the network) — the model cannot
+  see the picture. The engine is vendored whole into the skill (hash-pinned, Node only: no toolchain flag,
+  nothing to install). **A fix goes into `engine/lib/`, never into a vendored file.** → `drawio-skill.md`.
 - **An image the avatar is SHOWN is also a FILE it can place** (attachments, screenshots, Confluence
   attachments land in the conversation's sandbox folder; host-side writes go through `PinnedDir`). Text
   stays a legitimate slide choice: **never add a check that fires because a slide has no image.**

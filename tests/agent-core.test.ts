@@ -3302,6 +3302,10 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("`drawio` skill");
     expect(prompt).toContain("UNCOMPRESSED mxfile XML");
     expect(prompt).toContain("mcp__file_output__share_file");
+    // The skill's own layout/routing/check tool: geometry is not the model's to work out.
+    expect(prompt).toContain("`drawio.sh layout` places the shapes and routes the connectors");
+    expect(prompt).toContain("`drawio.sh route` keeps your placement");
+    expect(prompt).toContain("`drawio.sh check` reports overlaps");
   });
 
   it("lists enabled experimental features only for owner-driven turns", () => {
