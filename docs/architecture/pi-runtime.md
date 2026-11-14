@@ -840,6 +840,17 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   `plugin installed`; by pi's code a warn line `marketplace refresh had warnings` / `marketplace refresh failed`).
   A conversation already going keeps the skill list it began with; a new one gets the new version. The gateway
   must be able to reach each marketplace's git host for it.
+- **The per-turn tool call limit is pi's setting (pi `02a023e`)** — 기본 도구 → 턴당 도구 호출 상한 on the panel
+  (1–10000, default 200, kept in pi's DB), i.e. `PUT /admin/api/tool-call-limit` through this proxy: audited as
+  `pi_admin_proxy` with method + path, never the value (the gateway's own log has it). Noah keeps NO copy —
+  no env, no column, nothing in the prompt or `describe_system` — and pi reads it when a turn (or a subagent
+  call) starts, so a change applies from the next turn without a restart. A turn that makes one call more is
+  ended by pi as `incomplete` / `max_tool_calls` (that call does not run) → `incompleteErrorSubtype`
+  (`agent/pi/eventAdapter.ts`) → `error_max_turns` → an ordinary `done`, no `error` frame. What the user reads
+  depends on the turn's text (`runPiAgent.ts`): with none, `resultErrorMessage` (`agent/runErrors.ts`) —
+  "응답이 최대 처리 단계에 도달해 중단되었습니다. …" — and `response.resultError: "error_max_turns"`; with text
+  already written, that text ALONE, and nothing says the turn was cut. Neither service logs the stop. The
+  conversation goes on with its next turn.
 - **What does not stick** — `pi-setup` re-applies Noah's prompt `noah` (`scripts/pi-system-prompt.md`), its MCP
   broker entries and the disabled `request_admin`/`present_file` on every `docker compose up`, so edits to those in
   the panel last only until then; the repository stays their source of truth. Everything else (LLM settings,

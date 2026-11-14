@@ -446,6 +446,33 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   judging them, as the note above asked, and is 25/25. **NOT seen:** the team brain's `personalNotes` /
   `conflicts` through the stack (the same helper; Noah's unit tests only); a `.gitignore`d or very large tree
   under the new cwd; any turn with a real model. After the run: gateway 226 MiB, broker 206 MiB.
+  **pi `02a023e` (2026-11-14, the per-turn tool call limit — 200 in pi's code until now — is a setting on the
+  panel's 기본 도구 page, 1–10000, kept in pi's DB and read when a turn or a subagent call starts; `GET
+  /admin/api/tools` gains `maxToolCallsPerTurn`, `PUT /admin/api/tool-call-limit {value}` sets it; pi's tests
+  drive the route in-process and its commit looked at the page with a FAKE API only):** `run-all.sh` all PASS
+  on a fresh stack (`~/.noah-work/boot-test-2026-11-14e/`, Noah `1081102`), `71-` 25/25, `75-` 37/37, `25-`
+  48/48, `85-` 26/26, `86-` 20/20, `87-` 19/19, `88-` 23/23, `90-` 22/22, `92-` 10/10, no error-level line in
+  the six services' logs at the end, and the new **`93-tool-call-limit.mjs` 23/23**, through Noah's `/admin`
+  proxy as a Noah admin against the real gateway. The fresh stack answers `maxToolCallsPerTurn: 200` and an
+  owner turn with 4 tool calls completes; `PUT {value: 3}` → 200 `{"maxToolCallsPerTurn":3}` and the GET shows
+  3; `0`, `10001`, `2.5` and `"3"` → 400 `invalid_tool_call_limit` ("value must be an integer from 1 to 10000")
+  with the value unchanged; a member (PUT and GET) and an anonymous caller get 403, and an admin's PUT without
+  the panel's headers 403 `csrf`. At 3, with NO restart: a turn with 3 calls completes; a turn whose scripted
+  model makes a 4th call is stopped — the 4th command never ran (its file holds `1 2 3`), the model is not
+  asked a 5th time, and Noah's stream is an ordinary `done` (no `error` frame) whose answer is `응답이 최대 처리
+  단계에 도달해 중단되었습니다. 질문을 더 작게 나눠 다시 시도해 주세요.` with `response.resultError:
+  "error_max_turns"`; that text is the row the conversation keeps. **A stopped turn whose model had already
+  WRITTEN something answers with that text alone — no stop message and no `resultError`** (→ `pi-runtime.md`
+  "pi admin panel proxy"). In a real browser the page shows 턴당 도구 호출 상한 with the value in force, 저장
+  stays disabled for the same value, `0` and `10001`, and saving 5 shows 저장했습니다. 다음 턴부터 적용됩니다.
+  with no page error, failed call or CSP violation. Back at 200 the conversation that was stopped goes on
+  (4 calls complete). Noah's audit log holds one `pi_admin_proxy` row per PUT that reached pi (7: three
+  `success`, four `error`), each detail exactly `PUT /admin/api/tool-call-limit` — never the value; the three
+  refusals Noah made itself and the GETs leave no such row. The gateway logs `tool call limit updated` WITH the
+  value (3, 5, 200) and logs nothing for a stopped turn; neither does Noah. **NOT seen:** a subagent call
+  stopped at the limit (pi's tests), the value surviving a gateway restart (pi's DB — not restarted here), a
+  change made while a turn is running, any turn with a real model. After the run: gateway 265 MiB, broker
+  155 MiB.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive
