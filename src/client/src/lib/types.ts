@@ -284,12 +284,19 @@ export interface ChatPane {
    */
   workspaceTab?: boolean;
   /**
-   * One-shot: a shared file's card asked the 파일 tab to unfold its tree down
-   * to this workspace path (작업 폴더에서 보기, `revealWorkspaceFile`). The tab
-   * takes it (`takeWorkspaceReveal`) as soon as it sees it; `nonce` tells two
-   * asks for the same path apart. Only ever set by the viewer's own press.
+   * One-shot: a shared file's card asked the 파일 tab for this workspace path.
+   * The tab takes it (`takeWorkspaceReveal`) as soon as it sees it; `nonce`
+   * tells two asks for the same path apart.
+   * - plain (작업 폴더에서 보기, `revealWorkspaceFile`): unfold the tree down to
+   *   the file and mark its row.
+   * - `open` (a card click, `openSharedFile`): also OPEN the file's preview
+   *   there. `fallback` is the card itself: a file that is no longer at that
+   *   path opens as the card's own tab (the copy) instead.
+   * - `quiet` (a live .drawio share that opens by itself): keyboard focus
+   *   stays where the viewer is typing.
+   * Set by the viewer's own press, or by the one live .drawio rule.
    */
-  workspaceReveal?: { path: string; nonce: number };
+  workspaceReveal?: { path: string; nonce: number; open?: boolean; quiet?: boolean; fallback?: PaneFileTab };
   /** The selected side-panel tab; null/undefined = the default (lib/sidePanel `resolveSideTab`). */
   sideTab?: SideTabRef | null;
   /**
@@ -322,6 +329,8 @@ export interface ChatPane {
 export interface PaneFileTab {
   attachment: import("../../../server/types.js").MessageAttachment;
   slides: import("../../../server/types.js").MessageAttachment[];
+  /** Why this tab (the card's copy) shows instead of the workspace file — said above the preview. */
+  notice?: string;
 }
 
 /**

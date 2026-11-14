@@ -1871,6 +1871,11 @@ body.col-resizing .canvas-html-frame {
   flex-direction: column;
   gap: var(--s-3);
 }
+/* Why the card's copy shows instead of the workspace file (the file is gone from the workspace). */
+.file-tab-notice {
+  margin: 0;
+  font-size: var(--t-sm);
+}
 .file-preview-slide {
   margin: 0;
   display: flex;

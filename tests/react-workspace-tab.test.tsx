@@ -7,7 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel";
 import WorkspaceTab from "../src/client/src/components/WorkspaceTab";
-import { closeWorkspaceTab, newChat, openWorkspaceTab, revealWorkspaceFile, workspaceTabStartsOpen } from "../src/client/src/lib/chat";
+import {
+  SHARED_FILE_GONE_NOTICE,
+  closeWorkspaceTab,
+  newChat,
+  openSharedFile,
+  openWorkspaceTab,
+  opensInWorkspaceTab,
+  revealWorkspaceFile,
+  workspaceTabStartsOpen,
+} from "../src/client/src/lib/chat";
 import { WORKSPACE_TAB, hasSideTabs, resolveSideTab, sideTabs } from "../src/client/src/lib/sidePanel";
 import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import type { WorkspaceEntry, WorkspaceListing } from "../src/shared/workspaceFiles";
@@ -531,6 +540,109 @@ describe("a shared file's card pointing into the 파일 tab (작업 폴더에서
     render(<SidePanel pane={readState().chatPanes[0]} />);
     await screen.findByRole("button", { name: "deck.pptx" });
     expect(document.querySelector(".ws-row-marked")).toBeNull();
+  });
+});
+
+describe("a file card opening its file in the 파일 tab (a card click)", () => {
+  const card = (name: string, extra: Record<string, unknown> = {}): any => ({
+    id: `att-${name}`,
+    kind: "file",
+    mediaType: "text/plain",
+    name,
+    size: 20,
+    workspacePath: `c/${CONVERSATION}/${name}`,
+    ...extra,
+  });
+  const withTab = { bootstrap: { workspaceFiles: true } as any };
+  /** The store holds the pane (the fallback writes into it), on a deployment that has the tab. */
+  function seed(over: Record<string, unknown> = {}): void {
+    replaceState({ ...structuredClone(PRISTINE), ...withTab, chatPanes: [pane(over)] as any, activePaneId: "p1" });
+  }
+
+  it("goes to the 파일 tab only for a card with a recorded place and no slides of its own", () => {
+    const slide: any = { id: "s1", kind: "image", hidden: true };
+    expect(opensInWorkspaceTab(withTab, card("data.csv"), [])).toBe(true);
+    // A deck keeps its own tab: its slides are the converter's exact pages.
+    expect(opensInWorkspaceTab(withTab, card("deck.pptx"), [slide])).toBe(false);
+    // An older card (no place), and a deployment without the tab.
+    expect(opensInWorkspaceTab(withTab, card("data.csv", { workspacePath: undefined }), [])).toBe(false);
+    expect(opensInWorkspaceTab({ bootstrap: { workspaceFiles: false } as any }, card("data.csv"), [])).toBe(false);
+    expect(opensInWorkspaceTab({ bootstrap: null }, card("data.csv"), [])).toBe(false);
+  });
+
+  it("a click asks the 파일 tab to open the file; a deck or a card without a place opens its own tab", () => {
+    seed({ workspaceTab: false });
+    const data = card("data.csv");
+    act(() => openSharedFile("p1", data, []));
+    let state = readState();
+    expect(state.chatPanes[0].workspaceTab).toBe(true);
+    expect(state.chatPanes[0].sideTab).toEqual(WORKSPACE_TAB);
+    expect(state.chatPanes[0].sideExpand).toBe(true);
+    expect(state.chatPanes[0].workspaceReveal).toMatchObject({ path: data.workspacePath, open: true, fallback: { attachment: data, slides: [] } });
+    expect(state.chatPanes[0].workspaceReveal?.quiet).toBeUndefined();
+    expect(state.chatPanes[0].fileTabs).toEqual([]);
+
+    const slide: any = { id: "s1", kind: "image", hidden: true };
+    const deck = card("deck.pptx");
+    act(() => openSharedFile("p1", deck, [slide]));
+    state = readState();
+    expect(state.chatPanes[0].fileTabs).toEqual([{ attachment: deck, slides: [slide] }]);
+    expect(state.chatPanes[0].sideTab).toEqual({ kind: "file", id: deck.id });
+
+    const old = card("old.md", { workspacePath: undefined });
+    act(() => openSharedFile("p1", old, []));
+    expect(readState().chatPanes[0].sideTab).toEqual({ kind: "file", id: old.id });
+  });
+
+  it("opens the file's preview there — drawn by the tab — with the tree unfolded behind it", async () => {
+    seed();
+    act(() => openSharedFile("p1", card("data.csv"), []));
+    render(<SidePanel pane={readState().chatPanes[0]} />);
+    // The csv is drawn as a table, and the way back to the tree has the focus.
+    const back = await screen.findByRole("button", { name: /목록/ });
+    await waitFor(() => expect(screen.getByRole("cell", { name: "가,나" })).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(back));
+    expect(readState().chatPanes[0].workspaceReveal).toBeUndefined();
+    expect(readState().chatPanes[0].fileTabs).toEqual([]);
+    expect(screen.queryByRole("status")).toBeNull();
+    // Back: its row is there (the folder was unfolded) and takes the focus.
+    fireEvent.click(back);
+    const row = screen.getByRole("button", { name: "data.csv" });
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(currentRow().getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("a file that has gone from the workspace opens as the card's own tab (the copy), which says why", async () => {
+    seed();
+    const ghost = card("ghost.md");
+    act(() => openSharedFile("p1", ghost, []));
+    render(<SidePanel pane={readState().chatPanes[0]} />);
+    await waitFor(() => expect(readState().chatPanes[0].fileTabs).toEqual([{ attachment: ghost, slides: [], notice: SHARED_FILE_GONE_NOTICE }]));
+    expect(readState().chatPanes[0].sideTab).toEqual({ kind: "file", id: ghost.id });
+    expect(SHARED_FILE_GONE_NOTICE).toContain("전달한 시점의 사본을 보여줍니다");
+    // Nothing is said in the 파일 tab itself: the viewer is not there any more.
+    expect(document.querySelector(".workspace-tab [role=status]")).toBeNull();
+  });
+
+  it("a quiet ask (a live .drawio share) opens the file without taking the keyboard", async () => {
+    seed();
+    const typing = document.createElement("textarea");
+    document.body.append(typing);
+    typing.focus();
+    try {
+      const data = card("data.csv");
+      render(
+        <WorkspaceTab
+          pane={pane({ workspaceReveal: { path: data.workspacePath, nonce: 7, open: true, quiet: true, fallback: { attachment: data, slides: [] } } })}
+          active
+        />,
+      );
+      await screen.findByRole("button", { name: /목록/ });
+      await waitFor(() => expect(screen.getByRole("cell", { name: "가,나" })).toBeTruthy());
+      expect(document.activeElement).toBe(typing);
+    } finally {
+      typing.remove();
+    }
   });
 });
 

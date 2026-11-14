@@ -45,6 +45,7 @@ import type {
   LiveToolRow,
   MessageAttachment,
   PaneCanvas,
+  PaneFileTab,
   SideTabRef,
   SteerPublic,
   StoredMessage,
@@ -2000,11 +2001,26 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             state.chatPanes.length === 1
           ) {
             const current = resolveSideTab(pane);
-            if (!(pane.fileTabs ?? []).some((tab) => tab.attachment.id === data.attachment.id))
+            // Where its card would open it (`openSharedFile`): the 파일 tab at
+            // the file — only while the viewer has that tab open (a tab they
+            // closed is not reopened for them), and without taking the
+            // keyboard from the composer. Else the card's own tab, as before.
+            const path = data.attachment.workspacePath;
+            const inWorkspace = Boolean(path) && pane.workspaceTab === true && opensInWorkspaceTab(state, data.attachment, []);
+            if (inWorkspace && path) {
+              pane.workspaceReveal = {
+                path,
+                nonce: ++workspaceRevealNonce,
+                open: true,
+                quiet: true,
+                fallback: { attachment: data.attachment, slides: [] },
+              };
+            } else if (!(pane.fileTabs ?? []).some((tab) => tab.attachment.id === data.attachment.id)) {
               pane.fileTabs = [...(pane.fileTabs ?? []), { attachment: data.attachment, slides: [] }];
+            }
             // The diagram it opens for is meant to be SEEN — the preview never
             // stayed behind a collapsed strip before the panels merged.
-            if (revealSideTab(pane, { kind: "file", id: data.attachment.id }, current, false))
+            if (revealSideTab(pane, inWorkspace ? WORKSPACE_TAB : { kind: "file", id: data.attachment.id }, current, false))
               pane.sideExpand = true;
           }
         });
@@ -3079,16 +3095,76 @@ export function openFileTab(
   paneId: string,
   attachment: MessageAttachment,
   slides: MessageAttachment[],
+  notice?: string,
 ): void {
   updatePane(paneId, (pane) => {
-    const tabs = pane.fileTabs ?? [];
-    const tab = { attachment, slides };
-    pane.fileTabs = tabs.some((item) => item.attachment.id === attachment.id)
-      ? tabs.map((item) => (item.attachment.id === attachment.id ? tab : item))
-      : [...tabs, tab];
+    putFileTab(pane, { attachment, slides, ...(notice ? { notice } : {}) });
     selectTab(pane, { kind: "file", id: attachment.id });
     pane.sideFollow = false;
     pane.sideExpand = true;
+  });
+}
+
+function putFileTab(pane: ChatPane, tab: PaneFileTab): void {
+  const tabs = pane.fileTabs ?? [];
+  pane.fileTabs = tabs.some((item) => item.attachment.id === tab.attachment.id)
+    ? tabs.map((item) => (item.attachment.id === tab.attachment.id ? tab : item))
+    : [...tabs, tab];
+}
+
+/**
+ * Where a shared file's card opens: in the 파일 tab, AT the file — the one
+ * place that draws every format the app can draw (markdown, html, csv, json,
+ * images, documents, diagrams) — when the card recorded where its file sat and
+ * the deployment has the tab. A card that carries its OWN slide renders (a
+ * deck: the converter's exact pages, which the workspace could only
+ * approximate, and not on every server) keeps its own tab, and so does a card
+ * with no recorded place (an older card, a deployment without the tab).
+ */
+export function opensInWorkspaceTab(
+  state: Pick<ClientState, "bootstrap">,
+  attachment: MessageAttachment,
+  slides: MessageAttachment[],
+): boolean {
+  return Boolean(state.bootstrap?.workspaceFiles && attachment.workspacePath && slides.length === 0);
+}
+
+/** The card's copy is shown because its file is no longer where it was shared from (`openSharedFile`'s fallback). */
+export const SHARED_FILE_GONE_NOTICE =
+  "작업 폴더에서 이 파일을 찾지 못했습니다. 전달한 뒤에 옮겨졌거나 지워졌을 수 있어, 전달한 시점의 사본을 보여줍니다.";
+
+/**
+ * A file-card click: the file as it is NOW, opened in the 파일 tab
+ * (`opensInWorkspaceTab`), else the card's own tab. A file that has gone from
+ * the workspace since falls back to the card's copy (`workspaceFileGone`).
+ */
+export function openSharedFile(paneId: string, attachment: MessageAttachment, slides: MessageAttachment[]): void {
+  const path = attachment.workspacePath;
+  if (!path || !opensInWorkspaceTab(readState(), attachment, slides)) {
+    openFileTab(paneId, attachment, slides);
+    return;
+  }
+  updateState((state) => {
+    const pane = showWorkspaceTab(state, paneId);
+    if (pane) pane.workspaceReveal = { path, nonce: ++workspaceRevealNonce, open: true, fallback: { attachment, slides } };
+  });
+}
+
+/**
+ * The 파일 tab could not find the file a card asked it to open: the card's own
+ * tab (the copy taken when it was shared) shows instead and says why. A
+ * `quiet` ask (a live .drawio share) only joins the strip the way the avatar's
+ * tabs do — it never takes the panel from a tab the viewer picked.
+ */
+export function workspaceFileGone(paneId: string, fallback: PaneFileTab, quiet: boolean): void {
+  if (!quiet) {
+    openFileTab(paneId, fallback.attachment, fallback.slides, SHARED_FILE_GONE_NOTICE);
+    return;
+  }
+  updatePane(paneId, (pane) => {
+    const current = resolveSideTab(pane);
+    putFileTab(pane, { ...fallback, notice: SHARED_FILE_GONE_NOTICE });
+    if (revealSideTab(pane, { kind: "file", id: fallback.attachment.id }, current, false)) pane.sideExpand = true;
   });
 }
 

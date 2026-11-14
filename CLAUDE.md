@@ -181,9 +181,11 @@ These are the invariants the project is built around. New work should reinforce 
   only as text or through the chat's sanitizers. It never writes or deletes in the workspace and never reaches
   the avatar. A pdf/pptx/docx is rendered from Noah's own COPY of the bytes into an expiring per-user cache —
   never from a workspace path. **A new preview kind goes through a sanitizer, its own script-less frame, or
-  that copy-then-convert path.** A `share_file` card records where its file sat, and the VIEWER's press on the
-  card (폴더에서 보기) opens the tab there — the card stays the copy, the tab shows the file as it is now; the
-  avatar never opens, selects or learns of the tab. → `pi-runtime.md`, `client.md`.
+  that copy-then-convert path.** A `share_file` card records where its file sat, and a press on the card
+  opens the file IN the tab — the one place that draws a file, as it is NOW; a deck keeps its own tab (its
+  exact slides), and a file gone from the workspace falls back to the card's copy, which says so. The
+  avatar never opens, selects or learns of the tab (a live `.drawio` opens there by the client's own rule,
+  only while the viewer has the tab open). → `pi-runtime.md`, `client.md`.
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

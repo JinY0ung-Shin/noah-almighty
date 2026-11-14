@@ -5,7 +5,7 @@ import Icon from "./Icon";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
-import { takeWorkspaceReveal } from "../lib/chat";
+import { takeWorkspaceReveal, workspaceFileGone } from "../lib/chat";
 import { cx, useAppState, useLatest, useStore } from "../lib/hooks";
 import { theme as themeStore } from "../lib/theme";
 import {
@@ -138,6 +138,8 @@ export default function WorkspaceTab({ pane, active = false }: WorkspaceTabProps
       active={active}
       revealPath={pane.workspaceReveal?.path ?? ""}
       revealNonce={pane.workspaceReveal?.nonce ?? 0}
+      // A new object per ask, never changed afterwards: it does not move per token either.
+      revealAsk={pane.workspaceReveal}
     />
   );
 }
@@ -157,6 +159,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
   active,
   revealPath,
   revealNonce,
+  revealAsk,
 }: {
   paneId: string;
   conversationId: string;
@@ -166,6 +169,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
   /** A card's 작업 폴더에서 보기: the workspace path to unfold the tree down to (`revealNonce` 0 = no ask). */
   revealPath: string;
   revealNonce: number;
+  /** The same ask, whole: whether to OPEN the file (a card click) and what to show if it is gone. */
+  revealAsk?: ChatPane["workspaceReveal"];
 }) {
   const [folders, setFolders] = useState<Record<string, FolderState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -187,6 +192,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
     setCurrentState(path);
   }
   const [opened, setOpened] = useState<{ path: string; entry: WorkspaceEntry } | null>(null);
+  /** The file being opened was not the viewer's press: its preview does not take the keyboard focus. */
+  const quietOpen = useRef(false);
   /** Bumped by 새로고침: the open file is read again. */
   const [previewVersion, setPreviewVersion] = useState(0);
   /** 원문 보기: the open file's source instead of its rendering (offered once the preview says it has both). */
@@ -368,7 +375,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
    * folder meanwhile. A file that is not there any more is said, never an error:
    * the tree still unfolds as far as the folders exist.
    */
-  async function reveal(target: string): Promise<void> {
+  async function reveal(target: string, ask?: ChatPane["workspaceReveal"]): Promise<void> {
     const forConversation = conversationRef.current;
     const parts = target.split("/");
     const name = parts.pop() ?? "";
@@ -407,11 +414,23 @@ const WorkspaceTree = memo(function WorkspaceTree({
     if ([...parts, name].some((segment) => segment.startsWith("."))) setShowHidden(true);
     const entry = last?.entries.find((item) => item.name === name && item.kind === "file");
     if (entry) {
+      if (ask?.open) {
+        // A card click: the file itself, drawn here. The tree behind it is
+        // unfolded down to its row, which takes the focus on the way back.
+        quietOpen.current = Boolean(ask.quiet);
+        showFile({ path: target, entry });
+        return;
+      }
       setMarked(target);
       setMarkedTick((value) => value + 1);
       return;
     }
     setMarked("");
+    if (ask?.open && ask.fallback) {
+      // The card still holds the copy it was shared as: its own tab shows that, and says why.
+      workspaceFileGone(paneId, ask.fallback, Boolean(ask.quiet));
+      return;
+    }
     setNotice(problem || (last?.truncated ? REVEAL_TOO_MANY : REVEAL_GONE));
   }
   const revealRef = useLatest(reveal);
@@ -422,7 +441,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
     if (!revealNonce || handledReveal.current === revealNonce) return;
     handledReveal.current = revealNonce;
     takeWorkspaceReveal(paneId, revealNonce);
-    void revealRef.current(revealPath);
+    void revealRef.current(revealPath, revealAsk?.nonce === revealNonce ? revealAsk : undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealNonce]);
 
@@ -476,7 +495,9 @@ const WorkspaceTree = memo(function WorkspaceTree({
   useEffect(() => {
     if (openedPath) {
       returnTo.current = openedPath;
-      backRef.current?.focus();
+      // A file that opened by itself (a live .drawio share) leaves the keyboard where the viewer is typing.
+      if (quietOpen.current) quietOpen.current = false;
+      else backRef.current?.focus();
       return;
     }
     const path = returnTo.current;

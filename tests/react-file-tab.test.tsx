@@ -91,6 +91,28 @@ afterEach(() => {
 /* entry point: the deck's side-panel tab                              */
 /* ------------------------------------------------------------------ */
 
+describe("the card's copy shown because its workspace file is gone", () => {
+  it("says why above the preview, and says nothing otherwise", () => {
+    const note: MessageAttachment = { id: "file-9", kind: "file", mediaType: "text/markdown", name: "메모.md", size: 12 };
+    const view = render(<FileTab pane={paneWith(note)} file={{ attachment: note, slides: [], notice: "작업 폴더에서 이 파일을 찾지 못했습니다." }} active />);
+    expect(screen.getByRole("status").textContent).toBe("작업 폴더에서 이 파일을 찾지 못했습니다.");
+    expect(screen.getByRole("link", { name: "다운로드" })).toBeTruthy();
+    view.unmount();
+    // The way back to the folder is not offered from a tab that shows because the file is not there.
+    appState.set({ ...structuredClone(PRISTINE), bootstrap: { workspaceFiles: true } as any });
+    const placed = { ...note, workspacePath: "c/x/메모.md" };
+    const gone = render(<FileTab pane={paneWith(placed)} file={{ attachment: placed, slides: [], notice: "사본입니다." }} active />);
+    expect(screen.queryByRole("button", { name: "작업 폴더에서 보기" })).toBeNull();
+    gone.unmount();
+    const there = render(<FileTab pane={paneWith(placed)} file={{ attachment: placed, slides: [] }} active />);
+    expect(screen.getByRole("button", { name: "작업 폴더에서 보기" })).toBeTruthy();
+    there.unmount();
+    appState.set(structuredClone(PRISTINE));
+    render(<FileTab pane={paneWith(note)} file={{ attachment: note, slides: [] }} active />);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
 function paneWith(attachment: MessageAttachment, over: Partial<ChatPane> = {}): ChatPane {
   return {
     id: "pane-1",

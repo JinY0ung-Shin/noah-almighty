@@ -59,8 +59,10 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
 
   // 폴더에서 보기: the 파일 tab, unfolded down to where this file sat in the
   // viewer's sandbox workspace when it was shared. Only for a card that
-  // recorded the place (share_file on a deployment that has the 파일 tab).
-  const workspacePath = useAppState().bootstrap?.workspaceFiles ? (attachment.workspacePath ?? "") : "";
+  // recorded the place (share_file on a deployment that has the 파일 tab) —
+  // and not on a tab that shows BECAUSE the file is gone from there (`notice`).
+  const hasWorkspaceTab = Boolean(useAppState().bootstrap?.workspaceFiles);
+  const workspacePath = hasWorkspaceTab && !file.notice ? (attachment.workspacePath ?? "") : "";
 
   /* ---- draw.io diagram rendering (interactive, client-side) ---- */
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -245,6 +247,11 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
         </div>
       </div>
       <div className="canvas-content file-tab-body" ref={bodyRef}>
+        {file.notice ? (
+          <p className="muted file-tab-notice" role="status">
+            {file.notice}
+          </p>
+        ) : null}
         {drawioAtt ? (
           drawioStatus === "error" ? (
             <p className="muted">다이어그램을 표시할 수 없습니다. 다운로드해서 draw.io에서 열어 주세요.</p>

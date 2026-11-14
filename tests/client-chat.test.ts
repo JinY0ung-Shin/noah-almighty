@@ -2002,6 +2002,37 @@ describe("stream events applied to a pane", () => {
     expect(statuses()).toContain("파일을 공유했습니다.");
   });
 
+  it("a shared .drawio with a recorded place opens in the 파일 tab the viewer has open, quietly", async () => {
+    const id = seedPane({ workspaceTab: true } as any);
+    updateState((s) => {
+      s.bootstrap = { ...(s.bootstrap ?? {}), workspaceFiles: true } as any;
+    });
+    const attachment = { id: "d3", kind: "file", mediaType: DRAWIO_MEDIA_TYPE, name: "구조.drawio", workspacePath: "c/x/구조.drawio" };
+    await driveEvents(id, [["file", { attachment }]]);
+    // No tab of its own: the 파일 tab is asked to open the file, without taking the keyboard.
+    expect(pane(id).fileTabs ?? []).toEqual([]);
+    expect(pane(id).workspaceReveal).toMatchObject({
+      path: "c/x/구조.drawio",
+      open: true,
+      quiet: true,
+      fallback: { attachment, slides: [] },
+    });
+    expect(pane(id).sideTab).toEqual({ kind: "workspace", id: "workspace" });
+    expect(pane(id).sideExpand).toBe(true);
+  });
+
+  it("a shared .drawio opens as its own tab when the viewer closed the 파일 tab, or the card has no place", async () => {
+    updateState((s) => {
+      s.bootstrap = { ...(s.bootstrap ?? {}), workspaceFiles: true } as any;
+    });
+    const closed = seedPane({ workspaceTab: false } as any);
+    const placed = { id: "d4", kind: "file", mediaType: DRAWIO_MEDIA_TYPE, name: "구조.drawio", workspacePath: "c/x/구조.drawio" };
+    await driveEvents(closed, [["file", { attachment: placed }]]);
+    expect(pane(closed).fileTabs).toEqual([{ attachment: placed, slides: [] }]);
+    expect(pane(closed).workspaceReveal).toBeUndefined();
+    expect(pane(closed).workspaceTab).toBe(false); // a tab the viewer closed is not reopened for them
+  });
+
   it("a .drawio share stays a card when more than one pane is open", async () => {
     seedPane();
     const id = seedPane();

@@ -528,7 +528,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **Selection** = `pane.sideTab`; `null` means the default (`resolveSideTab`: the latest canvas still
   `pending`, else the latest canvas, else the latest file; answering or skipping a default-shown ask pins
   it first, so the panel does not jump once `pending` clears). **What the avatar shows takes the panel while the pane FOLLOWS** (`sideFollow` undefined/true);
-  a pick by the viewer (`selectSideTab`, a file-card `openFileTab`) stops following, and every send
+  a pick by the viewer (`selectSideTab`, a file-card click — `openSharedFile`) stops following, and every send
   re-arms it (next to `stickBottom`). Not following → the viewer's tab stays and the new one gets a dot
   (`sideUnseen`, tab keys); `revealSideTab` pins the CURRENT tab first, because a new last canvas would
   otherwise become the default and take the panel anyway. A canvas WITH controls is the exception — it
@@ -602,8 +602,31 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   extension, ≤ 1 MiB (images ≤ 10 MiB). 원문 보기 shows the source of a rendered kind. Names are drawn through
   `workspaceDisplayName` (control characters and bidi overrides become a mark). Relative images inside a Markdown or
   HTML file do not resolve (the file route is query-addressed).
+- **A file card OPENS its file in the 파일 tab (2026-11-14, user decision: one place draws a file).** The card's own
+  tab (`FileTab`) draws only what rides the card — a deck's slide renders, a `.drawio` — and answered every other
+  format with "미리보기를 제공하지 않습니다", while the 파일 tab draws markdown, html, csv, json, images, documents and
+  diagrams. So a card click (`controller.openFilePreview` → `openSharedFile`) goes there whenever it can
+  (`opensInWorkspaceTab`: `bootstrap.workspaceFiles` AND the card recorded its place, `workspacePath`, AND it has no
+  slides of its own): `showWorkspaceTab` + a one-shot ask `workspaceReveal = { path, nonce, open: true, fallback }`.
+  The tree unfolds down to the file exactly as for 폴더에서 보기 below and then OPENS it (`showFile`); 목록 goes back
+  to its row. **What it shows is the file as it is NOW, not the copy taken at the share.** Kept on the card's own
+  tab: a deck (its slides are the converter's exact pages — the workspace could only show LibreOffice's
+  approximation, and only where the server has it; 공유 링크 exports the card's copy), a card without a place
+  (stored before `workspacePath`, the `local` runtime), a deployment without the tab; split view still downloads.
+  **A file that is gone from the workspace falls back to the card's copy** (`workspaceFileGone` →
+  `openFileTab(…, SHARED_FILE_GONE_NOTICE)`): the card's tab opens and says why above the preview
+  (`PaneFileTab.notice`, `role="status"`), with its download; that tab has no 폴더에서 보기. **A live `.drawio`
+  share** (the one tab that opens by itself) follows the same rule only while the viewer HAS the 파일 tab open — a
+  tab they closed is never reopened for them — as a `quiet` ask: the file opens without moving keyboard focus out
+  of the composer (`quietOpen`), through `revealSideTab` like any tab the avatar shows; otherwise its own tab, as
+  before. `WorkspaceTree` is `memo`'d and takes the ask as an object: it is a NEW object per ask and never changed
+  afterwards (`takeWorkspaceReveal` replaces it with `undefined`), so it does not defeat the memo. Checked in
+  Chromium against mocked routes (2026-11-14): a `.md` card → the heading and bold text drawn in the 파일 tab with
+  목록 focused and no tab of the card's own; back → its row focused; a gone file → the card's tab with the line and
+  다운로드; a card without a place → its own tab, nothing said. Tests: `tests/react-workspace-tab.test.tsx` ("a file
+  card opening its file…"), `tests/client-chat.test.ts` (the two live `.drawio` cases), `tests/react-file-tab.test.tsx`.
 - **A shared file's card points INTO the 파일 tab (폴더에서 보기, 2026-11-14) — the viewer's press, never the
-  avatar's.** A `share_file` card that recorded its place (`MessageAttachment.workspacePath`, server side:
+  avatar's.** (Since the bullet above, the button matters for the cards that KEEP their own tab — decks.) A `share_file` card that recorded its place (`MessageAttachment.workspacePath`, server side:
   `chat-sse-media.md`) gets a 폴더에서 보기 button in its FileTab toolbar, before 공유 링크 / 다운로드, only while
   `bootstrap.workspaceFiles`; a card without the field (stored earlier, the `local` runtime, a user's own
   upload) has none. `revealWorkspaceFile(paneId, path)` opens the tab exactly like `openWorkspaceTab` and leaves

@@ -24,7 +24,7 @@ import {
   hasVisibleImages,
   knownModel,
   newChat,
-  openFileTab,
+  openSharedFile,
   selectConversation,
   sendMessage,
   sendSteer,
@@ -1148,10 +1148,11 @@ export function useChatController() {
     setShareTarget(null);
   }
 
-  // File-card click: open the file as a tab of the right-side panel (slides +
-  // download), next to the conversation's canvases. Split view keeps the
-  // direct download: its panes are narrow, and the one side panel serves only
-  // the ACTIVE pane.
+  // File-card click: the file opens in the right-side panel — in the 파일 tab,
+  // at the file as it is now, where the card recorded its place; a deck (its
+  // own slide renders) and a card without a place open as their own tab
+  // (`openSharedFile`). Split view keeps the direct download: its panes are
+  // narrow, and the one side panel serves only the ACTIVE pane.
   function openFilePreview(item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined): void {
     if (readState().chatPanes.length > 1) {
       const a = document.createElement("a");
@@ -1162,7 +1163,7 @@ export function useChatController() {
       a.remove();
       return;
     }
-    openFileTab(item.id, att, panelSlides(source, att));
+    openSharedFile(item.id, att, panelSlides(source, att));
   }
 
   async function ensureSkills(item: ChatPane) {
