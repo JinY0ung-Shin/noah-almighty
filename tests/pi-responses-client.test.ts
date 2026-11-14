@@ -496,6 +496,63 @@ describe("cancel / models / files", () => {
     expect(file.contentType).toBe("text/markdown");
     expect(seen.at(-1)!.url).toBe("/v1/files/content?path=%2Fworkspace%2Fc%2Fconv1%2Freport.md&user=u1");
   });
+
+  it("reads a session's turn traces with ?user=, drops malformed entries, and keeps pi's error code", async () => {
+    const span = { id: "s1", service: "gateway", name: "invoke_agent", startMs: 0, durationMs: 1200, error: false, attributes: { "pi_gateway.turn": 2 } };
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          traces: [
+            {
+              traceId: "t1",
+              turn: 2,
+              startedAt: "2026-11-14T01:00:00.000Z",
+              durationMs: 1200,
+              spans: [
+                span,
+                { id: "s2", parentId: "s1", service: "sandboxd", name: "sandboxd /exec", startMs: 10, durationMs: 5, error: true, attributes: { nested: { no: 1 }, ok: "yes" } },
+                { id: "s3", name: "no numbers" },
+                "not a span",
+              ],
+            },
+            { traceId: "t0", startedAt: "2026-11-14T00:00:00.000Z", durationMs: 9, spans: "none" },
+            { startedAt: "missing id", durationMs: 1 },
+          ],
+        }),
+      );
+    };
+    await expect(client().traces("resp_e_2", "u1")).resolves.toEqual([
+      {
+        traceId: "t1",
+        turn: 2,
+        startedAt: "2026-11-14T01:00:00.000Z",
+        durationMs: 1200,
+        spans: [
+          span,
+          { id: "s2", parentId: "s1", service: "sandboxd", name: "sandboxd /exec", startMs: 10, durationMs: 5, error: true, attributes: { ok: "yes" } },
+        ],
+      },
+      { traceId: "t0", startedAt: "2026-11-14T00:00:00.000Z", durationMs: 9, spans: [] },
+    ]);
+    expect(seen.at(-1)!.method).toBe("GET");
+    expect(seen.at(-1)!.url).toBe("/v1/responses/resp_e_2/traces?user=u1");
+    expect(seen.at(-1)!.headers.authorization).toBe("Bearer svc-key-1");
+
+    handler = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ data: [] }));
+    };
+    expect((await client().traces("resp_e_2", "u1").catch((e) => e)).kind).toBe("protocol");
+
+    handler = (_req, res) => errorBody(res, 404, { message: "Tracing is not enabled on this gateway.", type: "api_error", code: "tracing_disabled" });
+    const off = await client().traces("resp_e_2", "u1").catch((e) => e);
+    expect(off.kind).toBe("not_found");
+    expect(off.code).toBe("tracing_disabled");
+
+    handler = (_req, res) => errorBody(res, 503, { message: "Jaeger is unreachable", type: "api_error", code: "trace_store_unavailable" });
+    expect((await client().traces("resp_e_2", "u1").catch((e) => e)).kind).toBe("unavailable");
+  });
 });
 
 describe("withPiRetry", () => {

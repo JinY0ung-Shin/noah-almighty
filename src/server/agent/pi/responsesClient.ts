@@ -27,6 +27,8 @@ import { REASONING_EFFORT_ORDER } from "../../effortLevels.js";
 const MAX_SSE_FRAME_BYTES = 4 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 64 * 1024;
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024;
+/** `/v1/responses/{id}/traces`: up to 50 turns, each with one span per model call, tool call and sandbox/broker request. */
+const MAX_TRACES_BODY_BYTES = 16 * 1024 * 1024;
 /** pi-gateway's Fastify `bodyLimit` (server.ts). Larger bodies are a 413 there; fail before sending. */
 export const PI_MAX_REQUEST_BYTES = 16 * 1024 * 1024;
 /** pi's MAX_PRESENT_BYTES (= remote-fs MAX_READ_BYTES): `/v1/files/content` never serves more. */
@@ -531,6 +533,72 @@ export interface PiCompactResult {
   contextWindow?: number;
 }
 
+/** One span of a pi turn trace: a model call, a tool execution, or what the sandbox / MCP broker did under it. */
+export interface PiTraceSpan {
+  id: string;
+  parentId?: string;
+  /** `gateway` | `sandboxd` | `mcp-broker`. */
+  service: string;
+  /** `invoke_agent` (the turn), `chat <model>`, `execute_tool <name>`, `sandboxd <route>`, `mcp-broker <method>`, … */
+  name: string;
+  /** Milliseconds from the start of the turn's trace. */
+  startMs: number;
+  durationMs: number;
+  error: boolean;
+  /** Names, counts and durations only — pi records no prompt, tool argument, result or error message. */
+  attributes: Record<string, string | number | boolean>;
+}
+
+/** One FINISHED pi turn (`GET /v1/responses/{id}/traces`): pi writes a turn's trace when the turn ends. */
+export interface PiTurnTrace {
+  traceId: string;
+  /** pi's turn number in the session (`pi_gateway.turn`). */
+  turn?: number;
+  startedAt: string;
+  durationMs: number;
+  spans: PiTraceSpan[];
+}
+
+/** pi's `{ traces }` body, read defensively: a malformed trace or span is dropped, never trusted. */
+function parseTurnTraces(json: unknown): PiTurnTrace[] {
+  if (!isRecord(json) || !Array.isArray(json.traces)) {
+    throw new PiGatewayError("protocol", { message: "실행 시간 기록 형식이 올바르지 않습니다." });
+  }
+  const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+  const spansOf = (raw: unknown): PiTraceSpan[] =>
+    (Array.isArray(raw) ? raw : []).filter(isRecord).flatMap((span) => {
+      if (typeof span.id !== "string" || typeof span.name !== "string" || !finite(span.startMs) || !finite(span.durationMs)) return [];
+      const attributes: PiTraceSpan["attributes"] = {};
+      for (const [key, value] of Object.entries(isRecord(span.attributes) ? span.attributes : {})) {
+        if (typeof value === "string" || typeof value === "boolean" || finite(value)) attributes[key] = value;
+      }
+      return [
+        {
+          id: span.id,
+          ...(typeof span.parentId === "string" && span.parentId ? { parentId: span.parentId } : {}),
+          service: typeof span.service === "string" ? span.service : "",
+          name: span.name,
+          startMs: span.startMs,
+          durationMs: span.durationMs,
+          error: span.error === true,
+          attributes,
+        },
+      ];
+    });
+  return json.traces.filter(isRecord).flatMap((trace) => {
+    if (typeof trace.traceId !== "string" || typeof trace.startedAt !== "string" || !finite(trace.durationMs)) return [];
+    return [
+      {
+        traceId: trace.traceId,
+        ...(finite(trace.turn) ? { turn: trace.turn } : {}),
+        startedAt: trace.startedAt,
+        durationMs: trace.durationMs,
+        spans: spansOf(trace.spans),
+      },
+    ];
+  });
+}
+
 export interface PiStreamOptions {
   signal?: AbortSignal;
   /** Called once response headers arrived (the turn is admitted and running). */
@@ -562,6 +630,14 @@ export interface PiResponsesClient {
   listModels(signal?: AbortSignal): Promise<PiModel[]>;
   /** A `present_file` item's bytes. `path` must be under `/workspace`. */
   fileContent(path: string, user: string, signal?: AbortSignal): Promise<PiFileContent>;
+  /**
+   * `GET /v1/responses/{id}/traces?user=` → the FINISHED turns of that response's session, most recent first
+   * (pi keeps 7 days and answers at most its 50 most recent turns; the turn in progress is not in it). Any
+   * response id of the session names it. Throws `not_found` (404: pi no longer has the session — or, with code
+   * `tracing_disabled`, the operator runs pi without its trace store), `unavailable` / `server` (503 / 502: the
+   * trace store cannot be read right now).
+   */
+  traces(responseId: string, user: string, signal?: AbortSignal): Promise<PiTurnTrace[]>;
 }
 
 function joinUrl(base: string, path: string): URL {
@@ -844,6 +920,16 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       const response = await jsonCall("GET", "/v1/files/content", { path, user }, signal);
       const bytes = await readCappedBytes(response, PI_MAX_FILE_BYTES);
       return { bytes, contentType: response.headers.get("content-type") ?? "application/octet-stream" };
+    },
+    async traces(responseId, user, signal) {
+      const response = await jsonCall("GET", `/v1/responses/${encodeURIComponent(responseId)}/traces`, { user }, signal);
+      const text = await readCapped(response, MAX_TRACES_BODY_BYTES);
+      try {
+        return parseTurnTraces(JSON.parse(text));
+      } catch (error) {
+        if (error instanceof PiGatewayError) throw error;
+        throw new PiGatewayError("protocol", { cause: error });
+      }
     },
   };
 }

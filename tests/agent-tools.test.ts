@@ -1729,6 +1729,7 @@ describe("system tools (avatar system management)", () => {
       "notify_user",
       "list_recent_conversations",
       "read_conversation",
+      "turn_timings",
       "list_routines",
       "create_routine",
       "update_routine",

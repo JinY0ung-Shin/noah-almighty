@@ -84,6 +84,9 @@ vi.mock("../src/server/agent/pi/responsesClient.js", async (importOriginal) => {
       async fileContent() {
         throw new Error("not used");
       },
+      async traces() {
+        throw new Error("not used");
+      },
     }),
   };
 });

@@ -71,6 +71,9 @@ function fakeClient(steps: Step[]) {
     async fileContent() {
       throw new Error("not used");
     },
+    async traces() {
+      throw new Error("not used");
+    },
   };
   return { client, requests };
 }

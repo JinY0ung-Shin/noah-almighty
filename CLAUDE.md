@@ -18,6 +18,10 @@ These are the invariants the project is built around. New work should reinforce 
   the LIVE `mcp__system__describe_system`. **When you add a capability, surface its state in BOTH** —
   shared facts come from `agent/ownerState.ts` (`summarizeOwnerState`). Never offer a route the run does
   not actually have. → `agent-core.md` ("Cross-cutting rules").
+- **A duration the avatar states is MEASURED, never estimated.** `mcp__system__turn_timings` (owner runs)
+  reads pi's own traces of THIS conversation's session through pi's `/v1` as the run's principal — never
+  the admin key, another session, or the instance-wide stats — and every "nothing recorded" answer tells
+  the avatar not to guess. The turn in progress is not in it. → `pi-runtime.md` ("Turn timings").
 - **For the avatar to actually USE a capability, greeting-only prompt text isn't enough.** Give it
   STANDING per-turn guidance + an action-trigger in the tool's description + an error that redirects.
 - **Language split: agent-facing text is English, user-facing text is Korean.** Test: *"does the model

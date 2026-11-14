@@ -1786,6 +1786,16 @@ describe("buildPrompt", () => {
     expect(buildUserPrompt(request)).not.toContain("Official Noah usage manual");
   });
 
+  it("offers turn_timings only on a run stamped with it, and only in the owner's section", () => {
+    const line = "call `mcp__system__turn_timings` and answer from its measurements — never estimate durations yourself";
+    const owner = buildSystemPromptAppend(req({ viewerIsOwner: true, turnTimings: true }));
+    expect(owner).toContain(line);
+    expect(owner).toContain("It reports FINISHED turns only");
+    expect(buildSystemPromptAppend(req({ viewerIsOwner: true }))).not.toContain("turn_timings");
+    // The stamp is the owner plan's; a colleague's prompt has no owner section to carry it.
+    expect(buildSystemPromptAppend(req({ viewerIsOwner: false, turnTimings: true }))).not.toContain("turn_timings");
+  });
+
   it("keeps system lookup available even when all optional groups are deselected", () => {
     const system = buildSystemPromptAppend(req({ mcpToolGroups: [] }));
     expect(system).toContain("external-tasks: External Task API integration");

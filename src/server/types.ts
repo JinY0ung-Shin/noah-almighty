@@ -1463,6 +1463,13 @@ export interface AgentRequest {
    */
   midTurnMessages?: boolean;
   /**
+   * True when `mcp__system__turn_timings` can read this run's session traces
+   * (capability plan stamp `turnTimingsActive`: an owner run on pi) — the SAME
+   * boolean the system server's `turnTraces` is set on, so the prompt's
+   * standing line and describe_system offer the tool together.
+   */
+  turnTimings?: boolean;
+  /**
    * Set when this run executes on pi-gateway (capability plan stamp). Both
    * metacognition surfaces branch on it; see {@link PiRuntimeFacts}.
    */

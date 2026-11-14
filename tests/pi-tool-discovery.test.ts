@@ -99,6 +99,9 @@ function fakeClient(steps: ((req: PiResponseRequest) => PiStreamEvent[] | Promis
     async fileContent() {
       throw new Error("not used");
     },
+    async traces() {
+      throw new Error("not used");
+    },
   };
   return { client, requests };
 }

@@ -624,6 +624,46 @@ holds it:
   catalog and on every run), the prompt (`piAsyncToolsSentence`) and
   describe_system ("Long-running tools on this runtime") state this.
 
+## Turn timings (`agent/turnTimings.ts`, `mcp__system__turn_timings`, 2026-11-14)
+
+"Why was that slow?" is answered from pi's own measurements, never from the model's sense of time (it has none).
+
+- **Source:** pi writes ONE OpenTelemetry trace per turn (the `jaeger` service, see the compose section below) and
+  serves a session's finished turns at `GET /v1/responses/{id}/traces` — service key + `?user=`, the same ownership
+  check as cancel/input/compact (`record.principal !== user` → the 404 of an unknown id), the SAME body as the
+  admin panel's 실행 시간 보기 (`{ traces: TurnTrace[] }`, most recent first, pi's 50 most recent turns, 7 days).
+  Noah reads it with `PiResponsesClient.traces` (body cap 16 MiB; malformed traces/spans are dropped, attributes
+  kept only when scalar). **Never the admin key, never `traces/stats`** (instance-wide: its slowest-turns list
+  names other users' sessions) — user decision 2026-11-14.
+- **Which session:** the one the run continues. `runPiAgent` hands the plan a typed accessor
+  (`RunCapabilityOptions.piTurnTraces`, the `currentTextAnchor` pattern) that reads `previous` AT CALL TIME — it moves
+  at a self-heal and a follow-up turn — as the run's principal. No `previous` (a new conversation's first turn, a
+  session just restarted) → `null` → "no finished turn yet", and pi is not asked.
+- **The turn in progress is never in it:** pi finds a turn by its root span (`invoke_agent`), which is exported when
+  the turn ends. The tool description, the prompt line and describe_system all say "ask in the next message".
+- **Gate:** `turnTimingsActive` (runCapabilities) = system tools on AND `ownerToolAccess` AND not a consultation AND
+  the runner gave the accessor — ONE boolean for the system server's `turnTraces` and the `AgentRequest.turnTimings`
+  stamp. The handler self-gates (`viewerIsOwner`, then `turnTraces`) before any read, like every system tool: the
+  catalog lists `turn_timings` for every run. The `local` stub has no accessor → "not available in this run".
+- **The report (`summarizeTurnTimings`)** is arithmetic over the spans, nothing added: per turn the total, the
+  model / tools / other split (pi's own page's rule — the `chat …` and `execute_tool …` spans DIRECTLY under the
+  turn, overlapping spans counted once; a subagent's calls sit under the tool that started it), the time to the
+  first token, the 5 slowest steps (a model call with first-token time, tokens and tokens/s over the whole call; a
+  tool — `mcp_call` by its real tool, `pi_gateway.mcp_tool` — with the 2 largest spans inside it), and one-off
+  setup (`sandbox create`, `mcp-broker connect upstream`). Default 5 turns, max 20. A span name is pi's and can
+  carry an MCP server's tool name: one line, 120 characters.
+- **Refusals never invite a guess:** every "nothing to report" text ends by telling the avatar not to estimate.
+  `tracing_disabled` (404 + that code: pi runs without `JAEGER_HOST`) is told apart from a lost session (plain 404)
+  by `PiGatewayError.code`; 503/502 from the trace store read as "try again". pi's English message is never quoted.
+- **Not covered:** the sandbox's outbound network (pi's egress proxy is not in a trace — a slow download shows only
+  as a slow `bash`), and time before pi (Noah's own queueing, the browser). A stack whose pi predates the route
+  answers a plain 404, which reads as a lost session — the bundle ships both together, so this is not handled.
+- **Both surfaces + manual:** the owner section's standing line (`request.turnTimings`), describe_system's
+  `- Turn timings …` line (owner branch; "not available in this run" without the accessor), the `chat` manual page.
+- **Tests:** `tests/agent-turn-timings.test.ts` (the report's arithmetic, the tool's gates and refusals, the
+  describe_system line), `tests/pi-responses-client.test.ts` (the read and its error codes), `tests/pi-runner.test.ts`
+  (which response names the session, the principal, a colleague's run never reaching pi).
+
 ## Tool discovery (usability report §6.5)
 
 On pi the model sees only `mcp_search`/`mcp_call`; every Noah tool is found by pi's BM25 search (tool name, description,

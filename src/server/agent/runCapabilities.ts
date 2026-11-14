@@ -45,7 +45,7 @@ import {
 } from "./pi/modelCatalog.js";
 import { piServicesFor } from "./pi/piRuntime.js";
 import { piRepoCopySandboxPath } from "./pi/piRepoCopy.js";
-import { piSandboxEnvOf } from "./pi/responsesClient.js";
+import { piSandboxEnvOf, type PiTurnTrace } from "./pi/responsesClient.js";
 import { normalizeGitRepoName } from "../gitRepos.js";
 import { readWorkspaceImage } from "../chatImages.js";
 import {
@@ -294,6 +294,13 @@ export interface RunCapabilityOptions {
    * sync_repo, commit) — `runPiAgent` releases them when the run ends.
    */
   piRepoLocks?: RunRepoLocks;
+  /**
+   * pi runs: the finished turns of THIS run's pi session (`mcp__system__turn_timings`).
+   * A typed accessor like `currentTextAnchor` — which response names the session
+   * is the runner's loop state (it moves at a self-heal and a follow-up turn).
+   * `null` = no earlier response yet.
+   */
+  piTurnTraces?: () => Promise<PiTurnTrace[] | null>;
 }
 
 /**
@@ -674,6 +681,12 @@ export async function buildRunCapabilities(
   const todoToolsActive =
     systemToolsEnabled && ownerToolAccess && !consultationRun;
   const todoDeleteActive = todoToolsActive && !request.externalTaskApi;
+  // `mcp__system__turn_timings`: an owner run whose runner can read its pi
+  // session's traces. The session's principal is whoever the run executes AS,
+  // so the owner gate keeps the report to the owner's own turns. Computed here
+  // so the system server's ctx and the prompt stamp key on ONE boolean.
+  const turnTimingsActive =
+    systemToolsEnabled && ownerToolAccess && !consultationRun && Boolean(runOptions.piTurnTraces);
   // The 할 일 list as the prompt states it: FROZEN per conversation at its first
   // to-do-capable turn and only read back afterwards (agent/todoSnapshot.ts —
   // a write-once store call, so a re-plan or retry reads the same snapshot).
@@ -917,6 +930,8 @@ export async function buildRunCapabilities(
     // secrets, model switches) — mirrored by the prompt's pi section
     // (promptBuilder piRuntimeSection).
     piRuntime: piRuntimeFacts,
+    // turn_timings' source (turnTimingsActive above).
+    ...(turnTimingsActive ? { turnTraces: runOptions.piTurnTraces } : {}),
   });
   // Cross-avatar discovery (read-only): lets the avatar look up OTHER visible
   // avatars by capability so it can point the user at a teammate avatar for
@@ -1343,6 +1358,7 @@ export async function buildRunCapabilities(
     todoToolsActive,
     todoDeleteActive,
     todoSnapshot,
+    turnTimingsActive,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -1413,6 +1429,7 @@ export function stampPromptRequest(
     todoToolsActive,
     todoDeleteActive,
     todoSnapshot,
+    turnTimingsActive,
     deckRenderingAvailable,
     deckToolchain,
     deckAuthoring,
@@ -1529,6 +1546,8 @@ export function stampPromptRequest(
     // this run has a live steer channel, so the viewer can keep typing while it
     // works. Same boolean describe_system reports (the system server's ctx).
     midTurnMessages: Boolean(events?.steers),
+    // mcp__system__turn_timings (the system server's `turnTraces`).
+    turnTimings: turnTimingsActive,
     // 공용 MCP 서버: ONE derivation (the states describe_system got).
     // Every viewer class hears which servers are mounted; only the owner's
     // branches name missing secrets (the prompt section gates that).

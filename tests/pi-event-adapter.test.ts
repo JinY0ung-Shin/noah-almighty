@@ -103,6 +103,9 @@ function fakeClient(streams: PiStreamEvent[][], opts: { holdAfter?: number } = {
     async fileContent() {
       return { bytes: Buffer.alloc(0), contentType: "text/plain" };
     },
+    async traces() {
+      throw new Error("not used");
+    },
   };
   return { client, requests, cancels };
 }

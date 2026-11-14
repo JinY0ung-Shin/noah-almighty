@@ -1401,6 +1401,13 @@ export function buildSystemPromptAppend(
           "For an important result or required action the user should be told about separately, leave an app notification with `mcp__system__notify_user`. Routine times are based on KST `HH:MM`, and plugin add/enable changes usually load starting from the next conversation.",
       );
     }
+    // Turn timings (capability plan stamp — the same boolean describe_system's
+    // line reads): a measured answer to "why was that slow?", never a guess.
+    if (request.turnTimings === true) {
+      lines.push(
+        "When the owner asks why an answer was slow, how long something took, or where the time went in this conversation, call `mcp__system__turn_timings` and answer from its measurements — never estimate durations yourself. It reports FINISHED turns only (a turn is recorded when it ends), so for the turn you are in now say that and offer to look in the next message.",
+      );
+    }
     const todoBlock = todoSection(request);
     if (todoBlock) {
       lines.push(todoBlock);

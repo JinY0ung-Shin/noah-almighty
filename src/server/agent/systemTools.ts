@@ -68,6 +68,8 @@ import { serverProxyState } from "./serverProxyState.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../chatFiles.js";
 import { readSystemManual } from "./systemManual.js";
 import { consultationHistoryText } from "./avatarDirectoryTools.js";
+import { PiGatewayError, type PiTurnTrace } from "./pi/responsesClient.js";
+import { TURN_TIMINGS_DEFAULT_TURNS, TURN_TIMINGS_MAX_TURNS, summarizeTurnTimings } from "./turnTimings.js";
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
@@ -355,6 +357,16 @@ export interface SystemToolsContext {
    * only on direct callers (tests), which then get the generic runtime line.
    */
   piRuntime?: PiRuntimeFacts;
+  /**
+   * `turn_timings`' source, set by runCapabilities on an OWNER pi run only
+   * (`turnTimingsActive` — the SAME boolean stamped on
+   * `AgentRequest.turnTimings`, so the prompt and describe_system offer the
+   * tool together): reads pi's traces of THIS run's session. `null` = the
+   * session has no earlier response to name it by (its first turn, or a
+   * session just restarted). Undefined → the tool refuses and describe_system
+   * says it is not available.
+   */
+  turnTraces?: () => Promise<PiTurnTrace[] | null>;
 }
 
 /** MCP server name; tools surface to the model as `mcp__system__<tool>`. */
@@ -367,6 +379,7 @@ export const SYSTEM_TOOL_NAMES = [
   "mcp__system__notify_user",
   "mcp__system__list_recent_conversations",
   "mcp__system__read_conversation",
+  "mcp__system__turn_timings",
   "mcp__system__list_routines",
   "mcp__system__create_routine",
   "mcp__system__update_routine",
@@ -377,6 +390,37 @@ export const SYSTEM_TOOL_NAMES = [
 ] as const;
 
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is participating in.";
+
+/** The ending every `turn_timings` refusal shares: a missing measurement is never replaced by a guess. */
+const NO_TIMING_GUESS = "Do not estimate durations yourself — say that no measurement is available.";
+
+/** describe_system's line for `mcp__system__turn_timings` (owner branch), mirrored by the prompt's standing line. */
+function turnTimingsLine(ctx: SystemToolsContext): string {
+  return `- Turn timings (where the time went in this conversation): ${
+    ctx.turnTraces
+      ? "available — `mcp__system__turn_timings` reports, for the FINISHED turns of this conversation's session, how long each took and how that splits into model calls, tool calls and the rest, with the slowest steps named. Use it when the owner asks why an answer was slow or how long something took, and answer from its numbers. The turn now running is recorded only when it ends, so it is never in the report; records are kept for 7 days"
+      : "not available in this run — there is no measurement to read, so do not estimate how long a turn or a tool took"
+  }`;
+}
+
+/** Why pi could not answer the traces read, as text the avatar can act on. */
+function turnTimingsFailure(error: unknown): string {
+  if (error instanceof PiGatewayError) {
+    if (error.kind === "not_found" && error.code === "tracing_disabled") {
+      return `Turn timing is turned off on this deployment (the runtime runs without its trace store), so nothing was recorded. ${NO_TIMING_GUESS}`;
+    }
+    if (error.kind === "not_found") {
+      return `The runtime no longer has this conversation's session, so its timing records cannot be found. ${NO_TIMING_GUESS}`;
+    }
+    if (error.kind === "aborted") {
+      return "The read was cancelled.";
+    }
+    if (["unavailable", "server", "timeout", "network", "capacity", "rate_limited"].includes(error.kind)) {
+      return `The timing records cannot be read right now (the runtime's trace store did not answer). Try again in a moment. ${NO_TIMING_GUESS}`;
+    }
+  }
+  return `The timing records could not be read. ${NO_TIMING_GUESS}`;
+}
 
 /**
  * describe_system's 공용 MCP block, for every viewer class — the runtime mirror
@@ -1032,6 +1076,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // cannot (or ignore a message that arrives when it can).
           `- Mid-turn user messages: ${!ctx.midTurnMessages ? "not available in this run" : "ENABLED — a message the person sends while you work is delivered DURING your work: it appears as a user message at your next tool-call boundary (after the current tool calls finish, or right after the answer you are writing) and may change the task. Read it before you continue and let the newest instruction win when it conflicts with an earlier one; one that arrives just as you finish comes as the next turn instead"}`,
           ...rewindLines(ctx),
+          turnTimingsLine(ctx),
           `- runtime: ${runtimeLine(ctx)}`,
           ...piRunLines(ctx),
           ...(serverProxy.egressPolicy === "domain-proxy"
@@ -1249,6 +1294,42 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           total += line.length;
         }
         return text(out.join("\n\n") || "(no readable messages)");
+      },
+    ),
+    tool(
+      "turn_timings",
+      `Reports where the time went in THIS conversation — measured by the runtime, not estimated. For each of the most recent FINISHED turns: how long it took, how that splits into model calls, tool calls and the rest, the time to the first token, and the slowest steps by name (the model call with its token counts and speed, or the tool — an MCP tool by its real name — with what the sandbox or the MCP server spent inside it). Call it when the owner asks why an answer was slow, how long something took, or which step was the bottleneck, and answer from its numbers. The turn you are in now is NOT included (a turn is recorded when it ends): for "why is this one slow?" say so and offer to look right after it. Covers this conversation's session only; records are kept for 7 days. Read-only. (owner / owner routine only)`,
+      {
+        turns: z
+          .number()
+          .int()
+          .optional()
+          .describe(`How many of the most recent finished turns to report (default ${TURN_TIMINGS_DEFAULT_TURNS}, max ${TURN_TIMINGS_MAX_TURNS}).`),
+      },
+      async (args) => {
+        if (!ctx.viewerIsOwner) {
+          return text(OWNER_ONLY, true);
+        }
+        if (!ctx.turnTraces) {
+          return text(`Turn timings are not available in this run. ${NO_TIMING_GUESS}`, true);
+        }
+        let traces: PiTurnTrace[] | null;
+        try {
+          traces = await ctx.turnTraces();
+        } catch (error) {
+          return text(turnTimingsFailure(error), true);
+        }
+        if (traces === null) {
+          return text(
+            "No finished turn to report yet: this is the first turn of this conversation's session (a new conversation, or a session that was just restarted), and a turn is recorded only when it ends. Ask again in the next message.",
+          );
+        }
+        if (traces.length === 0) {
+          return text(
+            `The runtime holds no timing record for this conversation's session: records are written when a turn ends and are kept for 7 days. ${NO_TIMING_GUESS}`,
+          );
+        }
+        return text(summarizeTurnTimings(traces, args.turns ?? TURN_TIMINGS_DEFAULT_TURNS));
       },
     ),
     tool(

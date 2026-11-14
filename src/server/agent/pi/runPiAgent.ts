@@ -361,6 +361,11 @@ async function runPiAgentAs(
   // The sandbox-copy run locks the git_repo tools take mid-turn, released in
   // the run's `finally` below (a tool can only run once the run token exists).
   const repoLocks = new RunRepoLocks(conversationId ?? `run:${workKey}`);
+  // ---- session ------------------------------------------------------------
+  // (Declared before the plan: `turn_timings` reads the session through `previous`.)
+  const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;
+  let previous: string | undefined = isPiResponseId(resumeCandidate) ? resumeCandidate : undefined;
+  let sessionLost = false;
   const capabilities = await buildRunCapabilities(
     request,
     pluginRoots,
@@ -375,6 +380,10 @@ async function runPiAgentAs(
       piSkills,
       piRepoLocks: repoLocks,
       ...(asyncJobs ? { piAsyncJobs: asyncJobs } : {}),
+      // mcp__system__turn_timings: the session is named by the response this
+      // run continues from at the moment of the call (it moves at a self-heal
+      // and a follow-up turn); none yet = a session with no finished turn.
+      piTurnTraces: async () => (previous ? client.traces(previous, principal, signal) : null),
     },
   );
   const promptRequest = stampPromptRequest(request, capabilities, config, events);
@@ -400,10 +409,6 @@ async function runPiAgentAs(
   const piModelFor = (model: string | undefined, fresh: boolean): string | undefined =>
     model ?? (fresh ? undefined : catalogDefaultModelId(services.models.peek()));
 
-  // ---- session ------------------------------------------------------------
-  const resumeCandidate = request.resumeSessionAt ?? request.resumeSessionId;
-  let previous: string | undefined = isPiResponseId(resumeCandidate) ? resumeCandidate : undefined;
-  let sessionLost = false;
   // ---- input --------------------------------------------------------------
   const stagedFiles = request.imageFiles?.length ? stagePiAttachmentFiles(workspace, request.imageFiles) : [];
   const userRequest: AgentRequest = { ...promptRequest, imageFiles: stagedFiles.length ? stagedFiles : undefined };

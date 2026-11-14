@@ -40,6 +40,7 @@ import {
   PiGatewayError,
   buildResponsesBody,
   type PiCompactResult,
+  type PiTurnTrace,
   type PiResponseRequest,
   type PiResponsesClient,
   type PiStreamEvent,
@@ -60,11 +61,16 @@ type Step = (req: PiResponseRequest) => PiStreamEvent[] | Error | Promise<PiStre
 /** `acceptInput`: pi takes mid-turn input (`POST …/input` succeeds); otherwise every call is refused (404). */
 function fakeClient(
   steps: Step[],
-  { acceptInput = false, compact }: { acceptInput?: boolean; compact?: () => PiCompactResult | Error } = {},
+  {
+    acceptInput = false,
+    compact,
+    traces,
+  }: { acceptInput?: boolean; compact?: () => PiCompactResult | Error; traces?: () => PiTurnTrace[] | Error } = {},
 ) {
   const requests: PiResponseRequest[] = [];
   const inputs: { responseId: string; user: string; clientId: string; text: string }[] = [];
   const compactions: { responseId: string; user: string; instructions: string }[] = [];
+  const traceReads: { responseId: string; user: string }[] = [];
   let index = 0;
   const client: PiResponsesClient = {
     async compact(responseId, user, instructions) {
@@ -94,8 +100,14 @@ function fakeClient(
     async fileContent() {
       throw new Error("not used");
     },
+    async traces(responseId, user) {
+      traceReads.push({ responseId, user });
+      const out = traces ? traces() : new Error("unexpected traces call");
+      if (out instanceof Error) throw out;
+      return out;
+    },
   };
-  return { client, requests, inputs, compactions };
+  return { client, requests, inputs, compactions, traceReads };
 }
 
 const ev = (type: string, data: Record<string, unknown>): PiStreamEvent => ({ type, data });
@@ -1155,6 +1167,98 @@ describe("runPiAgent", () => {
     ).catch((error: unknown) => error);
     expect(requests.map((r) => r.model)).toEqual([undefined]);
     expect(outcome).toBeInstanceOf(Error);
+  });
+
+  it("turn_timings reads the traces of the session this run continues, as the run's principal", async () => {
+    const { store, config, owner, base } = setup();
+    const registry = new McpRunRegistry();
+    const app = express();
+    app.use(express.json());
+    app.use(createMcpHttpRouter({ registry }));
+    const server = http.createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const trace: PiTurnTrace = {
+      traceId: "t1",
+      turn: 3,
+      startedAt: "2026-11-14T01:00:00.000Z",
+      durationMs: 42_000,
+      spans: [
+        { id: "r", service: "gateway", name: "invoke_agent", startMs: 0, durationMs: 42_000, error: false, attributes: { "pi_gateway.turn": 3, "pi_gateway.status": "completed" } },
+        { id: "c", parentId: "r", service: "gateway", name: "chat falcon", startMs: 100, durationMs: 4_000, error: false, attributes: { "pi_gateway.first_token_ms": 900 } },
+        { id: "b", parentId: "r", service: "gateway", name: "execute_tool bash", startMs: 4_200, durationMs: 37_000, error: false, attributes: {} },
+      ],
+    };
+    const callTimings = async (token: string) => {
+      const mcp = new Client({ name: "broker", version: "1" });
+      await mcp.connect(
+        new StreamableHTTPClientTransport(new URL(`${url}/mcp/system`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }),
+      );
+      try {
+        return JSON.stringify(await mcp.callTool({ name: "turn_timings", arguments: {} }));
+      } finally {
+        await mcp.close();
+      }
+    };
+    try {
+      // A new session has no finished turn to name it by: nothing is asked of pi.
+      let first = "";
+      const fresh = fakeClient([
+        async (req) => {
+          first = await callTimings(req.headers![PI_RUN_TOKEN_HEADER]!);
+          return textTurn("resp_t_1", "done");
+        },
+      ]);
+      await runPiAgent(base(), [], config, store, { steers: new SteerChannel() }, undefined, { client: fresh.client, registry });
+      expect(fresh.traceReads).toEqual([]);
+      expect(first).toContain("No finished turn to report yet");
+
+      // A continued session is read by the response it continues from, as the run's principal.
+      let second = "";
+      const continued = fakeClient(
+        [
+          async (req) => {
+            second = await callTimings(req.headers![PI_RUN_TOKEN_HEADER]!);
+            return textTurn("resp_t_2", "done");
+          },
+        ],
+        { traces: () => [trace] },
+      );
+      await runPiAgent(base({ resumeSessionId: "resp_t_1" }), [], config, store, { steers: new SteerChannel() }, undefined, {
+        client: continued.client,
+        registry,
+      });
+      expect(continued.traceReads).toEqual([{ responseId: "resp_t_1", user: owner.id }]);
+      expect(second).toContain("Turn 3 — started 2026-11-14T01:00:00.000Z, took 42.0 s");
+      expect(second).toContain("execute_tool bash — 37.0 s");
+
+      // A colleague's run never reaches pi: the handler refuses before any read.
+      let colleague = "";
+      const other = fakeClient(
+        [
+          async (req) => {
+            colleague = await callTimings(req.headers![PI_RUN_TOKEN_HEADER]!);
+            return textTurn("resp_t_9", "done");
+          },
+        ],
+        { traces: () => [trace] },
+      );
+      const mate = store.createUser({ username: "mate", displayName: "Mate", password: "password123" });
+      store.touchConversation(mate.id, "conv-m", owner.id, "hi");
+      await runPiAgent(
+        base({ viewerIsOwner: false, viewerUserId: mate.id, viewerName: "Mate", conversationId: "conv-m", elevated: false, resumeSessionId: "resp_t_8" }),
+        [],
+        config,
+        store,
+        { steers: new SteerChannel() },
+        undefined,
+        { client: other.client, registry },
+      );
+      expect(other.traceReads).toEqual([]);
+      expect(colleague).toContain("can only be used in a conversation the avatar owner is participating in");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("serves EVERY Noah server to the broker: the full catalog listed, calls gated per run", async () => {
