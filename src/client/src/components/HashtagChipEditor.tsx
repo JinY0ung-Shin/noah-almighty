@@ -55,6 +55,10 @@ export default function HashtagChipEditor({ tags: tagsProp = NO_TAGS, onTagsChan
 
   function onKeydown(e: KeyboardEvent<HTMLInputElement>): void {
     if (disabled) return;
+    // A Korean IME owns these keys until it commits: Enter or space while
+    // composing would add the tag from the uncommitted value and leave (or
+    // repeat) the last syllable, and Backspace only edits the syllable.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
       addFromInput();

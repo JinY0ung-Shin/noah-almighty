@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { cx, useLatest, useWindowEvent } from "../lib/hooks";
-import { openModalFocus, trapTab } from "../lib/modalBehavior";
+import { isTopDialogLayer, openModalFocus, trapTab } from "../lib/modalBehavior";
 import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
 import { useTransition } from "../lib/presence";
 import { fade, fly, quartOut } from "../lib/transition";
@@ -146,11 +146,11 @@ export default function Modal({
   }
 
   useWindowEvent("keydown", (event) => {
+    // Every open dialog hears this window listener, and stopPropagation cannot
+    // stop a sibling window listener: a dialog covered by another one (a form
+    // under its own confirmation) leaves Escape and Tab to the one on top.
+    if (!isTopDialogLayer(overlayRef.current)) return;
     if (event.key === "Escape") {
-      // NOTE: stopPropagation does NOT stop the sibling window-level keydown
-      // listeners (Shell rail, CanvasTab fullscreen, PromptModal) — window is
-      // the last node in the path. Each of those gates on its own open-state, so
-      // one Escape won't cross-dismiss; we still close here.
       close();
     } else if (event.key === "Tab") {
       trapTab(event, cardRef.current);

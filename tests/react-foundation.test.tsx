@@ -17,6 +17,7 @@ import Toasts from "../src/client/src/components/Toasts";
 import Toggle from "../src/client/src/components/Toggle";
 import { confirmAction } from "../src/client/src/lib/confirm";
 import { useAction, useAppState, useStore, useStoreVersion } from "../src/client/src/lib/hooks";
+import { isTopDialogLayer, openModalFocus } from "../src/client/src/lib/modalBehavior";
 import { Presence, Transition, useTransition } from "../src/client/src/lib/presence";
 import { appState, readState, toasts, updateState } from "../src/client/src/lib/state";
 import { get, writable } from "../src/client/src/lib/store";
@@ -541,6 +542,51 @@ describe("Modal", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByText("내용").closest(".modal-overlay")?.parentElement).toBe(document.body);
     expect(view.getByTestId("deep").querySelector(".modal-overlay")).toBeNull();
+  });
+
+  it("leaves Escape to the dialog on top: a confirmation over a form closes alone", async () => {
+    // The 예약 작업 편집 → 삭제 → Esc case: one Escape used to close the
+    // confirmation AND the form under it, throwing the edits away.
+    const onFormClose = vi.fn();
+    render(
+      <>
+        <Modal ariaLabelledby="form-title" onClose={onFormClose}>
+          <h2 id="form-title">예약 작업 편집</h2>
+          <button type="button">저장</button>
+        </Modal>
+        <ConfirmationDialog />
+      </>,
+    );
+    let answer: Promise<boolean>;
+    await act(async () => {
+      answer = confirmAction("이 예약 작업을 삭제할까요?");
+    });
+    expect(screen.getAllByRole("dialog")).toHaveLength(2);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await expect(answer!).resolves.toBe(false);
+    expect(onFormClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(1));
+
+    // With the confirmation gone, the form is the top dialog again.
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onFormClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks the top dialog layer through any close order", () => {
+    const [first, second] = [document.createElement("div"), document.createElement("div")];
+    document.body.append(first, second);
+    const releaseFirst = openModalFocus(first);
+    expect(isTopDialogLayer(first)).toBe(true);
+    const releaseSecond = openModalFocus(second);
+    expect([isTopDialogLayer(first), isTopDialogLayer(second)]).toEqual([false, true]);
+    // A covered dialog closing first leaves the one on top in charge.
+    releaseFirst();
+    expect([isTopDialogLayer(first), isTopDialogLayer(second)]).toEqual([false, true]);
+    releaseSecond();
+    expect([isTopDialogLayer(first), isTopDialogLayer(second), isTopDialogLayer(null)]).toEqual([false, false, false]);
+    first.remove();
+    second.remove();
   });
 });
 

@@ -490,6 +490,26 @@ describe("HashtagChipEditor", () => {
     expect(chipTexts()).toEqual(["#x", "#y"]);
   });
 
+  it("leaves Enter, space, comma and Backspace to an IME that is still composing", () => {
+    const seen = vi.fn();
+    render(<Harness initial={["설계"]} seen={seen} />);
+
+    type("배포");
+    // fireEvent returns true when the handler did NOT preventDefault.
+    expect(fireEvent.keyDown(input(), { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input(), { key: " ", keyCode: 229 })).toBe(true);
+    expect(fireEvent.keyDown(input(), { key: ",", isComposing: true })).toBe(true);
+    type("");
+    fireEvent.keyDown(input(), { key: "Backspace", isComposing: true });
+    expect(chipTexts()).toEqual(["#설계"]);
+    expect(seen).not.toHaveBeenCalled();
+
+    // Once the syllable is committed, Enter adds the whole word as before.
+    type("배포");
+    expect(fireEvent.keyDown(input(), { key: "Enter" })).toBe(false);
+    expect(chipTexts()).toEqual(["#설계", "#배포"]);
+  });
+
   it("focuses the input on a click in the editor's empty area, not on a chip", () => {
     render(<Harness initial={["a"]} />);
     const editor = screen.getByRole("group", { name: "역량 해시태그 편집" });

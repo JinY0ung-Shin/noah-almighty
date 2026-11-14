@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import Icon from "./Icon";
 import { answerPrompt } from "../lib/chat";
 import { cx, useAppState, useWindowEvent } from "../lib/hooks";
-import { openModalFocus, trapTab } from "../lib/modalBehavior";
+import { isTopDialogLayer, openModalFocus, trapTab } from "../lib/modalBehavior";
 
 export interface PromptModalProps {
   // When `paneId` is set the modal is scoped to one chat pane (rendered inside it
@@ -203,6 +203,8 @@ export default function PromptModal({ paneId = null }: PromptModalProps) {
 
   function onKeydown(event: KeyboardEvent): void {
     if (!request) return;
+    // The root prompt is a dialog layer: one opened over it takes the keys first.
+    if (isRootModal && !isTopDialogLayer(backdropRef.current)) return;
     if (event.key === "Escape") {
       // A question must not be silently dismissible, so Escape maps to the same
       // SAFE decision as the 건너뛰기 button rather than to a no-answer close.

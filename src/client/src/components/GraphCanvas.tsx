@@ -492,6 +492,9 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
   }
 
   function onSearchKey(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    // A Korean IME owns the keys until it commits: Enter while composing would
+    // pick a match for the query WITHOUT its last syllable.
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "ArrowDown" && matches.length) {
       event.preventDefault();
       setSearchOpen(true);

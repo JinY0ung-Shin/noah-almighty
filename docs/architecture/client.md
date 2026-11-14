@@ -820,6 +820,14 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **모달 동작(포커스 트랩·inert·초기 포커스·복원)은 `lib/modalBehavior.ts` 공유 모듈** —
   `Modal.tsx`/`PromptModal.tsx`/`CanvasTab.tsx`(canvas-fs)가 공용. PromptModal 루트
   인스턴스는 Escape=거부·백드롭 닫기 없음(의도), pane 인스턴스는 non-modal(aria-modal/inert 없음).
+- **Escape·Tab은 맨 위 대화상자 하나만 처리한다.** 대화상자마다 `window` keydown을 듣고,
+  stopPropagation으로는 형제 window 리스너를 막을 수 없다 — 그래서 폼 위의 확인창에서 Esc 한 번에
+  둘 다 닫혀 편집 내용이 사라졌다(2026-11-14 수정). `openModalFocus`가 연 순서대로 층을 쌓고, 키 핸들러는
+  첫 줄에서 `isTopDialogLayer(overlay)`를 확인한다. 새 대화상자형 표면도 `openModalFocus`로 열고 같은
+  확인을 넣는다.
+- **Enter·스페이스·쉼표·Backspace로 동작하는 입력 핸들러는 IME 조합 중인 키를 건너뛴다**
+  (`event.nativeEvent.isComposing || event.keyCode === 229`면 return). 빠뜨리면 조합 중인 한글 마지막
+  음절이 남거나 겹친다. 컴포저·할 일 카드·해시태그 편집기·그래프 검색이 같은 형태다.
 - **테마 반응성:** `lib/theme.ts`의 `theme` 스토어는 `applyTheme()`만 발행하는 single-writer.
   캔버스형 렌더러(GraphCanvas의 cytoscape 스타일, CanvasTab의 mermaid)는 이 스토어를
   구독해 재스타일한다 — `data-theme`을 init에서 한 번만 읽는 패턴으로 되돌리면 토글 시 색이 낡는다.

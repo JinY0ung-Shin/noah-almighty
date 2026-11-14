@@ -79,16 +79,37 @@ export function focusInitial(root: HTMLElement, preferredSelector = "[data-modal
   (preferred && items.includes(preferred) ? preferred : items[0] || root).focus({ preventScroll: true });
 }
 
+// Root dialogs open right now, oldest first (one entry per openModalFocus).
+// Every dialog listens for keys on `window`, and stopPropagation cannot stop a
+// sibling window listener — so with two dialogs open (a confirmation over a
+// form), one Escape used to close BOTH and throw the form away. A dialog's key
+// handler asks isTopDialogLayer first; only the newest one acts.
+const openDialogLayers: HTMLElement[] = [];
+
+/**
+ * True when `layer` (the element passed to openModalFocus as `overlay`) is the
+ * most recently opened root dialog still open — the only one Escape and Tab
+ * belong to. False for a covered dialog and for an element never opened.
+ */
+export function isTopDialogLayer(layer: HTMLElement | null | undefined): boolean {
+  return !!layer && openDialogLayers[openDialogLayers.length - 1] === layer;
+}
+
 /**
  * The full root-dialog treatment: inert the background, move focus into the
- * card, and restore both when the returned cleanup runs. `card` defaults to
- * `overlay` for dialogs that are their own overlay.
+ * card, mark it the top dialog layer, and undo all three when the returned
+ * cleanup runs. `card` defaults to `overlay` for dialogs that are their own
+ * overlay.
  */
 export function openModalFocus(overlay: HTMLElement, card: HTMLElement = overlay, preferredSelector?: string): () => void {
   const previous = document.activeElement as HTMLElement | null;
   const restoreOutside = inertOutside(overlay);
+  openDialogLayers.push(overlay);
   focusInitial(card, preferredSelector);
   return () => {
+    // Remove THIS entry, wherever it sits: a covered dialog can close first.
+    const index = openDialogLayers.lastIndexOf(overlay);
+    if (index >= 0) openDialogLayers.splice(index, 1);
     restoreOutside();
     previous?.focus?.();
   };

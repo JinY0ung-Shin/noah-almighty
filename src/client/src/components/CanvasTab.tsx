@@ -7,7 +7,7 @@ import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { confirmAction } from "../lib/confirm";
 import { renderMarkdown, timeLabel } from "../lib/format";
 import { cx, useAction, useLatest, useStore, useWindowEvent } from "../lib/hooks";
-import { openModalFocus, trapTab } from "../lib/modalBehavior";
+import { isTopDialogLayer, openModalFocus, trapTab } from "../lib/modalBehavior";
 import { theme as themeStore } from "../lib/theme";
 import type { ResolvedTheme } from "../lib/theme";
 import {
@@ -499,7 +499,8 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
   }
 
   useWindowEvent("keydown", (event) => {
-    if (fullscreen) onFsKey(event);
+    // A dialog opened over the stage takes Escape and Tab first.
+    if (fullscreen && isTopDialogLayer(fsRef.current)) onFsKey(event);
   });
 
   // The stage lives under <body>: inside the side panel — whose backdrop-filter
