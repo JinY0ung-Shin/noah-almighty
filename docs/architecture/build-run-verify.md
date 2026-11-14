@@ -419,6 +419,33 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   is pi's statement); any turn with a real model. After the run: gateway 216 MiB, broker 214 MiB. The fake LLM
   there takes `rawArguments` (argument text sent as is) for a tool call that is not whole JSON; once the stack
   is down, pi-ai's validator alone runs from npm (`npm i @earendil-works/pi-ai@<version>` in a scratch folder).
+  **pi `cbbb1b7` (2026-11-14, the fix for that grep defect — the gateway runs ripgrep IN the searched directory
+  and searches `.`, so a glob holding a `/` is relative to `path`, and a leading `./` on a glob is dropped; pi's
+  commit tested it against a fake `rg` and never ran it in a container) — booted together with Noah `313f80b`
+  (`unwrapStringList`; the canvas `contentType` without a listed enum):** `run-all.sh` all PASS on a fresh
+  stack (`~/.noah-work/boot-test-2026-11-14d/`), `75-` 37/37, `25-` 48/48, `85-` 26/26, `86-` 20/20, `87-` 19/19,
+  `88-` 23/23, no error-level line in the six services' logs at the end. **`92-grep-glob.mjs` 10/10** (the five
+  checks that were 3/5, and five more) with the real `rg` in the owner's sandbox: with `path: /workspace/gv`,
+  `sub/**/*.txt` finds the two files under `sub/` and `sub/*.txt` the one (both were `No matches found`),
+  `./sub/*.txt` the same one, `!sub/**` the two files outside `sub/`, `*.txt` every depth; results are still
+  named relative to `path` (`sub/b.txt:1: …`), a `path` that is ONE file answers by its file name, and with no
+  `path` a glob written from `/workspace` works as before. The other side of the fix: a glob written from
+  `/workspace` with a `path` elsewhere (`gv/sub/*.txt`), which used to match, now answers `No matches found` —
+  what the description says. **`90-pi-validation.mjs` 22/22** — the 13 checks of the last run pass as before,
+  and for `313f80b`: `add_todos` with `tags: "[\"알파\",\"베타\"]"` stores TWO tags (`#알파 #베타`;
+  it was the one tag `["알파","베타"]`), `update_todo` with `tags: "[\"감마\",\"델타\"]"` replaces them with two,
+  and ONE tag that only looks like a list (`tags: "[긴급]"`, wrapped by pi) stays the one tag `[긴급]`; through
+  pi's `mcp_call`, `mcp__canvas__show` with `contentType: "widget"` answers `WIDGET_RETIRED_ERROR` and `"vega"`
+  answers `VEGA_RETIRED_ERROR` (both equal to the constants, character for character — pi said `expected one
+  of [...]` before), `"pdf"` answers `Unknown contentType 'pdf'. Use one of: 'markdown', 'mermaid', 'svg',
+  'html'. Nothing was shown.`, `"markdown"` is shown, and `mcp_search` shows the argument as a plain string
+  with the four values in its description and no `enum`. A LISTED enum is still pi's to refuse
+  (`list_todos {status: "everything"}` → `status: expected one of [...]`). `71-tracing-turn.mjs` was 24/25 in
+  the run and again alone — Jaeger's own `@jaeger@warnings` attribute once more (`clock skew adjustment
+  disabled; not applying calculated delta of -36 ms`); the script there now lists `@jaeger@*` keys without
+  judging them, as the note above asked, and is 25/25. **NOT seen:** the team brain's `personalNotes` /
+  `conflicts` through the stack (the same helper; Noah's unit tests only); a `.gitignore`d or very large tree
+  under the new cwd; any turn with a real model. After the run: gateway 226 MiB, broker 206 MiB.
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

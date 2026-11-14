@@ -669,9 +669,11 @@ expected integer, got string`, `status: expected one of [...]`), the received ar
 - **An unknown argument NAME passes pi** (the catalog schemas are open) and is refused by the gate above.
 - **Tool-call JSON that is cut off runs nothing** (`Invalid arguments for tool "bash": Unexpected end of JSON
   input` + the text received); by pi's commit, 1.2.0 ran the tool on the fields that had arrived.
-- **pi's own `grep`:** its `glob` is described to the model as relative to `path` (`src/**/*.ts`), but the
-  gateway matches a glob holding a `/` against the session's cwd (`/workspace`) — with a `path` elsewhere it
-  answers `No matches found`. A pi defect (the description came with 1.5.2, the gateway's execute is unchanged).
+- **pi's own `grep`:** its `glob` is relative to `path`, as its description tells the model (`src/**/*.ts`; a
+  pattern without `/` matches at any depth; a leading `./` is dropped; `!…` excludes). Since pi `cbbb1b7` the
+  gateway runs ripgrep IN the searched directory — at `92a69dd` it ran in the session's cwd, so with a `path`
+  elsewhere a glob holding a `/` answered `No matches found`. Results are named relative to `path`. A glob
+  written from `/workspace` with a `path` elsewhere no longer matches.
 
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
