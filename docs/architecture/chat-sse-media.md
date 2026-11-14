@@ -461,6 +461,17 @@
   tickets (`/api/share/t/…`, validity re-run per call) — [`share-links.md`](share-links.md). Sweeps: conversation bulk/single delete + rewind/regenerate mirror the
   image sweeps, and **user-delete (routes/admin.ts) snapshots the owner's conversation ids BEFORE
   `store.deleteUser`** to rm both chat-images and chat-files dirs (the rows are gone afterwards).
+- **A `share_file` card records WHERE its file was (`MessageAttachment.workspacePath`, 2026-11-14).** After
+  the publish, `onShareFile` names the read file (`sourcePath`, a realpath) relative to the run's sandbox root
+  (`workspacePathOfHostFile`, `workspaceBrowser.ts`) — only on a pi run whose workspaces Noah can reach
+  (`piPrepared.hostRoot` + `workspaceBrowserAvailable`), and only a path inside the 파일 tab's own grammar
+  (`parseWorkspacePath`; a backslash name or > 64 segments records nothing). The run executes as the
+  conversation owner, so the root is the one that owner's 파일 tab reads. It is a NAME for the card's 폴더에서
+  보기 button (`client.md` § Side panel), not a second way to the bytes: the card still serves its own copy,
+  the tab's routes re-check every segment when the path is used, and a file that changed, moved or went since
+  is simply what the tab shows now. The tool result tells the avatar nothing of it (the 파일 tab still never
+  reaches the avatar), a share link never carries it (the link row stores the file name and slide ids), and
+  nothing cascades (no bytes, no table). `show_file` images, screenshots and a user's uploads record none.
 - **`MessageAttachment.hidden`** = published for URL use only: `show_file` with `hidden:true` stores the
   image + returns its serving URL to the model (for canvas markdown embeds), but every ChatView render
   loop filters hidden entries. Per-turn caps: 6 visible images (unchanged), 30 hidden, 3 files —

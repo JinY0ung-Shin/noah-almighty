@@ -118,6 +118,40 @@ function tabProps(attachment: MessageAttachment, over: Partial<ChatPane> = {}) {
   return { pane: paneWith(attachment, over), file: { attachment, slides: [] }, active: true };
 }
 
+describe("FileTab 폴더에서 보기", () => {
+  const PLACED: MessageAttachment = { ...DECK, workspacePath: "c/conv-1/deck/분기 보고.pptx" };
+  const withWorkspace = (on: boolean) => appState.set({ ...structuredClone(PRISTINE), bootstrap: { workspaceFiles: on } as any });
+
+  it("opens the 파일 tab at the place the card recorded", () => {
+    withWorkspace(true);
+    const props = tabProps(PLACED);
+    appState.set({ ...readState(), chatPanes: [props.pane], activePaneId: props.pane.id });
+    const { container } = render(<FileTab {...props} />);
+    const actions = container.querySelector(".file-tab .canvas-toolbar") as HTMLElement;
+    const button = within(actions).getByRole("button", { name: "작업 폴더에서 보기" });
+    expect(button.textContent).toBe("폴더에서 보기");
+    // It says the card is a copy and the folder's file may have changed since.
+    expect(button.title).toContain("전달한 시점의 사본");
+    fireEvent.click(button);
+    const pane = readState().chatPanes[0];
+    expect(pane.workspaceTab).toBe(true);
+    expect(pane.sideTab).toEqual({ kind: "workspace", id: expect.any(String) });
+    expect(pane.workspaceReveal?.path).toBe("c/conv-1/deck/분기 보고.pptx");
+    // The card's own tab stays open next to it.
+    expect(pane.fileTabs).toHaveLength(1);
+  });
+
+  it("is absent for a card that recorded no place, and on a deployment without the 파일 tab", () => {
+    withWorkspace(true);
+    const plain = render(<FileTab {...tabProps(DECK)} />);
+    expect(screen.queryByRole("button", { name: "작업 폴더에서 보기" })).toBeNull();
+    plain.unmount();
+    withWorkspace(false);
+    render(<FileTab {...tabProps(PLACED)} />);
+    expect(screen.queryByRole("button", { name: "작업 폴더에서 보기" })).toBeNull();
+  });
+});
+
 describe("FileTab 공유 링크", () => {
   it("offers 공유 링크 next to 다운로드 on a PPTX card and hands the card to onShare", async () => {
     stubFetch();

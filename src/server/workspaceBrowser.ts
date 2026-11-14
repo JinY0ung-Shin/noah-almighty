@@ -16,7 +16,8 @@
  * (`PinnedDir`, docs/architecture/pi-runtime.md "Host-side filesystem
  * discipline"). A link is listed as a link and never opened.
  */
-import type fs from "node:fs";
+import fs from "node:fs";
+import path from "node:path";
 import { PI_USER_ID_PATTERN } from "./agent/pi/responsesClient.js";
 import { piConversationSegment, piUserSandboxDir } from "./agent/pi/piWorkspace.js";
 import type { PinnedDir } from "./pinnedFs.js";
@@ -25,6 +26,7 @@ import type { AppConfig } from "./types.js";
 import {
   WORKSPACE_LIST_MAX_ENTRIES,
   WORKSPACE_SCAN_MAX_ENTRIES,
+  parseWorkspacePath,
   type WorkspaceEntry,
   type WorkspaceEntryKind,
   type WorkspaceListing,
@@ -37,6 +39,28 @@ export function workspaceBrowserAvailable(config: AppConfig): boolean {
 
 function usable(config: AppConfig, userId: string): boolean {
   return workspaceBrowserAvailable(config) && PI_USER_ID_PATTERN.test(userId);
+}
+
+/**
+ * A host file below a user's sandbox root (`hostRoot`) as the path the 파일 tab
+ * addresses it by — relative to the root, plain segments — or undefined when
+ * it is not below the root or its name is outside the tab's path grammar (a
+ * backslash, more than the depth cap). `hostFile` is a REALPATH (what
+ * `publishWorkspaceFile` read), so the root is resolved the same way. Only a
+ * name: nothing is opened here, and the tab's own routes re-check every
+ * segment (pinned, no link followed) when the path is used.
+ */
+export function workspacePathOfHostFile(hostRoot: string, hostFile: string): string | undefined {
+  let root: string;
+  try {
+    root = fs.realpathSync(hostRoot);
+  } catch {
+    return undefined;
+  }
+  const relative = path.relative(root, hostFile);
+  if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) return undefined;
+  const candidate = relative.split(path.sep).join("/");
+  return parseWorkspacePath(candidate)?.length ? candidate : undefined;
 }
 
 /** The folder of a conversation below the workspace root (`c/<segment>`). */

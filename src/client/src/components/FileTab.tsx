@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { revealWorkspaceFile } from "../lib/chat";
 import { copyText } from "../lib/dom";
 import { formatFileSize } from "../lib/format";
 import { getGraphViewer, isDrawioAttachment, loadGraphViewer } from "../lib/drawioViewer";
-import { useLatest } from "../lib/hooks";
+import { useAppState, useLatest } from "../lib/hooks";
 import { isPptxCard } from "../../../shared/shareLinks";
 import type { ChatPane, MessageAttachment, PaneFileTab } from "../lib/types";
 
@@ -55,6 +56,11 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
   function share(): void {
     onShare(attachment);
   }
+
+  // 폴더에서 보기: the 파일 tab, unfolded down to where this file sat in the
+  // viewer's sandbox workspace when it was shared. Only for a card that
+  // recorded the place (share_file on a deployment that has the 파일 tab).
+  const workspacePath = useAppState().bootstrap?.workspaceFiles ? (attachment.workspacePath ?? "") : "";
 
   /* ---- draw.io diagram rendering (interactive, client-side) ---- */
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -202,6 +208,17 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
               onClick={(event) => void copyText(drawioXml.current, event.currentTarget)}
             >
               복사
+            </button>
+          ) : null}
+          {workspacePath ? (
+            <button
+              className="canvas-tool-btn"
+              type="button"
+              aria-label="작업 폴더에서 보기"
+              title="작업 폴더에서 이 파일의 위치를 엽니다. 이 카드는 전달한 시점의 사본이라, 작업 폴더의 파일은 그 뒤 바뀌었을 수 있습니다."
+              onClick={() => revealWorkspaceFile(pane.id, workspacePath)}
+            >
+              폴더에서 보기
             </button>
           ) : null}
           {shareable ? (

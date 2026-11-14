@@ -162,14 +162,17 @@ These are the invariants the project is built around. New work should reinforce 
   (text + 안내/주의/긴급 + on/off); each account may close it, and every save is a new announcement that
   shows again. It is never markup or a link, never shown before login, and never reaches the avatar (no
   prompt, no `describe_system`). → `server-core.md`, `client.md` ("관리자 공지").
-- **The chat's 파일 tab is a READ-ONLY window for PEOPLE onto their OWN sandbox workspace.** It shows the
+- **The chat's 파일 tab is a READ-ONLY window for PEOPLE onto their OWN sandbox workspace.** It is open by
+  default (the viewer's close is remembered in their browser; it never takes the panel from a canvas). It shows the
   workspace root with `c/` replaced by THIS conversation's folder (the shared folders stay; other conversations
   only on request) and says so in the tab, so nobody has to know the layout. Pinned descriptors only (a link is
   shown, never followed), no id that selects another user's files, every byte a sandboxed download, a file drawn
   only as text or through the chat's sanitizers. It never writes or deletes in the workspace and never reaches
   the avatar. A pdf/pptx/docx is rendered from Noah's own COPY of the bytes into an expiring per-user cache —
   never from a workspace path. **A new preview kind goes through a sanitizer, its own script-less frame, or
-  that copy-then-convert path.** → `pi-runtime.md`, `client.md`.
+  that copy-then-convert path.** A `share_file` card records where its file sat, and the VIEWER's press on the
+  card (폴더에서 보기) opens the tab there — the card stays the copy, the tab shows the file as it is now; the
+  avatar never opens, selects or learns of the tab. → `pi-runtime.md`, `client.md`.
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

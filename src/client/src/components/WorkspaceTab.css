@@ -27,6 +27,13 @@
 .ws-row-current:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
   background: var(--accent-soft);
 }
+/* The file a shared file's card pointed at (작업 폴더에서 보기). */
+.ws-row-marked:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)),
+.ws-row-marked:hover:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)),
+.ws-row-marked:focus-within:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
 .ws-row-inert:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
   opacity: 0.6;
 }
@@ -112,6 +119,14 @@ button.ws-row-main:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html
 }
 .ws-note-error:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
   color: var(--danger, #b42318);
+}
+
+/* Why a card's file could not be pointed at. */
+.ws-reveal-note:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  margin-block: 0 var(--s-2);
+  padding: var(--s-1-5) var(--s-2);
+  border-radius: var(--r-xs);
+  background: var(--panel-strong);
 }
 
 /* One line above the tree saying what it shows. */

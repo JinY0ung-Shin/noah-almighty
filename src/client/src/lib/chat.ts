@@ -6,7 +6,7 @@ import { takeConversationLoad } from "./conversationPrefetch";
 import { syncHash } from "./nav";
 import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
-import { appState, newId, notify, readState, updateState } from "./state";
+import { appState, newId, notify, readState, updateState, type ClientState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
 import { WORKSPACE_TAB, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState } from "./widgetState";
@@ -187,8 +187,8 @@ function makePane(
       : [...DEFAULT_MCP_TOOL_GROUPS],
     canvases,
     fileTabs: [],
-    // The 파일 tab the viewer left open rides along to every new pane.
-    workspaceTab: Boolean(readState().workspaceTabOpen),
+    // The 파일 tab is there from the start unless the viewer closed it.
+    workspaceTab: workspaceTabStartsOpen(readState()),
     sideTab: null,
     stickBottom: true,
     usage: null,
@@ -3101,22 +3101,89 @@ export function closeFileTab(paneId: string, attachmentId: string): void {
  * Open the 파일 tab (the viewer's own sandbox workspace) in the side panel — or
  * bring it forward — out of the collapsed strip if need be. A tab the viewer
  * picked: the panel stops following the avatar until the next send. It stays
- * open for the panes made after this one (`workspaceTabOpen`) until closed.
+ * open for the panes made after this one (`workspaceTabOpen`) until closed,
+ * and the choice is remembered in this browser (`workspaceTabStartsOpen`).
  */
 export function openWorkspaceTab(paneId: string): void {
   updateState((state) => {
-    state.workspaceTabOpen = true;
-    for (const pane of state.chatPanes) pane.workspaceTab = true;
-    const pane = state.chatPanes.find((item) => item.id === paneId);
-    if (!pane) return;
-    selectTab(pane, WORKSPACE_TAB);
-    pane.sideFollow = false;
-    pane.sideExpand = true;
+    showWorkspaceTab(state, paneId);
   });
 }
 
-/** Close the 파일 tab everywhere (the chat header's button reopens it); in each pane the tab beside it shows instead. */
+/** Where the viewer's open/close of the 파일 tab is kept in this browser (`"1"` / `"0"`; absent = never chosen). */
+const WORKSPACE_TAB_PREF = "workspaceTabOpen";
+
+function storedWorkspaceTabChoice(): boolean | undefined {
+  try {
+    const stored = localStorage.getItem(WORKSPACE_TAB_PREF);
+    return stored === "1" ? true : stored === "0" ? false : undefined;
+  } catch {
+    return undefined; // private mode: nothing is remembered
+  }
+}
+
+function storeWorkspaceTabChoice(open: boolean): void {
+  try {
+    localStorage.setItem(WORKSPACE_TAB_PREF, open ? "1" : "0");
+  } catch {
+    /* private mode: the choice holds for this page only */
+  }
+}
+
+/**
+ * Whether a pane made now starts with the 파일 tab — only where the deployment
+ * has the tab at all: the viewer's last open/close (this page's, else the one
+ * this browser remembers across reloads and logins), else the default, OPEN.
+ * It only joins the strip: it never takes the panel from a canvas
+ * (`resolveSideTab` puts it last) and never unfolds a panel the viewer folded.
+ */
+export function workspaceTabStartsOpen(state: Pick<ClientState, "workspaceTabOpen" | "bootstrap">): boolean {
+  if (!state.bootstrap?.workspaceFiles) return false;
+  return state.workspaceTabOpen ?? storedWorkspaceTabChoice() ?? true;
+}
+
+function showWorkspaceTab(state: ClientState, paneId: string): ChatPane | undefined {
+  state.workspaceTabOpen = true;
+  storeWorkspaceTabChoice(true);
+  for (const pane of state.chatPanes) pane.workspaceTab = true;
+  const pane = state.chatPanes.find((item) => item.id === paneId);
+  if (!pane) return undefined;
+  selectTab(pane, WORKSPACE_TAB);
+  pane.sideFollow = false;
+  pane.sideExpand = true;
+  return pane;
+}
+
+let workspaceRevealNonce = 0;
+
+/**
+ * 작업 폴더에서 보기 on a shared file's card: open the 파일 tab (exactly like
+ * `openWorkspaceTab`) and ask it to unfold its tree down to `path` — where the
+ * file sat in the viewer's own sandbox workspace when the avatar shared it
+ * (`MessageAttachment.workspacePath`). One-shot: the tab takes the request
+ * (`takeWorkspaceReveal`). A press by the viewer; the avatar never asks.
+ */
+export function revealWorkspaceFile(paneId: string, path: string): void {
+  updateState((state) => {
+    const pane = showWorkspaceTab(state, paneId);
+    if (pane) pane.workspaceReveal = { path, nonce: ++workspaceRevealNonce };
+  });
+}
+
+/** The 파일 tab took a reveal request: it is not asked again (a tab closed and reopened starts plain). */
+export function takeWorkspaceReveal(paneId: string, nonce: number): void {
+  updatePane(paneId, (pane) => {
+    if (pane.workspaceReveal?.nonce === nonce) pane.workspaceReveal = undefined;
+  });
+}
+
+/**
+ * Close the 파일 tab everywhere (the chat header's button reopens it); in each
+ * pane the tab beside it shows instead. Remembered in this browser: it stays
+ * closed across reloads and logins until the viewer opens it again.
+ */
 export function closeWorkspaceTab(): void {
+  storeWorkspaceTabChoice(false);
   updateState((state) => {
     state.workspaceTabOpen = false;
     for (const pane of state.chatPanes) {

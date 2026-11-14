@@ -30,6 +30,7 @@ vi.mock("../src/server/deckRender.js", async (importOriginal) => ({
 import { createApp, createServices } from "../src/server/app.js";
 import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
 import { PinnedDir } from "../src/server/pinnedFs.js";
+import { workspacePathOfHostFile } from "../src/server/workspaceBrowser.js";
 import {
   WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
   WORKSPACE_LIST_MAX_ENTRIES,
@@ -255,6 +256,33 @@ describe("GET /api/me/workspace", () => {
     }
     const { app } = boot();
     expect((await request(app).get("/api/bootstrap").expect(200)).body.workspaceFiles).toBe(true);
+  });
+});
+
+describe("workspacePathOfHostFile (where a shared file's card points)", () => {
+  it("names a file below the root by the tab's own path grammar, and nothing else", () => {
+    const root = path.join(dir(), "u-root");
+    fs.mkdirSync(path.join(root, "c", "abc", "deck"), { recursive: true });
+    const real = fs.realpathSync(root);
+    expect(workspacePathOfHostFile(root, path.join(real, "c", "abc", "deck", "분기 보고.pptx"))).toBe("c/abc/deck/분기 보고.pptx");
+    expect(workspacePathOfHostFile(root, path.join(real, "..notes.md"))).toBe("..notes.md");
+    // The root itself, a file outside it, a sibling whose name only starts like the root.
+    expect(workspacePathOfHostFile(root, real)).toBeUndefined();
+    expect(workspacePathOfHostFile(root, path.join(real, "..", "other", "a.md"))).toBeUndefined();
+    expect(workspacePathOfHostFile(root, `${real}-2/a.md`)).toBeUndefined();
+    // A name the tab's routes would refuse is never recorded.
+    expect(workspacePathOfHostFile(root, path.join(real, "a\\b.md"))).toBeUndefined();
+    expect(workspacePathOfHostFile(root, path.join(real, ...Array(65).fill("d"), "a.md"))).toBeUndefined();
+    // A root that does not exist names nothing.
+    expect(workspacePathOfHostFile(path.join(dir(), "missing"), path.join(real, "a.md"))).toBeUndefined();
+  });
+
+  it("resolves the root the way the shared file's path was resolved (a linked mount)", () => {
+    const root = path.join(dir(), "u-real");
+    fs.mkdirSync(root, { recursive: true });
+    const linked = path.join(dir(), "u-linked");
+    fs.symlinkSync(root, linked);
+    expect(workspacePathOfHostFile(linked, path.join(fs.realpathSync(root), "uploads", "a.pdf"))).toBe("uploads/a.pdf");
   });
 });
 

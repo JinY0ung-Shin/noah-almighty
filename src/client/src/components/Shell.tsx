@@ -511,7 +511,7 @@ export default function Shell({
       state.currentAvatar = null;
       state.chatPanes = [];
       state.activePaneId = null;
-      state.workspaceTabOpen = false;
+      state.workspaceTabOpen = undefined; // the next login reads the choice this browser remembers (else open)
       state.conversations = [];
       state.notifications = [];
       state.knowledgeRequests = [];

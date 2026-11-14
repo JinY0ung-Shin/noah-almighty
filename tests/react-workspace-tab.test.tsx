@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel";
 import WorkspaceTab from "../src/client/src/components/WorkspaceTab";
-import { closeWorkspaceTab, openWorkspaceTab } from "../src/client/src/lib/chat";
+import { closeWorkspaceTab, newChat, openWorkspaceTab, revealWorkspaceFile, workspaceTabStartsOpen } from "../src/client/src/lib/chat";
 import { WORKSPACE_TAB, hasSideTabs, resolveSideTab, sideTabs } from "../src/client/src/lib/sidePanel";
 import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import type { WorkspaceEntry, WorkspaceListing } from "../src/shared/workspaceFiles";
@@ -103,6 +103,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   replaceState(structuredClone(PRISTINE));
+  localStorage.removeItem("workspaceTabOpen"); // the remembered open/close of the 파일 tab
 });
 
 describe("WorkspaceTab", () => {
@@ -436,6 +437,103 @@ describe("WorkspaceTab", () => {
   });
 });
 
+describe("a shared file's card pointing into the 파일 tab (작업 폴더에서 보기)", () => {
+  const reveal = (path: string, nonce = 1) => pane({ workspaceReveal: { path, nonce } });
+
+  it("unfolds the tree down to the file, marks its row and puts keyboard focus on it", async () => {
+    folders.uploads = listing("uploads", [dir("spec")]);
+    folders["uploads/spec"] = listing("uploads/spec", [file("요구사항.md", 30), file("other.md", 5)]);
+    render(<WorkspaceTab pane={reveal("uploads/spec/요구사항.md")} active />);
+    const row = await screen.findByRole("button", { name: "요구사항.md" });
+    expect(row.getAttribute("aria-current")).toBe("true");
+    expect(row.closest(".ws-row")!.classList.contains("ws-row-marked")).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(row));
+    expect(screen.getByRole("button", { name: /uploads/ }).getAttribute("aria-expanded")).toBe("true");
+    // Only the one row is marked, and nothing is said above the tree.
+    expect(document.querySelectorAll(".ws-row-marked")).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
+    // The file is shown in the tree, not opened: the card already holds its copy.
+    expect(screen.queryByRole("button", { name: /목록/ })).toBeNull();
+  });
+
+  it("finds a file of this conversation under the pinned folder, without listing the other conversations", async () => {
+    render(<WorkspaceTab pane={reveal(`c/${CONVERSATION}/deck.pptx`)} active />);
+    const row = await screen.findByRole("button", { name: "deck.pptx" });
+    await waitFor(() => expect(row.getAttribute("aria-current")).toBe("true"));
+    expect(currentRow().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.queryByRole("button", { name: /대화별 작업 폴더/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "다른 대화" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("shows another conversation's file behind 다른 대화, and a dot folder's behind 숨김 항목", async () => {
+    folders[`c/${OTHER}`] = listing(`c/${OTHER}`, [file("old.md", 3)]);
+    const view = render(<WorkspaceTab pane={reveal(`c/${OTHER}/old.md`)} active />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "old.md" }).getAttribute("aria-current")).toBe("true"));
+    expect(screen.getByRole("button", { name: "다른 대화" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "숨김 항목" }).getAttribute("aria-pressed")).toBe("false");
+
+    folders[".noah"] = listing(".noah", [file("state.json", 2)]);
+    view.rerender(<WorkspaceTab pane={reveal(".noah/state.json", 2)} active />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "state.json" }).getAttribute("aria-current")).toBe("true"));
+    expect(screen.getByRole("button", { name: "숨김 항목" }).getAttribute("aria-pressed")).toBe("true");
+    // The earlier mark moved: one row at a time.
+    expect(document.querySelectorAll(".ws-row-marked")).toHaveLength(1);
+  });
+
+  it("says a file that is no longer there is gone — the tree still opens as far as it exists", async () => {
+    render(<WorkspaceTab pane={reveal(`c/${CONVERSATION}/ghost.pptx`)} active />);
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain("작업 폴더에서 이 파일을 찾지 못했습니다");
+    expect(said.textContent).toContain("카드의 다운로드는 전달한 시점의 사본");
+    // Focus goes to the line (the tree may be scrolled far below it).
+    await waitFor(() => expect(document.activeElement).toBe(said));
+    expect(await screen.findByRole("button", { name: "deck.pptx" })).toBeTruthy();
+    expect(document.querySelector(".ws-row-marked")).toBeNull();
+    // 새로고침 clears the line.
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+  });
+
+  it("says the same when a folder on the way is gone, and when the name is a folder now", async () => {
+    const view = render(<WorkspaceTab pane={reveal("uploads/removed/x.md")} active />);
+    expect((await screen.findByRole("status")).textContent).toContain("찾지 못했습니다");
+    view.rerender(<WorkspaceTab pane={reveal("uploads", 2)} active />);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain("찾지 못했습니다"));
+    expect(document.querySelector(".ws-row-marked")).toBeNull();
+  });
+
+  it("drops the mark once the viewer opens a file", async () => {
+    render(<WorkspaceTab pane={reveal(`c/${CONVERSATION}/data.csv`)} active />);
+    const row = await screen.findByRole("button", { name: "data.csv" });
+    await waitFor(() => expect(row.getAttribute("aria-current")).toBe("true"));
+    fireEvent.click(row);
+    fireEvent.click(await screen.findByRole("button", { name: /목록/ }));
+    expect(screen.getByRole("button", { name: "data.csv" }).getAttribute("aria-current")).toBeNull();
+  });
+
+  it("opens the tab from the card's press and is asked only once", async () => {
+    const base = structuredClone(PRISTINE);
+    replaceState({ ...base, chatPanes: [pane({ workspaceTab: false, fileTabs: [] })] as any, activePaneId: "p1" });
+    act(() => revealWorkspaceFile("p1", `c/${CONVERSATION}/deck.pptx`));
+    const state = readState();
+    expect(state.workspaceTabOpen).toBe(true);
+    expect(state.chatPanes[0].workspaceTab).toBe(true);
+    expect(state.chatPanes[0].sideTab).toEqual(WORKSPACE_TAB);
+    expect(state.chatPanes[0].sideFollow).toBe(false);
+    expect(state.chatPanes[0].sideExpand).toBe(true);
+    expect(state.chatPanes[0].workspaceReveal?.path).toBe(`c/${CONVERSATION}/deck.pptx`);
+
+    const view = render(<SidePanel pane={readState().chatPanes[0]} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "deck.pptx" }).getAttribute("aria-current")).toBe("true"));
+    // Taken: a tab closed and opened again starts plain.
+    expect(readState().chatPanes[0].workspaceReveal).toBeUndefined();
+    view.unmount();
+    render(<SidePanel pane={readState().chatPanes[0]} />);
+    await screen.findByRole("button", { name: "deck.pptx" });
+    expect(document.querySelector(".ws-row-marked")).toBeNull();
+  });
+});
+
 describe("the 파일 tab in the side panel", () => {
   it("is the last tab, and the default only when nothing else is open", () => {
     const only = pane();
@@ -463,6 +561,60 @@ describe("the 파일 tab in the side panel", () => {
     expect(readState().workspaceTabOpen).toBe(false);
     expect(readState().chatPanes.map((item) => item.workspaceTab)).toEqual([false, false]);
     expect(resolveSideTab(readState().chatPanes[0])).toBeNull();
+  });
+
+  it("is open by default where the deployment has it, until the viewer closes it", () => {
+    expect(workspaceTabStartsOpen({ bootstrap: { workspaceFiles: true } as any })).toBe(true);
+    expect(workspaceTabStartsOpen({ bootstrap: { workspaceFiles: false } as any })).toBe(false);
+    expect(workspaceTabStartsOpen({ bootstrap: null })).toBe(false);
+    // The viewer's last word on this page wins over the default, either way.
+    expect(workspaceTabStartsOpen({ bootstrap: { workspaceFiles: true } as any, workspaceTabOpen: false })).toBe(false);
+    expect(workspaceTabStartsOpen({ bootstrap: { workspaceFiles: true } as any, workspaceTabOpen: true })).toBe(true);
+  });
+
+  it("remembers the viewer's close and open across a reload", () => {
+    const fresh = { bootstrap: { workspaceFiles: true } as any }; // a page just loaded: nothing said on it yet
+    replaceState({ ...structuredClone(PRISTINE), workspaceTabOpen: undefined, chatPanes: [pane()] as any, activePaneId: "p1" });
+    act(() => closeWorkspaceTab());
+    expect(localStorage.getItem("workspaceTabOpen")).toBe("0");
+    expect(workspaceTabStartsOpen(fresh)).toBe(false);
+    act(() => openWorkspaceTab("p1"));
+    expect(localStorage.getItem("workspaceTabOpen")).toBe("1");
+    expect(workspaceTabStartsOpen(fresh)).toBe(true);
+    // A card's 폴더에서 보기 opens the tab too, so it counts as opening it.
+    act(() => closeWorkspaceTab());
+    act(() => revealWorkspaceFile("p1", "notes.md"));
+    expect(workspaceTabStartsOpen(fresh)).toBe(true);
+    // A remembered "open" never shows a tab the deployment does not have; anything else stored is no choice.
+    expect(workspaceTabStartsOpen({ bootstrap: { workspaceFiles: false } as any })).toBe(false);
+    localStorage.setItem("workspaceTabOpen", "yes");
+    expect(workspaceTabStartsOpen(fresh)).toBe(true);
+  });
+
+  it("starts a new chat with the tab in the strip, without taking the panel from the avatar", () => {
+    const base = structuredClone(PRISTINE);
+    const avatar = { id: "owner-1", username: "owner", displayName: "나", isOwn: true } as any;
+    // A pane from before the deployment's answer arrived stands in for "any pane": the chat made next is what counts.
+    const seed = pane({ id: "p1", avatar, workspaceTab: false });
+    // (`replaceState` patches: an earlier test's close would otherwise still stand.)
+    replaceState({ ...base, bootstrap: { workspaceFiles: true } as any, workspaceTabOpen: undefined, currentAvatar: avatar, chatPanes: [seed] as any, activePaneId: "p1" });
+    act(() => newChat());
+    const made = readState().chatPanes[0];
+    expect(made.workspaceTab).toBe(true);
+    expect(resolveSideTab(made)).toEqual(WORKSPACE_TAB);
+    // Only in the strip: nothing was picked for the viewer and the panel is not forced open.
+    expect(made.sideTab ?? null).toBeNull();
+    expect(made.sideFollow).toBeUndefined();
+    expect(made.sideExpand).toBeFalsy();
+
+    // Closed by the viewer: the next chat starts without it.
+    act(() => closeWorkspaceTab());
+    act(() => newChat(readState().chatPanes[0].id));
+    expect(readState().chatPanes.every((item) => !item.workspaceTab)).toBe(true);
+    // Opened again: it is back for the chats made after.
+    act(() => openWorkspaceTab(readState().chatPanes[0].id));
+    act(() => newChat(readState().chatPanes[0].id));
+    expect(readState().chatPanes.every((item) => item.workspaceTab)).toBe(true);
   });
 
   it("shows in the strip with its own close button", async () => {

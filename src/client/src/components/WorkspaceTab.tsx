@@ -5,6 +5,7 @@ import Icon from "./Icon";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
+import { takeWorkspaceReveal } from "../lib/chat";
 import { cx, useAppState, useLatest, useStore } from "../lib/hooks";
 import { theme as themeStore } from "../lib/theme";
 import {
@@ -53,6 +54,11 @@ import "./WorkspaceTab.css";
 // in ANY pane of a split, not only the one the panel serves — the open folders
 // are re-read every few seconds so files appear as they are written; a file's
 // preview is re-read only on 새로고침.
+//
+// A shared file's card can point here (작업 폴더에서 보기, the viewer's press):
+// the tree unfolds down to where that file sat when it was shared and marks its
+// row. The card holds a copy; this is the file as it is NOW — or a line saying
+// it is no longer there.
 export interface WorkspaceTabProps {
   pane: ChatPane;
   /** This tab is the one the panel shows. */
@@ -78,6 +84,11 @@ const ROOT_FOLDER_NOTES: Record<string, string> = {
 };
 
 const NOTHING_MADE_YET = "이 대화에서는 아직 만든 파일이 없습니다.";
+
+/** A card pointed at a file that is not (or no longer) where it was shared from. */
+const REVEAL_GONE =
+  "작업 폴더에서 이 파일을 찾지 못했습니다. 전달한 뒤에 옮겨졌거나 지워졌을 수 있습니다. 카드의 다운로드는 전달한 시점의 사본이라 그대로 받을 수 있습니다.";
+const REVEAL_TOO_MANY = "폴더의 항목이 너무 많아 이 파일을 목록에서 찾지 못했습니다. 카드의 다운로드로 받아 주세요.";
 
 /** What the tree shows, said in the tab: nobody should have to know how the workspace is laid out. */
 const TREE_NOTE = "맨 위는 이 대화의 작업 폴더이고, 그 아래는 모든 대화가 함께 쓰는 폴더입니다. 첨부한 문서는 uploads에 모입니다.";
@@ -119,7 +130,16 @@ export default function WorkspaceTab({ pane, active = false }: WorkspaceTabProps
   );
   // The pane is store state, published again on every streamed token: only the
   // primitives the tree needs go down, so a long listing is not rebuilt per token.
-  return <WorkspaceTree conversationId={pane.conversationId} answering={answering} active={active} />;
+  return (
+    <WorkspaceTree
+      paneId={pane.id}
+      conversationId={pane.conversationId}
+      answering={answering}
+      active={active}
+      revealPath={pane.workspaceReveal?.path ?? ""}
+      revealNonce={pane.workspaceReveal?.nonce ?? 0}
+    />
+  );
 }
 
 /** How many folders one re-read asks for at a time. */
@@ -131,14 +151,21 @@ function parentOf(path: string): string {
 }
 
 const WorkspaceTree = memo(function WorkspaceTree({
+  paneId,
   conversationId,
   answering,
   active,
+  revealPath,
+  revealNonce,
 }: {
+  paneId: string;
   conversationId: string;
   /** Panes whose avatar is answering right now (any pane of the split). */
   answering: number;
   active: boolean;
+  /** A card's 작업 폴더에서 보기: the workspace path to unfold the tree down to (`revealNonce` 0 = no ask). */
+  revealPath: string;
+  revealNonce: number;
 }) {
   const [folders, setFolders] = useState<Record<string, FolderState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -166,6 +193,14 @@ const WorkspaceTree = memo(function WorkspaceTree({
   const [raw, setRaw] = useState(false);
   const [rawOffered, setRawOffered] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The file a card pointed at: its row is marked until the viewer opens a file or another card points. */
+  const [marked, setMarked] = useState("");
+  /** Why a card's file could not be pointed at (said above the tree). */
+  const [notice, setNotice] = useState("");
+  /** Bumped when a row was marked: keyboard focus goes onto it once it is drawn. */
+  const [markedTick, setMarkedTick] = useState(0);
+  const handledReveal = useRef(0);
+  const noticeRef = useRef<HTMLParagraphElement | null>(null);
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const expandedRef = useLatest(expanded);
@@ -326,6 +361,91 @@ const WorkspaceTree = memo(function WorkspaceTree({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [answering, active]);
 
+  /**
+   * A card's 작업 폴더에서 보기: read every folder on the way to `target`, unfold
+   * them and mark the file's row. The folders are read here rather than through
+   * `loadFolder`, whose answer is dropped when a re-read pass asks for the same
+   * folder meanwhile. A file that is not there any more is said, never an error:
+   * the tree still unfolds as far as the folders exist.
+   */
+  async function reveal(target: string): Promise<void> {
+    const forConversation = conversationRef.current;
+    const parts = target.split("/");
+    const name = parts.pop() ?? "";
+    const chain = ["", ...parts.map((_, index) => parts.slice(0, index + 1).join("/"))];
+    showFile(null);
+    setNotice("");
+    const read: Record<string, FolderState> = {};
+    let last: WorkspaceListing | null = null;
+    let problem = "";
+    for (const folder of chain) {
+      try {
+        last = await loadWorkspaceFolder(folder, forConversation);
+        read[folder] = { status: "ready", listing: last };
+      } catch (err) {
+        last = null;
+        problem =
+          err instanceof ApiError && err.status === 404
+            ? REVEAL_GONE
+            : err instanceof Error
+              ? err.message
+              : "폴더를 불러오지 못했습니다.";
+      }
+      if (!alive.current || forConversation !== conversationRef.current) return;
+      if (!last) break;
+    }
+    const mine = read[""]?.listing?.current ?? currentPath.current;
+    if (mine) setCurrent(mine);
+    setFolders((prev) => ({ ...prev, ...read }));
+    // What must be unfolded for the row to be on screen: under this
+    // conversation's folder that folder is itself a top-level row (`c` is not
+    // shown); another conversation's file sits behind 다른 대화.
+    const inMine = Boolean(mine) && target.startsWith(`${mine}/`);
+    const unfold = Object.keys(read).filter((folder) => folder !== "" && (!inMine || folder === mine || folder.startsWith(`${mine}/`)));
+    setExpanded((prev) => new Set([...prev, ...unfold]));
+    if (!inMine && parts[0] === "c") setShowOthers(true);
+    if ([...parts, name].some((segment) => segment.startsWith("."))) setShowHidden(true);
+    const entry = last?.entries.find((item) => item.name === name && item.kind === "file");
+    if (entry) {
+      setMarked(target);
+      setMarkedTick((value) => value + 1);
+      return;
+    }
+    setMarked("");
+    setNotice(problem || (last?.truncated ? REVEAL_TOO_MANY : REVEAL_GONE));
+  }
+  const revealRef = useLatest(reveal);
+
+  // The ask is one-shot: taken from the pane as soon as it is seen, so a tab
+  // closed and reopened does not point again.
+  useEffect(() => {
+    if (!revealNonce || handledReveal.current === revealNonce) return;
+    handledReveal.current = revealNonce;
+    takeWorkspaceReveal(paneId, revealNonce);
+    void revealRef.current(revealPath);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealNonce]);
+
+  // The marked row, once drawn, takes keyboard focus (which also scrolls it
+  // into view): the button that asked sits in a tab that is hidden now.
+  useEffect(() => {
+    if (!markedTick || !marked) return;
+    const rows = rootRef.current?.querySelectorAll<HTMLElement>("[data-ws-path]") ?? [];
+    for (const row of Array.from(rows)) {
+      if (row.dataset.wsPath === marked) {
+        row.focus();
+        break;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markedTick]);
+
+  // The line saying a file is gone sits above the tree, which may be scrolled
+  // far down: focus brings it into view, like the marked row.
+  useEffect(() => {
+    if (notice) noticeRef.current?.focus();
+  }, [notice]);
+
   function toggleFolder(path: string): void {
     if (expanded.has(path)) {
       // Folding a folder folds what is inside it: `expanded` is exactly what is on screen, so a re-read asks for nothing hidden.
@@ -337,6 +457,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
   }
 
   async function onRefresh(): Promise<void> {
+    setNotice("");
     const target = opened;
     if (target) {
       // The file may have grown or shrunk past a preview cap: judge it by its size now.
@@ -374,6 +495,10 @@ const WorkspaceTree = memo(function WorkspaceTree({
     setRaw(false);
     setRawOffered(false);
     setPreviewVersion(0); // a file opened afresh is not a 새로고침 of the last one
+    if (next) {
+      setMarked("");
+      setNotice("");
+    }
     setOpened(next);
   }
 
@@ -497,12 +622,13 @@ const WorkspaceTree = memo(function WorkspaceTree({
     if (entry.kind === "file") {
       return (
         <li key={entry.name}>
-          <div className="ws-row" style={indent}>
+          <div className={cx("ws-row", path === marked && "ws-row-marked")} style={indent}>
             <button
               className="ws-row-main"
               type="button"
               title={`/workspace/${path}`}
               data-ws-path={path}
+              aria-current={path === marked ? "true" : undefined}
               onClick={() => showFile({ path, entry })}
             >
               <span className="ws-caret"></span>
@@ -581,6 +707,11 @@ const WorkspaceTree = memo(function WorkspaceTree({
           </div>
         </div>
         <p className="ws-note ws-tree-note muted">{TREE_NOTE}</p>
+        {notice ? (
+          <p className="ws-note ws-reveal-note" role="status" tabIndex={-1} ref={noticeRef}>
+            {notice}
+          </p>
+        ) : null}
         <div className="canvas-content ws-tree">{renderFolder("", 0)}</div>
       </div>
       {opened ? (

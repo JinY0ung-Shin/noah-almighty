@@ -552,9 +552,21 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   pane, fixed id; `WORKSPACE_TAB`): the viewer's own sandbox workspace as a folder tree (server side:
   `pi-runtime.md` § The 파일 tab). The chat header's 파일 button (`bootstrap.workspaceFiles`) opens it with
   `openWorkspaceTab` — like any tab the viewer picks it stops the panel following — and its × closes it
-  (`closeWorkspaceTab`). Open-ness is `ClientState.workspaceTabOpen`, copied to every pane and seeded by `makePane`,
-  because a pane is REPLACED on a new or another conversation and the workspace is the user's, not the
-  conversation's; not persisted. It is last in the strip and the default tab only when nothing else is open
+  (`closeWorkspaceTab`). **It is OPEN BY DEFAULT (2026-11-14, user decision)**: `makePane` seeds every pane with
+  `workspaceTabStartsOpen(state)`: false where the deployment has no tab (`bootstrap.workspaceFiles`), else
+  the viewer's word on this page (`ClientState.workspaceTabOpen`: `false` once closed, `true` once opened),
+  else the choice THIS BROWSER REMEMBERS (localStorage `workspaceTabOpen` = `"1"` / `"0"`, written by every
+  open and close — the header button, the tab's ×, a card's 폴더에서 보기), else open. So a close holds across
+  reloads and logins until the viewer opens the tab again (user decision, 2026-11-14); it is a browser
+  preference like the panel's width and fold, not an account setting. The page value lives on `ClientState`
+  and is copied to every pane because a pane is REPLACED on a new or another conversation and the workspace
+  is the user's, not the conversation's; logout and session expiry reset it to undefined and leave the
+  remembered choice. Default-open only JOINS the strip: it sets neither `sideTab`,
+  `sideFollow` nor `sideExpand`, so a canvas still takes the panel, the panel keeps following the avatar, and
+  a panel the viewer folded stays folded (`canvasPanelCollapsed` — the stored way to keep it out of sight; on
+  a ≤ 860 px window the panel starts folded, so a phone shows only the 파일 보기 strip). Checked in Chromium
+  against mocked routes (2026-11-14): open on entering a conversation, closed stays closed for a new chat
+  and after a reload, opened again stays open after a reload, folded strip at 420 px. It is last in the strip and the default tab only when nothing else is open
   (`resolveSideTab`), and the avatar never opens, selects or dots it. The tree is the workspace ROOT with one
   change (2026-11-13, user decision — a first reading that made the conversation folder the only root was
   wrong: the shared folders must stay): `c/`, which holds a folder per conversation, is REPLACED by the pane's
@@ -590,6 +602,25 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   extension, ≤ 1 MiB (images ≤ 10 MiB). 원문 보기 shows the source of a rendered kind. Names are drawn through
   `workspaceDisplayName` (control characters and bidi overrides become a mark). Relative images inside a Markdown or
   HTML file do not resolve (the file route is query-addressed).
+- **A shared file's card points INTO the 파일 tab (폴더에서 보기, 2026-11-14) — the viewer's press, never the
+  avatar's.** A `share_file` card that recorded its place (`MessageAttachment.workspacePath`, server side:
+  `chat-sse-media.md`) gets a 폴더에서 보기 button in its FileTab toolbar, before 공유 링크 / 다운로드, only while
+  `bootstrap.workspaceFiles`; a card without the field (stored earlier, the `local` runtime, a user's own
+  upload) has none. `revealWorkspaceFile(paneId, path)` opens the tab exactly like `openWorkspaceTab` and leaves
+  a ONE-SHOT ask on the pane (`ChatPane.workspaceReveal = { path, nonce }`); the tree takes it at once
+  (`takeWorkspaceReveal`), so a tab closed and reopened does not point again. The tree then reads every folder
+  on the way itself (not through `loadFolder`, whose answer is dropped when a re-read pass asks for the same
+  folder), unfolds them — under this conversation's folder without listing `c`; another conversation's file
+  turns 다른 대화 on, a dot segment 숨김 항목 — and MARKS the row (`ws-row-marked`, `aria-current`), which takes
+  keyboard focus (and so scrolls into view). The file is not opened: the card's tab already shows its copy, and
+  the tree shows what sits next to it. The card is the copy taken at the share and the tab is the file NOW, so
+  a file that moved or was removed is SAID above the tree (`role="status"`, focused; the card's download still
+  works), never an error; the tree still unfolds as far as the folders exist. The mark goes when the viewer
+  opens a file or another card points; 새로고침 clears the line. The button's title says the card is a copy.
+  Split view has no button (its cards are direct downloads). Checked in Chromium against mocked routes
+  (2026-11-14): the marked row focused and in view in a 43-entry folder, the gone line in view with the tree
+  scrolled down, the three toolbar buttons inside the card at a 1000 px window. Tests:
+  `tests/react-workspace-tab.test.tsx`, `tests/react-file-tab.test.tsx`.
 
 ## Client ↔ server contracts mirrored by hand
 - **New cross-boundary code goes into `src/shared/*`** (modules both sides compile, e.g. the import-free

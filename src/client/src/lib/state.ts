@@ -50,9 +50,14 @@ export interface ClientState {
   activePaneId: string | null;
   chatLayout: ChatLayout;
   /**
-   * The viewer opened the side panel's 파일 tab and has not closed it: every
-   * pane made from now on starts with it (`ChatPane.workspaceTab`). Not
-   * persisted — a reload starts without it.
+   * The side panel's 파일 tab is OPEN BY DEFAULT on a deployment that has it
+   * (`bootstrap.workspaceFiles`). This is the viewer's word on THIS page:
+   * `false` once they closed it, `true` once they opened it, undefined = not
+   * said yet. Every pane made starts from `workspaceTabStartsOpen` (lib/chat →
+   * `ChatPane.workspaceTab`): this value, else the choice the browser
+   * remembers (localStorage `workspaceTabOpen`, written by every open and
+   * close, so it survives a reload and a login), else open. Cleared at logout
+   * with the rest of the session state; the remembered choice stays.
    */
   workspaceTabOpen?: boolean;
   conversations: ConversationSummary[];

@@ -749,6 +749,16 @@ export interface MessageAttachment {
    */
   parentId?: string;
   /**
+   * A `share_file` card only: where the shared file sat in the conversation
+   * owner's sandbox workspace when it was shared, in the 파일 tab's path
+   * grammar (relative to `/workspace`, `src/shared/workspaceFiles.ts`). The
+   * card's 작업 폴더에서 보기 opens the tab there. A NAME, not a promise: the
+   * card's bytes are the copy taken at the share, and the workspace file may
+   * have changed, moved or gone since. Absent on rows stored before this
+   * field, on the `local` runtime and when Noah cannot reach the workspaces.
+   */
+  workspacePath?: string;
+  /**
    * Character offset into the message text at the moment the attachment was
    * shown/shared, so the bubble renders the card inline AT that point instead
    * of below the text (where later streaming would keep pushing it down).

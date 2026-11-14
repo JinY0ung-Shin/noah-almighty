@@ -3136,7 +3136,49 @@ describe("publishing images and documents mid-turn (onFile / onShareFile)", () =
 
     // Previews are best-effort: the download card still lands, just bare.
     expect(shared).toMatchObject({ behavior: "shown", previews: 0 });
+    // Noah cannot reach the workspaces here (no 파일 tab), so the card records no place in them.
+    expect(shared.behavior === "shown" && shared.attachment.workspacePath).toBeUndefined();
     expect(parseSse(res.text).filter((f) => f.event === "file")).toHaveLength(1);
+  });
+
+  it("records where a shared file sits in the owner's workspace, a path the 파일 tab serves", async () => {
+    const workspacesDir = path.join(tempDir, "pi-ws-place");
+    fs.mkdirSync(workspacesDir, { recursive: true });
+    const services = createServices({
+      dataDir: tempDir,
+      agentRuntime: "pi",
+      pi: { ...PI_CONFIG, workspacesDir },
+      sessionSecret: "test",
+    });
+    const app = createApp(services);
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, "placed").expect(201)).body.user.id as string;
+
+    let shared!: FileOutputResult;
+    H.impl = async (agentRequest, _pr, config, _store, events) => {
+      fs.mkdirSync(path.join(agentRequest.cwd!, "out"), { recursive: true });
+      fs.writeFileSync(path.join(agentRequest.cwd!, "out", "notes.md"), "# 메모\n");
+      shared = await events.onShareFile!({ path: path.join(agentRequest.cwd!, "out", "notes.md"), name: "회의 메모.md" });
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "문서" };
+    };
+    const res = await owner
+      .post("/api/chat/stream")
+      .send({ avatarId: ownerId, conversationId: "conv-placed", message: "메모" })
+      .expect(200);
+
+    expect(shared.behavior).toBe("shown");
+    if (shared.behavior !== "shown") return;
+    // The place is the file's own (not the download name the avatar chose)…
+    const placed = shared.attachment.workspacePath!;
+    expect(placed).toMatch(/^c\/[^/]+\/out\/notes\.md$/);
+    // …rides the live frame and the stored card…
+    const frame = parseSse(res.text).find((f) => f.event === "file")!;
+    expect((frame.data as { attachment: MessageAttachment }).attachment.workspacePath).toBe(placed);
+    const stored = services.store.listMessages(ownerId, "conv-placed").find((m) => m.role === "assistant")!;
+    expect(stored.attachments?.[0].workspacePath).toBe(placed);
+    // …and is exactly what the 파일 tab's own route reads.
+    const file = await owner.get(`/api/me/workspace/file?path=${encodeURIComponent(placed)}`).expect(200);
+    expect(file.body.toString("utf8")).toBe("# 메모\n");
   });
 
   it("refuses to publish anything once the conversation is deleted mid-run", async () => {

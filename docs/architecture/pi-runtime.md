@@ -384,6 +384,10 @@ PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system
     `-writer` (added with this feature — before it a `.docx` failed with "source file could not be loaded", for
     share_file cards too); `-calc` is not installed, so `.xlsx` is not offered here. The three formats were rendered THROUGH the app in
     a freshly built image by the combined-stack boot test (`85-workspace-files.mjs`, `build-run-verify.md`).
+- **A shared file's card may NAME a path here** (`MessageAttachment.workspacePath`, written by `onShareFile`
+  through `workspacePathOfHostFile` — `chat-sse-media.md` § Generated-file delivery): the card's 폴더에서 보기 opens
+  the tab at it on the viewer's press. It adds no route and no id: the tab reads the path through the same two
+  GETs, as the caller's own root, with every check above. The avatar is still told nothing about the tab.
 - **Tests:** `tests/routes-workspace-files.test.ts` (self-scoping, planted links at every level, the path grammar, the
   response headers, the cap, the preview routes), `tests/workspace-previews.test.ts` (the converter's copy, bounds,
   remembered failures, the sidecar, the cache), `tests/workspace-files.test.ts` (the shared contract),

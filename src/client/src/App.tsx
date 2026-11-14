@@ -170,7 +170,7 @@ export default function App() {
       s.currentAvatar = null;
       s.chatPanes = [];
       s.activePaneId = null;
-      s.workspaceTabOpen = false;
+      s.workspaceTabOpen = undefined; // the next login reads the choice this browser remembers (else open)
       s.conversations = [];
       s.notifications = [];
       s.knowledgeRequests = [];

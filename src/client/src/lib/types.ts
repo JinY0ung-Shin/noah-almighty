@@ -278,10 +278,18 @@ export interface ChatPane {
   fileTabs?: PaneFileTab[];
   /**
    * The 파일 tab is open: the viewer's own sandbox workspace as a folder tree
-   * (components/WorkspaceTab). Seeded from `ClientState.workspaceTabOpen`, so it
-   * stays open across conversations until the viewer closes it.
+   * (components/WorkspaceTab). Seeded by `workspaceTabStartsOpen` — open by
+   * default where the deployment has the tab — and closed for every pane, and
+   * the ones made later (after a reload too), once the viewer closes it.
    */
   workspaceTab?: boolean;
+  /**
+   * One-shot: a shared file's card asked the 파일 tab to unfold its tree down
+   * to this workspace path (작업 폴더에서 보기, `revealWorkspaceFile`). The tab
+   * takes it (`takeWorkspaceReveal`) as soon as it sees it; `nonce` tells two
+   * asks for the same path apart. Only ever set by the viewer's own press.
+   */
+  workspaceReveal?: { path: string; nonce: number };
   /** The selected side-panel tab; null/undefined = the default (lib/sidePanel `resolveSideTab`). */
   sideTab?: SideTabRef | null;
   /**

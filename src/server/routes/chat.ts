@@ -130,6 +130,7 @@ import {
 } from "../agent/runRegistry.js";
 import { SteerChannel, type SteerRecord } from "../agent/steerChannel.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
+import { workspaceBrowserAvailable, workspacePathOfHostFile } from "../workspaceBrowser.js";
 import { sanitizeCanvasRenderErrors } from "../canvasRenderReports.js";
 import { inlineUiAllowed } from "../agent/ownerState.js";
 import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
@@ -2613,6 +2614,15 @@ export async function executeChatTurn(
               return { behavior: "error", message: messages[result.error] };
             }
             sharedFileCount += 1;
+            // Where the file sits in the owner's own sandbox workspace, so the
+            // card can open the 파일 tab there — on the viewer's press. The run
+            // executes as the conversation owner (`piRunClass`), so this root
+            // is the one their 파일 tab reads. The avatar is told nothing of it.
+            const workspacePath =
+              piPrepared?.hostRoot && workspaceBrowserAvailable(config)
+                ? workspacePathOfHostFile(piPrepared.hostRoot, result.sourcePath)
+                : undefined;
+            if (workspacePath) result.attachment.workspacePath = workspacePath;
             shownAttachments.push(result.attachment);
             emitRunEvent(runId, "file", {
               runId,
