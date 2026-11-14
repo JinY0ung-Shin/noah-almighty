@@ -486,6 +486,36 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   stopped at the limit (pi's tests), the value surviving a gateway restart (pi's DB — not restarted here), a
   change made while a turn is running, any turn with a real model. After the run: gateway 265 MiB, broker
   155 MiB.
+  **pi `680f300` (2026-11-14, `GET /v1/responses/{id}/traces`: a session's own user reads its per-turn traces with
+  the service key + `?user=`, the body of the admin panel's 실행 시간 보기 — pi's commit passed typecheck and
+  vitest with Jaeger as a `fetch` stub and was not run against a real Jaeger):** `~/.noah-work/boot-test-2026-11-14h/`
+  on Noah `47a6a0f`, the commit that added `mcp__system__turn_timings` (the route's only caller; the run's
+  `tested-state.txt` names it `ebe9c90` — the same tree, before its commit message was reformatted). Every step
+  passed with the counts of the `02a023e` run: `10-accounts` 6/6, `21-admin-proxy` 11/11,
+  `24-llm-no-falcon-tier` 3/3, `23-admin-ui-assets` 3/3, `30-documents` 30/30, `31-documents-extra` 21/21,
+  `32-second-user-own` 3/3, `50-subagent` 9/9, `55-systemone` 22/22, `65-shell-step-verdicts` 33/33,
+  `71-tracing-turn` 25/25, `75-trace-stats` 37/37, `25-admin-ui-real` 48/48, `85-workspace-files` 26/26,
+  `86-mcp-files` 20/20, `87-mcp-file-args` 19/19, `88-plugin-refresh` 23/23, `90-pi-validation` 22/22,
+  `92-grep-glob` 10/10, `93-tool-call-limit` 23/23, `80-context-usage` 19/19, `95-final-state` 1/1 (no
+  error-level line in any service's log). The new check, `94-turn-timings.mjs` 13/13 (run twice on the stack:
+  the first run's one FAIL was the check's own guess at pi's label, see below), is the route seen through the
+  tool, against the real Jaeger. Turn 1 of an owner conversation (`bash` `sleep 2; echo slept`, then
+  `mcp_call` `mcp__system__turn_timings`) completes and the tool answers `No finished turn to report yet: this
+  is the first turn of this conversation's session … Ask again in the next message.` — no number in it. Once
+  the admin route shows turn 1 (2073 ms, `execute_tool bash` 2036 ms), turn 2's call answers `(1 of 1 recorded
+  turn shown)`, `Turn 1 — started 2026-11-14T…, took 2.1 s, ended completed, model falcon`, `model: 26 ms (1%)
+  in 3 calls; tools: 2.0 s (99%) in 2 calls; other: 5 ms (0%)`, a first-token line, and as slowest step
+  `1. execute_tool bash — 2.0 s` with `inside it: sandboxd /v1/exec 2.0 s` — within 0.1 s of the admin route's
+  span, and no `Turn 2` (the turn in progress). The report holds neither the command, its output nor the user's
+  message. **pi labels an MCP call `server/tool`:** the step reads `execute_tool mcp_call →
+  system/turn_timings`, not the `mcp__system__turn_timings` the model calls it by (the check expected the
+  latter at first; the report is left as pi records it). A colleague's chat with the owner's avatar completes
+  and the tool answers `This tool can only be used in a conversation the avatar owner is participating in.`
+  **NOT seen:** the route called directly (a foreign or unknown id → 404, a user key, `tracing_disabled`, Jaeger
+  down → 503/502 — pi's tests; Noah's handling of those codes — Noah's unit tests), a session's 50-turn cap and
+  the 7-day expiry, a report over several turns or with a subagent, a session restarted by a self-heal, any turn
+  with a real model (the fake's calls take milliseconds, so the model share is not a real one). After the run
+  (before the new check): gateway 287 MiB, broker 312 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

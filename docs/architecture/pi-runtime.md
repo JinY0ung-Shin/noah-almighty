@@ -629,7 +629,7 @@ holds it:
 "Why was that slow?" is answered from pi's own measurements, never from the model's sense of time (it has none).
 
 - **Source:** pi writes ONE OpenTelemetry trace per turn (the `jaeger` service, see the compose section below) and
-  serves a session's finished turns at `GET /v1/responses/{id}/traces` — service key + `?user=`, the same ownership
+  serves a session's finished turns at `GET /v1/responses/{id}/traces` (pi `680f300`) — service key + `?user=`, the same ownership
   check as cancel/input/compact (`record.principal !== user` → the 404 of an unknown id), the SAME body as the
   admin panel's 실행 시간 보기 (`{ traces: TurnTrace[] }`, most recent first, pi's 50 most recent turns, 7 days).
   Noah reads it with `PiResponsesClient.traces` (body cap 16 MiB; malformed traces/spans are dropped, attributes
@@ -649,7 +649,8 @@ holds it:
   model / tools / other split (pi's own page's rule — the `chat …` and `execute_tool …` spans DIRECTLY under the
   turn, overlapping spans counted once; a subagent's calls sit under the tool that started it), the time to the
   first token, the 5 slowest steps (a model call with first-token time, tokens and tokens/s over the whole call; a
-  tool — `mcp_call` by its real tool, `pi_gateway.mcp_tool` — with the 2 largest spans inside it), and one-off
+  tool — `mcp_call` by the tool it called, pi's `server/tool` label in `pi_gateway.mcp_tool`, e.g.
+  `execute_tool mcp_call → system/turn_timings` — with the 2 largest spans inside it), and one-off
   setup (`sandbox create`, `mcp-broker connect upstream`). Default 5 turns, max 20. A span name is pi's and can
   carry an MCP server's tool name: one line, 120 characters.
 - **Refusals never invite a guess:** every "nothing to report" text ends by telling the avatar not to estimate.
@@ -658,6 +659,9 @@ holds it:
 - **Not covered:** the sandbox's outbound network (pi's egress proxy is not in a trace — a slow download shows only
   as a slow `bash`), and time before pi (Noah's own queueing, the browser). A stack whose pi predates the route
   answers a plain 404, which reads as a lost session — the bundle ships both together, so this is not handled.
+- **Seen on a real stack** (boot test at pi `680f300`, `94-turn-timings.mjs`; → `build-run-verify.md`): the first
+  turn's "nothing finished yet", the next turn's report of a `sleep 2` as `execute_tool bash — 2.0 s` (the admin
+  route's own span: 2036 ms), a colleague's chat refused.
 - **Both surfaces + manual:** the owner section's standing line (`request.turnTimings`), describe_system's
   `- Turn timings …` line (owner branch; "not available in this run" without the accessor), the `chat` manual page.
 - **Tests:** `tests/agent-turn-timings.test.ts` (the report's arithmetic, the tool's gates and refusals, the
