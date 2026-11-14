@@ -127,18 +127,26 @@ describe("FeatureHintLayer", () => {
     control("nav-brain", "내 브레인", rect(12, 196, 255, 40));
     render(<FeatureHintLayer user={baseUser} />);
 
-    // Registry order, not screen order.
-    await waitFor(() => expect(bubbleTitle()).toBe(teamBrain.title), SOON);
-    // A hint without small print draws no empty list.
-    expect(teamBrain.details).toEqual([]);
-    expect(document.querySelector(".feature-hint-details")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "알겠어요" }));
-    expect(document.querySelector(".feature-hint")).toBeNull();
-    expect(seenPosts()).toEqual([teamBrain.id]);
-
-    await waitFor(() => expect(bubbleTitle()).toBe(brain.title), SOON);
-    fireEvent.click(screen.getByRole("button", { name: "알겠어요" }));
-    expect(seenPosts()).toEqual([teamBrain.id, brain.id]);
+    // Registry order, not screen order — every hint whose control is here, one at a
+    // time. A control may be the home of more than one (팀 브레인: a newer
+    // release's hint, then the older one's).
+    const offered = FEATURE_HINTS.filter((hint) => hint.anchor === "nav-teamBrain" || hint.anchor === "nav-brain");
+    expect(offered[0]).toBe(teamBrain);
+    expect(offered.at(-1)).toBe(brain);
+    const recorded: string[] = [];
+    for (const hint of offered) {
+      await waitFor(() => expect(document.querySelector<HTMLElement>(".feature-hint")?.dataset.hint).toBe(hint.id), SOON);
+      expect(bubbleTitle()).toBe(hint.title);
+      if (hint === teamBrain) {
+        // A hint without small print draws no empty list.
+        expect(teamBrain.details).toEqual([]);
+        expect(document.querySelector(".feature-hint-details")).toBeNull();
+      }
+      fireEvent.click(screen.getByRole("button", { name: "알겠어요" }));
+      expect(document.querySelector(".feature-hint")).toBeNull();
+      recorded.push(hint.id);
+      expect(seenPosts()).toEqual(recorded);
+    }
     // Nothing left that has a control here.
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 900));
