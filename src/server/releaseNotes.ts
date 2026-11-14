@@ -37,7 +37,7 @@ export type ReleaseNoteAction = "browser-guide";
  * `FEATURE_HINT_SIDES` (a missing side fails the client typecheck; a missing
  * mount fails tests/release-notes.test.ts).
  */
-export type FeatureHintAnchor = "composer-attach" | "nav-brain" | "nav-teamBrain" | "chat-workspace";
+export type FeatureHintAnchor = "composer-attach" | "nav-brain" | "nav-teamBrain" | "chat-workspace" | "chat-file-card";
 
 /**
  * A speech bubble shown AT the feature (#feature-hints), on top of the one-time
@@ -88,6 +88,62 @@ export interface ReleaseNote {
 }
 
 export const RELEASE_NOTES: ReleaseNote[] = [
+  {
+    id: "2026-11-14",
+    items: [
+      {
+        title: "아바타가 만든 파일을 바로 볼 수 있어요",
+        body: "대화 화면 위쪽의 '파일' 버튼을 누르면 아바타가 작업하는 폴더가 옆 패널에 열려요. 이 대화의 폴더가 맨 위에 있고, 문서·표·이미지·PDF·PowerPoint·Word·다이어그램을 그 자리에서 미리 보거나 내려받을 수 있어요. 보기 전용이라 여기서 파일이 바뀌거나 지워지지 않아요.",
+        hint: {
+          id: "2026-11-14.workspace-tab",
+          anchor: "chat-workspace",
+          title: "작업 폴더를 볼 수 있어요",
+          body: "아바타가 작업하는 폴더가 옆 패널에 열려요. 만든 파일을 미리 보고 내려받을 수 있고, 이 버튼으로 열고 닫아요.",
+        },
+      },
+      {
+        title: "파일 카드를 누르면 작업 폴더에서 열려요",
+        body: "아바타가 전달한 파일 카드를 누르면 작업 폴더에서 그 파일이 바로 열려요. Markdown이나 표 파일도 내용이 그려진 채로 보여요. 발표 자료(PPT)는 지금처럼 슬라이드 미리보기로 열려요.",
+        hint: {
+          id: "2026-11-14.file-card",
+          anchor: "chat-file-card",
+          body: "이 카드를 누르면 작업 폴더에서 파일이 바로 열려요.",
+        },
+      },
+      {
+        title: "팀 브레인에 누구나 바로 쓸 수 있어요",
+        body: "이제 관리자 검토를 기다리지 않아요. 내 아바타가 정리한 변경을 카드에서 확인하고 직접 누르면 팀 브레인에 반영돼요. 다른 사람이 쓴 페이지도 고칠 수 있고, 내가 읽은 뒤에 바뀐 페이지는 덮어쓰지 않아요.",
+        example: "예: “방금 정리한 배포 절차를 팀 브레인에 올려 줘.”",
+        hint: {
+          id: "2026-11-14.team-brain-write",
+          anchor: "nav-teamBrain",
+          body: "이제 관리자 검토 없이 누구나 바로 쓸 수 있어요. 아바타가 정리한 변경을 카드에서 직접 눌러 반영해요.",
+        },
+      },
+      {
+        title: "내 브레인에서 팀에 도움이 될 노트를 골라 줘요",
+        body: "부탁하면 아바타가 내 브레인의 노트 중 팀이 다시 쓸 만한 것을 몇 개 골라 카드로 만들어 줘요. 카드마다 내가 눌러야 팀 브레인에 올라가요.",
+        example: "예: “내 브레인에서 팀에 공유할 만한 노트를 골라 줘.”",
+      },
+      {
+        title: "답변이 왜 느렸는지 물어볼 수 있어요",
+        body: "내 아바타에게 물으면 추측이 아니라 실제 측정값으로 답해요. 모델과 도구에 각각 얼마나 걸렸는지, 어느 단계가 가장 오래 걸렸는지 알려 줘요. 답변이 끝나야 기록되니 느렸던 답변 다음 메시지에서 물어보세요.",
+        example: "예: “방금 답변은 왜 이렇게 오래 걸렸어?”",
+      },
+      {
+        title: "브레인 화면이 보기 편해졌어요",
+        body: "노트를 읽는 창이 넓어졌고, 그래프와의 경계를 끌어서 크기를 바꿀 수 있어요. 그래프는 원본 자료를 숨긴 채로 열리고, 팀 브레인은 페이지 종류마다 색이 달라요.",
+      },
+      {
+        title: "draw.io 다이어그램이 더 깔끔해졌어요",
+        body: "아바타가 다이어그램을 전달하기 전에 도형 배치와 연결선을 정리하고, 글자가 상자를 넘치거나 선이 도형 위를 지나가지 않는지 검사해요.",
+      },
+      {
+        title: "관리자 공지가 화면 위에 보여요",
+        body: "관리자가 올린 공지가 모든 화면 맨 위에 띠로 나타나요. 읽고 닫을 수 있고, 새 공지가 올라오면 다시 보여요.",
+      },
+    ],
+  },
   {
     id: "2026-11-12",
     items: [

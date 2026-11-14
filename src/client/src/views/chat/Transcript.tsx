@@ -25,6 +25,7 @@ import {
   hasVisibleImages,
   isRewindAnchor,
   messageKey,
+  opensInWorkspaceTab,
   regenerate,
   setRewindEditDraft,
   steerBadgeLabel,
@@ -37,7 +38,8 @@ import { cx, useAction, useMergedRef } from "../../lib/hooks";
 import type { StreamBlock } from "../../lib/streamMarkdown";
 import { messageRevealKey, revealedAttachments, revealedText } from "../../lib/streamReveal";
 import { formatThinkingDuration, thinkingElapsed, thinkingTopic } from "../../lib/streamThinking";
-import { segmentAttachments } from "../../lib/bubbleSegments";
+import { panelSlides, segmentAttachments } from "../../lib/bubbleSegments";
+import { featureHintAnchor } from "../../lib/featureHints";
 import { diagramProblems } from "../../lib/mermaidBlock";
 import type { ChatPane, MessageAttachment, StoredMessage } from "../../lib/types";
 import {
@@ -64,8 +66,18 @@ import {
 /* ------------------------------------------------------------------ */
 
 function fileCard(ctx: ChatController, item: ChatPane, att: MessageAttachment, source: MessageAttachment[] | undefined): ReactNode {
+  // The card is the home of "a card opens its file in the 파일 tab" only when a
+  // click really goes there (`openFilePreview`: one pane, a recorded place, no
+  // slides of its own) — a deck's card or a split pane's is never pointed at.
+  const opensInWorkspace =
+    ctx.state.chatPanes.length === 1 && Boolean(att.workspacePath) && opensInWorkspaceTab(ctx.state, att, panelSlides(source, att));
   return (
-    <button className="msg-file-card" type="button" onClick={() => ctx.openFilePreview(item, att, source)}>
+    <button
+      className="msg-file-card"
+      type="button"
+      ref={opensInWorkspace ? featureHintAnchor("chat-file-card") : undefined}
+      onClick={() => ctx.openFilePreview(item, att, source)}
+    >
       <span className="msg-file-icon" aria-hidden="true">
         <Icon name="file" />
       </span>{" "}

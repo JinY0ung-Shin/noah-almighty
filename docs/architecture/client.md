@@ -589,8 +589,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   that 404s on a re-read is folded away. `WorkspaceTab` hands only primitives (`conversationId`, `streaming`,
   `active`) to the `memo`'d tree, so a long listing is not rebuilt per streamed token. The header button is a
   toggle (pressed while the tab is the one showing; `workspaceTabOpen` is cleared at logout and session expiry)
-  and is marked `featureHintAnchor("chat-workspace")` (side: bottom) — the anchor is mounted, the release note item
-  that carries its hint is added at release.
+  and is marked `featureHintAnchor("chat-workspace")` (side: bottom); its hint is `2026-11-14.workspace-tab`. A file
+  card whose click opens in this tab (one pane, a recorded place, no slides of its own — the same test as
+  `openFilePreview`) is marked `featureHintAnchor("chat-file-card")` (side: top; hint `2026-11-14.file-card`), so a
+  deck's card or a split pane's is never pointed at.
   Focus moves to 목록 when a file opens and back to its row. A file opens INSIDE the tab (the tree stays mounted behind it): images through the file route in an
   `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML through the canvas's script-less
   sandboxed frame (`canvasHtmlDocument` + `CanvasHtmlFrame`), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×

@@ -23,6 +23,8 @@ export const FEATURE_HINT_SIDES: Record<FeatureHintAnchor, FeatureHintSide> = {
   "nav-teamBrain": "right",
   // The 파일 button sits in the chat header, at the top of the window.
   "chat-workspace": "bottom",
+  // A file card sits in an answer; the bubble opens over the text above it.
+  "chat-file-card": "top",
 };
 
 // ---- Anchors --------------------------------------------------------------

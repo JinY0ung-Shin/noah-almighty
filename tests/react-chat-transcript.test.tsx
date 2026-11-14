@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView";
 import { attachRun } from "../src/client/src/lib/chat";
+import { isFeatureHintAnchor } from "../src/client/src/lib/featureHints";
 import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import { get } from "../src/client/src/lib/store";
 import type { ChatPane } from "../src/client/src/lib/types";
@@ -813,6 +814,32 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     const { container } = render(<ChatView />);
     expect(container.querySelector(".msg-file-share")).toBeNull();
     expect(container.querySelector(".msg-images > .msg-file-card")?.textContent).toContain("보고.pdf");
+  });
+
+  it("marks a card as the 'opens in the 파일 tab' feature's home only when a click goes there", () => {
+    const note = { id: "md-1", kind: "file", mediaType: "text/markdown", name: "회의록.md", anchor: 0, workspacePath: "c/conv-1/회의록.md" };
+    const old = { id: "md-2", kind: "file", mediaType: "text/markdown", name: "옛날.md", anchor: 0 };
+    const marked = (container: HTMLElement) =>
+      Array.from(container.querySelectorAll<HTMLElement>("button.msg-file-card"))
+        .filter((card) => isFeatureHintAnchor("chat-file-card", card))
+        .map((card) => card.querySelector(".msg-file-name")?.textContent);
+    const withTab = { bootstrap: { workspaceFiles: true } as never };
+
+    replaceState({ avatars: [], ...withTab, chatPanes: [pane([deckMessage([note, old])])], activePaneId: "pane-1" });
+    const single = render(<ChatView />);
+    // Not the card without a recorded place, and not the deck (it keeps its own tab).
+    expect(marked(single.container)).toEqual(["회의록.md"]);
+    single.unmount();
+
+    // A deployment without the tab, and split view (a card click downloads there): no card is pointed at.
+    replaceState({ avatars: [], bootstrap: { workspaceFiles: false } as never, chatPanes: [pane([deckMessage([note])])], activePaneId: "pane-1" });
+    const noTab = render(<ChatView />);
+    expect(marked(noTab.container)).toEqual([]);
+    noTab.unmount();
+    const second = { ...pane([]), id: "pane-2", conversationId: "conv-2" } as ChatPane;
+    replaceState({ avatars: [], ...withTab, chatPanes: [pane([deckMessage([note])]), second], activePaneId: "pane-1" });
+    expect(marked(render(<ChatView />).container)).toEqual([]);
+    replaceState({ bootstrap: null }); // the tests after this one run on a deployment without the tab, as before
   });
 
   it("keeps the control in split view, where the card click downloads instead", () => {
