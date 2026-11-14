@@ -25,6 +25,10 @@ Agent orchestration + Noah's MCP tool servers. Read with the root [`CLAUDE.md`](
   both on the same boolean. The handler MUST self-gate (tools/list is a static catalog pi freezes per
   session — only the handler sees the live caller); guard conventions differ per file BY DESIGN
   (owner / elevated / member / ungated) — don't "normalize" them.
+- **pi judges a call against the LISTED schema before Noah is called** (types, enums, required; one value is
+  wrapped into an array). So a handler REDIRECT never sits behind an enum — make that argument a plain string
+  with its values in the description — and a list-of-strings argument is read through `unwrapStringList`
+  (`mcpTools.ts`): a list sent as a JSON string arrives as a one-item array. → `pi-runtime.md`.
 - **Adding a server:** also `PI_NOAH_SERVER_NAMES` + the catalog (`pi/mcpCatalog.ts`) AND
   `scripts/pi-register-mcp.mjs` (a test keeps them equal; broker ids are global per pi instance, `pi-setup`
   re-registers on every `up`). A third-party/process server is never its own id — it rides Noah's relays

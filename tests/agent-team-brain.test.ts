@@ -384,6 +384,15 @@ describe("team brain tools — writing", () => {
     const card = s.store.listTeamBrainProposals({ kind: "direct" })[0];
     expect(card).toMatchObject({ status: "draft", path: "", content: "", intake: null, proposerUserId: s.mate.id });
     expect(card.changeset?.conflicts).toEqual(["기존 페이지는 -d 옵션이 없음"]);
+    // A list the model sent as a JSON string (pi wraps it into a one-item array) is read as the list.
+    const wrapped = await callTool(t, "prepare_team_changes", {
+      title: "배포 절차 정정 (다시)",
+      summary: "-d 옵션 추가",
+      changes: [{ path: PAGE_PATH, op: "update", baseBlob: blob, content: page({ body: "setup-host.sh → docker compose up -d" }) }],
+      conflicts: ['["기존 페이지는 -d 옵션이 없음","백업 절차와 순서가 다름"]'],
+    });
+    expect(wrapped.isError, textOf(wrapped)).toBeFalsy();
+    expect(textOf(wrapped)).toContain("Tell the user about each flagged conflict (2)");
     expect(card.changeset?.changes.map((c) => [c.path, c.op, c.baseBlob])).toEqual([[PAGE_PATH, "update", blob]]);
     expect(mateCtx.onCard).toHaveBeenCalledWith({ proposalId: card.id, kind: "direct" });
 

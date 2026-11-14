@@ -10,6 +10,27 @@ export function text(message: string, isError = false) {
 }
 
 /**
+ * A list-of-strings argument as the model meant it. pi wraps ONE value into an
+ * array where the schema lists an array (pi-ai ≥ 1.5), so a list the model
+ * sent as a JSON STRING — a known open-model slip — arrives as a one-item
+ * array holding that text: `['["알파","베타"]']`. Exactly that shape is
+ * unwrapped (ONE item that parses as a JSON array of strings); anything else,
+ * a single tag that merely starts with `[` included, comes back untouched.
+ * (docs/architecture/pi-runtime.md "What pi does to the arguments".)
+ */
+export function unwrapStringList(value: unknown): unknown {
+  if (!Array.isArray(value) || value.length !== 1 || typeof value[0] !== "string") return value;
+  const only = value[0].trim();
+  if (!only.startsWith("[") || !only.endsWith("]")) return value;
+  try {
+    const parsed: unknown = JSON.parse(only);
+    return Array.isArray(parsed) && parsed.every((item) => typeof item === "string") ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Map a knowledge-repo file-op error (the value `scrubGitError` returns) to its
  * agent-facing English message. The repo and group-repo servers share the same
  * filesystem sentinels (`INVALID_PATH`/`FILE_TOO_LARGE`/`NOT_A_FILE`/

@@ -653,12 +653,19 @@ expected integer, got string`, `status: expected one of [...]`), the received ar
 - **The wrap is not a parse.** An array sent as a JSON string — a known open-model mistake — is one string, so
   it becomes a ONE-item array and passes: `tags: "[\"알파\",\"베타\"]"` stored a to-do with the single tag
   `["알파","베타"]` (pi 1.2.0's validator refused it with `must be array`). It reaches a handler only where the
-  items are strings (`todoTools.ts` `tags`, `teamBrainTools.ts` `personalNotes`/`conflicts`); an array of
-  objects, numbers or enum values still fails on the item. Not handled in Noah today.
-- **A value outside a LISTED enum never reaches the handler** (1.2.0's validator refused it too), so a handler
-  redirect behind a listed enum is not what a pi model reads: for the retired canvas `contentType: 'widget'` it
-  gets pi's `contentType: expected one of ["markdown","mermaid","svg","html"]`, not `WIDGET_RETIRED_ERROR`
-  (`canvasTools.ts` — that redirect answers a direct MCP client only, which is what the tests drive).
+  items are strings; an array of objects, numbers or enum values still fails on the item. **Every
+  list-of-strings argument is read through `unwrapStringList` (`agent/mcpTools.ts`)**: exactly ONE item
+  that parses as a JSON array of strings is taken as that list, anything else is left alone. Today:
+  `todoTools.ts` `tags` (add and update), `teamBrainTools.ts` `personalNotes` and `conflicts`. A new
+  `z.array(z.string())` argument goes through it too.
+- **A value outside a LISTED enum never reaches the handler** (1.2.0's validator refused it too): the model
+  reads pi's `<arg>: expected one of [...]`. So an argument whose bad values must hear a REDIRECT is a plain
+  string with its values in the description, checked in the handler — never an enum, in zod or in the
+  listed schema. The canvas `contentType` is that (the retired `'widget'` / `'vega'` answer
+  `WIDGET_RETIRED_ERROR` / `VEGA_RETIRED_ERROR`); until 2026-11-14 its listed schema carried the enum
+  through `.meta()`, and a pi model was told `expected one of ["markdown","mermaid","svg","html"]`
+  instead of where the feature went. An ordinary enum, whose only wrong answer is "not one of these", stays
+  an enum.
 - **An unknown argument NAME passes pi** (the catalog schemas are open) and is refused by the gate above.
 - **Tool-call JSON that is cut off runs nothing** (`Invalid arguments for tool "bash": Unexpected end of JSON
   input` + the text received); by pi's commit, 1.2.0 ran the tool on the fields that had arrived.

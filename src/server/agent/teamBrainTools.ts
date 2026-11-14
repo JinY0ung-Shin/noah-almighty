@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 import { tool } from "./mcpServer.js";
-import { text } from "./mcpTools.js";
+import { text, unwrapStringList } from "./mcpTools.js";
 import type { Store } from "../store.js";
 import type { AppConfig } from "../types.js";
 import {
@@ -196,7 +196,8 @@ async function resolvePersonalNotes(
   ctx: TeamBrainToolsContext,
   raw: unknown,
 ): Promise<{ ok: true; links: TeamPersonalNoteLink[] } | { ok: false; message: string }> {
-  const list = Array.isArray(raw) ? raw.map((p) => String(p ?? "").trim()).filter(Boolean) : [];
+  const given = unwrapStringList(raw);
+  const list = Array.isArray(given) ? given.map((p) => String(p ?? "").trim()).filter(Boolean) : [];
   if (list.length === 0) return { ok: true, links: [] };
   if (list.length > TEAM_BRAIN_MAX_PERSONAL_NOTES) {
     return { ok: false, message: `\`personalNotes\` takes at most ${TEAM_BRAIN_MAX_PERSONAL_NOTES} notes.` };
@@ -301,8 +302,9 @@ function normalizeChanges(raw: unknown, newRawPath: string | null): DraftChange[
 }
 
 function normalizeConflicts(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
+  const given = unwrapStringList(raw);
+  if (!Array.isArray(given)) return [];
+  return given
     .map((c) => String(c ?? "").trim().slice(0, MAX_CONFLICT_CHARS))
     .filter(Boolean)
     .slice(0, MAX_CONFLICTS);

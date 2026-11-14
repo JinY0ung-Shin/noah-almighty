@@ -100,6 +100,7 @@ import {
   TODO_TOOL_NAMES,
   type TodoToolsContext,
 } from "../src/server/agent/todoTools.js";
+import { unwrapStringList } from "../src/server/agent/mcpTools.js";
 import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
 import { readSystemManual, systemManualIndex } from "../src/server/agent/systemManual.js";
 import { buildSystemTools, SYSTEM_SERVER_NAME, type SystemToolsContext } from "../src/server/agent/systemTools.js";
@@ -227,6 +228,28 @@ describe("mcp__todo__* handlers", () => {
     const after = s.store.listTodos(s.owner.id);
     expect(after.map((t) => t.title)).toEqual(["기존"]);
     expect(after[0].status).toBe("todo");
+  });
+
+  it("reads a tag list that arrives as one JSON-string item as the list the model meant", async () => {
+    // pi wraps ONE value into an array where the schema lists an array, so a list
+    // sent as a JSON string reaches the handler as a one-item array holding that text.
+    expect(unwrapStringList(['["알파","베타"]'])).toEqual(["알파", "베타"]);
+    expect(unwrapStringList([' [ "a" ] '])).toEqual(["a"]);
+    expect(unwrapStringList(["[]"])).toEqual([]);
+    // Everything else is left alone: a real list, a tag that only looks like one, a list of non-strings.
+    for (const value of [["알파", "베타"], ["[긴급]"], ["[1,2]"], ['["a"', '"b"]'], ['{"a":1}'], [], "a,b", undefined]) {
+      expect(unwrapStringList(value)).toBe(value);
+    }
+
+    const s = ownerSetup("json-tags");
+    const tools = buildTodoTools(s.store, s.ctx);
+    const added = await callTool(tools, "add_todos", { items: [{ title: "태그 확인", tags: ['["알파","베타"]'] }] });
+    expect(added.isError, textOf(added)).toBeFalsy();
+    const [todo] = s.store.listTodos(s.owner.id);
+    expect(todo!.tags).toEqual(["알파", "베타"]);
+    const updated = await callTool(tools, "update_todo", { id: todo!.id, tags: ['["감마"]'] });
+    expect(updated.isError, textOf(updated)).toBeFalsy();
+    expect(s.store.listTodos(s.owner.id)[0]!.tags).toEqual(["감마"]);
   });
 
   it("adds a batch with the header, stamps source + conversation, and audits ids only", async () => {

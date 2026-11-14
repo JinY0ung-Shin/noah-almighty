@@ -38,10 +38,14 @@ describe("canvas content types (`widget` and `vega` are retired)", () => {
   it("lists exactly the four side-panel types in the schema — `widget` and `vega` are not advertised anywhere", () => {
     const { show } = harness();
     expect(CANVAS_SHOW_CONTENT_TYPES).toEqual(["markdown", "mermaid", "svg", "html"]);
-    // What tools/list serves: a string with the enum (zod itself accepts any
-    // string, so the handler — not a bare validation error — answers 'widget').
+    // What tools/list serves: a plain string whose DESCRIPTION names the four
+    // values, and no enum. pi judges a call against the listed schema before
+    // Noah is called, so an enum there would answer 'widget' with pi's own
+    // "expected one of […]" and the redirect below would never be read.
     const listed = z.toJSONSchema(z.object(show.inputSchema)) as { properties: Record<string, { type?: string; enum?: string[]; description?: string }> };
-    expect(listed.properties.contentType).toMatchObject({ type: "string", enum: ["markdown", "mermaid", "svg", "html"] });
+    expect(listed.properties.contentType!.type).toBe("string");
+    expect(listed.properties.contentType).not.toHaveProperty("enum");
+    expect(listed.properties.contentType!.description).toContain("How to render content: 'markdown', 'mermaid', 'svg', 'html' (exactly one of these).");
     expect(z.object(show.inputSchema).safeParse({ title: "t", content: "c", contentType: "widget" }).success).toBe(true);
     expect(z.object(show.inputSchema).safeParse({ title: "t", content: "{}", contentType: "vega" }).success).toBe(true);
     expect(JSON.stringify(listed)).not.toContain("widget");

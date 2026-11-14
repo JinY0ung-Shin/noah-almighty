@@ -192,13 +192,17 @@ export function buildCanvasTools(ctx: CanvasToolsContext) {
       {
         title: z.string().describe("Short title shown atop the canvas panel."),
         content: z.string().describe("The artifact body, interpreted per contentType."),
-        // A plain string whose LISTED schema carries the enum (`meta`), checked
-        // in the handler: a zod enum would turn the retired 'widget' / 'vega' into a
-        // bare "Input validation error" before their redirects could answer.
+        // A plain string, checked in the handler, with the valid values in its
+        // DESCRIPTION — never an enum, neither in zod nor in the listed schema.
+        // An enum is judged before the handler runs (zod: a bare "Input
+        // validation error"; pi: its own "expected one of […]" from the LISTED
+        // schema, docs/architecture/pi-runtime.md), so the retired 'widget' /
+        // 'vega' would never hear where the feature went.
         contentType: z
           .string()
-          .meta({ enum: [...CANVAS_SHOW_CONTENT_TYPES] })
-          .describe("How to render content. For a side-panel diagram or simple chart use 'mermaid' — it renders a rich visual from a tiny token-cheap source."),
+          .describe(
+            `How to render content: ${CANVAS_SHOW_CONTENT_TYPES.map((type) => `'${type}'`).join(", ")} (exactly one of these). For a side-panel diagram or simple chart use 'mermaid' — it renders a rich visual from a tiny token-cheap source.`,
+          ),
         controls: z.array(controlSchema).optional().describe("Optional interactive controls to collect a response."),
         canvasId: z
           .string()

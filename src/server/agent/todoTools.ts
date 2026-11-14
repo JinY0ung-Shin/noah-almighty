@@ -21,7 +21,7 @@ import { kstDateString, kstDateWithWeekday, normalizeCalendarDate } from "../rou
 import type { Store } from "../store.js";
 import { parseNewTodo, parseTodoPatch, type NewTodo, type TodoInputError } from "../todos.js";
 import type { AgentOwner } from "../types.js";
-import { text } from "./mcpTools.js";
+import { text, unwrapStringList } from "./mcpTools.js";
 
 /**
  * 할 일 tools: the avatar reads and edits its OWNER's persistent work to-do list
@@ -256,7 +256,7 @@ export function buildTodoTools(store: Store, ctx: TodoToolsContext) {
         }
         const values: NewTodo[] = [];
         for (const [index, item] of raw.entries()) {
-          const parsed = parseNewTodo(item);
+          const parsed = parseNewTodo(item && typeof item === "object" && "tags" in item ? { ...item, tags: unwrapStringList(item.tags) } : item);
           if (!parsed.ok) {
             return text(`Nothing was added — item ${index + 1}: ${ENGLISH_TODO_ERROR[parsed.error]}`, true);
           }
@@ -304,7 +304,7 @@ export function buildTodoTools(store: Store, ctx: TodoToolsContext) {
           note: args.note,
           dueDate: args.dueDate,
           priority: args.priority,
-          tags: args.tags,
+          tags: unwrapStringList(args.tags),
           status: args.status,
         });
         if (!parsed.ok) return text(ENGLISH_TODO_ERROR[parsed.error], true);
