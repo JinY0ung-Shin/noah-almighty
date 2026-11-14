@@ -308,7 +308,7 @@ describe("runPiAgent: document attachments", () => {
     );
     expect(refused).toBeInstanceOf(PiGatewayError);
     expect(refused.message).toBe(
-      "pi-gateway가 첨부한 문서를 받지 않았습니다 (파일 이름이나 형식을 받을 수 없거나, 문서를 받을 수 없는 대화입니다). 파일을 확인한 뒤 다시 첨부해 주세요.",
+      "첨부한 문서가 전달되지 않았습니다 (파일 이름이나 형식을 받을 수 없거나, 문서를 받을 수 없는 대화입니다). 파일을 확인한 뒤 다시 첨부해 주세요.",
     );
     expect(refused.code).toBe("invalid_file_input");
     expect(refused.upstreamMessage).toBe("input_file.filename must be a plain file name");
@@ -323,7 +323,7 @@ describe("runPiAgent: document attachments", () => {
 
     // pi's body cap.
     const tooLarge = await fail(new PiGatewayError("too_large", { status: 413 }));
-    expect(tooLarge.message).toBe("첨부한 문서와 이미지가 너무 커서 pi-gateway가 받지 않았습니다. 파일을 줄이거나 나눠서 보내 주세요.");
+    expect(tooLarge.message).toBe("첨부한 문서와 이미지가 너무 커서 전달되지 않았습니다. 파일을 줄이거나 나눠서 보내 주세요.");
 
     // Without documents the same failures are what they always were.
     const plain502 = new PiGatewayError("server", { status: 502, retryable: true, upstreamMessage: "Sandbox error: container failed" });
@@ -349,9 +349,9 @@ describe("runPiAgent: document attachments", () => {
     };
     const withFile = await drain({ kind: "prompt", text: "x", files: [{ filename: "a.pdf", mediaType: "application/pdf", data: huge }] });
     expect(withFile?.kind).toBe("too_large");
-    expect(withFile?.message).toBe("첨부한 문서와 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다. 파일을 줄이거나 나눠서 보내 주세요.");
+    expect(withFile?.message).toBe("첨부한 문서와 이미지가 너무 커서 보낼 수 없습니다. 파일을 줄이거나 나눠서 보내 주세요.");
     const imageOnly = await drain({ kind: "prompt", text: "x", images: [{ mediaType: "image/png", data: huge }] });
-    expect(imageOnly?.message).toBe("첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다.");
+    expect(imageOnly?.message).toBe("첨부 이미지가 너무 커서 보낼 수 없습니다.");
   });
 
   it("never sends a document on a run that cannot take one (a read_only colleague chat, a routine, a task-API turn)", async () => {

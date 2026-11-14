@@ -328,7 +328,7 @@ export function apiError(res: Response, status: number, message: string): void {
 }
 
 /** 503 body of a model WRITE while pi-gateway's model list cannot be read. */
-export const PI_MODELS_UNAVAILABLE_MESSAGE = "pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+export const PI_MODELS_UNAVAILABLE_MESSAGE = "모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
 /**
  * The model ids a WRITE (the composer's per-user default) may

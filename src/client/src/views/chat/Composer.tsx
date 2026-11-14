@@ -310,7 +310,7 @@ export function Composer({ ctx, item, compact, index }: { ctx: ChatController; i
                         >
                           <option
                             value=""
-                            title={models.defaultModel ? `pi-gateway의 ${models.defaultModel} 티어를 사용합니다` : "pi-gateway가 정한 기본 모델을 사용합니다"}
+                            title={models.defaultModel ? `관리자가 정한 기본 모델(${models.defaultModel})을 사용합니다` : "관리자가 정한 기본 모델을 사용합니다"}
                           >
                             {models.defaultModel ? `기본 모델 (${models.defaultModel})` : "기본 모델"}
                           </option>

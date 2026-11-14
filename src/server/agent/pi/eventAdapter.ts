@@ -751,7 +751,7 @@ export async function runPiTurn(options: RunPiTurnOptions): Promise<PiRunResult>
     }
     if (!outcome) {
       if (outer?.aborted) throw new PiGatewayError("aborted");
-      throw new PiGatewayError("protocol", { message: "pi-gateway 스트림이 완료 이벤트 없이 종료되었습니다." });
+      throw new PiGatewayError("protocol", { message: "응답 스트림이 완료 이벤트 없이 종료되었습니다." });
     }
     if (outcome.status === "failed") throw new PiTurnFailedError(outcome.error.code, outcome.error.message);
     usage = sumUsage(usage, outcome.usage);

@@ -93,7 +93,7 @@ import {
 
 const agentLogger = logger.child({ module: "agent" });
 
-export const EMPTY_PI_RESPONSE_MESSAGE = "pi-gateway 응답이 비어 있습니다.";
+export const EMPTY_PI_RESPONSE_MESSAGE = "응답이 비어 있습니다.";
 
 /** Longest the run stays open for its background jobs after the answer (a consultation's own budget + margin). */
 const ASYNC_WAIT_CAP_MS = AVATAR_ASK_TIMEOUT_MS + 30_000;
@@ -142,7 +142,7 @@ export function piDocumentTurnError(error: unknown): unknown {
   if (error.kind === "bad_request" && error.code === "invalid_file_input") {
     return new PiGatewayError("bad_request", {
       ...upstream,
-      message: "pi-gateway가 첨부한 문서를 받지 않았습니다 (파일 이름이나 형식을 받을 수 없거나, 문서를 받을 수 없는 대화입니다). 파일을 확인한 뒤 다시 첨부해 주세요.",
+      message: "첨부한 문서가 전달되지 않았습니다 (파일 이름이나 형식을 받을 수 없거나, 문서를 받을 수 없는 대화입니다). 파일을 확인한 뒤 다시 첨부해 주세요.",
     });
   }
   if (error.status === 502 && /^sandbox error/i.test(error.upstreamMessage ?? "")) {
@@ -154,7 +154,7 @@ export function piDocumentTurnError(error: unknown): unknown {
   if (error.kind === "too_large" && error.status === 413) {
     return new PiGatewayError("too_large", {
       ...upstream,
-      message: "첨부한 문서와 이미지가 너무 커서 pi-gateway가 받지 않았습니다. 파일을 줄이거나 나눠서 보내 주세요.",
+      message: "첨부한 문서와 이미지가 너무 커서 전달되지 않았습니다. 파일을 줄이거나 나눠서 보내 주세요.",
     });
   }
   return error;
@@ -605,7 +605,18 @@ async function runPiAgentAs(
               ...PI_OPEN_RETRY,
               ...deps.retry,
               ...(signal ? { signal } : {}),
-              onRetry: () => events?.onStatus?.("pi-gateway가 바빠서 잠시 후 다시 시도하는 중…"),
+              // The status line names no component; WHY the open failed goes to the log.
+              onRetry: (error, openAttempt, delayMs) => {
+                agentLogger.warn(
+                  { conversationId, kind: error.kind, status: error.status ?? null, code: error.code ?? null, upstream: error.upstreamMessage ?? null, openAttempt, delayMs },
+                  "pi stream open failed; retrying",
+                );
+                events?.onStatus?.(
+                  error.kind === "capacity" || error.kind === "rate_limited"
+                    ? "지금 실행 중인 작업이 많아 잠시 후 다시 시도하는 중…"
+                    : "응답 서버를 지금 사용할 수 없어 잠시 후 다시 시도하는 중…",
+                );
+              },
             },
           });
           break;
@@ -768,7 +779,7 @@ async function runPiAgentAs(
   return {
     kind: "text",
     runtime: "pi",
-    summary: "pi-gateway 실행이 완료되었습니다.",
+    summary: "실행이 완료되었습니다.",
     text,
     ...(final.errorSubtype && !final.text ? { resultError: final.errorSubtype } : {}),
     ...(usage ? { usage } : {}),

@@ -24,6 +24,9 @@ These are the invariants the project is built around. New work should reinforce 
   read it as INPUT?"* → English (prompts, tool descriptions, tool errors/refusals, slash-command
   expansions, bundled `SKILL.md`); else Korean (UI, `apiError`, status labels, titles). A string used on
   both channels is split. The avatar replies in the user's language (default Korean).
+- **Text a teammate reads never names `pi-gateway`** (chat status lines, run errors, composer): it says
+  what happened (`응답 서버`, or no subject). The name stays where it is needed — admin screens, the
+  avatar's own English text, and the server log, which records the cause a status line leaves out.
 
 ### Team, trust, sharing
 - **ONE Noah instance = ONE team; trust = an approved (not suspended) user.** Every approved user is a

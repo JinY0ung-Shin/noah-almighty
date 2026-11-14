@@ -1919,7 +1919,7 @@ export async function executeChatTurn(
             const segResponse: AgentResponse = {
               kind: "text",
               runtime: config.agentRuntime,
-              summary: "pi-gateway 실행이 완료되었습니다.",
+              summary: "실행이 완료되었습니다.",
               text: segment.text || STEER_TURN_END_PLACEHOLDER,
               ...(thinkingTail ? { thinking: thinkingTail } : {}),
               ...(segment.usage ? { usage: segment.usage } : {}),

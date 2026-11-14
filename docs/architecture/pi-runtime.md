@@ -137,7 +137,7 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    the session keeps its model).
 6. **Errors** — 404/409 on a continued session, or 400 `model_not_configured` (the operator removed the session's
    model from pi and the turn could not name pi's default; `isLostPiSession`) → once, a new session from history
-   (status-free, the model is told in the preamble). 503/429 at stream open → `withPiRetry` backoff (status line `pi-gateway가 바빠서…`). An empty turn —
+   (status-free, the model is told in the preamble). 503/429 at stream open → `withPiRetry` backoff (the cause is logged; the status line names no component: `지금 실행 중인 작업이 많아…` for capacity/429, else `응답 서버를 지금 사용할 수 없어…`). An empty turn —
    pi's `empty_response` (no text, reasoning or file output — a tool call alone does not count; pi does NOT commit it)
    — is re-sent ONCE as the same request (same `previous_response_id`, or the same fresh session; status line
    `모델이 빈 응답을 보내 한 번 더 시도하는 중…`), never for a steer follow-up turn. A model fallback chain (routines,

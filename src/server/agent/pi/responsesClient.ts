@@ -154,19 +154,19 @@ export type PiGatewayErrorKind =
   | "aborted";
 
 const KIND_MESSAGES: Record<PiGatewayErrorKind, string> = {
-  bad_request: "pi-gateway가 요청을 거절했습니다.",
-  auth: "pi-gateway 인증에 실패했습니다.",
-  not_found: "pi-gateway에서 이전 응답을 찾지 못했습니다.",
-  conflict: "pi-gateway 대화 상태가 요청과 맞지 않습니다.",
-  too_large: "pi-gateway 요청이 허용 크기를 초과했습니다.",
-  rate_limited: "pi-gateway 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
-  capacity: "pi-gateway가 동시에 처리할 수 있는 실행 수를 초과했습니다. 잠시 후 다시 시도해 주세요.",
-  unavailable: "pi-gateway를 지금 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
-  server: "pi-gateway 내부 오류가 발생했습니다.",
-  timeout: "pi-gateway 응답 대기 시간이 초과되었습니다.",
-  network: "pi-gateway에 연결하지 못했습니다.",
-  protocol: "pi-gateway 응답 형식이 올바르지 않습니다.",
-  aborted: "pi-gateway 요청이 취소되었습니다.",
+  bad_request: "응답 서버가 요청을 거절했습니다.",
+  auth: "응답 서버 인증에 실패했습니다.",
+  not_found: "이전 응답을 찾지 못했습니다.",
+  conflict: "대화 상태가 요청과 맞지 않습니다.",
+  too_large: "요청이 허용 크기를 초과했습니다.",
+  rate_limited: "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  capacity: "동시에 처리할 수 있는 실행 수를 초과했습니다. 잠시 후 다시 시도해 주세요.",
+  unavailable: "응답 서버를 지금 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
+  server: "응답 서버 내부 오류가 발생했습니다.",
+  timeout: "응답 대기 시간이 초과되었습니다.",
+  network: "응답 서버에 연결하지 못했습니다.",
+  protocol: "응답 서버의 응답 형식이 올바르지 않습니다.",
+  aborted: "요청이 취소되었습니다.",
 };
 
 export class PiGatewayError extends Error {
@@ -276,7 +276,7 @@ async function readCappedBytes(response: Response, limit: number): Promise<Buffe
   const declared = Number(response.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) {
     await response.body?.cancel().catch(() => undefined);
-    throw new PiGatewayError("too_large", { message: "pi-gateway 응답이 허용 크기를 초과했습니다." });
+    throw new PiGatewayError("too_large", { message: "응답 서버의 응답이 허용 크기를 초과했습니다." });
   }
   if (!response.body) return Buffer.alloc(0);
   const reader = response.body.getReader();
@@ -289,7 +289,7 @@ async function readCappedBytes(response: Response, limit: number): Promise<Buffe
       bytes += value.byteLength;
       if (bytes > limit) {
         await reader.cancel().catch(() => undefined);
-        throw new PiGatewayError("too_large", { message: "pi-gateway 응답이 허용 크기를 초과했습니다." });
+        throw new PiGatewayError("too_large", { message: "응답 서버의 응답이 허용 크기를 초과했습니다." });
       }
       chunks.push(Buffer.from(value));
     }
@@ -366,7 +366,7 @@ export async function* readSseFrames(
       while (boundary >= 0) {
         const block = buffer.slice(0, boundary);
         if (Buffer.byteLength(block, "utf8") > MAX_SSE_FRAME_BYTES) {
-          throw new PiGatewayError("protocol", { message: "pi-gateway 스트림 이벤트가 허용 크기를 초과했습니다." });
+          throw new PiGatewayError("protocol", { message: "응답 스트림 이벤트가 허용 크기를 초과했습니다." });
         }
         buffer = buffer.slice(boundary + 2);
         const frame = parseFrame(block);
@@ -374,7 +374,7 @@ export async function* readSseFrames(
         boundary = buffer.indexOf("\n\n");
       }
       if (Buffer.byteLength(buffer, "utf8") > MAX_SSE_FRAME_BYTES) {
-        throw new PiGatewayError("protocol", { message: "pi-gateway 스트림 이벤트가 허용 크기를 초과했습니다." });
+        throw new PiGatewayError("protocol", { message: "응답 스트림 이벤트가 허용 크기를 초과했습니다." });
       }
       if (done) break;
     }
@@ -405,12 +405,12 @@ export interface PiStreamEvent {
 
 export function buildResponsesBody(request: PiResponseRequest): Record<string, unknown> {
   if (!PI_USER_ID_PATTERN.test(request.user)) {
-    throw new PiGatewayError("bad_request", { message: "pi-gateway에 보낼 사용자 id 형식이 올바르지 않습니다." });
+    throw new PiGatewayError("bad_request", { message: "응답 서버에 보낼 사용자 id 형식이 올바르지 않습니다." });
   }
   if (request.previousResponseId && request.instructions) {
     // pi rejects this (system prompt is fixed per session, design D2); fail before the round trip.
     throw new PiGatewayError("bad_request", {
-      message: "이어지는 pi-gateway 턴에는 시스템 지시를 보낼 수 없습니다.",
+      message: "이어지는 턴에는 시스템 지시를 보낼 수 없습니다.",
     });
   }
   if (request.input.kind === "answer" && !request.previousResponseId) {
@@ -677,9 +677,9 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       if (!response.ok) throw await piErrorFromResponse(response);
       if (!response.headers.get("content-type")?.includes("text/event-stream")) {
         await response.body?.cancel().catch(() => undefined);
-        throw new PiGatewayError("protocol", { message: "pi-gateway가 SSE 스트림이 아닌 응답을 반환했습니다." });
+        throw new PiGatewayError("protocol", { message: "응답 서버가 SSE 스트림이 아닌 응답을 반환했습니다." });
       }
-      if (!response.body) throw new PiGatewayError("protocol", { message: "pi-gateway가 빈 스트림을 반환했습니다." });
+      if (!response.body) throw new PiGatewayError("protocol", { message: "응답 서버가 빈 스트림을 반환했습니다." });
       return response.body;
     } catch (error) {
       throw transportError(error, parent, timeouts.kind, true);
@@ -740,12 +740,12 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
           decoded = JSON.parse(frame.data);
         } catch (error) {
           throw new PiGatewayError("protocol", {
-            message: `pi-gateway의 ${frame.event.slice(0, 80)} 이벤트가 올바른 JSON이 아닙니다.`,
+            message: `응답 서버의 ${frame.event.slice(0, 80)} 이벤트가 올바른 JSON이 아닙니다.`,
             cause: error,
           });
         }
         if (!isRecord(decoded)) {
-          throw new PiGatewayError("protocol", { message: "pi-gateway 이벤트가 객체가 아닙니다." });
+          throw new PiGatewayError("protocol", { message: "응답 서버의 이벤트가 객체가 아닙니다." });
         }
         const type = frame.event !== "message" ? frame.event : typeof decoded.type === "string" ? decoded.type : "";
         yield { type, data: decoded };
@@ -767,8 +767,8 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       const withFiles = request.input.kind === "prompt" && Boolean(request.input.files?.length);
       throw new PiGatewayError("too_large", {
         message: withFiles
-          ? "첨부한 문서와 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다. 파일을 줄이거나 나눠서 보내 주세요."
-          : "첨부 이미지가 너무 커서 pi-gateway로 보낼 수 없습니다.",
+          ? "첨부한 문서와 이미지가 너무 커서 보낼 수 없습니다. 파일을 줄이거나 나눠서 보내 주세요."
+          : "첨부 이미지가 너무 커서 보낼 수 없습니다.",
       });
     }
     const headers: Record<string, string> = {};
@@ -808,7 +808,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
       if (status !== "in_progress") break;
     }
     // Ended (or went on) without a terminal event.
-    throw new PiGatewayError("protocol", { message: "pi-gateway의 맥락 정리 응답 형식이 올바르지 않습니다." });
+    throw new PiGatewayError("protocol", { message: "맥락 정리 응답 형식이 올바르지 않습니다." });
   }
 
   return {
@@ -827,7 +827,7 @@ export function createPiResponsesClient(config: PiGatewayConfig): PiResponsesCli
     async listModels(signal) {
       const json = await readJson(await jsonCall("GET", "/v1/models", {}, signal));
       if (!isRecord(json) || !Array.isArray(json.data)) {
-        throw new PiGatewayError("protocol", { message: "pi-gateway 모델 목록 형식이 올바르지 않습니다." });
+        throw new PiGatewayError("protocol", { message: "모델 목록 형식이 올바르지 않습니다." });
       }
       return json.data
         .filter(isRecord)

@@ -435,7 +435,7 @@ describe("admin: retired LLM settings (pi-gateway's admin page owns them)", () =
     const { app } = bootWithModels("down");
     const admin = await mkUser(app, "admin");
     const res = await admin.agent.put("/api/me/chat-defaults").send({ model: "deepseek/v3" }).expect(503);
-    expect(res.body.error).toBe("pi-gateway 모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    expect(res.body.error).toBe("모델 목록을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.");
     // Clearing names no model, so it needs no list.
     await admin.agent.put("/api/me/chat-defaults").send({ model: null }).expect(200);
     const sys = await admin.agent.get("/api/admin/system").expect(200);
