@@ -374,6 +374,51 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   answered. **NOT seen: the hourly timer.** `89-plugin-timer.mjs` there leaves a version unfetched and waits for
   the gateway's first tick, one hour after it starts; the run was stopped before the tick, so that the timer
   fires in the real gateway, and what it logs, still rest on pi's code and tests alone.
+  **pi `92a69dd` (2026-11-14, pi's agent libraries 1.2.0 → 1.5.2 — `d2d6704`: pi-coding-agent, pi-agent-core,
+  pi-ai, pi-mcp; tool arguments are now validated by pi-schema — plus two commits that change only pi's own
+  docs; pi's commit ran its typecheck, vitest and Docker e2e and NO turn against an LLM):** `run-all.sh` all PASS
+  on a fresh stack (`~/.noah-work/boot-test-2026-11-14c/`, Noah `cf5b2fa`; the gateway image holds all five
+  `@earendil-works/pi-*` packages at 1.5.2), `71-` 25/25, `75-` 37/37, `25-` 48/48, `85-` 26/26, `86-` 20/20,
+  `87-` 19/19, `88-` 23/23 (the script asks for a plugin's skill as `<plugin>:<skill>` now), no error-level line
+  in the six services' logs at the end (Noah's begins at its last recreate by `40-same-origin.sh`), and four new
+  looks. **(1) `90-pi-validation.mjs` 13/13** — scripted calls in
+  ONE owner conversation, each answer read back from the model's next request. Converted and run:
+  `mcp__system__list_recent_conversations {sinceHours: "24", limit: "3"}` answers its list, and
+  `mcp__todo__add_todos {items: {title}}` (ONE object where an array is listed) adds the item. Refused by pi
+  before Noah is called, as a tool result in a turn that completes: a missing required argument
+  (`Validation failed for tool "mcp__todo__update_todo":` / `  - id: missing` / the received arguments /
+  `Parameters of mcp__todo__update_todo: <the listed schema>`), a word for a number (`- sinceHours: expected
+  integer, got string`), a value outside a listed enum (`- status: expected one of ["open",…]`), `bash {}`
+  (`- command: missing`). Tool-call JSON that is cut off runs NOTHING: `bash` with
+  `{"command":"echo …","timeout":` answers `Invalid arguments for tool "bash": Unexpected end of JSON input` and
+  the echo never ran; an `mcp_call` cut after its first item added nothing. Passed through to Noah: an unknown
+  argument name (`list_todos {state}` — Noah's own gate answers `Unknown argument name …; valid: …`). **Seen and
+  NOT wanted: an array sent as a JSON STRING passes** — `tags: "[\"알파\",\"베타\"]"` is wrapped into a one-item
+  array and the to-do is stored with the single tag `["알파","베타"]` (→ `pi-runtime.md` "Tool discovery").
+  **(2) `91-validator-matrix.mjs`** — 18 argument cases through pi-ai's `validateToolArguments` with plain JSON
+  schemas, in the OLD gateway image (the host's, pi-ai 1.2.0) and the new one (`docker run --rm -i --network none
+  --entrypoint node -w /app pi-gateway/gateway:latest --input-type=module - < script`): 10 differ. Three in
+  behaviour — one string or one object where an array is listed, and an array as a JSON string, were refused
+  (`must be array`) and are now wrapped; seven in wording only (`must have required properties id` → `missing`,
+  `must be integer` → `expected integer, got string`, `must be equal to one of the allowed values` → `expected
+  one of [...]`, `must not have additional properties` → `unknown field`, `must be <= 5` → `expected <= 5`).
+  Numeric strings, `"true"`, a number for a string and a dropped optional `null` were ALREADY converted by 1.2.0
+  — for a tool's plain JSON schema that part of pi's commit message is not a change. **(3) the model's requests
+  of `50-subagent.mjs`, diffed against the `…-14b` run:** 12 tool declarations (9 for a subagent), all identical
+  — `Agent` included, as pi's commit says — except `grep`, whose `glob` is now described as "relative to path,
+  e.g. '*.ts', 'src/**/*.ts' … A pattern without '/' matches file names at any depth"; the system prompt is the
+  same length; pi's `user-agent` is `pi/1.5.2 (linux; node/v22.23.5; x64)` (was `pi (linux <kernel>; x64)`).
+  **(4) `92-grep-glob.mjs` 3/5 — the two misses are a pi defect this bump makes visible:** the gateway runs
+  ripgrep in the sandbox with the session's cwd, so a glob holding a `/` is matched against `/workspace`, not
+  against `path`: with `path: /workspace/gv` both `sub/**/*.txt` and `sub/*.txt` answer `No matches found`
+  (`gv/sub/*.txt` and `**/sub/*.txt` find the file; `*.txt` finds every depth; with no `path` the two coincide).
+  The gateway's code did not change — the description that now offers `src/**/*.ts` did. To fix in pi
+  (`apps/gateway/src/tools/grep.ts`), not here. **NOT seen:** the other fixes pi's commit names (no unpaired
+  tool result after a cut-off answer is recovered; no cap on a summary's output) — they rest on pi's tests; what
+  1.2.0 did with cut-off JSON through the stack (only 1.5.2 was booted; that it ran on the fields that arrived
+  is pi's statement); any turn with a real model. After the run: gateway 216 MiB, broker 214 MiB. The fake LLM
+  there takes `rawArguments` (argument text sent as is) for a tool call that is not whole JSON; once the stack
+  is down, pi-ai's validator alone runs from npm (`npm i @earendil-works/pi-ai@<version>` in a scratch folder).
   **A model-driven check in that stack** (done for `/compact`, 2026-11-10): run the scripted fake LLM
   (`~/.noah-work/pi-e2e/fake-llm.mjs`, `node:22-bookworm-slim`) as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

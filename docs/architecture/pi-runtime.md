@@ -640,6 +640,32 @@ Measured without a model, then mitigated Noah-side:
 | Noun-only broker descriptions | `SERVER_DESCRIPTIONS` in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall) |
 | Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged |
 
+**What pi does to the arguments BEFORE Noah is called (pi-ai 1.5.2 since pin `92a69dd`; seen on the dind stack,
+→ `build-run-verify.md`).** pi's `mcp_call` validates the model's arguments against the schema Noah's `/mcp`
+LISTS and calls the tool with the CONVERTED value; a failure is a tool result the model reads —
+`Validation failed for tool "<name>":`, one `  - <path>: <problem>` line each (`id: missing`, `sinceHours:
+expected integer, got string`, `status: expected one of [...]`), the received arguments, then
+`Parameters of <name>: <schema>` — and the turn goes on. Nothing in Noah quotes or parses that wording.
+- **Converted, then run:** a numeric string for a number, `"true"`/`"false"` for a boolean, a number for a
+  string, a `null` for an optional non-nullable argument (dropped) — and, new with 1.5.2, ONE value where an
+  array is listed is wrapped (`add_todos {items: {title}}` adds the item; `tags: ""` becomes `[""]`). The
+  numeric string and the wrap were seen through the stack, the rest with pi-ai's validator alone.
+- **The wrap is not a parse.** An array sent as a JSON string — a known open-model mistake — is one string, so
+  it becomes a ONE-item array and passes: `tags: "[\"알파\",\"베타\"]"` stored a to-do with the single tag
+  `["알파","베타"]` (pi 1.2.0's validator refused it with `must be array`). It reaches a handler only where the
+  items are strings (`todoTools.ts` `tags`, `teamBrainTools.ts` `personalNotes`/`conflicts`); an array of
+  objects, numbers or enum values still fails on the item. Not handled in Noah today.
+- **A value outside a LISTED enum never reaches the handler** (1.2.0's validator refused it too), so a handler
+  redirect behind a listed enum is not what a pi model reads: for the retired canvas `contentType: 'widget'` it
+  gets pi's `contentType: expected one of ["markdown","mermaid","svg","html"]`, not `WIDGET_RETIRED_ERROR`
+  (`canvasTools.ts` — that redirect answers a direct MCP client only, which is what the tests drive).
+- **An unknown argument NAME passes pi** (the catalog schemas are open) and is refused by the gate above.
+- **Tool-call JSON that is cut off runs nothing** (`Invalid arguments for tool "bash": Unexpected end of JSON
+  input` + the text received); by pi's commit, 1.2.0 ran the tool on the fields that had arrived.
+- **pi's own `grep`:** its `glob` is described to the model as relative to `path` (`src/**/*.ts`), but the
+  gateway matches a glob holding a `/` against the session's cwd (`/workspace`) — with a `path` elsewhere it
+  answers `No matches found`. A pi defect (the description came with 1.5.2, the gateway's execute is unchanged).
+
 ## The `/mcp` endpoint (`mcpHttp/endpoint.ts`)
 
 Mounted by `createApp` at `/mcp/:server` on every runtime (no token exists without a pi run → always 401). Its only
