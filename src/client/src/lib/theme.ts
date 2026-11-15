@@ -40,7 +40,7 @@ export const theme = { subscribe: resolvedTheme.subscribe };
 
 /**
  * A design-token value resolved against the theme in effect — e.g.
- * `cssToken("--accent")` → "#0f766e". Custom properties are substituted in the
+ * `cssToken("--accent")` → "#006edc" (light). Custom properties are substituted in the
  * computed style, so the `var()` chains resolve; `fallback` covers a context
  * with no stylesheet loaded. For canvas/chart renderers that need a real color
  * string instead of a CSS reference.

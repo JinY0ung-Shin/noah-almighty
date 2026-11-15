@@ -33,16 +33,10 @@
   --n-800: #262d35;
   --n-900: #161b21;
 
-  /* Accent (teal) */
-  --accent: #0f766e;
-  --accent-strong: #0b5f59;
-  --accent-soft: #e6f4f1;
-  --accent-soft-strong: #cfe9e4;
-  --accent-ring: rgba(15, 118, 110, 0.35);
-  /* Text/icon color on accent-filled surfaces. Dark mode swaps --accent to a
-     light mint, so plain #fff next to it becomes unreadable — always pair an
-     accent background with this token instead. */
-  --on-accent: #ffffff;
+  /* Accent: --accent, -strong, -soft, -soft-strong, -ring, --focus-ring and
+     --on-accent (text/icon color on an accent fill — always pair a fill with it)
+     are CANONICAL in 80-apple-design.css, for both themes — never re-declare
+     them here (the old teal palette here was dead, overridden everywhere). */
   /* BACKGROUND of a filled accent surface (primary button, the user's bubble,
      badges, selected chips, a checked box) — always paired with --on-accent.
      Accent as text, border or ring stays --accent. Light uses the accent itself;
@@ -204,12 +198,7 @@
   --n-800: #e1e7ec;
   --n-900: #f3f6f8;
 
-  --accent: #2dd4bf;
-  --accent-strong: #5eead4;
-  --accent-soft: #11332f;
-  --accent-soft-strong: #154a44;
-  --accent-ring: rgba(45, 212, 191, 0.4);
-  --on-accent: #06211d;
+  /* Dark accent tokens: CANONICAL in 80-apple-design.css's dark block. */
 
   --bg: #0c1014;
   --bg-elevated: var(--n-25);

@@ -40,7 +40,7 @@ function fontFaceRules(): string {
 function baseSheet(theme: ResolvedTheme): string {
   const dark = theme === "dark";
   const text = cssToken("--text", dark ? "#e5e7eb" : "#161b21");
-  const accent = cssToken("--accent", dark ? "#2dd4bf" : "#0f766e");
+  const accent = cssToken("--accent", dark ? "#0a84ff" : "#006edc");
   const font = cssToken("--font-sans", "system-ui, sans-serif");
   const size = cssToken("--t-md", "0.9375rem");
   return [
