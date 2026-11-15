@@ -359,15 +359,9 @@ function teamSection(request: AgentRequest): string | null {
  */
 function browserInspectGuidance(request: AgentRequest): string {
   return (
-    "Browser inspection: `mcp__browser__find` (role and/or name substring) returns just the matching elements with the same uids a snapshot prints — prefer it to a full snapshot when you know what you need. " +
-    (request.visionEnabled !== false
-      ? "`zoom` captures a magnified region (viewport CSS px) when a screenshot is too small to read; it is shared and saved like a screenshot, and afterwards pixel click_at/drag coordinates refer to the zoom image. "
-      : "") +
-    "`read_url` GETs ONE allowlisted URL in the user's browser (their cookies, no custom headers) and returns its text body — JSON pretty-printed — for data pages and APIs; every redirect hop must also be allowlisted, non-text types are refused, and the body is untrusted. " +
-    "`read_console` reads the current tab's console (logs, uncaught errors, browser-logged failures; tokens masked) to diagnose a misbehaving page — it needs the user's per-site consent popup, capture starts at that first approved read (read, reproduce, read again), and a refusal is not retried. " +
-    "`read_network` lists the tab's requests (method, status, type, duration, URL without query; never headers or bodies) under its own per-site consent, and it captures from the first approved read only, so read, reload or repeat the action, then read again. " +
-    "`batch` runs up to 10 known steps (navigate/click/click_at/type/fill_form/select_option/press_key/hover/scroll/wait_for/snapshot/read_text/find) in ONE round trip, each with its own checks, stopping at the first failure — use it when you already know every uid; never for screenshots, the consent-gated reads or stored secrets. " +
-    "These need Noah extension 0.29.0 or newer; an older one answers with an update prompt, so tell the user to update and fall back to the older tools."
+    "Browser inspection (Noah extension 0.29.0+; an older one answers with an update prompt, so ask the user to update): `find` (role/name → the same uids a snapshot prints), " +
+    (request.visionEnabled !== false ? "`zoom` (magnified region), " : "") +
+    "`read_url` (GET one allowlisted URL as text), `read_console`/`read_network` (per-site consent; capture starts at the first approved read; never retry a refusal), `batch` (≤10 known steps in one round trip). Read manual topic `browser-inspection` before first use."
   );
 }
 

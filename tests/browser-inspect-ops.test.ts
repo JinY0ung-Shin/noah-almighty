@@ -8,6 +8,9 @@ import { describe, expect, it, vi } from "vitest";
 import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX, networkCaptureApply, networkEntryOut, NETWORK_BUFFER_MAX, batchStepMessage, batchStepResult, BATCH_OPS } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
+import { readSystemManual } from "../src/server/agent/systemManual.js";
+import { buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import { browserInspectCapabilityLine } from "../src/server/agent/systemTools.js";
 
 type Tool = {
   name: string;
@@ -477,5 +480,39 @@ describe("browser tool: batch", () => {
     expect(schema.steps.safeParse(Array.from({ length: 10 }, () => ({ op: "click", uid: "e1" }))).success).toBe(true);
     expect(schema.steps.safeParse(Array.from({ length: 11 }, () => ({ op: "click", uid: "e1" }))).success).toBe(false);
     expect(schema.steps.safeParse([]).success).toBe(false);
+  });
+});
+
+describe("the 0.29.0 ops on both metacognition surfaces and in the manual", () => {
+  const base = {
+    message: "hello",
+    avatar: { id: "owner", displayName: "Owner", alias: "", persona: "" },
+    viewerIsOwner: true,
+  };
+
+  it("the prompt names every op briefly and points at the manual topic, only when browser control is on", () => {
+    const on = buildSystemPromptAppend({ ...base, browserEnabled: true, visionEnabled: true } as never);
+    for (const op of ["`find`", "`zoom`", "`read_url`", "`read_console`/`read_network`", "`batch`"]) expect(on).toContain(op);
+    expect(on).toContain("manual topic `browser-inspection`");
+    expect(on).toContain("0.29.0");
+    const blind = buildSystemPromptAppend({ ...base, browserEnabled: true, visionEnabled: false } as never);
+    expect(blind).not.toContain("`zoom` (magnified region)");
+    const off = buildSystemPromptAppend({ ...base, browserEnabled: false } as never);
+    expect(off).not.toContain("Browser inspection (Noah extension");
+  });
+
+  it("describe_system states the live capability and the version it needs", () => {
+    const line = browserInspectCapabilityLine({ browserEnabled: true, visionEnabled: true });
+    for (const op of ["find", "zoom", "read_url", "read_console", "read_network", "batch"]) expect(line).toContain(`mcp__browser__${op}`);
+    expect(line).toContain("0.29.0");
+    expect(browserInspectCapabilityLine({ browserEnabled: true, visionEnabled: false })).toContain("zoom is unavailable");
+    expect(browserInspectCapabilityLine({ browserEnabled: false })).toContain("unavailable in this run");
+  });
+
+  it("the manual topic carries the procedures", () => {
+    const page = readSystemManual("browser-inspection");
+    expect(page.isError).toBe(false);
+    for (const op of ["`find`", "`zoom`", "`read_url`", "`read_console`", "`read_network`", "`batch`"]) expect(page.text).toContain(op);
+    expect(page.text).toContain("update prompt");
   });
 });
