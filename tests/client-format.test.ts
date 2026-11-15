@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { repoToHref, formatUsageLabel } from "../src/client/src/lib/format.js";
+import { escapeHtml } from "../src/client/src/lib/html.js";
+
+describe("escapeHtml", () => {
+  it("escapes the five characters that matter in text and quoted attributes", () => {
+    expect(escapeHtml(`<a href="x">Tom & Jerry's</a>`)).toBe("&lt;a href=&quot;x&quot;&gt;Tom &amp; Jerry&#39;s&lt;/a&gt;");
+    expect(escapeHtml("평범한 글")).toBe("평범한 글");
+  });
+});
 
 describe("formatUsageLabel", () => {
   it("shows context occupancy (fill %) + cumulative output", () => {

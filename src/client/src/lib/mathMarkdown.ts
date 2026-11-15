@@ -18,6 +18,7 @@
 // into, and a formula never contains a backtick or a blank line. An unclosed
 // `$$` (an answer still streaming) matches nothing and stays text.
 import type { TokenizerAndRendererExtension, Tokens } from "marked";
+import { escapeHtml } from "./html";
 
 /** The marker class of a formula placeholder (sanitized html keeps class and data-* attributes). */
 export const MATH_CLASS = "md-math";
@@ -27,10 +28,6 @@ interface MathToken extends Tokens.Generic {
   raw: string;
   tex: string;
   display: boolean;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
 /** A formula must say something, and never runs over a blank line or a code span. */

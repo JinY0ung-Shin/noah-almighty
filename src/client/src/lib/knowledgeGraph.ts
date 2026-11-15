@@ -1,5 +1,6 @@
 import { TEAM_PAGE_TYPE_LABELS, TEAM_PAGE_TYPES } from "../../../shared/teamBrain";
 import type { KnowledgeGraph, KnowledgeGraphNode } from "./types";
+import { escapeHtml } from "./html";
 
 // Client-side helpers over a `[[wikilink]]` KnowledgeGraph, shared by the graph
 // canvas (colors, degrees) and the brain view's note panel (links, backlinks,
@@ -144,10 +145,6 @@ export function stripFrontmatter(markdown: string): string {
 export function stripTitleHeading(markdown: string, title: string): string {
   const m = /^\s*#[ \t]+(.+?)[ \t#]*(?:\r?\n|$)/.exec(markdown);
   return m && norm(m[1]) === norm(title) ? markdown.slice(m[0].length) : markdown;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
 }
 
 /**
