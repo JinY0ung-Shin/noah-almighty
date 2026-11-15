@@ -917,7 +917,8 @@
   and never again while unchanged; values left on an older answer are not news (a regenerate that makes it
   the latest again does surface unreported ones). `inlineUiStateChanges` (`agent/inlineUiStateReport.ts`)
   re-parses the answer (`parseAnswer`) and keeps only names whose `sig` the answer still declares, in
-  declaration order → `AgentRequest.inlineUiStateChanges` → ONE paragraph of `buildPiTurnPreamble`,
+  declaration order (`applicableStoredState`, `src/shared/inlineUiState.ts` — the SAME pure rule the
+  browser's `restoreState` restores by; nothing is evaluated on the server) → `AgentRequest.inlineUiStateChanges` → ONE paragraph of `buildPiTurnPreamble`,
   titled `INLINE_UI_STATE_TITLE` ("Inline UI state"), framed as data, `<`→`<` so a value cannot close
   `<inline_ui_state>`, ≤ 300 chars per value and ≤ 2 000 for the list (the rest counted). Both
   metacognition surfaces say so (the brief in `guide.ts`, `describe_system`'s `- Inline UI: AVAILABLE` line)

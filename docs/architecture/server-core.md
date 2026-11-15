@@ -106,14 +106,19 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   it. `create/updateRoutineJob` accept either the legacy flat fields OR a full `RoutineSchedule` object
   (additive, backward-compatible with `{prompt, minuteOfDay}` + NULL `schedule_kind`). When you add a
   schedule field, touch `routineSchedule.ts` + `RoutineJobRow` + this decode together.
-- **`deleteUser` does cascade-delete MANUALLY** (no `ON DELETE CASCADE` despite `foreign_keys=ON`), in TWO halves
-  that must stay in sync. (1) DB rows: a new user-scoped table needs a matching `DELETE` — in BOTH directions where
+- **`deleteUser` does cascade-delete MANUALLY** (no `ON DELETE CASCADE` despite `foreign_keys=ON` — with ONE
+  exception, below), in TWO halves that must stay in sync. (1) DB rows: a new user-scoped table needs a matching `DELETE` — in BOTH directions where
   the user can be owner AND subject (e.g. `knowledge_requests` by `avatar_user_id` OR `asker_user_id`) — or it
   orphans rows past "permanent deletion". (2) On-disk namespaces: every `dataDir/<ns>/<userId>` tree (`plugins/`,
   `workspaces/`, `pi-repo-copies/`, the knowledge clone, the ssh-trust dir, the avatar image, per-conversation
   media) and the user's pi sandbox workspace (`<PI_WORKSPACES_DIR>/u-<key>`, pi-runtime.md "Cascades") needs a
   best-effort sweep in the `routes/admin.ts` delete handler. Audit rows are RETAINED by design (`actor_*` dangle,
   like `shared_skill_blocks.blocked_by`).
+  **The one FK cascade:** `inline_ui_states.message_id REFERENCES messages(id) ON DELETE CASCADE` is the schema's
+  ONLY foreign key (chat-sse-media.md "Inline UI"), so every message-deleting path takes those rows without code
+  of its own. `deleteUser` (`store/admin.ts`) still deletes them by `user_id` as well — redundant for rows on
+  deleted messages, harmless, and it keeps the manual list complete. Every other table cascades by hand: a new
+  table follows the manual rule, and a new FK is a deliberate exception that gets this note and a table comment.
 - **`migrate()` runs on EVERY `new Store()`, so a value-guarded backfill is NOT one-time.** An
   `UPDATE … WHERE col IS NULL` re-fires each boot and clobbers rows the APP later creates NULL on purpose (a fresh
   signup's `onboarded_at`; a user-typed `[예약 작업]` title vanishing from chat). A backfill whose predicate can

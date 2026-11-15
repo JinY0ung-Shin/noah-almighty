@@ -7,16 +7,19 @@
 //
 // The caps are shared so both ends refuse the same record.
 
+import { MAX_WIDGET_STATES } from "./widget/check.js";
+
 /** One answer's record, measured as its JSON text. */
 export const MAX_INLINE_UI_STATE_CHARS = 200_000;
 /** Answers kept per (viewer, conversation); the least recently saved go first. */
 export const MAX_INLINE_UI_STATE_ANSWERS = 50;
-/** State variables per answer (the grammar allows ≤ 50 declarations). */
-export const MAX_INLINE_UI_STATE_NAMES = 50;
+/** State variables per answer: as many as the grammar lets an answer declare. */
+export const MAX_INLINE_UI_STATE_NAMES = MAX_WIDGET_STATES;
 /** A state name / its declaration text. */
 export const MAX_INLINE_UI_STATE_NAME_CHARS = 100;
 export const MAX_INLINE_UI_STATE_SIG_CHARS = 4_000;
 
+/** One stored value with the declaration it was set under (the widget runtime's `StoredState` is this type). */
 export interface InlineUiStateEntry {
   /** The declaration text (`name = initial`) the value was set under. */
   sig: string;
@@ -24,6 +27,23 @@ export interface InlineUiStateEntry {
 }
 
 export type InlineUiStateRecord = Record<string, InlineUiStateEntry>;
+
+/**
+ * The stored entry that still APPLIES to one `{@state}` declaration of an
+ * answer, or null: a stored value counts only while the answer declares that
+ * name with the same declaration text (`sig`) — the ONE rule the viewer's
+ * browser restores by (`restoreState`) and the avatar is told by
+ * (`inlineUiStateChanges`). Pure: nothing is evaluated.
+ */
+export function applicableStoredState(
+  stored: Readonly<Record<string, InlineUiStateEntry>>,
+  declaration: { name: string; sig: string },
+): InlineUiStateEntry | null {
+  if (!Object.prototype.hasOwnProperty.call(stored, declaration.name)) return null;
+  const entry = stored[declaration.name];
+  if (!entry || typeof entry !== "object" || entry.sig !== declaration.sig) return null;
+  return entry;
+}
 
 /** `GET /api/messages` → `inlineUiStates`: the caller's records by message id. */
 export type InlineUiStatesByMessage = Record<string, InlineUiStateRecord>;

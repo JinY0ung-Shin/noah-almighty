@@ -1,4 +1,6 @@
-import { jpegDimensions } from "./agent/visionImage.js";
+import { jpegDimensions, walkJpegSegments } from "./agent/visionImage.js";
+import { detectImageMediaType } from "./imageFormat.js";
+import type { ImageMediaType } from "./types.js";
 
 /**
  * Pixel size of a stored image, read from its HEADER alone — never a decode,
@@ -36,8 +38,6 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
 const u16le = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8);
 const u24le = (b: Uint8Array, i: number) => b[i] | (b[i + 1] << 8) | (b[i + 2] << 16);
 const u32be = (b: Uint8Array, i: number) => ((b[i] << 24) >>> 0) + ((b[i + 1] << 16) | (b[i + 2] << 8) | b[i + 3]);
-
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 function pngDimensions(b: Uint8Array): ImageDimensions | null {
   // Signature(8) + IHDR length(4) + "IHDR"(4) + width(4) + height(4): IHDR is always the first chunk.
@@ -80,25 +80,12 @@ function webpDimensions(b: Uint8Array): ImageDimensions | null {
  * is bounds-checked, and anything malformed is simply "no orientation".
  */
 export function jpegExifOrientation(b: Uint8Array): number {
-  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return 0;
-  let i = 2;
-  while (i + 4 <= b.length) {
-    if (b[i] !== 0xff) return 0;
-    while (i < b.length && b[i] === 0xff) i += 1;
-    if (i >= b.length) return 0;
-    const marker = b[i];
-    i += 1;
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    if (marker === 0xda || marker === 0xd9 || marker === 0x00) return 0;
-    if (i + 2 > b.length) return 0;
-    const length = (b[i] << 8) | b[i + 1];
-    if (length < 2 || i + length > b.length) return 0;
-    if (marker === 0xe1 && length >= 8 && ascii(b, i + 2, i + 8) === "Exif\0\0") {
-      return tiffOrientation(b, i + 8, i + length);
-    }
-    i += length;
-  }
-  return 0;
+  const orientation = walkJpegSegments(b, (marker, i, length) =>
+    marker === 0xe1 && length >= 8 && ascii(b, i + 2, i + 8) === "Exif\0\0"
+      ? tiffOrientation(b, i + 8, i + length)
+      : undefined,
+  );
+  return orientation ?? 0;
 }
 
 function tiffOrientation(b: Uint8Array, start: number, end: number): number {
@@ -133,14 +120,20 @@ function jpegDisplayDimensions(b: Uint8Array): ImageDimensions | null {
   return plausible(turned ? frame.height : frame.width, turned ? frame.width : frame.height);
 }
 
-/** Width/height of a PNG, JPEG, GIF or WebP from its header; null for anything else or anything broken. */
-export function imageDimensions(bytes: Uint8Array): ImageDimensions | null {
+/**
+ * Width/height of a PNG, JPEG, GIF or WebP from its header; null for anything
+ * else or anything broken. `mediaType` is the type a caller ALREADY sniffed
+ * from these same bytes (`detectImageMediaType`), so they are not sniffed twice.
+ */
+export function imageDimensions(
+  bytes: Uint8Array,
+  mediaType: ImageMediaType | null = detectImageMediaType(bytes),
+): ImageDimensions | null {
   try {
-    if (bytes.length >= 8 && PNG_SIGNATURE.every((v, i) => bytes[i] === v)) return pngDimensions(bytes);
-    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return jpegDisplayDimensions(bytes);
-    const head = ascii(bytes, 0, 6);
-    if (head === "GIF87a" || head === "GIF89a") return gifDimensions(bytes);
-    if (ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 12) === "WEBP") return webpDimensions(bytes);
+    if (mediaType === "image/png") return pngDimensions(bytes);
+    if (mediaType === "image/jpeg") return jpegDisplayDimensions(bytes);
+    if (mediaType === "image/gif") return gifDimensions(bytes);
+    if (mediaType === "image/webp") return webpDimensions(bytes);
   } catch {
     // Header reading is index arithmetic over a buffer; nothing here should
     // throw, but a size is never worth failing an upload over.
@@ -149,7 +142,7 @@ export function imageDimensions(bytes: Uint8Array): ImageDimensions | null {
 }
 
 /** The `{ width, height }` fields to spread onto an image attachment — empty when the size cannot be read. */
-export function imageDimensionFields(bytes: Uint8Array): Partial<ImageDimensions> {
-  const size = imageDimensions(bytes);
+export function imageDimensionFields(bytes: Uint8Array, mediaType?: ImageMediaType): Partial<ImageDimensions> {
+  const size = imageDimensions(bytes, mediaType);
   return size ? { width: size.width, height: size.height } : {};
 }

@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import type { UploadRelayConfig } from "./types.js";
 import { chatDocumentContentMatches } from "./chatDocuments.js";
+import { detectImageMediaType } from "./imageFormat.js";
 import { MAX_CHAT_DOCUMENT_BYTES, chatDocumentExtension } from "../shared/chatDocuments.js";
 import {
   UPLOAD_RELAY_COLLECT_GRACE_SECONDS,
+  UPLOAD_RELAY_IMAGE_MEDIA_TYPES,
   UPLOAD_RELAY_MAX_FILES,
   UPLOAD_RELAY_MAX_FILE_BYTES,
   UPLOAD_RELAY_TICKET_TTL_SECONDS,
@@ -345,26 +347,10 @@ async function ackUploadRelayFileOnce(
   }
 }
 
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
-
 /** Is `buffer` an image of the kind its extension says? (The first bytes only — the browser decodes it.) */
 function imageContentMatches(ext: string, buffer: Buffer): boolean {
-  switch (ext) {
-    case "png":
-      return buffer.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC);
-    case "jpg":
-    case "jpeg":
-      return buffer.subarray(0, JPEG_MAGIC.length).equals(JPEG_MAGIC);
-    case "gif": {
-      const head = buffer.subarray(0, 6).toString("latin1");
-      return head === "GIF87a" || head === "GIF89a";
-    }
-    case "webp":
-      return buffer.subarray(0, 4).toString("latin1") === "RIFF" && buffer.subarray(8, 12).toString("latin1") === "WEBP";
-    default:
-      return false;
-  }
+  if (!Object.hasOwn(UPLOAD_RELAY_IMAGE_MEDIA_TYPES, ext)) return false;
+  return detectImageMediaType(buffer) === UPLOAD_RELAY_IMAGE_MEDIA_TYPES[ext];
 }
 
 /**

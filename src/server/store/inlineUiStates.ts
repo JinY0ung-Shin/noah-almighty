@@ -45,39 +45,40 @@ function parseRecord(raw: string): InlineUiStateRecord | null {
 
 export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: TBase) {
   return class extends Base {
-    private ownsConversationForUiState(userId: string, conversationId: string): boolean {
-      const row = this.db.prepare("SELECT owner_user_id FROM conversations WHERE id = ?").get(conversationId) as
-        | { owner_user_id: string }
-        | undefined;
-      return Boolean(row && row.owner_user_id === userId);
+    /**
+     * The caller's saved records for one of their conversations, by message id,
+     * and when each was last saved (ms) — ONE read of the rows (both empty for
+     * anyone else).
+     */
+    listInlineUiStatesWithTimes(
+      userId: string,
+      conversationId: string,
+    ): { states: InlineUiStatesByMessage; times: Record<string, number> } {
+      const states: InlineUiStatesByMessage = {};
+      const times: Record<string, number> = {};
+      if (!this.ownsConversation(userId, conversationId)) return { states, times };
+      const rows = this.db
+        .prepare(
+          "SELECT message_id, values_json, updated_at FROM inline_ui_states WHERE user_id = ? AND conversation_id = ?",
+        )
+        .all(userId, conversationId) as { message_id: string; values_json: string; updated_at: string }[];
+      for (const row of rows) {
+        const record = parseRecord(row.values_json);
+        if (record) states[row.message_id] = record;
+        const ms = Date.parse(row.updated_at);
+        if (Number.isFinite(ms)) times[row.message_id] = ms;
+      }
+      return { states, times };
     }
 
     /** The caller's saved records for one of their conversations, by message id ({} for anyone else). */
     listInlineUiStates(userId: string, conversationId: string): InlineUiStatesByMessage {
-      if (!this.ownsConversationForUiState(userId, conversationId)) return {};
-      const rows = this.db
-        .prepare("SELECT message_id, values_json FROM inline_ui_states WHERE user_id = ? AND conversation_id = ?")
-        .all(userId, conversationId) as { message_id: string; values_json: string }[];
-      const out: InlineUiStatesByMessage = {};
-      for (const row of rows) {
-        const record = parseRecord(row.values_json);
-        if (record) out[row.message_id] = record;
-      }
-      return out;
+      return this.listInlineUiStatesWithTimes(userId, conversationId).states;
     }
 
     /** When each of the caller's records in one of their conversations was last saved (ms), by message id. */
     listInlineUiStateTimes(userId: string, conversationId: string): Record<string, number> {
-      if (!this.ownsConversationForUiState(userId, conversationId)) return {};
-      const rows = this.db
-        .prepare("SELECT message_id, updated_at FROM inline_ui_states WHERE user_id = ? AND conversation_id = ?")
-        .all(userId, conversationId) as { message_id: string; updated_at: string }[];
-      const out: Record<string, number> = {};
-      for (const row of rows) {
-        const ms = Date.parse(row.updated_at);
-        if (Number.isFinite(ms)) out[row.message_id] = ms;
-      }
-      return out;
+      return this.listInlineUiStatesWithTimes(userId, conversationId).times;
     }
 
     /**
@@ -101,7 +102,7 @@ export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: T
       record: InlineUiStateRecord,
       options: { replayedAt?: number } = {},
     ): InlineUiStatePutOutcome {
-      if (!this.ownsConversationForUiState(userId, conversationId)) return "not_found";
+      if (!this.ownsConversation(userId, conversationId)) return "not_found";
       const message = this.db
         .prepare("SELECT role FROM messages WHERE id = ? AND conversation_id = ?")
         .get(messageId, conversationId) as { role: string } | undefined;
@@ -157,22 +158,23 @@ export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: T
      * conversation's owner (the person the turn answers).
      */
     takeInlineUiStateForTurn(userId: string, conversationId: string): InlineUiStateForTurn | null {
-      if (!this.ownsConversationForUiState(userId, conversationId)) return null;
-      const latest = this.db
-        .prepare(
-          "SELECT id, content FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 1",
-        )
-        .get(conversationId) as { id: string; content: string | null } | undefined;
-      if (!latest) return null;
+      if (!this.ownsConversation(userId, conversationId)) return null;
+      const latestId = this.latestAssistantMessageId(conversationId);
+      if (!latestId) return null;
       const row = this.db
         .prepare("SELECT values_json FROM inline_ui_states WHERE user_id = ? AND message_id = ? AND reported = 0")
-        .get(userId, latest.id) as { values_json: string } | undefined;
+        .get(userId, latestId) as { values_json: string } | undefined;
       if (!row) return null;
       this.db
         .prepare("UPDATE inline_ui_states SET reported = 1 WHERE user_id = ? AND message_id = ?")
-        .run(userId, latest.id);
+        .run(userId, latestId);
       const values = parseRecord(row.values_json);
-      return values ? { messageId: latest.id, answer: latest.content ?? "", values } : null;
+      if (!values) return null;
+      // The answer text is read only once something is due (most turns read none).
+      const message = this.db.prepare("SELECT content FROM messages WHERE id = ?").get(latestId) as
+        | { content: string | null }
+        | undefined;
+      return { messageId: latestId, answer: message?.content ?? "", values };
     }
   };
 }

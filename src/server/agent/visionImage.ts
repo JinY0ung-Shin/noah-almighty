@@ -124,6 +124,30 @@ function isStartOfFrame(marker: number): boolean {
 export function jpegDimensions(
   bytes: Buffer | Uint8Array,
 ): { width: number; height: number } | null {
+  return walkJpegSegments(bytes, (marker, index, length) => {
+    if (!isStartOfFrame(marker)) return undefined;
+    // Payload layout: length(2) precision(1) height(2) width(2) …
+    if (length < 7) return null;
+    const height = (bytes[index + 3] << 8) | bytes[index + 4];
+    const width = (bytes[index + 5] << 8) | bytes[index + 6];
+    if (!width || !height) return null;
+    return { width, height };
+  });
+}
+
+/**
+ * Walk a JPEG's marker segments up to the image data, handing each one with a
+ * length word to `visit` (`index` = its length word, `length` counts itself and
+ * stays inside the buffer). `visit` returns undefined to go on, anything else
+ * (null included) to stop with that answer. Null for a walk that ends without
+ * one: not a JPEG, misaligned, truncated, or the scan/end reached. The ONE
+ * segment walker of the server ({@link jpegDimensions}, and the Exif
+ * orientation reader in `imageDimensions.ts`).
+ */
+export function walkJpegSegments<T>(
+  bytes: Buffer | Uint8Array,
+  visit: (marker: number, index: number, length: number) => T | null | undefined,
+): T | null {
   // SOI. Anything else is not a JPEG at all, so there is nothing to salvage.
   if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
   let index = 2;
@@ -140,23 +164,17 @@ export function jpegDimensions(
     if (marker === 0x00) return null;
     // Standalone markers carry no length word: SOI, TEM, RST0–RST7.
     if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-    // SOS starts entropy-coded data and EOI ends the file. Either way no SOF
-    // was found, and walking compressed bytes as if they were segments would
-    // invent a size out of noise.
+    // SOS starts entropy-coded data and EOI ends the file. Either way the
+    // segments are over, and walking compressed bytes as if they were segments
+    // would invent an answer out of noise.
     if (marker === 0xda || marker === 0xd9) return null;
     if (index + 1 >= bytes.length) return null;
     const length = (bytes[index] << 8) | bytes[index + 1];
     // The length word counts itself, so anything under 2 — or a segment running
     // past the buffer — means corrupt or truncated input.
     if (length < 2 || index + length > bytes.length) return null;
-    if (isStartOfFrame(marker)) {
-      // Payload layout: length(2) precision(1) height(2) width(2) …
-      if (length < 7) return null;
-      const height = (bytes[index + 3] << 8) | bytes[index + 4];
-      const width = (bytes[index + 5] << 8) | bytes[index + 6];
-      if (!width || !height) return null;
-      return { width, height };
-    }
+    const answer = visit(marker, index, length);
+    if (answer !== undefined) return answer;
     index += length;
   }
   return null;

@@ -3129,6 +3129,7 @@ export function createChatRouter({
         res.json({ messages: [] });
         return;
       }
+      const inlineUi = store.listInlineUiStatesWithTimes(req.user!.id, conversationId);
       res.json({
         messages: store.listMessages(req.user!.id, conversationId),
         // The user's chosen pi model id for this conversation (null = default; one
@@ -3152,9 +3153,9 @@ export function createChatRouter({
         // What THIS viewer changed in the inline UI of each answer (by message
         // id), so a reload or another device draws the controls where they were
         // left — in the same response as the messages, so nothing jumps.
-        inlineUiStates: store.listInlineUiStates(req.user!.id, conversationId),
+        inlineUiStates: inlineUi.states,
         // When each was saved, and the server's clock now: an unconfirmed save in the browser wins only if newer.
-        inlineUiStateTimes: store.listInlineUiStateTimes(req.user!.id, conversationId),
+        inlineUiStateTimes: inlineUi.times,
         serverNow: Date.now(),
       });
     },
