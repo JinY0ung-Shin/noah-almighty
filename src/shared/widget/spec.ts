@@ -73,6 +73,10 @@ export interface ComponentSpec {
   oneOf?: readonly string[];
   /** The component is its text: it needs non-empty children. */
   textRequired?: boolean;
+  /** It belongs DIRECTLY inside one of these (through `{#each}`/`{#if}`): a `<page>` in a `<pager>`. */
+  parents?: readonly string[];
+  /** Its children are only these components, and at least one of them: a `<pager>`'s `<page>`s. */
+  childTags?: readonly string[];
   /** What it is, for the manual. Empty when the tag says it all (`<divider>`, `<slider>`). */
   doc: string;
 }
@@ -93,7 +97,7 @@ const HANDLER: PropType = { k: "handler" };
 const LABEL: PropSpec = { type: { k: "string", max: 200 }, required: true, doc: "visible label (required: every input is labelled)", ref: "" };
 const SHORT: PropType = { k: "string", max: 200 };
 /** Tags that may sit inside running text. */
-const IN_TEXT: readonly string[] = ["link"];
+const IN_TEXT: readonly string[] = ["link", "hint"];
 
 function component(
   tag: string,
@@ -136,6 +140,30 @@ const LIST: ComponentSpec[] = [
     span: { type: { k: "number", min: 1, max: 6, int: true }, doc: "columns it spans" },
     gap: { type: SPACING },
   }),
+  component(
+    "pager",
+    "Layout",
+    "block",
+    "Shows its <page> children ONE AT A TIME with ‹ n / N › arrows: a quiz, a step-by-step guide.",
+    {
+      label: { type: SHORT, doc: "shown in its header" },
+      value: { type: { k: "number", min: 0, max: 999, int: true }, doc: "0-based index of the shown page; bind a state to move it or to know where the user is" },
+      onChange: { type: HANDLER, doc: "called with the new index when the user turns a page", ref: "gets the new index" },
+      nextDisabled: { type: BOOL, doc: "turns the › arrow off, e.g. until this page's question is answered", ref: "› off, e.g. until answered" },
+    },
+    { childTags: ["page"] },
+  ),
+  component(
+    "page",
+    "Layout",
+    "block",
+    "One page of a <pager>, only directly inside one ({#each} may write them).",
+    {
+      title: { type: SHORT },
+      gap: { type: SPACING },
+    },
+    { parents: ["pager"] },
+  ),
   component("divider", "Layout", "none", "", {}),
   component("spacer", "Layout", "none", "Pushes siblings apart, or a fixed gap with `size`.", {
     size: { type: SPACING },
@@ -185,6 +213,16 @@ const LIST: ComponentSpec[] = [
       href: { type: { k: "url" }, required: true, doc: "absolute http(s) URL", ref: "" },
     },
     { textRequired: true },
+  ),
+  component(
+    "hint",
+    "Text",
+    "inline",
+    "A small lightbulb button that opens its text in a bubble. On its own line or inside <text>/<title>, next to a question.",
+    {
+      label: { type: SHORT, doc: 'the button\'s accessible name; default "힌트"', ref: 'button name; default "힌트"' },
+    },
+    { inlineTags: ["link"], textRequired: true },
   ),
   component("callout", "Text", "block", "", {
     tone: { type: { k: "enum", values: ["info", "success", "warning", "danger"] } },
@@ -345,6 +383,17 @@ const LIST: ComponentSpec[] = [
     color: { type: COLOR },
     label: { type: SHORT, doc: "accessible name; without it the icon is decoration" },
   }),
+  component(
+    "celebrate",
+    "Media",
+    "none",
+    "Draws nothing; plays a short confetti burst when `when` turns true WHILE the user watches (never on load). Keep it outside the {#if} it celebrates.",
+    {
+      when: { type: BOOL, required: true, doc: "e.g. {score === total}; fires on its change from false to true", ref: "fires on false → true" },
+      tone: { type: TONE },
+      label: { type: SHORT, doc: "what is celebrated, read out to screen readers", ref: "read out" },
+    },
+  ),
   component("svg", "Media", "svg", "A drawing that follows state (a gauge, a diagram).", {
     viewBox: { type: { k: "viewBox" }, required: true, doc: '"minX minY width height"' },
     width: { type: { k: "number", min: 16, max: 800 }, doc: "px, default the viewBox width; shrinks to fit" },

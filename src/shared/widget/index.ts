@@ -13,7 +13,7 @@
 export { checkWidget, widgetProblems, MAX_WIDGET_NODES, MAX_WIDGET_STATES, type WidgetCheck } from "./check.js";
 export { CHART_SPEC_RETIRED, MAX_CHART_ROWS, MAX_CHART_SERIES, simpleChartModel, type SimpleChartModel, type SimpleChartRead } from "./chart.js";
 export { INLINE_UI_TAG_NAMES, containsInlineUi, inlineUiPlainText } from "./detect.js";
-export { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, inlineUiPromptSpec, widgetComponentBrief } from "./guide.js";
+export { INLINE_UI_COMPONENTS_MANUAL_TOPIC, INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, inlineUiPromptSpec, widgetComponentBrief } from "./guide.js";
 export {
   WIDGET_COMPONENTS,
   WIDGET_TAGS,

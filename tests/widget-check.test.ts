@@ -146,8 +146,8 @@ describe("checkWidget", () => {
     expect(checkWidget('{@state a = 1}\n<button onClick={() => setA(2)} label="go" />').ok).toBe(true);
     expect(checkWidget("{@state a = 1}\n<button onClick={() => setA(2)}>{a}</button>").ok).toBe(true);
     expect(errorOf('<row><stat label="a" value={1}>child</stat></row>')).toMatch(/Unexpected closing tag <\/stat>/); // a void tag never opens
-    expect(errorOf("<text>hello <badge>new</badge></text>")).toMatch(/<text> takes text, \{expr\} and <link> only, but contains <badge>\. Put <badge> next to it/);
-    expect(errorOf("<title>{#if true}<badge>x</badge>{/if}</title>")).toMatch(/<title> takes text, \{expr\} and <link> only/);
+    expect(errorOf("<text>hello <badge>new</badge></text>")).toMatch(/<text> takes text, \{expr\}, <link> and <hint> only, but contains <badge>\. Put <badge> next to it/);
+    expect(errorOf("<title>{#if true}<badge>x</badge>{/if}</title>")).toMatch(/<title> takes text, \{expr\}, <link> and <hint> only/);
     expect(errorOf("{@state a = 1}\n<checkbox checked={a} onChange={setA}>on <badge>x</badge></checkbox>")).toMatch(/<checkbox> takes text and \{expr\} only, but contains <badge>/);
   });
 
@@ -299,11 +299,11 @@ describe("checkWidget", () => {
 describe("widget component spec", () => {
   it("covers the v1 components", () => {
     expect(WIDGET_TAGS).toEqual([
-      "box", "row", "col", "grid", "grid-item", "divider", "spacer",
-      "title", "text", "badge", "link", "callout",
+      "box", "row", "col", "grid", "grid-item", "pager", "page", "divider", "spacer",
+      "title", "text", "badge", "link", "hint", "callout",
       "button", "segmented-control", "checkbox", "switch", "slider", "select", "input", "tabs",
       "stat", "progress", "table", "chart", "details",
-      "image", "icon", "svg",
+      "image", "icon", "celebrate", "svg",
       "submit",
     ]);
     // not reachable through Object.prototype
@@ -359,8 +359,9 @@ describe("widget component spec", () => {
     expect(ref).toContain("- <chart /> — Give `data` (+ type, xKey, series). The viewer gets a tooltip under the pointer and can single a series out from the legend.");
     expect(ref.toLowerCase()).not.toContain("vega");
     expect(ref).toContain('type: bar|line|area|pie|donut (default bar); xKey: str (category key; default the first); series: ["key"] | [{key, label}] (numeric keys; default all)');
-    // The manual page it rides is capped (tests/system-manual.test.ts): keep the reference terse.
-    expect(ref.length).toBeLessThan(6800);
+    // The manual page it rides (topic `inline-ui-components`, split from `inline-ui` when the
+    // pager/hint/celebrate trio came) is capped (tests/system-manual.test.ts): keep the reference terse.
+    expect(ref.length).toBeLessThan(8000);
   });
 });
 
@@ -692,5 +693,40 @@ describe("widget effects are declared props: button send / href, <link>, <image>
     }
     // nothing written, nothing reported
     expect(normalizeProps("button", { label: "x" })).toEqual({ props: Object.assign(Object.create(null), { label: "x" }), errors: [] });
+  });
+});
+
+describe("pager, page, hint and celebrate", () => {
+  it("a <page> belongs directly inside a <pager> — {#each} and {#if} in between are fine", () => {
+    expect(checkWidget('<pager label="Quiz">\n  <page title="1"><text>a</text></page>\n  <page title="2"><text>b</text></page>\n</pager>')).toMatchObject({ ok: true });
+    expect(
+      checkWidget('{@state q = 0}\n<pager value={q} onChange={setQ} nextDisabled={q > 5}>\n  {#each [1, 2, 3] as n}\n    <page><text>{n}</text></page>\n  {/each}\n  {#if q > 1}<page><text>more</text></page>{/if}\n</pager>'),
+    ).toMatchObject({ ok: true });
+    expect(errorOf("<page><text>a</text></page>")).toMatch(/<page> belongs directly inside <pager>: <pager><page>…<\/page><page>…<\/page><\/pager>\./);
+    expect(errorOf("<pager><page><box><page><text>a</text></page></box></page></pager>")).toMatch(/<page> belongs directly inside <pager>, not inside <box>/);
+  });
+
+  it("a <pager> holds only <page>s, and at least one", () => {
+    expect(errorOf("<pager><page><text>a</text></page><text>stray</text></pager>")).toMatch(/<pager> holds only <page> children, but contains <text>\. Put <text> inside a <page>\./);
+    expect(errorOf("<pager>loose words<page><text>a</text></page></pager>")).toMatch(/Text directly inside <pager> is not shown\. Put it inside a <page>\./);
+    expect(errorOf("<pager></pager>")).toMatch(/<pager> needs at least one <page> child\./);
+    expect(errorOf('<pager value="first"><page><text>a</text></page></pager>')).toMatch(/Prop "value" of <pager> must be a number/);
+  });
+
+  it("a <hint> sits inside running text or on its own line, and holds text and links only", () => {
+    expect(checkWidget('<text>What is 2 + 2? <hint label="Tip">Count **two** twice — see <link href="https://example.com">this</link>.</hint></text>')).toMatchObject({ ok: true });
+    expect(checkWidget("<title>Question 1 <hint>tip</hint></title>")).toMatchObject({ ok: true });
+    expect(checkWidget("<hint>On its own line.</hint>")).toMatchObject({ ok: true });
+    expect(errorOf("<hint></hint>")).toMatch(/<hint> needs its text between the tags/);
+    expect(errorOf("<hint>a <hint>b</hint></hint>")).toMatch(/<hint> takes text, \{expr\}, <link> only, but contains <hint>/);
+    expect(errorOf("<hint><badge>x</badge></hint>")).toMatch(/<hint> takes text, \{expr\}, <link> only, but contains <badge>/);
+  });
+
+  it("a <celebrate> needs `when` and takes no children", () => {
+    expect(checkWidget('{@state n = 0}\n<button onClick={() => setN(n + 1)}>+1</button>\n<celebrate when={n >= 3} tone="success" label="Three!" />')).toMatchObject({ ok: true });
+    expect(errorOf("<celebrate />")).toMatch(/<celebrate> is missing the required prop "when"/);
+    // It is void: the parser closes it at its own tag, so the closing one is stray.
+    expect(errorOf("<row><celebrate when={true}>yay</celebrate></row>")).toMatch(/Unexpected closing tag <\/celebrate>/);
+    expect(errorOf('<celebrate when="yes" />')).toMatch(/Prop "when" of <celebrate> must be a boolean/);
   });
 });

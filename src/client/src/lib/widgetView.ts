@@ -53,6 +53,8 @@ export interface Seg {
   href?: string;
   /** Why this run is NOT the link it was written as (English, for the avatar). */
   problem?: string;
+  /** The run is a `<hint>`: a button (its `text` is empty) that opens these runs in a bubble. */
+  hint?: { label: string; segs: Seg[] };
 }
 
 export type VNode =
@@ -209,9 +211,31 @@ export function parseInlineMarkdown(text: string, base: Omit<Seg, "text"> = {}, 
 
 /* ───────────────────────── evaluation ───────────────────────── */
 
-/** Text, an interpolation, or a `<link>` — what sits in a line of text. */
+/** Text, an interpolation, a `<link>` or a `<hint>` — what sits in a line of text. */
 function isInline(node: TNode): boolean {
-  return node.t === "text" || node.t === "expr" || (node.t === "el" && node.name === "link");
+  return node.t === "text" || node.t === "expr" || (node.t === "el" && (node.name === "link" || node.name === "hint"));
+}
+
+/** A run that shows something: text, or a `<hint>` button. */
+function visibleSeg(seg: Seg): boolean {
+  return seg.text.trim() !== "" || seg.hint !== undefined;
+}
+
+/**
+ * A `<hint>`: ONE run with no text of its own — the button — carrying its
+ * children's runs for the bubble. A hint with nothing to say is not drawn.
+ */
+function hintSegs(node: ElNode, env: Env, rt: Runtime, out: Seg[]): void {
+  const { props } = resolveProps(node, env, rt);
+  const segs = inlineSegs(node.children, env, rt);
+  if (!segs.some((seg) => seg.text.trim())) return;
+  out.push({ text: "", hint: { label: typeof props.label === "string" && props.label.trim() ? props.label : "힌트", segs } });
+}
+
+/** A `<link>` or a `<hint>` inside running text. */
+function inlineElSegs(node: ElNode, env: Env, rt: Runtime, out: Seg[]): void {
+  if (node.name === "hint") hintSegs(node, env, rt, out);
+  else linkSegs(node, env, rt, out);
 }
 
 /**
@@ -252,6 +276,8 @@ function inlineSegs(children: TNode[], env: Env, rt: Runtime, out: Seg[] = []): 
       for (const item of scopes) inlineSegs(node.children, item, rt, out);
     } else if (node.t === "el" && node.name === "link") {
       linkSegs(node, scope, rt, out);
+    } else if (node.t === "el" && node.name === "hint") {
+      hintSegs(node, scope, rt, out);
     } else if (node.t === "el" && !componentSpec(node.name)) {
       // A tag that does not exist (`<b>`, `<span>`): its text still belongs to the sentence.
       inlineSegs(node.children, scope, rt, out);
@@ -371,10 +397,10 @@ function renderChildren(children: TNode[], env: Env, rt: Runtime, prefix: string
             const text = interpolate(part, scope, rt);
             if (text) segs.push({ text });
           } else if (part.t === "el") {
-            linkSegs(part, scope, rt, segs);
+            inlineElSegs(part, scope, rt, segs);
           }
         }
-        if (segs.some((seg) => seg.text.trim())) out.push({ k: "inline", key, segs });
+        if (segs.some(visibleSeg)) out.push({ k: "inline", key, segs });
       } catch (err) {
         if (err instanceof WidgetBudgetError) throw err;
         out.push(errorNode(key, node, NODE_ERROR, detailOf(err)));
@@ -404,6 +430,15 @@ function ignoredCalls(rt: Runtime, key: string, node: TNode, out: VNode[]): void
 }
 
 const MAX_PROBLEMS = 20;
+
+/** The runs' own problems, a `<hint>`'s bubble included. */
+function segProblems(segs: Seg[], out: string[] = []): string[] {
+  for (const seg of segs) {
+    if (seg.problem) out.push(seg.problem);
+    if (seg.hint) segProblems(seg.hint.segs, out);
+  }
+  return out;
+}
 
 /**
  * A choice control (tabs, select, segmented control) whose `value` is not one
@@ -453,12 +488,12 @@ export function collectWidgetProblems(doc: WidgetDoc, view: VNode[]): string[] {
       if (v.k === "error") add(`${where(v.at)}${v.what}: ${v.detail}`);
       else if (v.k === "warn") for (const line of v.detail.split("\n")) add(`${where(v.at)}${line}`);
       else if (v.k === "inline") {
-        for (const seg of v.segs) if (seg.problem) add(seg.problem);
+        for (const problem of segProblems(v.segs)) add(problem);
       } else if (v.k === "el") {
         if (v.flawed) add(`${where(v.at)}<${v.tag}>: a prop was dropped — ${v.flawed}`);
         const unchosen = choiceValueProblem(v);
         if (unchosen) add(`${where(v.at)}${unchosen}`);
-        for (const seg of v.segs) if (seg.problem) add(`${where(v.at)}${seg.problem}`);
+        for (const problem of segProblems(v.segs)) add(`${where(v.at)}${problem}`);
         walk(v.children);
       }
     }
@@ -560,9 +595,9 @@ export function buildAnswerItems(
           } else if (node.t === "expr") {
             const text = interpolate(node, root, rt);
             if (text) nodes.push({ k: "inline", key, segs: [{ text }] });
-          } else if (node.t === "el" && node.name === "link") {
+          } else if (node.t === "el" && (node.name === "link" || node.name === "hint")) {
             const segs: Seg[] = [];
-            linkSegs(node, root, rt, segs);
+            inlineElSegs(node, root, rt, segs);
             if (segs.length) nodes.push({ k: "inline", key, segs });
           } else {
             renderNode(node, root, rt, key, nodes);

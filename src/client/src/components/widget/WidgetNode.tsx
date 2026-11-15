@@ -15,9 +15,11 @@ import type { WidgetCtx } from "../../lib/widgetCtx";
 import { colorStyle, containerStyle, imageStyle, spacerStyle, textStyle, toneStyle } from "../../lib/widgetStyle";
 import { cellText, type ElVNode, type VNode } from "../../lib/widgetView";
 import Icon from "../Icon";
+import WidgetCelebrate from "./WidgetCelebrate";
 import WidgetChart from "./WidgetChart";
 import WidgetControl from "./WidgetControl";
 import WidgetInline from "./WidgetInline";
+import WidgetPager from "./WidgetPager";
 import WidgetStatValue from "./WidgetStatValue";
 import WidgetSvg from "./WidgetSvg";
 import WidgetTable from "./WidgetTable";
@@ -111,6 +113,32 @@ function element(v: ElVNode, ctx: WidgetCtx): ReactNode {
       <div className={cx(`wg-${v.tag}`, v.props.border === true && "wg-bordered")} style={styleOf(containerStyle(v.tag, v.props))}>
         {children(v, ctx)}
       </div>
+    );
+  }
+  if (v.tag === "pager") return <WidgetPager v={v} ctx={ctx} draw={(child) => <WidgetNode key={child.key} v={child} ctx={ctx} />} />;
+  if (v.tag === "page") {
+    // Inside a <pager> one at a time; anywhere else (the check says it does not belong there) simply a column.
+    return (
+      <div className="wg-page" style={styleOf(containerStyle("col", v.props))}>
+        {typeof v.props.title === "string" && v.props.title ? (
+          <div className="wg-page-title" role="heading" aria-level={4}>
+            {v.props.title}
+          </div>
+        ) : null}
+        {children(v, ctx)}
+      </div>
+    );
+  }
+  if (v.tag === "celebrate") {
+    const toned = typeof v.props.tone === "string" && v.props.tone !== "default";
+    return (
+      <WidgetCelebrate
+        when={v.props.when}
+        toned={toned}
+        label={typeof v.props.label === "string" ? v.props.label : ""}
+        interacted={ctx.interacted === true}
+        style={toned ? styleOf(toneStyle(v.props.tone)) : undefined}
+      />
     );
   }
   if (v.tag === "divider") return <hr className="wg-divider" />;

@@ -9,7 +9,7 @@ import { checkWidget } from "../src/shared/widget/check.js";
 import { WIDGET_ICON_NAMES } from "../src/shared/widget/icons.js";
 import { widgetComponentReference } from "../src/shared/widget/spec.js";
 import { svgReference } from "../src/shared/widget/svg.js";
-import { INLINE_UI_REPORT_TITLE } from "../src/shared/widget/guide.js";
+import { INLINE_UI_REPORT_TITLE, widgetComponentBrief } from "../src/shared/widget/guide.js";
 import { buildSystemTools, SYSTEM_TOOL_NAMES, type SystemToolsContext } from "../src/server/agent/systemTools.js";
 import type { Store } from "../src/server/store.js";
 import { callTool } from "./helpers.js";
@@ -154,8 +154,16 @@ describe("official system manual", () => {
     }
     expect(page).toContain("work ONLY inside an event handler");
     expect(page).toContain("no `Math.random`");
-    // The component list is the shared spec's own text, never a hand copy.
-    expect(page).toContain(`## Components\n${widgetComponentReference()}`);
+    // The component list is the shared spec's own text, never a hand copy: the entry page
+    // names every component (the prompt's brief) and sends the props to their own topic,
+    // split out when the pager/hint/celebrate trio would have taken the page over its cap.
+    expect(page).toContain(`## Components\n${widgetComponentBrief()}\n`);
+    expect(page).toContain("topic `inline-ui-components` — read it before using a prop whose values you do not know.");
+    expect(page).not.toContain(widgetComponentReference());
+    expect(readSystemManual().text).toContain("- inline-ui-components: Inline UI component reference");
+    const components = readSystemManual("inline-ui-components").text;
+    expect(components).toContain(widgetComponentReference());
+    expect(components).toContain("is topic `inline-ui`.");
     // The TWO ways back to the avatar, each an ordinary next message.
     expect(page).toContain("Only two things come back, each as the user's NEXT message");
     expect(page).toContain('`<button send="Compare the two plans in a table">Compare plans</button>` — a natural FOLLOW-UP');
@@ -209,15 +217,24 @@ describe("official system manual", () => {
     expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.calculator)).toEqual({ ok: true, submits: true });
     expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.filteredTable)).toEqual({ ok: true, submits: false });
     expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.gauge)).toEqual({ ok: true, submits: false });
+    expect(checkWidget(INLINE_UI_MANUAL_EXAMPLES.quiz)).toEqual({ ok: true, submits: false });
     // Examples are written the way an answer writes them: not inside a code fence.
     expect(page).not.toContain("```");
     // The sortable table, the icons and the state-bound <svg>: each is in the generated reference
     // (the spec's own text) and shown once in an example — and the page still fits its cap.
-    expect(page).toContain("sortable: bool (headers sort on click — the viewer's own view; your rows and state are untouched)");
-    expect(page).toContain(`Icons: ${WIDGET_ICON_NAMES.join(" ")}`);
-    expect(page).toContain(svgReference());
-    expect(page).toContain("NOT available: style class href events font-family, <style> <script> <use> <image> <a> <foreignObject>, filters, animation");
-    expect(page).toContain("colours are default muted accent success warning danger info surface subtle line");
+    expect(components).toContain("sortable: bool (headers sort on click — the viewer's own view; your rows and state are untouched)");
+    expect(components).toContain(`Icons: ${WIDGET_ICON_NAMES.join(" ")}`);
+    expect(components).toContain(svgReference());
+    expect(components).toContain("NOT available: style class href events font-family, <style> <script> <use> <image> <a> <foreignObject>, filters, animation");
+    expect(components).toContain("colours are default muted accent success warning danger info surface subtle line");
+    expect(components).toContain("- <pager>…</pager> — Shows its <page> children ONE AT A TIME");
+    expect(components).toContain("- <celebrate /> — Draws nothing; plays a short confetti burst when `when` turns true WHILE the user watches (never on load).");
+    expect(components.length).toBeLessThan(16000);
+    // The quiz example shows the trio together.
+    expect(page).toContain("## Example: quiz — one question per page, a hint, a celebration");
+    expect(INLINE_UI_MANUAL_EXAMPLES.quiz).toContain('<pager label="Quiz" value={q} onChange={setQ} nextDisabled={picks[q] === undefined}>');
+    expect(INLINE_UI_MANUAL_EXAMPLES.quiz).toContain("<hint>{item.hint}</hint>");
+    expect(INLINE_UI_MANUAL_EXAMPLES.quiz).toContain('<celebrate when={score === questions.length} label="Perfect score!" />');
     expect(page).toContain("## Example: filtered sortable table, chart, icon");
     expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).toContain("<table sortable columns=");
     expect(INLINE_UI_MANUAL_EXAMPLES.filteredTable).toContain('<icon name="activity" color="muted" />');

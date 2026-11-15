@@ -663,14 +663,17 @@
   file's header says so) and live in `src/shared/widget/` — the directory keeps the name from the canvas
   type it started as.
 - **What makes the model write it: a standing brief in the prompt.** `inlineUiPromptSpec()`
-  (`src/shared/widget/guide.ts`, ~5.6k chars, generated from the spec table) is appended for a run where
+  (`src/shared/widget/guide.ts`, ~6.4k chars, generated from the spec table) is appended for a run where
   `AgentRequest.inlineUiEnabled` is true — an interactive chat turn a person watches in the app: never
   `headless`, never `externalTaskApi`, never a consultation (their text is read by a machine or another avatar,
   where tags would be noise). ONE predicate decides it, `inlineUiAllowed` (`agent/ownerState.ts`), computed
   once in `runCapabilities`; it depends on no tool group, flag or events sink, and every viewer class gets it.
   `describe_system` reports the same state live (`- Inline UI: AVAILABLE in this run …` / `NOT available …`
-  with the reason), and the manual topic `inline-ui` holds the full reference (its page sits ~200 characters
-  under the 16 000 cap — the next component means splitting the topic). The prompt is frozen per conversation,
+  with the reason), and the manual holds the full reference in TWO topics (split 2026-11-15, when `inline-ui` would have
+  gone over its 16 000 cap): `inline-ui` stays the entry every pointer names (where/how, grammar, expressions,
+  the component list as the brief writes it, what reaches the avatar, limits, worked examples) and
+  `inline-ui-components` (`INLINE_UI_COMPONENTS_MANUAL_TOPIC`) is the generated `widgetComponentReference()`:
+  every prop, `<svg>`, icon names. Both ~12k/~8k; a new component's props grow the second. The prompt is frozen per conversation,
   so two things cover the edges: a routine or task-API turn of a conversation that began as a chat hears
   `Answer format (this turn): plain Markdown only …` in its turn preamble (`inlineUiOffTurnNote`), and a
   conversation that predates this has no brief at all — it learns inline UI only from `describe_system`, the
@@ -754,6 +757,22 @@
   so a computed value is judged too and nothing is reported twice); it changes nothing on screen. The case it
   exists for: `{@state s = 0}` + `options={["흡입", …]}` — `onChange` hands back the option's VALUE, so `s`
   becomes a string on the first press and `strokes[s]` is undefined.
+- **`<pager>`, `<hint>`, `<celebrate>` (2026-11-15, after comparing ChatGPT's quiz answer).** `<pager>` shows
+  its `<page>` children one at a time under a "‹ n / N ›" header (이전/다음, ←/→ on the arrows; `aria-disabled`
+  so the focus survives the ends). Every page is evaluated, only the shown one is mounted
+  (`WidgetPager.tsx`); the position is the pager's own unless `value` is bound — a CHANGED `value` moves it, a
+  turn calls `onChange` through `ctx.fire`, `nextDisabled` holds the › arrow ("answer first"). The checker
+  knows two new spec fields: `parents` (a `<page>` only directly inside a `<pager>`, `{#each}`/`{#if}`
+  transparent) and `childTags` (a `<pager>` holds only `<page>`s, at least one). `<hint>` is an inline tag
+  (in `IN_TEXT`, so it sits inside `<text>`/`<title>`/`<badge>`, or on its own line): ONE `Seg` with no text
+  and a `hint` carrying the bubble's runs, drawn by `WidgetInline` as a disclosure (`aria-expanded` /
+  `aria-controls`; a press elsewhere closes it; Escape is handled on the hint and STOPPED, so a dialog's window
+  listener never takes the same key, and the focus goes back to the button). `<celebrate when>` draws nothing
+  until `when` goes false → true AND the viewer changed something in the answer (`WidgetCtx.interacted`, set by
+  the first setter) — never on load, a restored state or a streaming text; then a ~1.3 s Web Animations
+  confetti burst centred on the UI block (`.wg-root` is `position: relative`), or with 움직임 줄이기 a still
+  🎉 badge for 1.5 s; the label is read out through a `role=status`. Put it outside the `{#if}` it
+  celebrates (mounting with a true value is "already true").
 - **What a control will do is DECLARED as a prop, so the user sees it before pressing** — there is no free
   `send()`/`open()` action (the original's are deliberately not ported). `<button>` takes EXACTLY ONE of
   `onClick` (local state), `send` (the text becomes the viewer's next chat message through the pane's

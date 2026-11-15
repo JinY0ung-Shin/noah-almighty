@@ -629,8 +629,9 @@ export default function AnswerUi({
       dark,
       entrance,
       domId: view.domId,
+      interacted,
     }),
-    [view, locked, dark, entrance],
+    [view, locked, dark, entrance, interacted],
   );
   const status = notice || (locked && view.sends ? "아바타 응답이 끝난 뒤 보낼 수 있습니다." : "");
 

@@ -222,6 +222,45 @@ const INPUTS: GallerySample[] = [
   {/each}
 </col>`,
   },
+  {
+    id: "pager",
+    title: "한 장씩 넘기기",
+    note: "‹ › 버튼이나 키보드 ←/→로 넘깁니다. value를 주지 않으면 페이저가 위치를 스스로 기억합니다.",
+    source: `<pager label="설치 안내">
+  <page title="1. 내려받기">
+    <text>설치 파일을 내려받습니다.</text>
+  </page>
+  <page title="2. 설치">
+    <text>파일을 열고 **다음**을 눌러 설치합니다.</text>
+  </page>
+  <page title="3. 로그인">
+    <text>회사 계정으로 로그인하면 끝입니다.</text>
+  </page>
+</pager>`,
+  },
+  {
+    id: "quiz",
+    title: "퀴즈: 페이지, 힌트, 축하",
+    note: "답을 골라야 다음 문제로 넘어갑니다. 세 문제를 모두 맞히면 그 순간 축하 효과가 재생됩니다(움직임 줄이기가 켜져 있으면 배지만 잠깐 보입니다).",
+    source: `{@state q = 0}
+{@state picks = {}}
+{@const questions = [{ text: "대한민국의 수도는?", options: ["부산", "서울", "인천"], answer: "서울", hint: "경복궁이 있는 도시예요." }, { text: "1 + 2 × 3 은?", options: ["9", "7", "6"], answer: "7", hint: "곱셈을 먼저 계산해요." }, { text: "물의 화학식은?", options: ["H2O", "CO2", "O2"], answer: "H2O", hint: "수소 둘, 산소 하나." }]}
+{@const score = questions.filter((item, i) => picks[i] === item.answer).length}
+{@const finished = Object.keys(picks).length === questions.length}
+<pager label="상식 퀴즈" value={q} onChange={setQ} nextDisabled={picks[q] === undefined}>
+  {#each questions as item, i}
+    <page title={\`\${i + 1}번 문제\`} gap={2}>
+      <text>{item.text} <hint>{item.hint}</hint></text>
+      <segmented-control label="답" value={picks[i] ?? ""} onChange={(v) => setPicks({ ...picks, [i]: v })} options={item.options} />
+      {#if picks[i] !== undefined}
+        <text color={picks[i] === item.answer ? "success" : "danger"}>{picks[i] === item.answer ? "정답입니다!" : \`아쉬워요. 정답은 \${item.answer}\`}</text>
+      {/if}
+    </page>
+  {/each}
+</pager>
+<text weight="bold">점수 {score} / {questions.length}</text>
+<celebrate when={finished && score === questions.length} label="만점입니다!" />`,
+  },
 ];
 
 const LAYOUT: GallerySample[] = [
@@ -317,6 +356,13 @@ const TEXT: GallerySample[] = [
     note: "http(s) 주소만 새 탭으로 열립니다.",
     source: `<text>문서는 <link href="https://example.com/docs">여기</link>에 있습니다.</text>
 <link href="https://example.com/changelog">변경 내역 보기</link>`,
+  },
+  {
+    id: "hint",
+    title: "힌트",
+    note: "전구를 누르면 말풍선이 열립니다. 다시 누르거나, 바깥을 누르거나, Esc로 닫힙니다.",
+    source: `<text>피타고라스 정리를 써서 빗변을 구해 보세요. <hint>밑변이 3, 높이가 4이면 빗변은 √(3² + 4²)입니다.</hint></text>
+<title size="sm">줄 끝에 둔 힌트 <hint label="풀이 힌트">**제곱의 합**의 제곱근을 구하면 됩니다.</hint></title>`,
   },
 ];
 

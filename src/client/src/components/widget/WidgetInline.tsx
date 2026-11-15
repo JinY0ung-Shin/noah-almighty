@@ -6,9 +6,16 @@
 // absolute http(s) URL the shared library already normalized, it opens in a
 // new tab without handing this page to it, and the address is the tooltip —
 // the reader sees where it goes before following it.
-import { Fragment, type ReactNode } from "react";
+//
+// A run may also be a `<hint>`: a small lightbulb button whose bubble holds the
+// hint's own runs. It is a disclosure — `aria-expanded`/`aria-controls`; the
+// bubble closes on a second press, on a press anywhere else, and on Escape,
+// which it keeps to itself (one Escape closes only the top thing — a dialog
+// under it stays open) and which puts the focus back on the button.
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type { Seg } from "../../lib/widgetView";
+import Icon from "../Icon";
 
 export interface WidgetInlineProps {
   segs?: Seg[];
@@ -30,11 +37,58 @@ function run(seg: Seg): ReactNode {
   return seg.text;
 }
 
+function HintRun({ label, segs }: { label: string; segs: Seg[] }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const wrap = useRef<HTMLSpanElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: Event) => {
+      if (wrap.current && event.target instanceof Node && !wrap.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    return () => document.removeEventListener("pointerdown", outside, true);
+  }, [open]);
+
+  function onKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
+    if (event.key !== "Escape" || !open || event.nativeEvent.isComposing) return;
+    // Stopped here, so no window listener (a dialog this answer sits in) takes the same Escape.
+    event.preventDefault();
+    event.stopPropagation();
+    setOpen(false);
+    button.current?.focus();
+  }
+
+  return (
+    <span className="wg-hint-wrap" ref={wrap} onKeyDown={onKeyDown}>
+      <button
+        ref={button}
+        type="button"
+        className="wg-hint-btn"
+        aria-label={label}
+        title={label}
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <Icon name="lightbulb" size={14} />
+      </button>
+      <span id={id} className="wg-hint-pop" role="note" aria-label={label} hidden={!open}>
+        <WidgetInline segs={segs} />
+      </span>
+    </span>
+  );
+}
+
 export default function WidgetInline({ segs = [] }: WidgetInlineProps) {
   return (
     <>
       {segs.map((seg, index) =>
-        seg.href ? (
+        seg.hint ? (
+          <HintRun key={index} label={seg.hint.label} segs={seg.hint.segs} />
+        ) : seg.href ? (
           <a key={index} className="wg-link" href={seg.href} target="_blank" rel="noopener noreferrer" title={seg.href}>
             {run(seg)}
           </a>

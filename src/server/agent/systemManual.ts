@@ -17,7 +17,7 @@ import { DOCUMENT_ENCODING_CLAUSE, DOCUMENT_LIBRARIES_PHRASE, DOCUMENT_TYPES_PHR
 import { brainPolicyManualText } from "./brainPolicy.js";
 import { TEAM_POLICY_KEYS } from "../teamBrainPolicy.js";
 import { widgetComponentReference } from "../../shared/widget/spec.js";
-import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE } from "../../shared/widget/guide.js";
+import { INLINE_UI_COMPONENTS_MANUAL_TOPIC, INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, widgetComponentBrief } from "../../shared/widget/guide.js";
 
 /**
  * The worked examples of the `inline-ui` topic. Exported so a test can run
@@ -68,6 +68,21 @@ Change the inputs — the numbers update at once.
   <line x1="100" y1="100" x2={100 + 70 * Math.cos(a)} y2={100 - 70 * Math.sin(a)} stroke={pct > 80 ? "danger" : "accent"} stroke-width="4" stroke-linecap="round" />
   <text x="100" y="90" text-anchor="middle" font-size="20" font-weight="bold">{pct}%</text>
 </svg>`,
+  quiz: `{@state q = 0}
+{@state picks = {}}
+{@const questions = [{ text: "Capital of Korea?", options: ["Busan", "Seoul"], answer: "Seoul", hint: "Gyeongbokgung is there." }, { text: "1 + 2 × 3?", options: ["9", "7"], answer: "7", hint: "Multiply first." }]}
+{@const score = questions.filter((item, i) => picks[i] === item.answer).length}
+
+<pager label="Quiz" value={q} onChange={setQ} nextDisabled={picks[q] === undefined}>
+  {#each questions as item, i}
+    <page title={\`Question \${i + 1}\`}>
+      <text>{item.text} <hint>{item.hint}</hint></text>
+      <segmented-control label="Answer" value={picks[i] ?? ""} onChange={(v) => setPicks({ ...picks, [i]: v })} options={item.options} />
+    </page>
+  {/each}
+</pager>
+<text weight="bold">Score {score} / {questions.length}</text>
+<celebrate when={score === questions.length} label="Perfect score!" />`,
 } as const;
 
 export const SYSTEM_MANUAL_TOPICS = [
@@ -565,7 +580,8 @@ A safe JavaScript subset run by an interpreter (never \`eval\`):
 Setters and \`copy(text)\` (puts text on the user's clipboard) work ONLY inside an event handler (\`onChange={setMonths}\`, \`onClick={() => setTab("b")}\`); calling one while rendering is an error.
 
 ## Components
-${widgetComponentReference()}
+${widgetComponentBrief()}
+\`*\` = required. Every prop's type, allowed values and limits, \`<svg>\` drawings and the icon names: topic \`${INLINE_UI_COMPONENTS_MANUAL_TOPIC}\` — read it before using a prop whose values you do not know.
 
 ## What reaches you, links and images
 Only two things come back, each as the user's NEXT message:
@@ -585,8 +601,20 @@ ${INLINE_UI_MANUAL_EXAMPLES.filteredTable}
 ## Example: svg gauge bound to a slider
 ${INLINE_UI_MANUAL_EXAMPLES.gauge}
 
+## Example: quiz — one question per page, a hint, a celebration
+The › arrow stays off until the shown question is answered; the burst plays when the last right answer makes \`when\` true, never when the answer is reopened.
+${INLINE_UI_MANUAL_EXAMPLES.quiz}
+
 ## When something is wrong
 Nothing checks your answer before it is drawn. A tag or prop that does not exist is dropped where it stands and the rest still draws; a block that cannot be evaluated or runs over budget shows an error in its place. What the user's browser could not draw is told to you at the start of your next turn ("${INLINE_UI_REPORT_TITLE}") — write the corrected UI in that answer if it still matters.`,
+  },
+  {
+    id: INLINE_UI_COMPONENTS_MANUAL_TOPIC,
+    title: "Inline UI component reference",
+    summary: "Every inline UI component with its props, types, allowed values and limits; <svg> elements; icon names.",
+    body: `Every component inline UI has, generated from the same table the user's app draws with. How to write it in an answer — where tags go, state, expressions, what reaches you, limits and worked examples — is topic \`${INLINE_UI_MANUAL_TOPIC}\`.
+
+${widgetComponentReference()}`,
   },
 ] as const;
 

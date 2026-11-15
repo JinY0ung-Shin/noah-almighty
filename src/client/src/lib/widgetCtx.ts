@@ -28,4 +28,10 @@ export interface WidgetCtx {
   entrance: EntranceRule | null;
   /** A DOM id unique to this view for a node key (two answers on one page must not collide). */
   domId(key: string): string;
+  /**
+   * The viewer has changed something in this answer (a setter ran). A
+   * `<celebrate>` plays only then: a value that turns true because the answer
+   * was loaded or is still being written is not a moment the viewer made.
+   */
+  interacted?: boolean;
 }
