@@ -67,9 +67,14 @@ export async function loadMessages(
     selectedMcpToolGroups?: import("../../../shared/mcpToolGroups").McpToolGroupId[] | null;
     canvases?: CanvasArtifact[];
     inlineUiStates?: InlineUiStatesByMessage;
+    inlineUiStateTimes?: Record<string, number>;
+    serverNow?: number;
   }>(`/api/messages?conversationId=${encodeURIComponent(conversationId)}`);
   // Before the messages are drawn: an answer's controls mount where the viewer left them.
-  primeWidgetStates(readState().user?.id, conversationId, loaded.inlineUiStates);
+  primeWidgetStates(readState().user?.id, conversationId, loaded.inlineUiStates, undefined, {
+    times: loaded.inlineUiStateTimes,
+    serverNow: loaded.serverNow,
+  });
   return loaded;
 }
 

@@ -3153,6 +3153,9 @@ export function createChatRouter({
         // id), so a reload or another device draws the controls where they were
         // left — in the same response as the messages, so nothing jumps.
         inlineUiStates: store.listInlineUiStates(req.user!.id, conversationId),
+        // When each was saved, and the server's clock now: an unconfirmed save in the browser wins only if newer.
+        inlineUiStateTimes: store.listInlineUiStateTimes(req.user!.id, conversationId),
+        serverNow: Date.now(),
       });
     },
   );
@@ -3276,7 +3279,9 @@ export function createChatRouter({
   // turn when the answer is the conversation's latest (takeInlineUiStateForTurn).
   // Session auth only, the caller's own conversation only (anything else is ONE
   // 404, as for ui-report); `values: {}` removes the answer's record. The client
-  // sends it debounced and, when the tab goes away, with `keepalive`.
+  // sends it debounced and, when the tab goes away, with `keepalive`. A save the
+  // browser REPLAYS (`replayedAt`: when it was made, on the server's clock) is
+  // refused with 409 when the server's copy is newer — the newer value wins.
   router.put(
     "/api/conversations/:conversationId/ui-states/:messageId",
     requireAuth(store),
@@ -3286,7 +3291,8 @@ export function createChatRouter({
         apiError(res, 400, "values가 필요합니다.");
         return;
       }
-      const outcome = store.putInlineUiState(req.user!.id, req.params.conversationId, req.params.messageId, record);
+      const replayedAt = typeof req.body?.replayedAt === "number" && Number.isFinite(req.body.replayedAt) ? req.body.replayedAt : undefined;
+      const outcome = store.putInlineUiState(req.user!.id, req.params.conversationId, req.params.messageId, record, { replayedAt });
       if (outcome === "not_found") {
         apiError(res, 404, "대화를 찾을 수 없습니다.");
         return;
@@ -3301,6 +3307,10 @@ export function createChatRouter({
       }
       if (outcome === "too_large") {
         apiError(res, 413, "입력값이 너무 커서 저장할 수 없습니다.");
+        return;
+      }
+      if (outcome === "stale") {
+        apiError(res, 409, "더 최근에 저장된 입력값이 있어 이 값은 저장하지 않았습니다.");
         return;
       }
       res.status(204).end();

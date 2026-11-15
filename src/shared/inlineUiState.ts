@@ -29,6 +29,14 @@ export type InlineUiStateRecord = Record<string, InlineUiStateEntry>;
 export type InlineUiStatesByMessage = Record<string, InlineUiStateRecord>;
 
 /**
+ * `GET /api/messages` → `inlineUiStateTimes`: when each record was last saved,
+ * in SERVER milliseconds, by message id; `serverNow` in the same response lets
+ * the client put its own clock on that scale. The newer of a browser's
+ * unconfirmed save and the server's copy wins.
+ */
+export type InlineUiStateTimes = Record<string, number>;
+
+/**
  * The well-formed part of a record that came over the wire or out of storage,
  * or null when `input` is not a record at all. Entries without a string `sig`,
  * with an over-long name or sig, and names past the count cap are dropped. The

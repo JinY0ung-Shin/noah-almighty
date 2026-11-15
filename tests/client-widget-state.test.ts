@@ -56,15 +56,15 @@ const brokenStorage = {
 
 // The server, faked: every PUT is recorded; what it answers is set per test
 // ("failed" by default, so what was saved stays waiting in localStorage).
-const puts: { conversationId: string; messageId: string; record: unknown }[] = [];
+const puts: { conversationId: string; messageId: string; record: unknown; replayedAt?: number }[] = [];
 let putResult: WidgetStatePutResult = "failed";
 
 beforeEach(() => {
   resetWidgetStateMemory();
   puts.length = 0;
   putResult = "failed";
-  setWidgetStateTransport(async (target, record) => {
-    puts.push({ ...target, record });
+  setWidgetStateTransport(async (target, record, replayedAt) => {
+    puts.push(replayedAt === undefined ? { ...target, record } : { ...target, record, replayedAt });
     return putResult;
   });
 });
@@ -379,6 +379,50 @@ describe("widgetState on the server", () => {
     primeWidgetStates("u1", "conv-1", { m1: { n: { sig: "n = 2", value: 3 } } }, storage);
     expect(loadWidgetState(ref("u1", "m1"), null)).toEqual({ n: { sig: "n = 2", value: 7 } });
     expect(puts).toEqual([{ conversationId: "conv-1", messageId: "m1", record: { n: { sig: "n = 2", value: 7 } } }]);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(widgetStateKey(ref("u1", "m1"))!)).toBe(false);
+  });
+
+  it("the NEWER value wins: an unconfirmed save older than the server's copy is dropped, a newer one is replayed with its time", async () => {
+    vi.useFakeTimers();
+    const T = Date.parse("2026-11-15T12:00:00.000Z");
+    vi.setSystemTime(T);
+    const storage = memoryStorage();
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 7 } }, dataSize, storage); // saved at T, never confirmed
+    saveWidgetState(ref("u1", "m2"), { n: { sig: "n = 2", value: 8 } }, dataSize, storage);
+    await settleWidgetStateRequests();
+    vi.setSystemTime(T + 60_000);
+    resetWidgetStateMemory();
+    puts.length = 0;
+    putResult = "ok";
+    const server = { m1: { n: { sig: "n = 2", value: 3 } }, m2: { n: { sig: "n = 2", value: 4 } } };
+    // The server's clock runs 5 s ahead of this browser's. m1 was saved there (another device) 10 s after
+    // this browser's save; m2's server copy is 10 s OLDER than this browser's save.
+    const skew = 5_000;
+    primeWidgetStates("u1", "conv-1", server, storage, {
+      times: { m1: T + skew + 10_000, m2: T + skew - 10_000 },
+      serverNow: T + 60_000 + skew,
+    });
+    // m1: the server's newer value stays, this browser's older copy is gone and nothing is sent.
+    expect(loadWidgetState(ref("u1", "m1"), null)).toEqual(server.m1);
+    expect(storage.data.has(widgetStateKey(ref("u1", "m1"))!)).toBe(false);
+    // m2: this browser's newer value wins and is replayed with its time on the server's clock.
+    expect(loadWidgetState(ref("u1", "m2"), null)).toEqual({ n: { sig: "n = 2", value: 8 } });
+    expect(puts).toEqual([{ conversationId: "conv-1", messageId: "m2", record: { n: { sig: "n = 2", value: 8 } }, replayedAt: T + skew }]);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(widgetStateKey(ref("u1", "m2"))!)).toBe(false);
+  });
+
+  it("a replay the server refuses as stale (409) is dropped, not retried", async () => {
+    const storage = memoryStorage();
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 7 } }, dataSize, storage);
+    await settleWidgetStateRequests();
+    resetWidgetStateMemory();
+    puts.length = 0;
+    putResult = "gone"; // what fetchTransport makes of a 409
+    primeWidgetStates("u1", "conv-1", {}, storage, { times: {}, serverNow: Date.now() });
+    expect(puts).toHaveLength(1);
+    expect(typeof puts[0].replayedAt).toBe("number");
     await settleWidgetStateRequests();
     expect(storage.data.has(widgetStateKey(ref("u1", "m1"))!)).toBe(false);
   });

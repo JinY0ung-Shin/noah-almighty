@@ -1589,6 +1589,21 @@ describe("inline UI state (per viewer, on the server; the avatar hears what chan
     expect(H.requests[5].inlineUiStateChanges).toBeUndefined();
   });
 
+  it("returns when each record was saved with the server's clock, and refuses a replay older than the stored copy (409)", async () => {
+    const { turn, lastAnswer, put, owner } = await setupState("uistatenewest");
+    await turn();
+    const answer = lastAnswer();
+    await put("conv-st", answer, { values: { n: { sig: "n = 2", value: 7 } } }).expect(204);
+    const body = (await owner.get("/api/messages?conversationId=conv-st").expect(200)).body;
+    expect(typeof body.serverNow).toBe("number");
+    const savedAt = body.inlineUiStateTimes[answer] as number;
+    expect(savedAt).toBeLessThanOrEqual(body.serverNow);
+    const stale = await put("conv-st", answer, { values: { n: { sig: "n = 2", value: 1 } }, replayedAt: savedAt - 5_000 }).expect(409);
+    expect(stale.body.error).toBe("더 최근에 저장된 입력값이 있어 이 값은 저장하지 않았습니다.");
+    await put("conv-st", answer, { values: { n: { sig: "n = 2", value: 9 } }, replayedAt: savedAt + 5_000 }).expect(204);
+    expect((await owner.get("/api/messages?conversationId=conv-st").expect(200)).body.inlineUiStates[answer]).toEqual({ n: { sig: "n = 2", value: 9 } });
+  });
+
   it("keeps only values whose declaration the answer still holds, and nothing unchanged", async () => {
     const { turn, lastAnswer, put } = await setupState("uistatesig");
     await turn();

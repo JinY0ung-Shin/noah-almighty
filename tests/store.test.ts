@@ -2290,6 +2290,24 @@ describe("inline UI state (inline_ui_states)", () => {
     expect(store.listInlineUiStates(ownerId, "conv-u")).toEqual({});
   });
 
+  it("a REPLAYED save older than the stored copy is refused as stale; a newer one, or a live save, is kept", () => {
+    const { store, ownerId, answer } = makeStore();
+    const id = answer();
+    expect(store.putInlineUiState(ownerId, "conv-u", id, rec(1))).toBe("saved");
+    const savedAt = store.listInlineUiStateTimes(ownerId, "conv-u")[id];
+    expect(typeof savedAt).toBe("number");
+    expect(store.putInlineUiState(ownerId, "conv-u", id, rec(2), { replayedAt: savedAt - 1_000 })).toBe("stale");
+    expect(store.listInlineUiStates(ownerId, "conv-u")[id]).toEqual(rec(1));
+    expect(store.putInlineUiState(ownerId, "conv-u", id, rec(3), { replayedAt: savedAt + 1_000 })).toBe("saved");
+    expect(store.listInlineUiStates(ownerId, "conv-u")[id]).toEqual(rec(3));
+    // A replay with nothing stored yet is simply saved; a live save (no time) always is.
+    const other = answer();
+    expect(store.putInlineUiState(ownerId, "conv-u", other, rec(4), { replayedAt: 1 })).toBe("saved");
+    expect(store.putInlineUiState(ownerId, "conv-u", id, rec(5))).toBe("saved");
+    // Another viewer's conversation has no times.
+    expect(store.listInlineUiStateTimes("someone-else", "conv-u")).toEqual({});
+  });
+
   it("is consumed once per change, for the latest answer only", () => {
     const { store, ownerId, answer } = makeStore();
     const first = answer();

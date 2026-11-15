@@ -893,7 +893,11 @@
   that message starts hears it); requests per answer go out one after another, with `keepalive` up to
   60 000 chars. `localStorage` (`noah:inline-ui:<userId>:<conversationId>:<messageId>`, now
   `{at, values}`) holds only what the server has not CONFIRMED (a failed or cut-off request); the next load
-  of that conversation uploads it (it wins over the server's copy) and drops it on 2xx/400/404/413. A bare
+  of that conversation settles it and the NEWER value wins (2026-11-15): `/api/messages` also returns
+  `inlineUiStateTimes` (each record's save time, server ms) and `serverNow`, the client moves its `at` onto the
+  server's clock and drops its copy when the server's is newer (another device saved later); otherwise it
+  replays it with `replayedAt`, and the server refuses that with ONE 409 when it holds a newer copy (a live save
+  carries no time and always writes). The local copy goes on 2xx/400/404/409/413. A bare
   record there is what the browser-only build left: uploaded once where the server has nothing for that
   answer, dropped where it has — the one-time move of existing users' values. A conversation deleted in this
   page load is never written again; a client-made message id replaced by the server's moves its record. A

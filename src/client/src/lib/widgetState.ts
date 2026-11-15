@@ -28,6 +28,7 @@ import {
   MAX_INLINE_UI_STATE_ANSWERS,
   MAX_INLINE_UI_STATE_CHARS,
   normalizeInlineUiStateRecord,
+  type InlineUiStateTimes,
   type InlineUiStatesByMessage,
 } from "../../../shared/inlineUiState";
 import type { StoredState } from "../../../shared/widget/index";
@@ -74,11 +75,13 @@ export type WidgetStatePutResult = "ok" | "gone" | "failed";
 export type WidgetStateTransport = (
   target: { conversationId: string; messageId: string },
   record: WidgetStateRecord,
+  /** A REPLAYED save: when it was made, on the server's clock (the server refuses it if it holds a newer one). */
+  replayedAt?: number,
 ) => Promise<WidgetStatePutResult>;
 
-const fetchTransport: WidgetStateTransport = async ({ conversationId, messageId }, record) => {
+const fetchTransport: WidgetStateTransport = async ({ conversationId, messageId }, record, replayedAt) => {
   try {
-    const body = JSON.stringify({ values: record });
+    const body = JSON.stringify(replayedAt === undefined ? { values: record } : { values: record, replayedAt });
     // Plain fetch, not `api()`: a failure here must not toast, and a 401 must
     // not log the viewer out from a background save. `keepalive` lets the last
     // save of a closing tab finish (small bodies only — the browser's cap).
@@ -93,7 +96,8 @@ const fetchTransport: WidgetStateTransport = async ({ conversationId, messageId 
       },
     );
     if (response.ok) return "ok";
-    return response.status === 400 || response.status === 404 || response.status === 413 ? "gone" : "failed";
+    // 409: the server already holds a NEWER value than this replayed one — ours is dropped.
+    return response.status === 400 || response.status === 404 || response.status === 409 || response.status === 413 ? "gone" : "failed";
   } catch {
     return "failed";
   }
@@ -110,12 +114,20 @@ export function setWidgetStateTransport(next: WidgetStateTransport | null): void
 // land after a newer one.
 const inflight = new Map<string, Promise<void>>();
 
-function upload(ref: WidgetStateRef, key: string, record: WidgetStateRecord, at: number, storage: StorageLike | null): Promise<void> {
+function upload(
+  ref: WidgetStateRef,
+  key: string,
+  record: WidgetStateRecord,
+  at: number,
+  storage: StorageLike | null,
+  replayedAt?: number,
+): Promise<void> {
   const target = { conversationId: ref.conversationId as string, messageId: ref.messageId as string };
   const previous = inflight.get(key);
   // With nothing in flight the request starts NOW (synchronously), so a save
   // flushed right before the UI sends a chat message reaches the server first.
-  const sent = previous ? previous.then(() => transport(target, record)) : transport(target, record);
+  const send = () => (replayedAt === undefined ? transport(target, record) : transport(target, record, replayedAt));
+  const sent = previous ? previous.then(send) : send();
   const job = sent
     .then((result) => {
       // Confirmed (or refused for good): the local copy of THIS record is not needed any more.
@@ -268,17 +280,25 @@ function localKeysOf(storage: StorageLike, prefix: string): string[] {
  * Take the server's records for one conversation (the `inlineUiStates` of the
  * messages response) into this page, BEFORE its messages are drawn. An answer
  * saved in this page load keeps what was set here. Then what this browser
- * holds that the server has not confirmed is uploaded: an entry this build
- * wrote (a request that failed or was cut off) wins over the server's copy; a
- * bare entry left by the browser-only build is uploaded only where the server
- * has nothing (the one-time move of existing values to the server) and dropped
- * otherwise. `states` undefined (an older server) changes nothing.
+ * holds that the server has not confirmed is settled — the NEWER value wins:
+ * - an entry this build wrote (a request that failed or was cut off) is
+ *   uploaded only when it is newer than the server's copy (`times`, on the
+ *   server's clock; this browser's `at` is moved onto that clock with
+ *   `serverNow`), and the server checks that again (409 = it holds a newer
+ *   one). Older than the server's copy — another device saved after it — it is
+ *   dropped and the server's value stays. Without `times` (an older server) it
+ *   is uploaded as before.
+ * - a bare entry left by the browser-only build is uploaded only where the
+ *   server has nothing (the one-time move of existing values to the server)
+ *   and dropped otherwise.
+ * `states` undefined (an older server) changes nothing.
  */
 export function primeWidgetStates(
   userId: string | null | undefined,
   conversationId: string | null | undefined,
   states: InlineUiStatesByMessage | null | undefined,
   storage: StorageLike | null = defaultStorage(),
+  meta: { times?: InlineUiStateTimes | null; serverNow?: number | null } = {},
 ): void {
   if (!userId || !conversationId || !states || typeof states !== "object") return;
   if (forgotten.has(`${userId}:${conversationId}`)) return;
@@ -302,8 +322,18 @@ export function primeWidgetStates(
       dropLocal(storage, key);
       continue;
     }
+    // This browser's save time on the server's clock (the skew measured now; a
+    // response without `serverNow` leaves it as it is).
+    const skew = typeof meta.serverNow === "number" && Number.isFinite(meta.serverNow) ? meta.serverNow - Date.now() : 0;
+    const localAt = local.at + skew;
+    const serverAt = meta.times && typeof meta.times[messageId] === "number" ? meta.times[messageId] : null;
+    if (onServer && serverAt !== null && serverAt > localAt) {
+      // The server's copy was saved after this one (another device): it stays.
+      dropLocal(storage, key);
+      continue;
+    }
     if (!touched.has(key)) remember(key, local.record);
-    void upload({ userId, conversationId, messageId }, key, local.record, local.at, storage);
+    void upload({ userId, conversationId, messageId }, key, local.record, local.at, storage, meta.times ? localAt : undefined);
   }
 }
 

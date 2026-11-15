@@ -22,7 +22,9 @@ export type InlineUiStatePutOutcome =
   | "not_found"
   | "message_not_found"
   | "not_assistant"
-  | "too_large";
+  | "too_large"
+  /** A REPLAYED save older than what the server already holds: nothing was changed. */
+  | "stale";
 
 /** The latest answer's changed values, as the turn that is starting takes them. */
 export interface InlineUiStateForTurn {
@@ -64,6 +66,20 @@ export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: T
       return out;
     }
 
+    /** When each of the caller's records in one of their conversations was last saved (ms), by message id. */
+    listInlineUiStateTimes(userId: string, conversationId: string): Record<string, number> {
+      if (!this.ownsConversationForUiState(userId, conversationId)) return {};
+      const rows = this.db
+        .prepare("SELECT message_id, updated_at FROM inline_ui_states WHERE user_id = ? AND conversation_id = ?")
+        .all(userId, conversationId) as { message_id: string; updated_at: string }[];
+      const out: Record<string, number> = {};
+      for (const row of rows) {
+        const ms = Date.parse(row.updated_at);
+        if (Number.isFinite(ms)) out[row.message_id] = ms;
+      }
+      return out;
+    }
+
     /**
      * Save what the caller changed in one answer of their own conversation (an
      * empty record removes it). Only an ASSISTANT message of that conversation;
@@ -72,12 +88,18 @@ export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: T
      * avatar hears them on its next turn; the same values again change nothing.
      * Past MAX_INLINE_UI_STATE_ANSWERS answers in the conversation, the least
      * recently saved are dropped.
+     *
+     * `replayedAt` marks a save the browser could not get confirmed earlier and
+     * sends again (its time, on the server's clock): the NEWER value wins, so it
+     * is refused as "stale" when the server's copy was saved after it — by
+     * another device, say. A live save carries none: it is now.
      */
     putInlineUiState(
       userId: string,
       conversationId: string,
       messageId: string,
       record: InlineUiStateRecord,
+      options: { replayedAt?: number } = {},
     ): InlineUiStatePutOutcome {
       if (!this.ownsConversationForUiState(userId, conversationId)) return "not_found";
       const message = this.db
@@ -85,6 +107,12 @@ export function withInlineUiStates<TBase extends Constructor<StoreBase>>(Base: T
         .get(messageId, conversationId) as { role: string } | undefined;
       if (!message) return "message_not_found";
       if (message.role !== "assistant") return "not_assistant";
+      if (typeof options.replayedAt === "number" && Number.isFinite(options.replayedAt)) {
+        const held = this.db
+          .prepare("SELECT updated_at FROM inline_ui_states WHERE user_id = ? AND message_id = ?")
+          .get(userId, messageId) as { updated_at: string } | undefined;
+        if (held && Date.parse(held.updated_at) > options.replayedAt) return "stale";
+      }
       if (Object.keys(record).length === 0) {
         this.db.prepare("DELETE FROM inline_ui_states WHERE user_id = ? AND message_id = ?").run(userId, messageId);
         return "cleared";
