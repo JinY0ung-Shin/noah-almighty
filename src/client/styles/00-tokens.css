@@ -43,6 +43,13 @@
      light mint, so plain #fff next to it becomes unreadable — always pair an
      accent background with this token instead. */
   --on-accent: #ffffff;
+  /* BACKGROUND of a filled accent surface (primary button, the user's bubble,
+     badges, selected chips, a checked box) — always paired with --on-accent.
+     Accent as text, border or ring stays --accent. Light uses the accent itself;
+     the dark theme (80-apple-design.css) supplies a deeper blue so white text
+     reads at ≥ 4.5:1. -strong is the hover fill. */
+  --accent-fill: var(--accent);
+  --accent-fill-strong: var(--accent-strong);
 
   /* Semantic */
   --bg: var(--n-50);

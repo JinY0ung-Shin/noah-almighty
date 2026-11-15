@@ -167,8 +167,8 @@
   background: var(--danger-soft);
 }
 .weekday-chip.selected {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--on-accent);
 }
 .interval-inputs {
@@ -310,13 +310,13 @@
   background: color-mix(in srgb, var(--ok) 8%, var(--panel));
 }
 .onboard-step.primary-step {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--on-accent);
 }
 .onboard-step.primary-step:hover:not(:disabled) {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill-strong);
 }
 .onboard-step-icon {
   display: inline-grid;

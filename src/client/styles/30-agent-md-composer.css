@@ -65,8 +65,8 @@
 .btn.primary,
 .btn-primary,
 .primary {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-weight: 700;
   box-shadow: var(--shadow-sm);
@@ -74,8 +74,8 @@
 .btn.primary:hover:not(:disabled),
 .btn-primary:hover:not(:disabled),
 .primary:hover:not(:disabled) {
-  background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  background: var(--accent-fill-strong);
+  border-color: var(--accent-fill-strong);
 }
 .btn.secondary {
   background: var(--panel);
@@ -885,8 +885,8 @@ details[open] > summary > .disclosure-chevron {
 }
 .md li > input[type="checkbox"]:checked,
 .md li > p:first-child > input[type="checkbox"]:checked {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
 }
 .md li > input[type="checkbox"]:checked::before,
 .md li > p:first-child > input[type="checkbox"]:checked::before {
@@ -1433,15 +1433,15 @@ textarea::placeholder {
   width: 40px;
   height: 40px;
   border-radius: var(--r-md);
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
   color: var(--on-accent);
   display: grid;
   place-items: center;
   flex: none;
 }
 .send-button:hover:not(:disabled) {
-  background: var(--accent-strong);
+  background: var(--accent-fill-strong);
 }
 .send-button:disabled {
   cursor: not-allowed;

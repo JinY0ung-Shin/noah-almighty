@@ -49,8 +49,13 @@ macOS 화면을 복제하지 않는다. 콘텐츠(대화·지식·작업)가 주
 - **시맨틱 별칭** `--bg / --panel / --text / --text-soft / --muted / --line / --line-soft`:
   컴포넌트는 `--n-*` 원시값이 아니라 **시맨틱 별칭**을 쓴다(다크모드가 별칭만 스왑하면 되도록).
 - **액센트** `--accent / --accent-strong / --accent-soft / --accent-ring`은 system blue 계열이다.
-  액센트 면 위 텍스트/아이콘은 **반드시 `--on-accent`**를 사용한다. 색상 모드별 대비를
-  확보하기 위해 light는 흰색, 밝은 accent를 쓰는 dark는 검은색으로 전환되므로 `#fff` 직접 사용 금지.
+  **액센트로 채운 면**(주 버튼·새 대화·보내기·내 말풍선·배지·선택된 칩·체크된 체크박스·건너뛰기 링크)의
+  배경은 `--accent-fill`(hover `--accent-fill-strong`), 그 위 텍스트/아이콘은 **반드시 `--on-accent`**다 —
+  둘은 늘 짝으로 쓰고 `#fff` 직접 사용 금지. 액센트를 **글자·테두리·링·점·진행 막대**로 쓸 때는
+  그대로 `--accent`다. `--on-accent`는 두 테마 모두 **흰색**이다: light의 fill은 accent 자체
+  (#006edc, 흰 글자 4.93:1 / hover #0062cc 5.80:1), dark는 밝은 accent(#0a84ff — 흰 글자 3.65:1이라
+  예전엔 검은 글자였다) 대신 더 깊은 파랑 `#0a68d6`(흰 글자 5.30:1 / hover `#0b70e4` 4.72:1)을 채운다.
+  (2026-11-15 변경: dark의 검은 글자 액센트 면은 같은 버튼이 테마마다 다른 물건처럼 보였다.)
 - **포커스 표시**는 반투명 glow인 `--accent-ring`과 구분해, 인접 표면 대비 3:1 이상인
   불투명 `--focus-ring`을 사용한다. 구현은 **전역 `:focus-visible` 아웃라인 하나**(80 계층)로
   통일한다 — **2px, 바깥 2px 간격**. 컴포넌트에서 `outline: none`으로 끄거나 `box-shadow` 링을
@@ -67,6 +72,10 @@ macOS 화면을 복제하지 않는다. 콘텐츠(대화·지식·작업)가 주
   액센트다 — hover의 `--rail-active` 회색과 구별되고, 레일에 파란 면을 늘리지 않는다(파란 채움은
   주 행동인 새 대화, 옅은 액센트는 열려 있는 대화 행의 선택 표시).
   (`.icon-button`은 시맨틱 토큰 기본 + `.rail .icon-button` 오버라이드로 분리돼 있다).
+  **레일 높이 배분:** 대화 목록이 우선이다. 메뉴 행은 32px(낮은 데스크톱 창 — 높이 ≤820px —
+  에선 28px, 행 간격 0), 대화 목록은 늘 `--rail-history-min`(15rem, 최대 45dvh)을 확보하고, 그보다
+  창이 낮으면 **메뉴가 스크롤**된다(목록은 줄지 않는다). 메뉴를 "더보기"로 묶지 않는다.
+  coarse pointer는 44px, ≤860px 서랍은 40px 행을 유지한다.
 - **고정 표면/전경** (테마 무관 상수 — 각 정의에 이유 주석): `--code-*`(코드블록),
   `--diagram-bg / --diagram-line`(drawio·슬라이드 프리뷰 — 흰 원본 위 고정 테두리),
   `--on-avatar`(생성 그라디언트 위 흰 글자), `--on-scrim`(검정 스크림 위 흰 글리프),
@@ -193,7 +202,7 @@ macOS 화면을 복제하지 않는다. 콘텐츠(대화·지식·작업)가 주
 
 ```
 .btn                      /* 베이스(md) — 단독 사용 가능: 정렬·패딩·라운드 포함 */
-.btn.primary              /* ≡ .primary ≡ .btn-primary — accent 채움 (+ --on-accent), 화면당 1개 권장 */
+.btn.primary              /* ≡ .primary ≡ .btn-primary — --accent-fill 채움 (+ --on-accent), 화면당 1개 권장 */
 .btn.secondary            /* panel + 1px line */
 .btn.ghost                /* ≡ .btn-ghost — 투명, hover는 80 계층 공용 목록 */
 .btn.danger               /* danger 토큰 (.ghost-sm.danger 계열과 병합) */
@@ -312,7 +321,7 @@ backdrop을 토큰·베이스로 통일.**
 
 ## 6. 체크리스트 (PR 셀프리뷰)
 
-- [ ] 새 hex/rgba 없음 (시맨틱 토큰 또는 `--n-*` 사용, 액센트 면엔 `--on-accent`, 고정
+- [ ] 새 hex/rgba 없음 (시맨틱 토큰 또는 `--n-*` 사용, 액센트 면엔 `--accent-fill` + `--on-accent`, 고정
   표면엔 `--code-*`/`--diagram-*`/`--on-avatar`/`--on-scrim` 계열)
 - [ ] 새 px 간격/라운드/폰트 없음 (`--s-*` / `--r-*` / `--t-*`)
 - [ ] 인라인 box-shadow 없음 (`--shadow-*`; 80 계층 재질만 예외)

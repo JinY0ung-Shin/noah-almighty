@@ -103,7 +103,7 @@ input[type="radio"] {
   z-index: var(--z-modal);
   padding: var(--s-2) var(--s-4);
   border-radius: var(--r-md);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-weight: 700;
   text-decoration: none;
