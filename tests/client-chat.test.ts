@@ -2747,8 +2747,8 @@ describe("browser-bridge relay", () => {
 
     expect(send).toHaveBeenCalledTimes(3);
     expect(send.mock.calls[0][1]).toMatchObject({ op: "click", driver: "conv-a" });
-    expect(send.mock.calls[1][1].driver).toBe("c".repeat(128));
-    expect(send.mock.calls[2][1].driver).toBeUndefined();
+    expect((send.mock.calls[1][1] as { driver?: string }).driver).toBe("c".repeat(128));
+    expect((send.mock.calls[2][1] as { driver?: string }).driver).toBeUndefined();
   });
 
   it("answers the parked run even with no extension installed", async () => {
