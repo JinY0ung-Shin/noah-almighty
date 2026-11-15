@@ -3282,12 +3282,23 @@ describe("guards around the canvas panel and pane lifecycle", () => {
     expect(pane(id)).toMatchObject({ streaming: false, liveStatus: "" });
   });
 
-  it("closePane stops a streaming pane on its way out", async () => {
+  it("closePane asks before stopping a streaming pane, and keeps it on 취소", async () => {
     const controller = new AbortController();
     const a = seedPane();
     const b = seedPane({ streaming: true, liveRunId: "run9", abortController: controller });
     const fetchFn = useFetch(() => jsonRes({ ok: true }));
-    closePane(b);
+
+    const kept = closePane(b);
+    expect(get(confirmation)).toMatchObject({ title: "창을 닫을까요?", confirmLabel: "중지하고 닫기", tone: "danger" });
+    resolveConfirmation(false);
+    await kept;
+    expect(readState().chatPanes.map((p) => p.id)).toEqual([a, b]);
+    expect(controller.signal.aborted).toBe(false);
+    expect(fetchFn).not.toHaveBeenCalled();
+
+    const closed = closePane(b);
+    resolveConfirmation(true);
+    await closed;
     expect(readState().chatPanes.map((p) => p.id)).toEqual([a]);
     expect(controller.signal.aborted).toBe(true);
     expect(fetchFn).toHaveBeenCalledWith(

@@ -926,7 +926,10 @@ test("in split view a press on the other pane's toggle moves the card there; a s
   await openCard(page, { width: 1680, height: 1000 });
   const card = page.locator("#todo-overlay");
   await expect(card).toHaveAttribute("data-mode", "pinned");
-  await page.getByRole("button", { name: "대화 추가 (분할)" }).click();
+  // The select starts on its "나란히 열기…" placeholder: pick the avatar, then add.
+  const pick = page.getByRole("combobox", { name: "나란히 열 아바타" });
+  await pick.selectOption({ index: 1 });
+  await page.getByRole("button", { name: "나란히 열기", exact: true }).click();
   const panes = page.locator(".chat-pane");
   await expect(panes).toHaveCount(2);
   const toggles = [panes.nth(0).locator(".composer-todo-btn"), panes.nth(1).locator(".composer-todo-btn")];

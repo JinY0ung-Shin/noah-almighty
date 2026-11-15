@@ -129,9 +129,7 @@ html {
 body {
   line-height: 1.5;
   letter-spacing: 0;
-  background:
-    radial-gradient(circle at 78% -10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 42%),
-    var(--bg);
+  background: var(--bg);
 }
 
 h1,
@@ -200,7 +198,7 @@ button:disabled {
 }
 
 :focus-visible {
-  outline: 3px solid var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -214,7 +212,7 @@ button:disabled {
   border-color: color-mix(in srgb, var(--accent) 84%, #000);
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: 0 1px 1px rgba(255, 255, 255, 0.3) inset, 0 4px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+  box-shadow: 0 1px 1px rgba(255, 255, 255, 0.3) inset, var(--shadow-sm);
 }
 
 .btn.primary:hover:not(:disabled),
@@ -223,7 +221,7 @@ button:disabled {
 .new-chat:hover:not(:disabled) {
   border-color: var(--accent-strong);
   background: var(--accent-strong);
-  box-shadow: 0 1px 1px rgba(255, 255, 255, 0.24) inset, 0 7px 20px color-mix(in srgb, var(--accent) 28%, transparent);
+  box-shadow: 0 1px 1px rgba(255, 255, 255, 0.24) inset, var(--shadow-sm);
 }
 
 .btn.ghost,
@@ -291,13 +289,13 @@ button:disabled {
 .conv-search:focus,
 .explore-search-bar:focus-within,
 .composer-box:focus-within {
-  border-color: var(--accent);
-  /* One indicator, one token: the wrappers here delegate to inner controls that
-     suppress their own outline, so the ring must be drawn on the wrapper — and
-     it uses the opaque --focus-ring, never the translucent --accent-ring. */
-  outline: 3px solid var(--focus-ring);
+  /* ONE indicator, one token: the wrappers here delegate to inner controls that
+     suppress their own outline, so the ring is drawn on the wrapper — the opaque
+     --focus-ring, never the translucent --accent-ring — and nothing else (no
+     accent border, glow or lift on top of it: a focused composer is the normal
+     state while someone types). */
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 /* App chrome: content moves beneath floating, translucent functional layers. */
@@ -358,10 +356,11 @@ button:disabled {
 }
 
 .nav-item.active {
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--line-soft);
+  background: var(--bg-elevated);
   color: var(--rail-text);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset;
+  font-weight: 700;
+  box-shadow: var(--shadow-sm);
 }
 
 .nav-item.active svg {
@@ -494,8 +493,7 @@ button:disabled {
 /* Segmented controls mirror the platform pattern: a quiet track and lifted thumb. */
 .seg-control,
 .settings-tabs,
-.inbox-filter,
-.split-controls {
+.inbox-filter {
   border-color: var(--line-soft);
   background: var(--bg-subtle);
   box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04) inset;
@@ -616,7 +614,7 @@ button:disabled {
   border-color: transparent;
   background: var(--accent);
   color: var(--on-accent);
-  box-shadow: 0 5px 16px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: none;
 }
 
 .message.user .bubble a {
@@ -636,10 +634,6 @@ button:disabled {
   border-radius: var(--r-xl);
   padding: var(--s-2);
   box-shadow: var(--shadow-md), 0 1px 0 var(--material-edge) inset;
-}
-
-.composer-box:focus-within {
-  transform: translateY(-1px);
 }
 
 .canvas-panel {

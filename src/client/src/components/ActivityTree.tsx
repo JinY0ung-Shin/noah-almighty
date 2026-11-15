@@ -1,3 +1,4 @@
+import Icon from "./Icon";
 import { agentTitle, openAgentCards, toggleAgentCard } from "../lib/agentCards";
 import { useStore } from "../lib/hooks";
 import type { LiveAgentNode, LiveTaskRow, LiveToolRow } from "../lib/types";
@@ -115,8 +116,8 @@ export default function ActivityTree({ agentId = "main", agents, tools, tasks = 
     >
       {!node.isMain ? (
         foldable ? (
-          // An explicit name: the text content would carry the badge's
-          // decorative ◆ and miss the run status the listitem announces.
+          // An explicit name: the text content would read the badge, label and
+          // row count run together and miss the run status the listitem announces.
           <button
             type="button"
             className="agent-head agent-toggle"
@@ -129,9 +130,12 @@ export default function ActivityTree({ agentId = "main", agents, tools, tasks = 
             <span className="agent-badge">에이전트</span>
             {node.name ? <span className="agent-name">{`@${node.name}`}</span> : null}
             <span className="agent-label">{node.label}</span>
+            {node.status === "failed" ? <span className="agent-failed">실패</span> : null}
             <span className="agent-meta">
               <span className="agent-count">{rowCount}</span>
-              <span className="agent-chevron" aria-hidden="true"></span>
+              <span className="agent-chevron" aria-hidden="true">
+                <Icon name="chevron-right" size={12} />
+              </span>
             </span>
           </button>
         ) : (
@@ -140,6 +144,7 @@ export default function ActivityTree({ agentId = "main", agents, tools, tasks = 
             <span className="agent-badge">에이전트</span>
             {node.name ? <span className="agent-name">{`@${node.name}`}</span> : null}
             <span className="agent-label">{node.label}</span>
+            {node.status === "failed" ? <span className="agent-failed">실패</span> : null}
           </div>
         )
       ) : null}

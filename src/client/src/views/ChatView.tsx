@@ -49,24 +49,21 @@ function splitControls(ctx: ChatController): ReactNode {
         value={ctx.splitAvatarId}
         onChange={(event) => ctx.setSplitAvatarId(event.currentTarget.value)}
         disabled={splitAddBusy || !splitOptions.length || panes.length >= 4}
-        aria-label="분할로 추가할 아바타"
+        aria-label="나란히 열 아바타"
       >
-        {splitOptions.length ? (
-          splitOptions.map((av, index) => (
-            <option key={index} value={av.id}>
-              {av.alias || av.displayName || av.username}
-            </option>
-          ))
-        ) : (
-          <option value="">추가할 아바타 없음</option>
-        )}
+        <option value="">{splitOptions.length ? "나란히 열기…" : "추가할 아바타 없음"}</option>
+        {splitOptions.map((av, index) => (
+          <option key={index} value={av.id}>
+            {av.alias || av.displayName || av.username}
+          </option>
+        ))}
       </select>{" "}
       <button
         className="split-add"
         type="button"
-        title="대화 추가 (분할)"
-        aria-label="대화 추가 (분할)"
-        disabled={splitAddBusy || !splitOptions.length || panes.length >= 4}
+        title="고른 아바타를 나란히 열기"
+        aria-label="나란히 열기"
+        disabled={splitAddBusy || !ctx.splitAvatarId || panes.length >= 4}
         onClick={() => void ctx.addSplitPane()}
       >
         <Icon name="plus" />
@@ -200,7 +197,7 @@ export default function ChatView() {
                       disabled={panes.length <= 1}
                       onClick={(event) => {
                         event.stopPropagation();
-                        closePane(item.id);
+                        void closePane(item.id);
                       }}
                     >
                       <Icon name="close" />

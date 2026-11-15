@@ -93,7 +93,7 @@ export default function RoutineRunBlock({
             return (
               <div key={message.id} className={`message ${message.role}`}>
                 <div className="msg-role">
-                  <span className="role-dot"></span> <span>{isUser ? "예약 작업 지시" : authorName}</span>{" "}
+                  <span>{isUser ? "예약 작업 지시" : authorName}</span>{" "}
                   {message.createdAt ? (
                     <time className="msg-time" dateTime={message.createdAt}>
                       {timeLabel(message.createdAt)}

@@ -779,10 +779,10 @@ export function useChatController() {
     for (const avatar of state.avatars) if (avatar?.id) byId.set(avatar.id, avatar);
     return [...byId.values()];
   })();
+  // "" = nothing picked yet: the select shows its "나란히 열기…" placeholder
+  // rather than preselecting an avatar (which read as an avatar switcher).
   let splitAvatarId = splitAvatarIdState;
-  if (splitOptions.length && !splitOptions.some((avatar) => avatar.id === splitAvatarId)) {
-    splitAvatarId = splitOptions[0].id;
-  } else if (!splitOptions.length && splitAvatarId) {
+  if (splitAvatarId && !splitOptions.some((avatar) => avatar.id === splitAvatarId)) {
     splitAvatarId = "";
   }
   if (splitAvatarId !== splitAvatarIdState) setSplitAvatarId(splitAvatarId);
@@ -1361,6 +1361,7 @@ export function useChatController() {
     setSplitAddBusy(true);
     try {
       await startChatWith(avatar as AvatarSummary, true);
+      setSplitAvatarId("");
     } catch (err) {
       notify(`분할 대화를 추가하지 못했습니다: ${(err as Error).message}`, "warn");
     } finally {

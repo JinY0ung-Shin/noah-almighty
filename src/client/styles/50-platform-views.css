@@ -426,8 +426,7 @@ button.linkish {
 /* Wrapper carries the indicator: the inner .tag-input is borderless and
    suppresses its own outline, so focus has nowhere else to land. */
 .hashtag-editor:focus-within {
-  border-color: var(--accent);
-  outline: 3px solid var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 /* The chip list flows inline with the input within the editor. */
@@ -510,12 +509,7 @@ button.linkish {
 .split-controls {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-0-5);
-  padding: var(--s-1);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--panel);
-  box-shadow: var(--shadow-sm);
+  gap: var(--s-1);
 }
 .split-btn,
 .split-add {
@@ -810,9 +804,6 @@ body.col-resizing {
   color: inherit;
   font-size: var(--t-sm);
   padding: var(--s-2) var(--s-2-5);
-}
-.routine-search:focus {
-  border-color: var(--accent);
 }
 .routine-count {
   font-size: var(--t-xs);

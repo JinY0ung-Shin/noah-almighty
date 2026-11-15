@@ -1727,10 +1727,20 @@ export async function stopPane(paneId: string): Promise<void> {
   if (pane.streaming) finalizePane(paneId, "중지됨", true);
 }
 
-export function closePane(paneId: string): void {
-  const state = readState();
-  const pane = state.chatPanes.find((item) => item.id === paneId);
-  if (pane?.streaming) void stopPane(paneId);
+export async function closePane(paneId: string): Promise<void> {
+  // Closing a pane whose answer is still being written STOPS that answer (the
+  // run is cancelled), unlike switching away, which leaves it running — so it
+  // asks first. A pane with nothing running closes at once, synchronously.
+  if (readState().chatPanes.find((item) => item.id === paneId)?.streaming) {
+    const confirmed = await confirmAction(
+      "이 창의 답변이 아직 생성 중입니다. 창을 닫으면 답변 생성이 중지됩니다.",
+      { title: "창을 닫을까요?", confirmLabel: "중지하고 닫기", tone: "danger" },
+    );
+    if (!confirmed) return;
+  }
+  const pane = readState().chatPanes.find((item) => item.id === paneId);
+  if (!pane) return;
+  if (pane.streaming) void stopPane(paneId);
   updateState((s) => {
     s.chatPanes = s.chatPanes.filter((item) => item.id !== paneId);
     if (!s.chatPanes.length && s.currentAvatar)

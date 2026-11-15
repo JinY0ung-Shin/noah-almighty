@@ -15,6 +15,10 @@ body {
   font-optical-sizing: auto;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Korean wraps between words (어절), never between two syllables of one word;
+     a run too long for its box still breaks rather than overflowing. */
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 
 html {

@@ -153,15 +153,14 @@
    answer text, so the gap toward that text comes from the sibling rule beneath —
    as the FIRST bubble child (tools before any text) the card stays flush with
    the bubble's own padding. */
+/* A quiet disclosure row, the same family as the reasoning card (ChatView.css):
+   no frame or fill of its own inside the answer card — the open tree is
+   indented under the chevron with a hairline guide instead. */
 .activity-done,
 .activity-live {
   margin-bottom: var(--s-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--bg);
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
 }
 /* The gap toward whatever the card follows (answer text, a thinking card). Not
    an unconditional margin-top: that would inset a tools-only bubble's first
@@ -174,8 +173,8 @@
 .activity-live > summary {
   cursor: pointer;
   list-style: none;
-  padding: var(--s-1-5) var(--s-2-5);
-  font-size: var(--t-xs);
+  padding: var(--s-1) 0;
+  font-size: var(--t-sm);
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -187,14 +186,15 @@
 .activity-live > summary::-webkit-details-marker {
   display: none;
 }
-.activity-done > summary::before,
-.activity-live > summary::before {
-  content: "▸";
-  font-size: var(--t-2xs);
+/* The ONE disclosure marker of the answer's secondary rows (activity, reasoning,
+   legacy plan): the same SVG chevron, on the left, turning down when open. */
+.disclosure-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted);
   transition: transform 0.15s var(--ease-out);
 }
-.activity-done[open] > summary::before,
-.activity-live[open] > summary::before {
+details[open] > summary > .disclosure-chevron {
   transform: rotate(90deg);
 }
 .activity-done > summary:hover,
@@ -218,25 +218,28 @@
   flex: none;
   padding: 1px 8px;
   border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--surface-2);
+  color: var(--text-soft);
   font-size: var(--t-2xs);
   font-weight: 600;
   white-space: nowrap;
 }
-.activity-done > .agent-activity {
-  margin: 0;
-  padding: 0 var(--s-2-5) var(--s-2-5);
+/* The 6px offset hangs the hairline guide under the 14px chevron's centre. */
+.activity-done > .agent-activity,
+.activity-live > .agent-activity {
+  margin: var(--s-0-5) 0 0 6px;
+  padding: var(--s-1) 0 var(--s-1) var(--s-3);
+  border-left: 1px solid var(--line);
   overflow-x: hidden;
 }
 /* While streaming, cap the tree's height and scroll within it so a burst of
    tool calls can't grow the bubble unbounded; the newest rows stay in view. */
 .activity-live > .agent-activity {
-  margin: 0;
-  padding: 0 var(--s-2-5) var(--s-2-5);
   max-height: 220px;
   overflow-y: auto;
-  overflow-x: hidden;
+  /* Wheeling past the tree's top must not scroll the transcript (and detach
+     its autoscroll mid-run). */
+  overscroll-behavior: contain;
 }
 /* Answer text sits below the collapsed activity in the final bubble. */
 .bubble > .activity-done + .response-meta,
@@ -253,31 +256,23 @@
   min-width: 0;
   max-width: 100%;
 }
-/* A subagent renders as a distinct "workspace" card — set apart from the flat
-   tool rows so it reads as an agent doing its own delegated work, not one more
-   tool call. While running it gets an accent border + soft glow pulse. */
+/* A subagent is a branch of the tree: indented with a hairline guide, set apart
+   from the flat tool rows by its header (badge + label) rather than by a tinted,
+   striped card. Its state is the head's glyph (spinner / ✓ / ✕) plus the word
+   실패 when it failed — never colour alone. */
 .agent-node.sub {
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-sm);
-  background: var(--accent-soft);
-  padding: var(--s-2) var(--s-2-5);
+  border-left: 1px solid var(--line);
+  /* A straight guide: the Apple layer rounds every .agent-node. */
+  border-radius: 0;
+  padding: var(--s-0-5) 0 var(--s-0-5) var(--s-2-5);
   margin-left: var(--s-1);
 }
-.agent-node.sub[data-status="running"] {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-@keyframes agent-glow {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-ring); }
-  50% { box-shadow: 0 0 0 4px transparent; }
-}
-.agent-node.sub[data-status="done"] {
-  background: transparent;
-  border-left-color: var(--ok);
-}
-.agent-node.sub[data-status="failed"] {
-  border-left-color: var(--warn);
+.agent-failed {
+  flex: none;
+  color: var(--warn);
+  font-size: var(--t-2xs);
+  font-weight: 600;
+  white-space: nowrap;
 }
 .agent-children {
   display: flex;
@@ -314,15 +309,10 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--accent);
-  background: var(--accent-soft-strong);
+  color: var(--text-soft);
+  background: var(--surface-2);
   border-radius: var(--r-pill);
   padding: 1px var(--s-2);
-}
-.agent-badge::before {
-  content: "◆";
-  font-size: var(--t-2xs);
-  line-height: 1;
 }
 .agent-label {
   font-weight: 600;
@@ -368,6 +358,10 @@
 .agent-toggle:active:not(:disabled) {
   transform: none;
 }
+/* Full-width inside a tree that clips sideways: the ring is drawn inside. */
+.agent-toggle:focus-visible {
+  outline-offset: -2px;
+}
 .agent-toggle:hover .agent-label,
 .agent-toggle:hover .agent-count,
 .agent-toggle:hover .agent-chevron {
@@ -386,13 +380,10 @@
   white-space: nowrap;
 }
 .agent-chevron {
+  display: inline-flex;
   flex: none;
   color: var(--muted);
-  font-size: var(--t-2xs);
   transition: transform 0.15s var(--ease-out);
-}
-.agent-chevron::before {
-  content: "▸";
 }
 .agent-toggle[aria-expanded="true"] .agent-chevron {
   transform: rotate(90deg);
@@ -724,7 +715,8 @@
   max-height: 180px;
   overflow: auto;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 .prompt-actions {
   display: flex;
@@ -823,7 +815,9 @@
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
-  word-break: break-word;
+  /* Hangul wraps between words (어절), never between two syllables of one
+     word; overflow-wrap still breaks a run that cannot fit at all. */
+  word-break: keep-all;
 }
 .md > :first-child {
   margin-top: 0;
@@ -866,6 +860,42 @@
 .md li {
   margin: 0.25em 0;
   overflow-wrap: anywhere;
+}
+/* GFM task lists: the checkbox IS the marker. It takes the bullet's place in the
+   list's own gutter (the list keeps its padding, so nested and mixed lists keep
+   their indentation and text alignment), and is drawn so a disabled (read-only)
+   box stays visible. A loose list puts the box inside the item's first <p>. */
+.md li:has(> input[type="checkbox"]),
+.md li:has(> p:first-child > input[type="checkbox"]) {
+  list-style: none;
+}
+.md li > input[type="checkbox"],
+.md li > p:first-child > input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.4em 0 -1.4em;
+  vertical-align: -0.12em;
+  /* A box at text size: a functional 1em square with a small fixed corner. */
+  border: 1.5px solid var(--muted);
+  border-radius: 4px;
+  background: transparent;
+}
+.md li > input[type="checkbox"]:checked,
+.md li > p:first-child > input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.md li > input[type="checkbox"]:checked::before,
+.md li > p:first-child > input[type="checkbox"]:checked::before {
+  content: "";
+  width: 0.55em;
+  height: 0.3em;
+  border-left: 2px solid var(--on-accent);
+  border-bottom: 2px solid var(--on-accent);
+  transform: translateY(-0.05em) rotate(-45deg);
 }
 .md li > ul,
 .md li > ol {
@@ -1061,7 +1091,7 @@
 .md blockquote {
   margin: 0.8em 0;
   padding: var(--s-1) 0 var(--s-1) var(--s-4);
-  border-left: 3px solid var(--accent-soft-strong);
+  border-left: 3px solid var(--line);
   color: var(--text-soft);
 }
 .md hr {
@@ -1258,7 +1288,7 @@ tbody tr:hover td {
   position: relative;
 }
 .composer-attach:has(input:focus-visible) {
-  outline: 3px solid var(--focus-ring);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1543,11 +1573,24 @@ button.composer-bridge:focus-visible {
 .composer-bridge[data-status="outdated"]::before {
   background: var(--warn);
 }
+/* Unreachable is usually just "not installed here" (another PC, a phone): it
+   stays muted with a hollow dot — still a button to the install guide — and red
+   is left for a browser operation that actually failed. */
 .composer-bridge[data-status="unreachable"] {
-  color: var(--danger);
+  color: var(--muted);
 }
 .composer-bridge[data-status="unreachable"]::before {
-  background: var(--danger);
+  box-sizing: border-box;
+  border: 1.5px solid var(--muted);
+  background: transparent;
+}
+/* On a touch-only device (a phone, most tablets) "unreachable" just means
+   "this device has no extension" — nothing to act on. The other states stay:
+   they are the route to an update. */
+@media (hover: none) and (pointer: coarse) {
+  .composer-bridge[data-status="unreachable"] {
+    display: none;
+  }
 }
 
 /* Per-conversation model tier picker (all viewers). Styled to match the

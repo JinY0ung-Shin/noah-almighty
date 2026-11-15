@@ -97,12 +97,6 @@
   transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
 }
 
-.field input:focus,
-.field select:focus,
-.secret-preset-row > .password-field input:focus,
-.secret-preset-row textarea:focus {
-  border-color: var(--accent);
-}
 .field input[aria-invalid="true"] {
   border-color: var(--warn-line);
   background: var(--warn-soft);
@@ -889,6 +883,13 @@ body.col-resizing {
   overflow: hidden;
   white-space: nowrap;
 }
+.canvas-tab:focus-visible,
+.canvas-tab-close:focus-visible {
+  outline-offset: -2px;
+}
+.canvas-tab:hover {
+  color: var(--text);
+}
 .canvas-tab-label {
   min-width: 0;
   overflow: hidden;
@@ -962,18 +963,22 @@ body.col-resizing {
   flex: none;
 }
 .canvas-tool-btn {
-  font-size: var(--t-2xs);
-  padding: var(--s-0-5) var(--s-1-5);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  font-size: var(--t-xs);
+  padding: 0 var(--s-2);
   border: 1px solid var(--line);
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   background: var(--panel);
-  color: var(--muted);
+  color: var(--text-soft);
   cursor: pointer;
-  line-height: 1.4;
+  line-height: 1.2;
 }
 .canvas-tool-btn:hover {
   color: var(--text);
-  border-color: var(--accent);
+  background: var(--panel-strong);
 }
 /* The file tab's 다운로드 is a link dressed as a tool button. */
 a.canvas-tool-btn {
@@ -1369,13 +1374,6 @@ body.col-resizing .canvas-html-frame {
   padding: 0 var(--s-0-5);
 }
 
-.msg-role .role-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
 .bubble {
   max-width: 100%;
   min-width: 0;
@@ -1387,7 +1385,7 @@ body.col-resizing .canvas-html-frame {
   line-height: 1.6;
   box-shadow: var(--shadow-sm);
   overflow-wrap: anywhere;
-  word-break: break-word;
+  word-break: keep-all;
 }
 
 .message.user .bubble {

@@ -85,40 +85,35 @@
   justify-content: flex-end;
   gap: var(--s-2);
 }
-/* Plan card (retired plan mode): a distinct, collapsible card inside an OLDER
-   assistant bubble that still carries a stored plan (response.plan). Read-only. */
+/* Plan card (retired plan mode): an OLDER assistant bubble that still carries a
+   stored plan (response.plan). Read-only. The same quiet disclosure row as the
+   reasoning card below — one component family, so the two never drift apart. */
 .plan-card:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
   min-width: 0;
   max-width: 100%;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
   margin: var(--s-2) 0;
-  overflow: hidden;
 }
 .plan-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
+  gap: var(--s-1-5);
+  padding: var(--s-1) 0;
   cursor: pointer;
   list-style: none;
   user-select: none;
   font-size: var(--t-sm);
+  color: var(--muted);
   min-width: 0;
+}
+.plan-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)):hover {
+  color: var(--text-soft);
 }
 .plan-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::-webkit-details-marker {
   display: none;
 }
-/* Composes the global `.tag` base (geometry + type scale); only the colour and
-   weight deltas that make it read as an accent badge live here. */
 .plan-card-badge:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
-  font-weight: 700;
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
-  letter-spacing: 0.02em;
+  flex: none;
+  font-weight: 600;
 }
 .plan-card-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
   min-width: 0;
@@ -126,10 +121,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: var(--t-xs);
 }
 .plan-card-body:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
-  padding: 0 var(--s-3) var(--s-2);
+  margin: var(--s-0-5) 0 var(--s-1) 6px;
+  padding: 0 0 0 var(--s-3);
+  border-left: 1px solid var(--line);
   min-width: 0;
   max-width: 100%;
 }
@@ -139,50 +135,30 @@
 .thinking-card:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
   min-width: 0;
   max-width: 100%;
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--muted);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
   margin: var(--s-2) 0;
-  overflow: hidden;
 }
 .thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
   display: flex;
   align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
+  gap: var(--s-1-5);
+  padding: var(--s-1) 0;
   cursor: pointer;
   list-style: none;
   user-select: none;
   font-size: var(--t-sm);
+  color: var(--muted);
   min-width: 0;
+}
+.thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)):hover {
+  color: var(--text-soft);
 }
 .thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::-webkit-details-marker {
   display: none;
 }
-/* Chevron affordance (right when closed, down when open) — the badge alone
-   doesn't read as expandable on a collapsed card. */
-.thinking-card-head:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::after {
-  content: "";
-  margin-left: auto;
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-right: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
-  transform: rotate(-45deg);
-  transition: transform 0.15s var(--ease-out);
-}
-.thinking-card[open]:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) .thinking-card-head:where(:not(.md *))::after {
-  transform: rotate(45deg);
-}
-/* Composes the global `.tag` base (geometry + type scale); only the colour and
-   weight deltas that make it read as a muted, secondary badge live here. */
+/* The disclosure chevron is the shared `.disclosure-chevron` (30-agent-md-composer.css). */
 .thinking-card-badge:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
-  font-weight: 700;
-  background: var(--line);
-  color: var(--muted);
-  letter-spacing: 0.02em;
+  flex: none;
+  font-weight: 600;
 }
 /* Live reasoning indicator: shown on the collapsed card while thinking deltas
    stream, so a closed-by-default card still signals the avatar is thinking. */
@@ -192,7 +168,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
-  font-size: var(--t-xs);
+}
+.thinking-card-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::before,
+.plan-card-hint:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *))::before {
+  content: "· ";
 }
 /* Self-contained spinner: the base `.spinner` rule is scoped to `.stream-status`.
    `spin` is a global keyframe. */
@@ -219,7 +198,11 @@
   opacity: 0.78;
 }
 .thinking-card-body:is(.cmp-chat-view, .cmp-chat-view *):where(:not(.md *)) {
-  padding: 0 var(--s-3) var(--s-2);
+  /* Indented under the chevron with a hairline guide: the open reasoning reads
+     as belonging to its row without a frame around it. */
+  margin: var(--s-0-5) 0 var(--s-1) 6px;
+  padding: 0 0 0 var(--s-3);
+  border-left: 1px solid var(--line);
   min-width: 0;
   max-width: 100%;
   color: var(--muted);

@@ -397,6 +397,7 @@ function assistantBody(ctx: ChatController, item: ChatPane, message: StoredMessa
     activityCard = (
       <details className="activity-live activity-done" onToggle={(event) => ctx.toggleCard(activityKey, event)}>
         <summary>
+          <span className="disclosure-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
           <span className="activity-summary-text">{completedActivityLabel(activity)}</span>{" "}
           {memChip ? (
             <span className="activity-memory-chip" title={memChip.title}>
@@ -430,7 +431,8 @@ function assistantBody(ctx: ChatController, item: ChatPane, message: StoredMessa
       {thinking ? (
         <details className="thinking-card" onToggle={(event) => ctx.toggleCard(thinkingKey, event)}>
           <summary className="thinking-card-head">
-            <span className="tag thinking-card-badge">생각 과정</span>{" "}
+            <span className="disclosure-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+            <span className="thinking-card-badge">생각 과정</span>{" "}
             {thinkingFor ? <span className="thinking-card-hint">{thinkingFor} 동안 생각함</span> : null}
           </summary>{" "}
           {ctx.expandedCards.has(thinkingKey) ? <MarkdownHtml className="md thinking-card-body" source={thinking} /> : null}
@@ -440,7 +442,8 @@ function assistantBody(ctx: ChatController, item: ChatPane, message: StoredMessa
         // Read-only: plan mode is retired, but an older turn's stored plan still renders.
         <details className="plan-card" open>
           <summary className="plan-card-head">
-            <span className="tag plan-card-badge">계획</span>
+            <span className="disclosure-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+            <span className="plan-card-badge">계획</span>
             <span className="plan-card-hint">계획 모드</span>
           </summary>{" "}
           <MarkdownHtml className="md plan-card-body" source={plan} />
@@ -471,7 +474,7 @@ function userBody(ctx: ChatController, item: ChatPane, message: StoredMessage, e
             ),
           )}
         </div>
-      ) : null}{" "}
+      ) : null}
       {editing ? <RewindEditor ctx={ctx} item={item} message={message} /> : message.content ? message.content : null}
     </>
   );
@@ -490,7 +493,6 @@ function MessageRow({ ctx, item, message, index }: { ctx: ChatController; item: 
   return (
     <div className={`message ${consultation ? "consultation" : message.role}`}>
       <div className="msg-role">
-        <span className="role-dot"></span>{" "}
         <span>{consultation ? consultationLabel(message) : message.role === "user" ? "나" : item.avatar.alias || item.avatar.displayName}</span>{" "}
         {consultation ? <span className="tag steer-badge">팀원 상담 결과</span> : null}{" "}
         {/* A message the viewer sent WHILE the avatar was answering. The badge is
@@ -556,7 +558,8 @@ function liveTurn(ctx: ChatController, item: ChatPane): ReactNode {
     thinkingCard = (
       <details className={cx("thinking-card", item.thinkingActive && "thinking-card-active")} onToggle={(event) => ctx.toggleLiveThinking(item.id, event)}>
         <summary className="thinking-card-head">
-          <span className="tag thinking-card-badge">생각 과정</span>{" "}
+          <span className="disclosure-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
+          <span className="thinking-card-badge">생각 과정</span>{" "}
           {item.thinkingActive ? (
             <>
               <span className="thinking-card-hint">{thinkingOn ? `생각 중 · ${thinkingOn}` : "생각 중…"}</span>{" "}
@@ -586,6 +589,7 @@ function liveTurn(ctx: ChatController, item: ChatPane): ReactNode {
     activityCard = (
       <details className="activity-live" open>
         <summary>
+          <span className="disclosure-chevron" aria-hidden="true"><Icon name="chevron-right" size={14} /></span>
           <span className="activity-summary-text">{activitySummary(liveRows)}</span>{" "}
           {liveMemChip ? (
             <span className="activity-memory-chip" title={liveMemChip.title}>
@@ -616,7 +620,7 @@ function liveTurn(ctx: ChatController, item: ChatPane): ReactNode {
       {(item.steers ?? []).map((steer) => (
         <div key={steer.id} className="message user steer-pending">
           <div className="msg-role">
-            <span className="role-dot"></span> <span>나</span> <span className="tag steer-badge">전달 대기 중</span>
+            <span>나</span> <span className="tag steer-badge">전달 대기 중</span>
           </div>{" "}
           <div className="bubble">{steer.text}</div>
         </div>
@@ -625,7 +629,7 @@ function liveTurn(ctx: ChatController, item: ChatPane): ReactNode {
       {"   "}
       <div className="message assistant" aria-live="off">
         <div className="msg-role">
-          <span className="role-dot"></span> <span>{item.avatar.alias || item.avatar.displayName}</span>
+          <span>{item.avatar.alias || item.avatar.displayName}</span>
         </div>{" "}
         <div className="bubble">
           {thinkingCard} {streamedAnswer(ctx, item, item.id, liveShownText, liveShownAtts, item.liveAttachments, true)}{" "}

@@ -178,7 +178,8 @@
   font-size: var(--t-xs);
   line-height: 1.55;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
 }
 /* 전수되는 파일 목록: SKILL.md 본문 바로 아래, 같은 폭의 종속 정보로 붙는다. */
 .sk-files:is(.cmp-skills-view, .cmp-skills-view *) {

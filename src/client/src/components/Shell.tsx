@@ -228,6 +228,13 @@ function ConversationRow({
               rail.clearRenameError();
             }}
             onKeyDown={(event) => {
+              // A Korean IME owns Enter/Escape until it commits the syllable — and
+              // the key must not reach the window either (the rail drawer closes on
+              // Escape, which would blur this input and save the half-typed name).
+              if (event.nativeEvent.isComposing || event.keyCode === 229) {
+                event.stopPropagation();
+                return;
+              }
               if (event.key === "Enter") {
                 event.preventDefault();
                 void rail.commitRename(conversation);

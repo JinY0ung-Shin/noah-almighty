@@ -286,6 +286,13 @@
 :root[data-motion="reduce"] .tool-row[data-status="running"] .tool-spinner,
 :root[data-motion="reduce"] .task-row[data-status="running"] .task-spinner,
 :root[data-motion="reduce"] .routine-spinner,
+:root[data-motion="reduce"] .thinking-card-spin,
+:root[data-motion="reduce"] .rail-streaming-note .spinner,
 :root[data-motion="reduce"] .agent-node[data-status="running"] > .agent-head > .agent-spinner {
   animation: spin 0.7s linear infinite !important;
+}
+/* A decorative pulse is not a progress signal: under the global rule above it
+   would keep looping at a random phase (a flicker), so it stops instead. */
+:root[data-motion="reduce"] .conv-live-dot {
+  animation: none;
 }

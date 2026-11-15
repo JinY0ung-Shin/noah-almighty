@@ -206,6 +206,9 @@ export default function PromptModal({ paneId = null }: PromptModalProps) {
     // The root prompt is a dialog layer: one opened over it takes the keys first.
     if (isRootModal && !isTopDialogLayer(backdropRef.current)) return;
     if (event.key === "Escape") {
+      // Escape while a Korean IME composes a 직접 입력 answer cancels the
+      // composition, never the whole question.
+      if (event.isComposing || event.keyCode === 229) return;
       // A question must not be silently dismissible, so Escape maps to the same
       // SAFE decision as the 건너뛰기 button rather than to a no-answer close.
       // A pane instance only answers for its own card so that one Escape can't

@@ -459,4 +459,41 @@ describe("Shell conversation prefetch on intent", () => {
     await settle(5);
     expect(server.messageRequests("c-two")).toBe(2);
   });
+
+  it("a rename leaves Enter and Escape to an IME that is still composing", async () => {
+    await mountRail(list);
+    const patches: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: unknown, init: RequestInit = {}) => {
+        if (init.method === "PATCH") {
+          patches.push(JSON.parse(String(init.body)));
+          return jsonRes({ conversation: { ...list[0], title: "새 이름" } });
+        }
+        return jsonRes({ run: null });
+      }),
+    );
+    const outside = vi.fn();
+    window.addEventListener("keydown", outside);
+    fireEvent.click(screen.getByRole("button", { name: "대화 이름 바꾸기: 첫째" }));
+    const input = screen.getByRole("textbox", { name: "대화 이름" });
+    fireEvent.change(input, { target: { value: "새 이" } });
+
+    // fireEvent returns true when the handler did NOT preventDefault.
+    expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "Escape", keyCode: 229 })).toBe(true);
+    await settle(3);
+    expect(patches).toEqual([]);
+    expect(screen.getByRole("textbox", { name: "대화 이름" })).toBe(input);
+    // Nor did the composing keys reach the window (the rail drawer closes on Escape).
+    expect(outside).not.toHaveBeenCalled();
+    window.removeEventListener("keydown", outside);
+
+    // Committed: Enter saves the whole name.
+    fireEvent.change(input, { target: { value: "새 이름" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await settle(5);
+    expect(patches).toHaveLength(1);
+    expect(JSON.stringify(patches[0])).toContain("새 이름");
+  });
 });

@@ -413,18 +413,14 @@
   padding: var(--s-3);
 }
 /* Guided-tour cards in the welcome modal — the same scenarios the chat empty
-   state offers (.tour-card in 20-shell-chat.css), compacted into the modal's
-   accent callout: two per row, title carrying the weight, description receding
-   to --muted, duration on the shared .tag pill. */
+   state offers (.tour-card in 20-shell-chat.css): a heading and a grid of the
+   cards, two per row, with no callout box of its own around them (cards in a
+   callout in a modal). Title carries the weight, description recedes to
+   --muted, duration on the shared .tag pill. */
 .onboard-tours {
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
-  padding: var(--s-3);
-  border: 1px solid var(--accent-soft-strong);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-sm);
-  background: var(--accent-soft);
 }
 .onboard-tours-head {
   display: flex;
@@ -432,8 +428,9 @@
   gap: var(--s-0-5);
 }
 .onboard-tours-head strong {
-  color: var(--accent-strong);
+  color: var(--text);
   font-size: var(--t-sm);
+  font-weight: 600;
 }
 .onboard-tours-head span {
   color: var(--text-soft);
@@ -535,10 +532,9 @@
 .whats-new-example {
   margin-top: var(--s-0-5);
   padding: var(--s-1-5) var(--s-2-5);
-  border-left: 2px solid var(--accent);
   border-radius: var(--r-sm);
-  background: var(--accent-soft);
-  color: var(--text);
+  background: var(--surface-2);
+  color: var(--text-soft);
   font-size: var(--t-xs);
   line-height: 1.5;
 }
@@ -646,9 +642,6 @@
 .conv-search:disabled {
   opacity: var(--disabled-opacity);
   cursor: not-allowed;
-}
-.conv-search:focus {
-  border-color: var(--accent);
 }
 .conv-search-clear {
   position: absolute;

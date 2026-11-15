@@ -46,6 +46,38 @@ describe("PromptModal", () => {
     await waitFor(() => expect(posted).toEqual([{ runId: "run-q", requestId: "q-1", value: { cancelled: true } }]));
     vi.unstubAllGlobals();
   });
+
+  it("leaves Escape to an IME that is still composing a 직접 입력 answer", async () => {
+    const posted: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        posted.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }),
+    );
+    replaceState({
+      view: "explore",
+      chatPanes: [],
+      promptQueue: [
+        { id: "q-2", runId: "run-q2", paneId: "pane-x", kind: "question", data: { payload: { questions: [{ question: "어느 쪽으로 갈까요?", options: [{ label: "왼쪽" }] }] } } },
+      ],
+    } as unknown as Parameters<typeof replaceState>[0]);
+    render(<PromptModal />);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // Escape cancels the composition, never the whole question.
+    fireEvent.keyDown(window, { key: "Escape", isComposing: true });
+    fireEvent.keyDown(window, { key: "Escape", keyCode: 229 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(posted).toEqual([]);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    // Once nothing is composing, Escape skips the question as before.
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(posted).toEqual([{ runId: "run-q2", requestId: "q-2", value: { cancelled: true } }]));
+    vi.unstubAllGlobals();
+  });
 });
 
 /* ------------------------------------------------------------------ */

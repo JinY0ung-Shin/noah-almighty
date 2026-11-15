@@ -98,6 +98,17 @@
   font-weight: 600;
   padding: 0 var(--s-1);
 }
+/* The base `.spinner` rule is scoped to `.stream-status`; without its own the
+   rail's 응답 중 spinner rendered as nothing. */
+.rail-streaming-note .spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
 
 .view-header > div:first-child:not(.header-left):not(.title) {
   min-width: 0;
