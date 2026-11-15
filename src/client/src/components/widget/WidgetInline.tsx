@@ -15,6 +15,7 @@
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import { clickOutside } from "../../lib/dom";
+import { isImeComposing } from "../../lib/ime";
 import type { Seg } from "../../lib/widgetView";
 import Icon from "../Icon";
 
@@ -53,9 +54,7 @@ function HintRun({ label, segs }: { label: string; segs: Seg[] }) {
 
   function onKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
     // An Escape that ends an IME composition (Hangul) is the input method's, not ours.
-    // TODO: lib/ime.ts isImeComposing
-    const composing = event.nativeEvent.isComposing || event.keyCode === 229;
-    if (event.key !== "Escape" || !open || composing) return;
+    if (event.key !== "Escape" || !open || isImeComposing(event)) return;
     // Stopped here, so no window listener (a dialog this answer sits in) takes the same Escape.
     event.preventDefault();
     event.stopPropagation();
