@@ -91,17 +91,62 @@
   fresh snapshot" error instead of quietly operating on a stranger. Both agent-facing surfaces state it
   (`snapshot`'s description, the promptBuilder browser paragraph): no uid survives
   `navigate`/`navigate_back` or a click that loads a different document.
-- **The WORKING TAB is pinned across turns, and losing it is ANNOUNCED, not silent.** The tab every op
-  acts on is persisted in `chrome.storage.session` (survives service-worker suspension, dies with the
-  browser session), so the tab a previous turn opened is still the tab this turn acts on. When it is
-  gone the bridge falls back to another tab in the group and says WHICH through the `note` channel; a
-  tab the page opened itself (`target=_blank`) is announced the same way. `list_tabs`' `*` marks that
-  tab, and its description now says the marker means "the working tab, pinned until you switch it or it
-  closes" — the agent used to read `*` as "wherever we happen to be". The ONE place the bridge
-  re-points that pin on its own initiative is the clipboard-staging auto-close (actions.md): closing a
-  `COPIED` staging tab restores the id remembered when `new_tab` opened it, or `null` when that tab is
-  gone — never a guess at a plausible substitute — so the unknown case still falls into `targetTab`'s
-  oldest-tab fallback and is ANNOUNCED through the same `note`, exactly as when a tab closes by itself.
+- **The WORKING TAB is per CONVERSATION and pinned across turns; losing it is ANNOUNCED, not silent; and a
+  tab another conversation is using is REFUSED, never shared (0.29.0).** Every relayed op carries `driver` —
+  the run's conversation id, stamped by `routes/chat.ts` from the RUN (`browserDriverKey`), never by the tool
+  or the model (contract.md). `background.js` keeps a map driver → tabId (`workingTabs`, mirrored in
+  `chrome.storage.session` under `workingTabsByDriver`: survives service-worker suspension, dies with the
+  browser session), so the tab a previous turn opened is still the tab this conversation's next turn acts on,
+  and another conversation's `new_tab` can no longer re-point it. An op WITHOUT `driver` (an older client or
+  server) uses the LEGACY slot `""` — the pre-0.29.0 single pointer exactly, shared by everything that does not
+  say who it is; the old `workingTabId` key is read once, migrated into that slot and removed (in practice
+  Chrome clears `storage.session` on an extension update anyway). The pure rules live in `extension/tabLeases.js`
+  (unit-tested in `tests/browser-tab-leases.test.ts`):
+  - **Lease.** A tab is in use by a driver while one of its ops runs there AND for `TAB_LEASE_GRACE_MS` (60 s)
+    after the last one ends — the model's think time between two ops of one task (5–30 s routinely, ~45 s for a
+    slow reasoning model), so another conversation cannot slip in mid-task; the clock restarts at every op, so
+    a long task keeps its tab, and a finished one frees it within a minute. Leases are mirrored in
+    `storage.session` (`tabLeases`, grace-only — MV3 stops an idle worker after ~30 s, inside the grace).
+  - **Refusal.** An op of another driver that would act on a leased tab — the working tab, ANY tab a uid in the
+    op points into (`claimRefTabs`: `uid`, `toUid`, every `fields[].uid` — a uid carries its own tab), a
+    `select_tab` onto it, a `close_tab` of it — is REFUSED with `busyTabMessage` (ok:false, the op never ran),
+    never queued: queuing would act on a page the other conversation is half-way through. The uid tabs are
+    checked BEFORE the working tab is claimed (`assertRefTabsFree`), so a refused op leaves no lease behind on
+    its own tab (the spec caught exactly that: a refused op had blocked the user's tab for a minute). The text tells the
+    agent not to touch it, to open its own tab with `new_tab`, or to wait (it names the seconds left) only if
+    it needs that exact tab. A conversation whose OWN remembered tab was taken over after its grace expired
+    gets the same refusal rather than a silent switch.
+  - **Fallback.** A driver with no usable working tab falls back (`pickFallbackTab`) to the OLDEST group tab no
+    other driver holds a live lease on, preferring one that is nobody else's working tab, and the `note` says
+    which (and how many busy tabs were skipped); when every tab is leased it refuses with
+    `ALL_TABS_BUSY_MESSAGE` (suggesting `new_tab`). `list_tabs` still lists in that case.
+  - **Ownership.** `new_tab` leases its tab to the caller BEFORE the load wait (`touchLease`), and so does
+    `select_tab`; a `target=_blank` tab the caller's own action opened is leased to it too, and a tab ANOTHER
+    driver opened meanwhile is no longer announced as "a new tab opened during this op". `close_tab` and the
+    `onRemoved` listener drop a closed tab from every driver's pointer and from the leases
+    (`forgetTabOwnership`).
+  - **Marks.** `perform()` applies `markTabs` once to whatever tab list an op answers with: `current` is THIS
+    driver's working tab, `busy: true` a tab another driver holds a live lease on. The relay forwards `busy`,
+    and `formatTabs` prints it as a `(BUSY: …)` suffix the tool descriptions explain.
+  - **Mutex.** A per-tab mutex (`createTabMutex`, `claimTab`) keeps two ops from EXECUTING on one tab at the
+    same instant even inside one driver (a duplicate delivery outliving the coalescer, a batch step vs a single
+    op). Both its wait and its hold are bounded at 40 s — the client's own wait for an op — because a renderer
+    frozen by a native dialog leaves an op's CDP call pending forever; `dialog_status`, the probe for exactly
+    that hang, takes the lease but skips the mutex.
+  - **Per-tab state that used to be global** became per tab or per op with it: the screenshot pixel mapping
+    (`lastShotByTab` — one conversation's screenshot no longer voids another's coordinates), the which-tab
+    `note` (`ctx.notice` on the op's own context, not a module variable another op could drain), and the
+    action-highlight clear (only the finishing op's tabs). `refSeq` stays global; it only orders uids.
+  The fallback and every notice still go through the `note` channel; a tab the page opened itself
+  (`target=_blank`) is announced the same way. `list_tabs`' `*` marks the caller's working tab, and its
+  description says the marker means "the working tab, pinned until you switch it or it closes" — the agent
+  used to read `*` as "wherever we happen to be". The ONE place the bridge re-points a pin on its own
+  initiative is the clipboard-staging auto-close (actions.md): closing a `COPIED` staging tab restores the id
+  remembered for THAT driver when its `new_tab` opened it, or `null` when that tab is gone — never a guess at a
+  plausible substitute — so the unknown case still falls into `targetTab`'s fallback and is ANNOUNCED through
+  the same `note`, exactly as when a tab closes by itself. An extension older than 0.29.0 ignores `driver` and
+  keeps ONE shared working tab — the pre-0.29.0 behaviour, nothing breaks; the per-conversation guarantee needs
+  the 0.29.0 build. Verified with the unpacked extension in `tests/visual/tab-leases.spec.ts`.
 - **The common action tail settles, and it never reports a done action as failed.** `SETTLE_OPS`
   (INPUT_OPS + navigate/navigate_back/new_tab/handle_dialog) wait `ACTION_SETTLE_MS` (350) before the
   tail re-reads the tab: a page's answer to input is async, so the old immediate snapshot showed the

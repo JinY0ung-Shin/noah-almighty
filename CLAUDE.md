@@ -112,8 +112,9 @@ These are the invariants the project is built around. New work should reinforce 
   storage reads need consent IN THE EXTENSION per site (and per storage type) and are audited by key name
   + count, never value. Drive what can't be executed directly the way a PERSON would and re-read the
   result. Screenshot pixel→CSS mapping comes from the MEASURED bitmap and is reported in every pixel-mode
-  result. Everything a page returns is UNTRUSTED. → `browser-bridge.md` (hub; start
-  with `contract.md`).
+  result. Everything a page returns is UNTRUSTED. Each conversation drives its OWN working tab (`driver` = the
+  run's conversation id, stamped by the server, never the model); a tab another conversation is using is
+  REFUSED, never shared or queued. → `browser-bridge.md` (hub; start with `contract.md`).
 - **A server-held third-party credential stays READ-ONLY; the WRITE path is the user's own browser.**
   Read-only is STRUCTURAL (the Confluence `requestJson` has no method/body); writes go through the user's
   own browser, so they stay attributable, visible and undoable. → `agent-core.md` ("Cross-cutting rules").

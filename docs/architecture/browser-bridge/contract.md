@@ -217,6 +217,17 @@
     `networkTotal`) — actions.md "read_network". Its own consent kind `network`; the relay keeps the newest 100
     rows, re-cuts every URL at `?`/`#` defensively and slices each field; the audit row records `requests=N`
     only, never a URL.
+  - `driver` on EVERY op (not an op — a wire field; addressing.md "The WORKING TAB is per CONVERSATION").
+    `routes/chat.ts` stamps it on the browser frame from the RUN's conversation id (`browserDriverKey`:
+    id characters only, ≤ 128) and ignores anything `requestData` carries, so the model can neither choose
+    nor impersonate a driver; client `lib/chat.ts` relays it (re-capped at 128) on `BridgeOperation.driver`;
+    the extension keys per-conversation working tabs and tab leases on it (`driverOf`, capped again). Batch
+    steps carry none of their own: `runBatch` runs every step as the batch's driver. The reply gains
+    `tabs[].busy` (a tab another conversation is driving), relayed only when `true`. NOT behind
+    `INSPECT_OPS_MIN_EXTENSION_VERSION` and no probe of its own, because nothing degrades: 0.29.0 had not
+    been released when this was folded in (v2.1.0 shipped 0.28.2), an older build ignores the unknown field
+    and keeps its one shared working tab, and an older client or server that sends no `driver` lands in the
+    extension's LEGACY slot — today's behaviour. So `BROWSER_EXTENSION_MIN_COMPATIBLE` does not move.
   - `batch` (new `steps` — each an ordinary single-op request — plus the batch's own `maxChars` →
     `batchSteps` `[{op, ok, message?, notRun?, note?, url?, title?, landedOn?, snapshot?, snapshotError?,
     pageText…, dialog?}]` + `batchTotal`) — actions.md "batch". The ONE op with its own TTLs: the route parks

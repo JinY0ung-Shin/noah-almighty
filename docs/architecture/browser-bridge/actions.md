@@ -413,11 +413,13 @@
   and no user page ever pays this wait. Without it the auto-close rarely fired for images and the
   guidance's "unchanged title means the copy did NOT happen" turned a success into a false failure.
 - **The tab to return to is REMEMBERED at `new_tab` time, because the open and the click are different
-  TURNS.** A `new_tab` of a staging URL reads the working-tab id BEFORE anything can overwrite it
-  (`currentTabId ?? storedTabId()`, taken ahead of `setCurrentTab(created.id)` — after that the
-  pre-staging id exists nowhere else) and keys it under the tab it just created, in a Map bounded at 20
+  TURNS.** A `new_tab` of a staging URL reads the CALLING DRIVER's working-tab id BEFORE anything can
+  overwrite it (`workingTabOf(ctx.driver)`, taken ahead of `setWorkingTab(ctx.driver, created.id)` — after
+  that the pre-staging id exists nowhere else) and keys `{ tab, driver }` under the tab it just created
+  (0.29.0: the pointer the close restores is THAT driver's, never another conversation's; a bare-number entry
+  from an older mirror reads as the legacy slot), in a Map bounded at 20
   pairs (insertion order, so the bound drops the STALEST pairing rather than the one an agent is still
-  driving) that is ALSO mirrored in `chrome.storage.session` for the same reason `WORKING_TAB_KEY` is
+  driving) that is ALSO mirrored in `chrome.storage.session` for the same reason `WORKING_TABS_KEY` is
   (addressing.md): the MV3 worker idles out between those two turns and module state dies with it, so
   an in-memory-only map would answer "no previous working tab was remembered" for every copy in the
   field. That mirror is merged in ONCE per worker life with module entries winning, and each write
@@ -467,7 +469,10 @@
   inside ONE untrusted wrapper (`reportFetched`). Verified in a real Chromium with the unpacked extension
   (`tests/visual/inspect-ops.spec.ts`: JSON pretty-print, an allowed redirect followed, EUC-KR, a redirect to
   an off-list host refused with the server never seeing that request — with a positive control proving the
-  host resolves — and a PNG refused unread).
+  host resolves — and a PNG refused unread). Its reader tab disturbs no driver's working tab (0.29.0):
+  `groupedTabs()` filters `readUrlTabs` out, so while it reads it is never listed, selected, picked as any
+  conversation's fallback, nor announced as "a new tab opened" by another conversation's concurrent op, and
+  read_url claims no lease — it is answered before the working tab is resolved.
 - **`read_console` (0.29.0) is consent-gated per site and captures only from the approved read on.** Consent
   is a NEW data kind, `console`, in the SAME unified popup and grant store as cookies/storage
   (`requestDataConsent(host, "console")`; `DATA_CONSENT_COPY`, `consent.js`'s `kind=console` branch and
@@ -530,9 +535,11 @@
   only ever travel on the transient single-op frame behind the client's version probe; refused by the tool,
   stripped by the route, refused again by the extension). In the extension `runBatch` builds each step from a
   field WHITELIST (`batchStepMessage` — nothing a step carries can set an internal option) and calls
-  `perform(step, origin, {skipSnapshot})`: the allowlist and landing check, the verification ladder, the
-  file-input/obscured-target refusals, the dialog guard and the working-tab notice all apply per step exactly
-  as if it had been sent alone. `skipSnapshot` (never settable from the wire) drops the action tail's page
+  `perform(step, origin, {skipSnapshot, ctx})`: the allowlist and landing check, the verification ladder, the
+  file-input/obscured-target refusals, the dialog guard, the working-tab notice and (0.29.0) the tab lease and
+  per-tab mutex all apply per step exactly as if it had been sent alone — each step runs as the BATCH's
+  driver with its own op context, claims its tab and releases it, and the lease's grace spans the gap to the
+  next step, so another conversation cannot slip in between steps. `skipSnapshot` (never settable from the wire) drops the action tail's page
   walk for INTERMEDIATE action steps only — the settle wait, landing re-check and dialog check still run; the
   LAST step (under the batch's `maxChars`) and every snapshot/read_text/find step return their content. It
   stops at the first step that fails or leaves a JS dialog open; the batch itself answers ok:true with the
