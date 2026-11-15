@@ -277,7 +277,8 @@ export interface BrowserRequest {
     // 0.29.0 additions. An older extension never sees these: the client probes
     // the installed version first (INSPECT_OPS_MIN_EXTENSION_VERSION) and
     // answers ok:false with an update prompt instead of forwarding.
-    | "find";
+    | "find"
+    | "zoom";
   /** navigate/new_tab: absolute http(s) URL. */
   url?: string;
   /**
@@ -300,7 +301,10 @@ export interface BrowserRequest {
    * page. Dies with the document it was minted in: a navigation invalidates it.
    */
   uid?: string;
-  /** click_at/drag PIXEL mode: coordinates measured on the most recent viewport screenshot image. */
+  /**
+   * click_at/drag PIXEL mode: coordinates measured on the most recent viewport
+   * screenshot image. zoom: the region's top-left in viewport CSS px.
+   */
   x?: number;
   /** click_at/drag PIXEL mode: coordinates measured on the most recent viewport screenshot image. */
   y?: number;
@@ -316,6 +320,9 @@ export interface BrowserRequest {
   /** drag UID mode: where inside the END element's box to release, 0–1. */
   toXFraction?: number;
   toYFraction?: number;
+  /** zoom only: the region's size in viewport CSS px. */
+  width?: number;
+  height?: number;
   /** drag PIXEL mode: release coordinates on the most recent viewport screenshot image. */
   toX?: number;
   toY?: number;
@@ -458,7 +465,7 @@ export type BrowserResult =
        * taken; `message`/`defaultPrompt` are UNTRUSTED page content.
        */
       dialog?: { type: string; message: string; defaultPrompt?: string };
-      /** screenshot: captured image (base64 bytes) — pixels of UNTRUSTED page content. */
+      /** screenshot/zoom: captured image (base64 bytes) — pixels of UNTRUSTED page content. */
       image?: { base64: string; mimeType: string };
       /**
        * screenshot only, SERVER-INTERNAL (set by the chat route's auto-share,

@@ -41,6 +41,7 @@ export const BROWSER_TOOL_NAMES = [
   "mcp__browser__copy_image",
   "mcp__browser__copy_text",
   "mcp__browser__find",
+  "mcp__browser__zoom",
 ] as const;
 
 /**
@@ -955,6 +956,48 @@ export function buildBrowserTools(context: BrowserToolsContext) {
           result,
           "Screenshot of the user's browser tab.",
           viewportCapture ? oversizeCaptureCaveat(result) : undefined,
+        );
+      },
+    ),
+    tool(
+      "zoom",
+      "Capture a MAGNIFIED image of one rectangular REGION of the visible viewport — for small text, icons, " +
+        "chart labels, map details or dense tables that a whole-viewport screenshot renders too small to read. " +
+        "`x`/`y`/`width`/`height` are viewport CSS px: the same space as the `viewport (W×H CSS px)` a " +
+        "screenshot's note reports and the `viewport point` click_at's mapping line reports — so divide a " +
+        "position you measured on a screenshot image by that note's `image px per CSS px` factor. The region " +
+        "must start on screen (scroll first) and is clipped to the viewport; it comes back at up to 4 image px " +
+        "per CSS px, fitted to what you can see natively. Like screenshot, every capture is shared with the " +
+        "user as a file card and saved under `captures/`, and the bridge note states the image size and " +
+        "mapping. After a zoom, click_at/drag PIXEL coordinates are positions on the ZOOM image (until the next " +
+        "screenshot or zoom), which lets you click a tiny target precisely. Needs browser extension 0.29.0 or " +
+        "newer. Unavailable when this conversation's model cannot receive images.",
+      {
+        x: z.number().min(0).max(20000).describe("Region left edge, viewport CSS px."),
+        y: z.number().min(0).max(20000).describe("Region top edge, viewport CSS px."),
+        width: z.number().min(1).max(20000).describe("Region width, CSS px."),
+        height: z.number().min(1).max(20000).describe("Region height, CSS px."),
+      },
+      async (args) => {
+        const denied = gate();
+        if (denied) return denied;
+        if (!ctx.vision) {
+          return text(
+            "The model serving this conversation cannot receive images, so zoom (like screenshot) is " +
+              "unavailable here. Read the page with mcp__browser__snapshot, mcp__browser__find or " +
+              "mcp__browser__read_text instead, or suggest the user switch to a vision-capable model.",
+            true,
+          );
+        }
+        return report(
+          await ctx.execute({
+            op: "zoom",
+            x: args.x,
+            y: args.y,
+            width: args.width,
+            height: args.height,
+          }),
+          `Zoomed capture of the region (${args.x}, ${args.y}) ${args.width}×${args.height} CSS px of the user's browser tab.`,
         );
       },
     ),

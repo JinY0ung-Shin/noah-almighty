@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // by the unpacked-extension Playwright probe (tests/visual/inspect-ops.spec.ts).
 // Kept on ONE line: @ts-expect-error only covers the line after it.
 // @ts-expect-error — plain JS module that ships inside the extension bundle.
-import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX } from "../extension/axtree.js";
+import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
 
@@ -102,5 +102,50 @@ describe("browser tool: find", () => {
     const res = await call(tools, "find", { name: "x" });
     expect(res.isError).toBe(true);
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("zoomShotScale / zoomImageNote (zoom's capture geometry)", () => {
+  it("magnifies a small region up to the per-CSS-px cap", () => {
+    // 100×40 CSS px at zoom 1, dsf 1 → 4× → 400×160, well inside every bound.
+    const scale = zoomShotScale(100, 40, { dsf: 1, zoom: 1 });
+    expect(scale).toBeCloseTo(ZOOM_MAX_PX_PER_CSS, 5);
+    // On a 1.5× display the cap is per CSS px, so the protocol scale shrinks.
+    expect(zoomShotScale(100, 40, { dsf: 1.5, zoom: 1 }) * 1.5).toBeCloseTo(ZOOM_MAX_PX_PER_CSS, 5);
+  });
+
+  it("fits a large region to the edge cap and the standard vision tier", () => {
+    const scale = zoomShotScale(1200, 900, { dsf: 1, zoom: 1, maxEdge: 1400 });
+    const w = Math.round(1200 * scale);
+    const h = Math.round(900 * scale);
+    expect(w).toBeLessThanOrEqual(1400);
+    expect(visionFits(w, h)).toBe(true);
+  });
+
+  it("states the region, the factor and that pixel coordinates now refer to this image", () => {
+    const note = zoomImageNote({ imageWidth: 400, imageHeight: 160, x: 10, y: 20, cssWidth: 100, cssHeight: 40 });
+    expect(note).toContain("Image: 400×160 px = viewport region (10, 20)–(110, 60) CSS px");
+    expect(note).toContain("4.000 image px per CSS px");
+    expect(note).toContain("positions on THIS image (x 0–399, y 0–159)");
+  });
+});
+
+describe("browser tool: zoom", () => {
+  it("is vision-gated exactly like screenshot", async () => {
+    const execute = okResult();
+    const tools = buildBrowserTools({ execute, allowed: true, vision: false });
+    const res = await call(tools, "zoom", { x: 0, y: 0, width: 100, height: 50 });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("cannot receive images");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("relays the region and returns the image as an untrusted image block", async () => {
+    const execute = okResult({ image: { base64: "AAAA", mimeType: "image/jpeg" }, note: "Image: 400×160 px" });
+    const tools = buildBrowserTools({ execute, allowed: true, vision: true });
+    const res = await call(tools, "zoom", { x: 10, y: 20, width: 100, height: 40 });
+    expect(execute).toHaveBeenLastCalledWith({ op: "zoom", x: 10, y: 20, width: 100, height: 40 });
+    expect(res.content[1]).toMatchObject({ type: "image", data: "AAAA", mimeType: "image/jpeg" });
+    expect(res.content[0].text).toContain("UNTRUSTED page content");
   });
 });

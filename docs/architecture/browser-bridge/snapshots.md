@@ -359,3 +359,17 @@
   the page" read differently. The uids come from the same `mintUid`, so click/type take them as-is and they
   die with the document exactly like a snapshot's. It does NOT write `lastSnapshotByTab` (a filtered view must
   not become the stale-snapshot baseline), and the chat route skips its audit row like `snapshot`'s.
+- **`zoom` (0.29.0) is a screenshot of a viewport REGION, and it REPLACES the pixel mapping.** The region is
+  viewport CSS px — the space a screenshot's note calls `viewport (W×H CSS px)` and click_at's mapping line
+  reports — clipped to what is on screen (a region starting off-screen, or under 8×8 CSS px on screen, is
+  refused). `captureZoom` converts it exactly like `captureShot`'s clip (CSS → DIP × `zoom`; bitmap = DIP ×
+  `scale` × dsf) but lets `scale` go ABOVE 1: `zoomShotScale` (`axtree.js`, pure) takes up to
+  `ZOOM_MAX_PX_PER_CSS` (4) image px per CSS px, bounded by `SCREENSHOT_MAX_WIDTH` per edge and then fitted to
+  the standard vision tier with the same loop `viewportShotScale` uses. Never `captureBeyondViewport` (the
+  region is on screen, so the live surface is captured and no responsive re-layout fires). The bitmap is
+  MEASURED (`jpegDimensions`) like every capture, and `lastShot` is written in mode `region` with the region
+  origin and the viewport size kept apart — `shotCssPoint` adds the origin when inverting and runs its drift
+  check against the stored viewport size — so click_at/drag pixel coordinates measured on the zoom image land
+  where the model saw them. The bridge note (`zoomImageNote`) states the image size, the region, the factor,
+  and that pixel coordinates now refer to THIS image until the next screenshot or zoom (the previous viewport
+  screenshot's coordinates stop meaning anything at that moment). No new CDP method.

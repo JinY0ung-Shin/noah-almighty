@@ -579,12 +579,15 @@ export function browserInspectCapabilityLine(
   ctx: Pick<SystemToolsContext, "browserEnabled" | "visionEnabled">,
 ): string {
   if (!ctx.browserEnabled) {
-    return "- Browser inspection (find): unavailable in this run (browser control is not connected).";
+    return "- Browser inspection (find, zoom): unavailable in this run (browser control is not connected).";
   }
   return (
     "- Browser inspection (needs Noah extension 0.29.0+; an older install answers these with an update prompt): " +
     "mcp__browser__find returns only the elements matching a role and/or name substring, with the SAME uids a snapshot prints — " +
-    "use it instead of a full snapshot when you know what you are looking for."
+    "use it instead of a full snapshot when you know what you are looking for" +
+    (ctx.visionEnabled === false
+      ? "; zoom is unavailable because the selected model does not accept images."
+      : "; mcp__browser__zoom captures a magnified REGION of the viewport (x/y/width/height in viewport CSS px, up to 4 image px per CSS px), auto-shared and saved under captures/ like a screenshot, and afterwards click_at/drag pixel coordinates are positions on that zoom image.")
   );
 }
 

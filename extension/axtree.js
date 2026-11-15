@@ -3017,3 +3017,61 @@ export function findAtoms(atoms, opts) {
   }
   return { lines, total, textOnly };
 }
+
+// ---------------------------------------------------------------------- zoom
+//
+// `zoom` is a screenshot of a REGION of the viewport, magnified. Same three
+// pixel units as captureShot (CSS → DIP via the browser zoom → PHYSICAL via the
+// display scale), same vision fit, same measured mapping — plus an UPSCALE,
+// which is the point: a 120×40 CSS-px badge captured at 1× is unreadable.
+
+/** Most image px a zoom spends on one CSS px — past this the page's own pixels are just interpolated. */
+export const ZOOM_MAX_PX_PER_CSS = 4;
+/** Smallest region edge, CSS px; below this there is nothing a model can read. */
+export const ZOOM_MIN_EDGE_CSS = 8;
+
+/**
+ * The `scale` to ask `Page.captureScreenshot` for when capturing a region of
+ * `dipWidth`×`dipHeight` (clip DIP) on a display of `dsf`, so that the bitmap
+ * (DIP × scale × dsf) is as LARGE as allowed: at most `ZOOM_MAX_PX_PER_CSS`
+ * image px per CSS px (`zoom` = the browser zoom, CSS→DIP), at most `maxEdge`
+ * px on either edge, and then fitted to the standard vision tier exactly like a
+ * viewport capture, so the image we send is the image the model sees and pixel
+ * coordinates measured on it come back in OUR space.
+ */
+export function zoomShotScale(dipWidth, dipHeight, info) {
+  const dsf = Number(info?.dsf) > 0 ? Number(info.dsf) : 1;
+  const zoom = Number(info?.zoom) > 0 ? Number(info.zoom) : 1;
+  const maxEdge = Number(info?.maxEdge) > 0 ? Number(info.maxEdge) : 1400;
+  const pw = Math.max(1, Number(dipWidth) * dsf);
+  const ph = Math.max(1, Number(dipHeight) * dsf);
+  let scale = Math.min(ZOOM_MAX_PX_PER_CSS / (zoom * dsf), maxEdge / pw, maxEdge / ph);
+  for (let guard = 0; guard < 6; guard += 1) {
+    const w = Math.max(1, Math.round(pw * scale));
+    const h = Math.max(1, Math.round(ph * scale));
+    if (visionFits(w, h, info)) break;
+    const [fitW] = visionFitSize(w, h, info);
+    if (!(fitW > 0) || fitW >= w) break;
+    scale = scale * (fitW / w);
+  }
+  return Math.max(scale, 1 / 10000);
+}
+
+/**
+ * The bridge note a zoom capture carries: what the image IS, and — because a
+ * zoom REPLACES the pixel mapping click_at/drag invert — that pixel coordinates
+ * now mean positions on THIS image.
+ */
+export function zoomImageNote(info) {
+  const width = Math.max(1, Math.round(Number(info?.imageWidth) || 1));
+  const height = Math.max(1, Math.round(Number(info?.imageHeight) || 1));
+  const x = Math.round(Number(info?.x) || 0);
+  const y = Math.round(Number(info?.y) || 0);
+  const cssWidth = Math.max(1, Math.round(Number(info?.cssWidth) || 1));
+  const cssHeight = Math.max(1, Math.round(Number(info?.cssHeight) || 1));
+  return (
+    `Image: ${width}×${height} px = viewport region (${x}, ${y})–(${x + cssWidth}, ${y + cssHeight}) ` +
+    `CSS px, ${(width / cssWidth).toFixed(3)} image px per CSS px. Until the next screenshot or zoom, ` +
+    `click_at/drag pixel coordinates are positions on THIS image (x 0–${width - 1}, y 0–${height - 1}).`
+  );
+}

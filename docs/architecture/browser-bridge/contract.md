@@ -199,3 +199,7 @@
   in actions.md / snapshots.md:
   - `find` (`role`, `name`, optional `uid` scope → the matching `[eN] …` atoms in `snapshot`, a count in
     `note`) — snapshots.md "find".
+  - `zoom` (`x`/`y` reused as the region origin, new `width`/`height`; viewport CSS px → an image + `note`) —
+    snapshots.md "zoom". Vision-gated like `screenshot`, and the chat route treats it as one: the same
+    base64 cap and mime whitelist, the same auto-share card (`publishBrowserScreenshot`) and `captures/` copy
+    (`saveBrowserCapture`) under the same per-turn/per-run budgets, and an audit row with `at=`/`size=`.

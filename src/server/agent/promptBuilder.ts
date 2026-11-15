@@ -357,9 +357,12 @@ function teamSection(request: AgentRequest): string | null {
  * live fact, so it is stated as a rule ("an older one answers with an update
  * prompt"), never as a reading of the current install.
  */
-function browserInspectGuidance(): string {
+function browserInspectGuidance(request: AgentRequest): string {
   return (
     "Browser inspection: `mcp__browser__find` (role and/or name substring) returns just the matching elements with the same uids a snapshot prints — prefer it to a full snapshot when you know what you need. " +
+    (request.visionEnabled !== false
+      ? "`zoom` captures a magnified region (viewport CSS px) when a screenshot is too small to read; it is shared and saved like a screenshot, and afterwards pixel click_at/drag coordinates refer to the zoom image. "
+      : "") +
     "These need Noah extension 0.29.0 or newer; an older one answers with an update prompt, so tell the user to update and fall back to the older tools."
   );
 }
@@ -1231,7 +1234,7 @@ export function buildSystemPromptAppend(
   // The 0.29.0 browser ops, in their OWN paragraph so the standing browser
   // guidance above can change without touching this one (and vice versa).
   if (request.browserEnabled) {
-    lines.push(browserInspectGuidance());
+    lines.push(browserInspectGuidance(request));
   }
   // Standing (every-turn) guidance: the avatar can recommend a better-suited
   // teammate avatar. Phrased for ANY viewer class — in a headless routine there's

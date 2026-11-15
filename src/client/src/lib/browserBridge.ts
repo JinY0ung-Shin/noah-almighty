@@ -128,7 +128,8 @@ export interface BridgeOperation {
     | "select_tab"
     | "close_tab"
     /** 0.29.0+: only forwarded after the version probe (INSPECT_OPS_MIN_EXTENSION_VERSION). */
-    | "find";
+    | "find"
+    | "zoom";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
@@ -137,9 +138,12 @@ export interface BridgeOperation {
   /** find only: exact accessibility role to match. */
   role?: string | null;
   uid?: string | null;
-  /** click_at/drag pixel mode: coordinates on the most recent viewport screenshot. */
+  /** click_at/drag pixel mode: coordinates on the most recent viewport screenshot. zoom: region origin (CSS px). */
   x?: number | null;
   y?: number | null;
+  /** zoom only: region size in viewport CSS px. */
+  width?: number | null;
+  height?: number | null;
   /** click_at/drag uid mode: 0–1 position inside the uid's box (0.5 = centre). */
   xFraction?: number | null;
   yFraction?: number | null;
@@ -385,7 +389,7 @@ export function extensionSupportsSecretInput(version: string | undefined | null)
 export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
 
 /** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
-export const INSPECT_OPS: ReadonlySet<string> = new Set(["find"]);
+export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom"]);
 
 /**
  * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-

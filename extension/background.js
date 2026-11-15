@@ -58,6 +58,9 @@ import {
   EXTRA_CLICKABLE_GROUP_HEAD,
   findAtoms,
   FIND_MAX_MATCHES,
+  zoomShotScale,
+  zoomImageNote,
+  ZOOM_MIN_EDGE_CSS,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -2349,7 +2352,7 @@ const INPUT_OPS = new Set(["click", "click_at", "drag", "type", "fill_form", "se
  * a hidden tab's surface returns stale or empty pixels, so `screenshot` rides
  * the same show-the-tab path as the input ops.
  */
-const VISIBLE_OPS = new Set([...INPUT_OPS, "screenshot"]);
+const VISIBLE_OPS = new Set([...INPUT_OPS, "screenshot", "zoom"]);
 
 /**
  * Ops that CHANGE the page, so the snapshot they return has to wait for the
@@ -2646,7 +2649,7 @@ async function shotCssPoint(tab, x, y) {
       },
     };
   }
-  if (lastShot.mode !== "viewport") {
+  if (lastShot.mode !== "viewport" && lastShot.mode !== "region") {
     return {
       refusal: {
         ok: false,
@@ -2685,12 +2688,16 @@ async function shotCssPoint(tab, x, y) {
   // model never saw. (±2px absorbs subpixel scroll jitter.)
   const nowMetrics = await sendCdp({ tabId: tab.id }, "Page.getLayoutMetrics", {});
   const nowView = nowMetrics.cssVisualViewport || nowMetrics.cssLayoutViewport || {};
+  // A region (zoom) capture is a window INTO the viewport: its clip is the
+  // region, so the viewport size the drift check compares is stored apart.
+  const viewWidth = lastShot.mode === "region" ? lastShot.viewportWidth : lastShot.clipWidth;
+  const viewHeight = lastShot.mode === "region" ? lastShot.viewportHeight : lastShot.clipHeight;
   const drifted =
     (tab.url || "") !== lastShot.url ||
     Math.abs((nowView.pageX || 0) - lastShot.pageX) > 2 ||
     Math.abs((nowView.pageY || 0) - lastShot.pageY) > 2 ||
-    Math.abs((nowView.clientWidth || 0) - lastShot.clipWidth) > 2 ||
-    Math.abs((nowView.clientHeight || 0) - lastShot.clipHeight) > 2;
+    Math.abs((nowView.clientWidth || 0) - viewWidth) > 2 ||
+    Math.abs((nowView.clientHeight || 0) - viewHeight) > 2;
   if (drifted) {
     return {
       refusal: {
@@ -2708,6 +2715,19 @@ async function shotCssPoint(tab, x, y) {
   // dimensions ride back with the point so the calling op can STATE the mapping
   // it used: a wrong coordinate space and a wrong aim produce the same miss,
   // and only the reported mapping tells them apart (issue #66).
+  if (lastShot.mode === "region") {
+    // The region's own origin, in viewport CSS px, is where image (0, 0) sits.
+    // The point stays inside the REGION (the image's own bounds) and the
+    // reported CSS size is the whole viewport, like a viewport capture's.
+    return {
+      cssX: Math.min(lastShot.regionX + x / pxPerCssX, lastShot.regionX + lastShot.clipWidth - 1, viewWidth - 1),
+      cssY: Math.min(lastShot.regionY + y / pxPerCssY, lastShot.regionY + lastShot.clipHeight - 1, viewHeight - 1),
+      imageWidth,
+      imageHeight,
+      cssWidth: viewWidth,
+      cssHeight: viewHeight,
+    };
+  }
   return {
     cssX: Math.min(x / pxPerCssX, lastShot.clipWidth - 1),
     cssY: Math.min(y / pxPerCssY, lastShot.clipHeight - 1),
@@ -5298,6 +5318,116 @@ async function captureShot(tab, message) {
   return { imageBase64: data, imageMimeType: "image/jpeg", ...(note ? { note } : {}) };
 }
 
+/**
+ * `zoom`: capture a REGION of the visible viewport, magnified. The region is in
+ * viewport CSS px — the space screenshot's note and click_at's mapping line
+ * report — and is converted exactly like captureShot's clip (CSS → DIP × the
+ * browser zoom; the bitmap is DIP × scale × the display factor). Unlike a
+ * viewport screenshot the scale may go ABOVE 1 (zoomShotScale: up to
+ * ZOOM_MAX_PX_PER_CSS image px per CSS px, bounded by the edge cap and the
+ * standard vision fit), which is the whole point of the op.
+ *
+ * It records `lastShot` in mode "region" (origin = the region's top-left), so
+ * click_at/drag pixel coordinates measured on the zoom image land where the
+ * model saw them — and the note says so, since the previous viewport
+ * screenshot's coordinates stop meaning anything once this mapping replaces it.
+ * Never captureBeyondViewport: the region must be ON screen, so the live surface
+ * is captured and no responsive re-layout can happen around it.
+ */
+async function captureZoom(tab, message) {
+  const metrics = await sendCdp({ tabId: tab.id }, "Page.getLayoutMetrics", {});
+  const viewport = metrics.cssVisualViewport || metrics.cssLayoutViewport || {};
+  const zoom = Number(viewport.zoom) > 0 ? Number(viewport.zoom) : 1;
+  const physical = metrics.visualViewport || {};
+  const pxPerCssRaw =
+    Number(physical.clientWidth) > 0 && Number(viewport.clientWidth) > 0
+      ? physical.clientWidth / viewport.clientWidth
+      : zoom;
+  const dsf = pxPerCssRaw / zoom || 1;
+  const viewWidth = Math.round(viewport.clientWidth || 1024);
+  const viewHeight = Math.round(viewport.clientHeight || 768);
+  const num = (value) => (typeof value === "number" && Number.isFinite(value) ? value : NaN);
+  let x = Math.round(num(message.x));
+  let y = Math.round(num(message.y));
+  let width = Math.round(num(message.width));
+  let height = Math.round(num(message.height));
+  if (![x, y, width, height].every(Number.isFinite) || x < 0 || y < 0 || width <= 0 || height <= 0) {
+    return {
+      refusal: {
+        ok: false,
+        message: "zoom needs x, y, width and height: a rectangle in viewport CSS px with a non-negative origin.",
+      },
+    };
+  }
+  if (x >= viewWidth || y >= viewHeight) {
+    return {
+      refusal: {
+        ok: false,
+        message:
+          `The region starts outside the visible viewport (${viewWidth}×${viewHeight} CSS px). ` +
+          "Coordinates are viewport CSS px — scroll the target into view first, or take a screenshot to measure it.",
+      },
+    };
+  }
+  // Clipped to what is ON screen: the part beyond the edge does not exist in
+  // this frame, and the note reports the region actually captured.
+  width = Math.min(width, viewWidth - x);
+  height = Math.min(height, viewHeight - y);
+  if (width < ZOOM_MIN_EDGE_CSS || height < ZOOM_MIN_EDGE_CSS) {
+    return {
+      refusal: {
+        ok: false,
+        message: `The region is too small to capture (minimum ${ZOOM_MIN_EDGE_CSS}×${ZOOM_MIN_EDGE_CSS} CSS px on screen).`,
+      },
+    };
+  }
+  const clip = {
+    x: (x + (viewport.pageX || 0)) * zoom,
+    y: (y + (viewport.pageY || 0)) * zoom,
+    width: Math.max(1, Math.round(width * zoom)),
+    height: Math.max(1, Math.round(height * zoom)),
+  };
+  const scale = zoomShotScale(clip.width, clip.height, { dsf, zoom, maxEdge: SCREENSHOT_MAX_WIDTH });
+  // Same load-bearing hide as captureShot: a drawn highlight is in the bitmap.
+  await sendCdp({ tabId: tab.id }, "Overlay.hideHighlight", {}).catch(() => {});
+  const { data } = await sendCdp({ tabId: tab.id }, "Page.captureScreenshot", {
+    format: "jpeg",
+    quality: 85,
+    clip: { ...clip, scale },
+  });
+  if (!data) {
+    throw new Error("The browser returned an empty capture. Retry after the page settles.");
+  }
+  const measured =
+    jpegDimensions(base64ToBytes(data, JPEG_HEADER_PROBE_BYTES)) || jpegDimensions(base64ToBytes(data));
+  const pxPerCss = scale * zoom * dsf;
+  const imageWidth = measured?.width || Math.max(1, Math.round(width * pxPerCss));
+  const imageHeight = measured?.height || Math.max(1, Math.round(height * pxPerCss));
+  lastShot = {
+    tabId: tab.id,
+    url: tab.url || "",
+    mode: "region",
+    scale,
+    clipWidth: width,
+    clipHeight: height,
+    regionX: x,
+    regionY: y,
+    viewportWidth: viewWidth,
+    viewportHeight: viewHeight,
+    pxPerCss,
+    imageWidth,
+    imageHeight,
+    pxPerCssX: imageWidth / width,
+    pxPerCssY: imageHeight / height,
+    zoom,
+    dsf,
+    pageX: viewport.pageX || 0,
+    pageY: viewport.pageY || 0,
+  };
+  const note = zoomImageNote({ imageWidth, imageHeight, x, y, cssWidth: width, cssHeight: height });
+  return { imageBase64: data, imageMimeType: "image/jpeg", note };
+}
+
 /** Wait for the tab to stop loading, so a snapshot reflects the new page. */
 function waitForLoad(tabId, timeoutMs = 15000) {
   return new Promise((resolve) => {
@@ -5799,10 +5929,10 @@ async function performOp(message, stagingOrigin) {
   // browser-side input router — dropped unless the tab's view is visible.
   if (VISIBLE_OPS.has(message.op) || (message.op === "read_text" && message.expand)) {
     await showTab(tab);
-    // `screenshot` mints its own frame by capturing; every other op here is
-    // about to DISPATCH input and needs the compositor awake first (occluded
+    // `screenshot`/`zoom` mint their own frame by capturing; every other op here
+    // is about to DISPATCH input and needs the compositor awake first (occluded
     // windows drop mouse press/release — see ensureFrameForInput).
-    if (message.op !== "screenshot") await ensureFrameForInput(tab);
+    if (message.op !== "screenshot" && message.op !== "zoom") await ensureFrameForInput(tab);
   }
 
   // An open JS dialog freezes the renderer: every page-touching command below
@@ -5933,6 +6063,18 @@ async function performOp(message, stagingOrigin) {
 
   if (message.op === "screenshot") {
     const shot = await captureShot(tab, message);
+    return {
+      ok: true,
+      ...shot,
+      url: tab.url || "",
+      title: tab.title || "",
+      tabs: (await groupedTabs()).map(describeTab),
+    };
+  }
+
+  if (message.op === "zoom") {
+    const shot = await captureZoom(tab, message);
+    if (shot.refusal) return shot.refusal;
     return {
       ok: true,
       ...shot,

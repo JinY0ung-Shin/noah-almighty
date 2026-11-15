@@ -2100,6 +2100,8 @@ export async function executeChatTurn(
                 uid: requestData.uid ?? null,
                 x: typeof requestData.x === "number" ? requestData.x : null,
                 y: typeof requestData.y === "number" ? requestData.y : null,
+                width: typeof requestData.width === "number" ? requestData.width : null,
+                height: typeof requestData.height === "number" ? requestData.height : null,
                 xFraction:
                   typeof requestData.xFraction === "number" ? requestData.xFraction : null,
                 yFraction:
@@ -2283,6 +2285,10 @@ export async function executeChatTurn(
                   typeof requestData.x === "number" && typeof requestData.y === "number"
                     ? `at=(${requestData.x},${requestData.y})`
                     : "",
+                  // zoom's region: `at` is its top-left, this its size (CSS px).
+                  typeof requestData.width === "number" && typeof requestData.height === "number"
+                    ? `size=${requestData.width}x${requestData.height}`
+                    : "",
                   // click_at's uid mode: the point is relative to the
                   // element above, so the row needs both to be readable.
                   typeof requestData.xFraction === "number" &&
@@ -2367,8 +2373,11 @@ export async function executeChatTurn(
             // none) outside the untrusted wrapper; never on the extension wire.
             let savedPath: string | undefined;
             let saveSkipped: "limit" | "conversation_gone" | "not_an_image" | "save_failed" | undefined;
+            // zoom is a screenshot of a region: same share card, same saved
+            // `captures/` file, same budgets — the user sees every capture the
+            // avatar looked at, magnified or not.
             if (
-              requestData.op === "screenshot" &&
+              (requestData.op === "screenshot" || requestData.op === "zoom") &&
               typeof reply.imageBase64 === "string" &&
               reply.imageBase64
             ) {
