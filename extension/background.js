@@ -1221,17 +1221,33 @@ function releaseHeld(ctx) {
  * conversation's uid would act on that conversation's page. Claimed like the
  * working tab, so its lease and mutex hold too.
  */
-async function claimRefTabs(ctx, message) {
+function refTabsOf(message) {
   const uids = [
     message.uid,
     message.toUid,
     ...(Array.isArray(message.fields) ? message.fields.map((field) => field?.uid) : []),
   ];
+  const tabIds = new Set();
   for (const uid of uids) {
     if (typeof uid !== "string" || !uid) continue;
     const ref = refMap.get(uid);
-    if (ref && typeof ref.tabId === "number") await claimTab(ctx, ref.tabId);
+    if (ref && typeof ref.tabId === "number") tabIds.add(ref.tabId);
   }
+  return [...tabIds];
+}
+
+async function claimRefTabs(ctx, message) {
+  for (const tabId of refTabsOf(message)) await claimTab(ctx, tabId);
+}
+
+/**
+ * Refuse BEFORE claiming anything when a uid points into another driver's tab,
+ * so a refused op leaves no lease behind on its own working tab (a lease taken
+ * by an op that never ran would block the user's tab for a minute for nothing).
+ */
+async function assertRefTabsFree(ctx, message) {
+  await loadLeases();
+  for (const tabId of refTabsOf(message)) assertTabFree(ctx, tabId);
 }
 
 /** The driver whose op ran last — the popup's uid map shows ITS working tab. */
@@ -6664,6 +6680,7 @@ async function performOp(message, stagingOrigin, opts = {}) {
   const tab = await targetTab(ctx);
   // The tab is THIS driver's for the op (refused if another conversation is
   // using it), and so is every tab a uid in the op points into.
+  await assertRefTabsFree(ctx, message);
   await claimTab(ctx, tab.id, { skipMutex: message.op === "dialog_status" });
   await claimRefTabs(ctx, message);
   // Check the tab we are ABOUT to read as well as any URL we are asked to open:
