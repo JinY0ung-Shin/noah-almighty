@@ -29,6 +29,8 @@ describe("inlineUiPromptSpec", () => {
     expect(brief).toContain("never decorate a simple answer");
     expect(brief).toContain("You are NOT called when they change an input");
     expect(brief).toContain(`topic \`${INLINE_UI_MANUAL_TOPIC}\``);
+    expect(brief).toContain("topic `inline-ui-components` (every prop's type and allowed values");
+    expect(brief).toContain("A quiz or a step-by-step guide: a `<pager>` with one `<page>` per question or step");
     expect(brief).toContain(INLINE_UI_REPORT_TITLE);
   });
 
@@ -50,6 +52,8 @@ describe("inlineUiPromptSpec", () => {
   });
 
   it("stays small: it is in the prompt of every interactive chat run", () => {
-    expect(brief.length).toBeLessThan(6200);
+    // 6200 → 6600 (2026-11-15): the pager/hint/celebrate trio and the line that says when to use it,
+    // and the full reference now names two topics (`inline-ui-components` for props).
+    expect(brief.length).toBeLessThan(6600);
   });
 });

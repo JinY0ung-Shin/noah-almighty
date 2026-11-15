@@ -227,7 +227,7 @@ describe("checkWidget: <svg> elements are an allowlist", () => {
     expect(errorOf('<path d="M0 0" />')).toMatch(/<path> is an SVG element: it exists only inside <svg viewBox="…">…<\/svg>\. Wrap the drawing in an <svg>\./);
     expect(errorOf(svg('<slider label="a" value={1} onChange={(v) => v} />'))).toMatch(/<slider> is not an SVG element a widget can draw\./);
     // <text> inside an inline component is refused by the component's own rule
-    expect(errorOf(`<text>a <svg ${BOX}></svg></text>`)).toMatch(/<text> takes text, \{expr\} and <link> only, but contains <svg>/);
+    expect(errorOf(`<text>a <svg ${BOX}></svg></text>`)).toMatch(/<text> takes text, \{expr\}, <link> and <hint> only, but contains <svg>/);
   });
 
   it("what may sit inside what", () => {

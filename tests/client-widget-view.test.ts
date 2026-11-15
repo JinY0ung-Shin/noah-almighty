@@ -486,3 +486,58 @@ describe("cellText", () => {
     ]);
   });
 });
+
+describe("pager, hint and celebrate in the view", () => {
+  function view(text: string, override: Record<string, unknown> = {}): { nodes: VNode[]; problems: string[] } {
+    const doc = parseAnswer(text);
+    const rt = createRuntime();
+    const values = { ...restoreState(doc, null).values, ...override };
+    const nodes = answerNodes(buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: (name) => values[name], set: () => {}, copy: () => {} }), rt, values, createAnswerViewCache()));
+    return { nodes, problems: collectWidgetProblems(doc, nodes) };
+  }
+
+  it("a <pager> carries EVERY page, evaluated, in order — and its bound value, clamped to an index", () => {
+    const { nodes, problems } = view('{@state q = 1}\n<pager label="Quiz" value={q} onChange={setQ} nextDisabled>\n  {#each ["a", "b", "c"] as item, i}\n    <page title={`Q${i + 1}`}><text>{item}</text></page>\n  {/each}\n</pager>\n');
+    expect(problems).toEqual([]);
+    const pager = el(nodes, "pager");
+    expect(pager.props).toMatchObject({ label: "Quiz", value: 1, nextDisabled: true });
+    expect(typeof pager.props.onChange).toBe("function");
+    const pages = pager.children as ElVNode[];
+    expect(pages.map((page) => [page.tag, page.props.title, (page.children[0] as ElVNode).segs[0].text])).toEqual([
+      ["page", "Q1", "a"],
+      ["page", "Q2", "b"],
+      ["page", "Q3", "c"],
+    ]);
+    // Keys stay distinct per page, so the one shown keeps its nodes across renders.
+    expect(new Set(pages.map((page) => page.key)).size).toBe(3);
+    expect(el(view('<pager value={2.6}><page><text>a</text></page></pager>').nodes, "pager").props.value).toBe(3);
+    expect(el(view('<pager value={-4}><page><text>a</text></page></pager>').nodes, "pager").props.value).toBe(0);
+  });
+
+  it("a <hint> is ONE run with no text of its own, carrying its bubble's runs — in a sentence, in a loose line, on its own line", () => {
+    const inText = el(view("<text>2 + 2? <hint>Count **twice**.</hint> Go on.</text>").nodes, "text");
+    expect(inText.segs).toEqual([
+      { text: "2 + 2? " },
+      { text: "", hint: { label: "힌트", segs: [{ text: "Count " }, { text: "twice", b: true }, { text: "." }] } },
+      { text: " Go on." },
+    ]);
+    const labelled = el(view('<title>Q1 <hint label="풀이 힌트">tip</hint></title>').nodes, "title");
+    expect(labelled.segs[1]).toEqual({ text: "", hint: { label: "풀이 힌트", segs: [{ text: "tip" }] } });
+    const loose = view("<box>\n  Question <hint>tip</hint>\n</box>").nodes;
+    expect((el(loose, "box").children[0] as Extract<VNode, { k: "inline" }>).segs.map((seg) => seg.hint?.segs[0].text ?? seg.text)).toEqual(["Question ", "tip"]);
+    const alone = view("<hint>On its own.</hint>").nodes;
+    expect(alone).toHaveLength(1);
+    expect(alone[0]).toMatchObject({ k: "inline", segs: [{ text: "", hint: { label: "힌트", segs: [{ text: "On its own." }] } }] });
+  });
+
+  it("a <hint> with nothing to say draws nothing, and a broken link in its bubble reaches the avatar", () => {
+    expect(el(view('{@const tip = ""}\n<text>Q <hint>{tip}</hint></text>').nodes, "text").segs).toEqual([{ text: "Q " }]);
+    const { problems } = view('<text>Q <hint>see <link href="ftp://x">this</link></hint></text>');
+    expect(problems.join("\n")).toMatch(/<link>: href:/);
+  });
+
+  it("a <celebrate> is a node with a boolean `when` — false when it was left empty", () => {
+    expect(el(view('{@state n = 3}\n<celebrate when={n >= 3} tone="success" label="세 번!" />').nodes, "celebrate").props).toMatchObject({ when: true, tone: "success", label: "세 번!" });
+    expect(el(view("{@const x = null}\n<celebrate when={x} />").nodes, "celebrate").props.when).toBe(false);
+  });
+});

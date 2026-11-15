@@ -441,6 +441,180 @@
   flex: 0 1 auto;
 }
 
+/* Pager: its <page>s one at a time under a compact "‹ n / N ›" header. */
+.wg-pager {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.wg-pager-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+  min-height: 28px;
+}
+.wg-pager-label {
+  min-width: 0;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--text-soft);
+}
+.wg-pager-nav {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--s-1);
+}
+.wg-pager-count {
+  min-width: 3.5em;
+  font-size: var(--t-sm);
+  color: var(--muted);
+  text-align: center;
+}
+.wg-pager-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.wg-pager-arrow:hover:not([aria-disabled="true"]) {
+  background: var(--bg-subtle);
+}
+.wg-pager-arrow[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+.wg-pager-arrow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.wg-pager-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wg-page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wg-page-title {
+  font-size: var(--t-base);
+  font-weight: 600;
+}
+
+/* Hint: a lightbulb button in the line; its bubble opens under it. */
+.wg-hint-wrap {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+}
+.wg-hint-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin: 0 var(--s-0-5);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--warn);
+  cursor: pointer;
+}
+.wg-hint-btn:hover,
+.wg-hint-btn[aria-expanded="true"] {
+  border-color: var(--warn-line);
+  background: var(--warn-soft);
+}
+.wg-hint-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.wg-hint-pop {
+  position: absolute;
+  top: calc(100% + var(--s-1));
+  left: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  font-size: var(--t-sm);
+  font-weight: normal;
+  line-height: 1.5;
+  text-align: start;
+  white-space: normal;
+}
+.wg-hint-pop[hidden] {
+  display: none;
+}
+
+/* Celebrate: no box of its own; a burst (or, with 움직임 줄이기, a still badge)
+   centred on the UI block it sits in. */
+.wg-root {
+  position: relative;
+}
+.wg-celebrate {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+.wg-confetti {
+  position: absolute;
+  inset: 0;
+}
+.wg-confetti-piece {
+  position: absolute;
+  top: -4px;
+  left: -3px;
+  width: 6px;
+  height: 9px;
+  border-radius: 1px;
+  opacity: 0;
+}
+.wg-confetti-piece.wg-confetti-round {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.wg-celebrate-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -50%);
+  padding: var(--s-1) var(--s-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+:root[data-motion="reduce"] .wg-confetti {
+  display: none;
+}
+
 /* ---- Inline UI in an answer (components/widget/AnswerUi.tsx) ----
    The UI blocks sit in the bubble between the answer's Markdown runs, as wide
    as the bubble, with the same air around them a paragraph has. */

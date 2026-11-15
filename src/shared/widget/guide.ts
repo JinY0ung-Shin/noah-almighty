@@ -13,8 +13,11 @@
  */
 import { WIDGET_COMPONENTS, WIDGET_TAGS, type ComponentSpec } from "./spec.js";
 
-/** `mcp__system__read_manual` topic that holds the full reference. */
+/** `mcp__system__read_manual` topic that is inline UI's entry: grammar, limits, worked examples. */
 export const INLINE_UI_MANUAL_TOPIC = "inline-ui";
+
+/** The topic that holds every component's props (split out of `inline-ui` when that page reached its cap). */
+export const INLINE_UI_COMPONENTS_MANUAL_TOPIC = "inline-ui-components";
 
 /** Heading of the paragraph that tells the avatar what the viewer's browser could not draw. */
 export const INLINE_UI_REPORT_TITLE = "Inline UI render report";
@@ -84,6 +87,8 @@ Example
   <button send={\`수량 \${qty}개로 주문해 줘\`}>이대로 주문</button>
 </box>
 
-Every prop's type and allowed values, the limits, \`<svg>\` drawings and the icon names: \`mcp__system__read_manual\` topic \`${INLINE_UI_MANUAL_TOPIC}\` — read it once before a layout that goes beyond the example. A tag or prop that does not exist is dropped where it stands, and what the user's browser could not draw is told to you at the start of your next turn ("${INLINE_UI_REPORT_TITLE}").`;
+A quiz or a step-by-step guide: a \`<pager>\` with one \`<page>\` per question or step (\`{#each}\` may write them), a \`<hint>\` next to a question, and \`<celebrate when={…} />\` for the moment the user gets it all right.
+
+Full reference, via \`mcp__system__read_manual\`: topic \`${INLINE_UI_COMPONENTS_MANUAL_TOPIC}\` (every prop's type and allowed values, \`<svg>\` drawings, icon names) and topic \`${INLINE_UI_MANUAL_TOPIC}\` (grammar, limits, worked examples) — read them once before a layout that goes beyond the example. A tag or prop that does not exist is dropped where it stands, and what the user's browser could not draw is told to you at the start of your next turn ("${INLINE_UI_REPORT_TITLE}").`;
   return cached;
 }

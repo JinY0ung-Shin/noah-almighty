@@ -68,6 +68,7 @@ export const WIDGET_ICON_NAMES: readonly string[] = Object.freeze([
   "monitor",
   "network",
   "panel-left-close",
+  "lightbulb",
 ]);
 
 /** Pixel size of each `<icon size>` step. */

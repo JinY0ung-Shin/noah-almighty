@@ -109,6 +109,8 @@ class Checker {
   /** Names whose use changes state or the clipboard — when they resolve to the root scope (a local may shadow them). */
   effects = new Set<string>(ACTION_NAMES);
   root = new Scope();
+  /** The component whose children are being checked (`{#each}`/`{#if}` and unknown tags are transparent); null at the top level. */
+  parent: string | null = null;
 
   constructor(
     public doc: WidgetDoc,
@@ -262,6 +264,10 @@ class Checker {
       return;
     }
     if (spec.tag === "submit") this.submits = true;
+    if (spec.parents && !spec.parents.includes(this.parent ?? "")) {
+      const where = spec.parents.map((t) => `<${t}>`).join(" or ");
+      this.problem(`<${spec.tag}> belongs directly inside ${where}${this.parent ? `, not inside <${this.parent}>` : ""}: <${spec.parents[0]}><${spec.tag}>…</${spec.tag}><${spec.tag}>…</${spec.tag}></${spec.parents[0]}>.`, node.s);
+    }
 
     const seen = new Set<string>();
     for (const attr of node.attrs) {
@@ -305,15 +311,26 @@ class Checker {
       this.svgRoot(node, scope);
       return;
     }
+    if (spec.childTags) {
+      const only = spec.childTags.map((t) => `<${t}>`).join(", ");
+      const bad = this.firstElement(node.children, spec.childTags);
+      if (bad) this.problem(`<${spec.tag}> holds only ${only} children, but contains <${bad.name}>. Put <${bad.name}> inside a ${only.split(", ")[0]}.`, bad.s);
+      else if (this.hasLooseText(node.children)) this.problem(`Text directly inside <${spec.tag}> is not shown. Put it inside a ${only.split(", ")[0]}.`, node.s);
+      if (!this.hasElement(node.children, spec.childTags)) this.problem(`<${spec.tag}> needs at least one ${only.split(", ")[0]} child.`, node.s);
+    }
     if (spec.child === "inline") {
       const allowed = spec.inlineTags ?? [];
       const bad = this.firstElement(node.children, allowed);
       if (bad) {
-        const takes = allowed.length ? `text, {expr} and ${allowed.map((t) => `<${t}>`).join(", ")} only` : "text and {expr} only";
+        const tags = allowed.map((t) => `<${t}>`);
+        const takes = tags.length ? `text, {expr}, ${tags.length > 1 ? `${tags.slice(0, -1).join(", ")} and ${tags[tags.length - 1]}` : tags[0]} only` : "text and {expr} only";
         this.problem(`<${spec.tag}> takes ${takes}, but contains <${bad.name}>. Put <${bad.name}> next to it (for example both inside a <row>).`, bad.s);
       }
     }
+    const outer = this.parent;
+    this.parent = spec.tag;
     this.children(node.children, scope);
+    this.parent = outer;
   }
 
   attr(spec: ComponentSpec, attr: Attr, scope: Scope): void {
@@ -484,6 +501,27 @@ class Checker {
 
   hasContent(nodes: TNode[]): boolean {
     return nodes.some((n) => (n.t === "text" ? n.value.trim() !== "" : true));
+  }
+
+  /** Non-blank text or an `{expr}` in a children list, `{#each}`/`{#if}` looked into. */
+  hasLooseText(nodes: TNode[]): boolean {
+    return nodes.some((n) =>
+      n.t === "text"
+        ? n.value.trim() !== ""
+        : n.t === "expr" ||
+          (n.t === "each" && (this.hasLooseText(n.children) || (n.empty ? this.hasLooseText(n.empty) : false))) ||
+          (n.t === "if" && n.branches.some((b) => this.hasLooseText(b.children))),
+    );
+  }
+
+  /** Whether a children list holds one of `tags`, `{#each}`/`{#if}` looked into. */
+  hasElement(nodes: TNode[], tags: readonly string[]): boolean {
+    return nodes.some((n) =>
+      n.t === "el"
+        ? tags.includes(n.name)
+        : (n.t === "each" && (this.hasElement(n.children, tags) || (n.empty ? this.hasElement(n.empty, tags) : false))) ||
+          (n.t === "if" && n.branches.some((b) => this.hasElement(b.children, tags))),
+    );
   }
 
   /** The first element in an inline body that is not one of the `allowed` tags (blocks are looked into). */
