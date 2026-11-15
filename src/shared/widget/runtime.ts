@@ -40,6 +40,7 @@ import {
   toStr,
   type Runtime,
 } from "./interp.js";
+import { applicableStoredState, type InlineUiStateEntry } from "../inlineUiState.js";
 import { normalizeProps } from "./spec.js";
 import type { ConstNode, EachNode, ElNode, ExprNode, IfNode, TNode, WidgetDoc } from "./template.js";
 import { displayText } from "./text.js";
@@ -103,11 +104,8 @@ export function initialState(doc: WidgetDoc): { values: Record<string, unknown>;
   return { values, errors };
 }
 
-/** One stored state entry: the value and the declaration it was stored under. */
-export interface StoredState {
-  sig: string;
-  value: unknown;
-}
+/** One stored state entry: the value and the declaration it was stored under (the server's record entry). */
+export type StoredState = InlineUiStateEntry;
 
 /**
  * State for a document, carrying over what was there before: a stored value
@@ -119,9 +117,8 @@ export function restoreState(doc: WidgetDoc, stored: Record<string, StoredState>
   const init = initialState(doc);
   if (!stored || typeof stored !== "object") return init;
   for (const st of doc.states) {
-    if (!hasOwn(stored, st.name)) continue;
-    const entry = stored[st.name];
-    if (!entry || typeof entry !== "object" || entry.sig !== st.sig) continue;
+    const entry = applicableStoredState(stored, st);
+    if (!entry) continue;
     try {
       init.values[st.name] = sanitizeData(entry.value, MAX_STATE_NODES);
     } catch {
