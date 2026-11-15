@@ -237,6 +237,17 @@
   the stored session unless it is a rewind, whose resume point the route already chose). A rewind/regenerate
   re-reads its ANCHOR row's stored attachments from disk (`readChatImages`). `express.json` limit was bumped
   3mb→40mb. Conversation delete sweeps the image dir (`deleteConversationImages`).
+- **Images hold their box before they load (2026-11-15).** Every image attachment written to the store
+  (`saveChatImages`, `publishWorkspaceImage`, `saveHiddenChatImage` — so uploads, `show_file`, screenshots,
+  deck/preview slides) records `width`/`height` read from the bytes' HEADER (`imageDimensions.ts`: PNG IHDR,
+  JPEG SOF via `visionImage.ts`'s `jpegDimensions` + Exif orientation 5–8 swaps the edges, GIF screen, WebP
+  VP8/VP8L/VP8X; anything else → no fields, never an error). It rides `attachments_json` — no column, no
+  migration: older rows simply have none. The workspace document preview cache does the same per page
+  (`meta.json` → `sizes` on the `ready` answer). The client draws every such `<img>` through
+  `components/ReservedImage.tsx`: a known size becomes `width`/`height` attributes (the transcript fits it into
+  the 240 px thumbnail box, `chatThumbSize`) with CSS `height: auto`; an unknown one (old rows, a workspace image
+  file, the optimistic bubble's data URL) is `data-pending` — a per-surface placeholder box — until it loads or
+  fails.
 - **Vision gating is PER-RUN, per-model** (`agent/pi/modelCatalog.ts` `visionForCatalogModel`): effective vision =
   pi's own image setting ALONE (`input` in pi's `/v1/models`, set on pi's admin LLM page: only a model reported
   without `image` is text-only; unknown reads as vision on). Noah's admin per-model policy and `MODEL_VISION` are

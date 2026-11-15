@@ -369,7 +369,8 @@ PEOPLE: nothing about it reaches the avatar (no prompt line, no `describe_system
     next to the file the kernel says was opened (`/proc/self/fd`), accepted only when its `pptxSha256` equals the
     bytes just read — else LibreOffice.
   - **The renders are an expiring CACHE**, `<dataDir>/workspace-previews/<u-key>/<id>/` (`page-N.<ext>` + `meta.json`,
-    published by one rename). `id` = sha256(user, device, inode, size, mtime, ext) of the OPENED file, so a rewritten
+    published by one rename; `meta.json` records each page's header `width`/`height`, which the `ready` answer
+    carries as `sizes` so the tab reserves each page's box — an entry without them answers without `sizes`). `id` = sha256(user, device, inode, size, mtime, ext) of the OPENED file, so a rewritten
     file is a new entry; it is not a content hash (a file forced back to the same size and mtime keeps its old pages
     until expiry — the user's own file; the download is always the real bytes). Entries go after 6 h or past 20 per
     user (swept every 10 min by an unref'd timer and on requests), the whole root at boot, and a user's folder with the account

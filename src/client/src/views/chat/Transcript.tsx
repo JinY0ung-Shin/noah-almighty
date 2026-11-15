@@ -15,6 +15,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from "re
 import ActivityTree from "../../components/ActivityTree";
 import AvatarImage from "../../components/AvatarImage";
 import Icon from "../../components/Icon";
+import ReservedImage, { chatThumbSize } from "../../components/ReservedImage";
 import TeamBrainCard from "../../components/TeamBrainCard";
 import TodoOverlay from "../../components/TodoOverlay";
 import {
@@ -180,7 +181,7 @@ export function attachmentCards(
         return (
           <figure key={att.id} className="msg-image-item">
             <a className="msg-image-link" href={src} target="_blank" rel="noopener noreferrer">
-              <img className="msg-image" src={src} alt={att.caption || att.name || "생성된 이미지"} loading="lazy" />
+              <ReservedImage className="msg-image" src={src} alt={att.caption || att.name || "생성된 이미지"} loading="lazy" size={chatThumbSize(att)} />
             </a>{" "}
             {att.caption ? <figcaption className="msg-image-caption">{att.caption}</figcaption> : null}
           </figure>
@@ -471,7 +472,7 @@ function userBody(ctx: ChatController, item: ChatPane, message: StoredMessage, e
             ) : (
               <figure key={att.id} className="msg-image-item">
                 <a className="msg-image-link" href={imageSrc(message, att, item)} target="_blank" rel="noopener noreferrer">
-                  <img className="msg-image" src={imageSrc(message, att, item)} alt={att.caption || att.name || "첨부 이미지"} loading="lazy" />
+                  <ReservedImage className="msg-image" src={imageSrc(message, att, item)} alt={att.caption || att.name || "첨부 이미지"} loading="lazy" size={chatThumbSize(att)} />
                 </a>{" "}
                 {att.caption ? <figcaption className="msg-image-caption">{att.caption}</figcaption> : null}
               </figure>

@@ -72,7 +72,8 @@ describe("chatImages", () => {
     const decoded = decodeChatImages([{ id: "img-1", data: PNG_URL }]);
     if (!("images" in decoded)) throw new Error("expected images");
     const { attachments, images } = saveChatImages(config(), "conv-1", decoded.images);
-    expect(attachments).toEqual([{ id: "img-1", kind: "image", mediaType: "image/png", name: undefined }]);
+    // width/height: read from the PNG's IHDR at save time (the bubble's box before the bytes load).
+    expect(attachments).toEqual([{ id: "img-1", kind: "image", mediaType: "image/png", name: undefined, width: 1, height: 1 }]);
     expect(images[0]).toEqual({ mediaType: "image/png", data: PNG_B64 });
     // File landed under the conversation's image dir.
     expect(fs.existsSync(path.join(chatImagesDir(config(), "conv-1"), "img-1.png"))).toBe(true);
@@ -218,6 +219,8 @@ describe("chatImages", () => {
       caption: "결과 이미지",
     });
     expect(resolveStoredImage(config(), "conv-output", result.attachment.id)).toBeTruthy();
+    // The header's size is recorded with the metadata.
+    expect(result.attachment).toMatchObject({ width: 1, height: 1 });
 
     deleteChatImageAttachments(config(), "conv-output", [result.attachment]);
     expect(resolveStoredImage(config(), "conv-output", result.attachment.id)).toBeNull();
@@ -584,5 +587,21 @@ describe("savePreviewImages", () => {
       expect(resolved).not.toBeNull();
     }
     expect(savePreviewImages(config(), "conv-prev", [])).toEqual([]);
+  });
+
+  it("records each page's header size, and none when the header cannot be read", () => {
+    const ihdr = (width: number, height: number) => {
+      const b = Buffer.alloc(33);
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+      b.writeUInt32BE(13, 8);
+      b.write("IHDR", 12, "latin1");
+      b.writeUInt32BE(width, 16);
+      b.writeUInt32BE(height, 20);
+      return b;
+    };
+    const [slide, odd] = savePreviewImages(config(), "conv-prev-size", [ihdr(1920, 1080), Buffer.from("not-a-header")]);
+    expect(slide).toMatchObject({ width: 1920, height: 1080 });
+    expect(odd).not.toHaveProperty("width");
+    expect(odd).not.toHaveProperty("height");
   });
 });

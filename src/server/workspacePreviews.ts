@@ -47,6 +47,7 @@ import { piUserKey } from "./agent/pi/piWorkspace.js";
 import { loadConverterPreviews } from "./deckPreview.js";
 import { probeDocumentPreviews, renderDocumentPreviews } from "./deckRender.js";
 import logger from "./logger.js";
+import { imageDimensions } from "./imageDimensions.js";
 import { procFdAvailable } from "./pinnedFs.js";
 import type { AppConfig } from "./types.js";
 import { openWorkspaceFile, workspaceBrowserAvailable } from "./workspaceBrowser.js";
@@ -112,7 +113,18 @@ interface PageImage {
 }
 
 interface CacheMeta {
-  pages: { file: string; mediaType: string }[];
+  /** `width`/`height`: the page image's header size (absent on entries written before them, or unreadable). */
+  pages: { file: string; mediaType: string; width?: number; height?: number }[];
+}
+
+/** The `ready` answer for a stored entry, with each page's size where the cache knows it. */
+function readyAnswer(id: string, meta: CacheMeta): WorkspaceDocumentPreview {
+  const sizes = meta.pages.map((page) =>
+    Number.isInteger(page.width) && Number.isInteger(page.height) && page.width! > 0 && page.height! > 0
+      ? { width: page.width!, height: page.height! }
+      : null,
+  );
+  return { status: "ready", id, pages: meta.pages.length, ...(sizes.some(Boolean) ? { sizes } : {}) };
 }
 
 export interface WorkspacePreviewPage {
@@ -208,10 +220,10 @@ export class WorkspaceDocumentPreviews {
       const key = `${piUserKey(userId)}/${id}`;
 
       const cached = this.readMeta(userId, id);
-      if (cached) return { status: "ready", id, pages: cached.pages.length };
+      if (cached) return readyAnswer(id, cached);
 
       const running = this.jobs.get(key);
-      if (running) return this.answer(id, running);
+      if (running) return this.answer(userId, id, running);
 
       const failure = this.failures.get(key);
       if (failure) {
@@ -230,7 +242,7 @@ export class WorkspaceDocumentPreviews {
       if (!bytes) return failed("TOO_LARGE");
       // Another request may have started this document while the read ran.
       const started = this.jobs.get(key);
-      if (started) return this.answer(id, started);
+      if (started) return this.answer(userId, id, started);
       if (this.running >= MAX_CONCURRENT || (this.runningByUser.get(userId) ?? 0) >= MAX_CONCURRENT_PER_USER) {
         return { status: "rendering", waiting: true };
       }
@@ -267,14 +279,14 @@ export class WorkspaceDocumentPreviews {
       this.jobs.set(key, job);
       handedOver = true;
       fs.closeSync(file.fd);
-      return this.answer(id, job);
+      return this.answer(userId, id, job);
     } finally {
       if (!handedOver) fs.closeSync(file.fd);
     }
   }
 
   /** `ready` when the job ends within the wait, `rendering` when it does not, `failed` when it ended with nothing. */
-  private async answer(id: string, job: Promise<number>): Promise<WorkspaceDocumentPreview> {
+  private async answer(userId: string, id: string, job: Promise<number>): Promise<WorkspaceDocumentPreview> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waited = new Promise<null>((resolve) => {
       timer = setTimeout(() => resolve(null), this.deps.requestWaitMs);
@@ -282,7 +294,9 @@ export class WorkspaceDocumentPreviews {
     const pages = await Promise.race([job, waited]);
     clearTimeout(timer);
     if (pages === null) return { status: "rendering" };
-    return pages > 0 ? { status: "ready", id, pages } : failed("RENDER_FAILED");
+    if (pages <= 0) return failed("RENDER_FAILED");
+    const meta = this.readMeta(userId, id);
+    return meta ? readyAnswer(id, meta) : { status: "ready", id, pages };
   }
 
   /** Render `bytes` and store the pages; resolves to the page count (0 = nothing came out). */
@@ -349,7 +363,8 @@ export class WorkspaceDocumentPreviews {
       for (const [index, page] of pages.entries()) {
         const file = `page-${index + 1}.${PAGE_EXTENSIONS[page.mediaType]}`;
         await fs.promises.writeFile(path.join(staging, file), page.buffer, { mode: 0o600 });
-        meta.pages.push({ file, mediaType: page.mediaType });
+        const size = imageDimensions(page.buffer);
+        meta.pages.push({ file, mediaType: page.mediaType, ...(size ?? {}) });
       }
       await fs.promises.writeFile(path.join(staging, META_FILE), JSON.stringify(meta), { mode: 0o600 });
       const target = path.join(userDir, id);
