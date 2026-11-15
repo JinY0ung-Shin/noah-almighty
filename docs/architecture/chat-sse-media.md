@@ -747,6 +747,13 @@
   `errors: []` clears a waiting report; a report whose message is no longer the latest answer when the turn
   takes it (regenerate, rewind) is dropped; consumed only by a run where inline UI is on, never a compaction
   or a steer's follow-up turn.
+- **Two checks aimed at mistakes seen in real answers (2026-11-15, compared against ChatGPT's Intelligent UI).**
+  A QUOTED prop naming an in-scope name (`title="기간을 {y2}년으로"`) is a static problem that hands back the
+  template to write (`Checker.quotedProp`). A choice control (`tabs`/`select`/`segmented-control`) whose evaluated
+  `value` is not one of its options' values is a RENDER-report line (`choiceValueProblem` in `lib/widgetView.ts`,
+  so a computed value is judged too and nothing is reported twice); it changes nothing on screen. The case it
+  exists for: `{@state s = 0}` + `options={["흡입", …]}` — `onChange` hands back the option's VALUE, so `s`
+  becomes a string on the first press and `strokes[s]` is undefined.
 - **What a control will do is DECLARED as a prop, so the user sees it before pressing** — there is no free
   `send()`/`open()` action (the original's are deliberately not ported). `<button>` takes EXACTLY ONE of
   `onClick` (local state), `send` (the text becomes the viewer's next chat message through the pane's

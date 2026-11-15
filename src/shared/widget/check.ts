@@ -246,6 +246,27 @@ class Checker {
     }
   }
 
+  /**
+   * A QUOTED prop is a literal: `title="{n}년"` shows "{n}" on screen. Called
+   * out only for a name that is in scope (a state, a const, a loop item), so
+   * braces meant as text stay quiet.
+   */
+  quotedProp(tag: string, name: string, value: string, at: number, scope: Scope): void {
+    if (!value.includes("{")) return;
+    const re = /\{\s*([A-Za-z_$][\w$]*)/g;
+    for (let m = re.exec(value); m; m = re.exec(value)) {
+      if (value[m.index - 1] === "\\") continue;
+      const ref = m[1];
+      if (!scope.has(ref) || GLOBAL_NAMES.includes(ref)) continue;
+      const tmpl = value.replace(/`/g, "\\`").replace(/(^|[^\\])\{/g, "$1${");
+      this.problem(
+        `Prop "${name}" of <${tag}> is a quoted string, so {${ref}…} is shown literally. Compute the text instead: ${name}={\`${tmpl}\`}.`,
+        at,
+      );
+      return;
+    }
+  }
+
   element(node: ElNode, scope: Scope): void {
     const spec: ComponentSpec | undefined = hasOwn(WIDGET_COMPONENTS, node.name) ? WIDGET_COMPONENTS[node.name] : undefined;
     if (!spec) {
@@ -342,6 +363,7 @@ class Checker {
     }
     const fix = literalProblem(p.type, attr.value);
     if (fix) this.problem(`Prop "${attr.name}" of <${spec.tag}> ${fix}.`, attr.s);
+    if (typeof attr.value === "string") this.quotedProp(spec.tag, attr.name, attr.value, attr.s, scope);
     if (attr.value === true || typeof attr.value === "string") return;
     this.expr(attr.value, scope, p.type.k === "handler" ? "handler" : "render", attr.s);
   }

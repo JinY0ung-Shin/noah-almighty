@@ -39,6 +39,7 @@ import {
   type AnswerDoc,
   type TNode,
   type WidgetDoc,
+  type WidgetOption,
 } from "../../../shared/widget/index";
 
 /** A run of inline text and its Markdown styling. */
@@ -405,6 +406,33 @@ function ignoredCalls(rt: Runtime, key: string, node: TNode, out: VNode[]): void
 const MAX_PROBLEMS = 20;
 
 /**
+ * A choice control (tabs, select, segmented control) whose `value` is not one
+ * of its options' values shows nothing as chosen — and its `onChange` hands
+ * back an OPTION's value, so a state bound to it changes type on the first
+ * press (`{@state s = 0}` with `options={["a", "b"]}` becomes "b", and
+ * `list[s]` is undefined from then on). Nothing changes on screen for this; it
+ * goes to the avatar only. An empty value is "nothing chosen yet" and is fine.
+ */
+function choiceValueProblem(v: ElVNode): string | null {
+  const options = v.props.options;
+  const value = v.props.value;
+  if (!Array.isArray(options) || options.length === 0 || value === undefined || value === "") return null;
+  if (!(typeof value === "string" || typeof value === "number" || typeof value === "boolean")) return null;
+  const values = (options as WidgetOption[]).map((o) => o.value);
+  if (values.includes(value)) return null;
+  const shown = values.slice(0, 4).map((x) => JSON.stringify(x)).join(", ") + (values.length > 4 ? ", …" : "");
+  const kinds = new Set(values.map((x) => typeof x));
+  const sameKind = kinds.has(typeof value);
+  return (
+    `<${v.tag}>: value ${JSON.stringify(value)} is not one of its options' values (${shown}), so no option shows as chosen.` +
+    (sameKind
+      ? " Bind value to a state that holds one of those values."
+      : ` onChange passes the chosen option's VALUE (a ${[...kinds].join("/")}, not a ${typeof value}), so the state bound to it changes type on the first press and anything indexed by it breaks.` +
+        ` Start the state at one of the values, or give options as {label, value} objects whose values are what you index with (e.g. options={names.map((label, i) => ({ label, value: i }))}).`)
+  );
+}
+
+/**
  * What went wrong in an evaluated view, as short ENGLISH lines for the avatar
  * (the render report): every error node, dropped prop and ignored call, each
  * with the line:column of the node it belongs to. Empty when the view is clean.
@@ -428,6 +456,8 @@ export function collectWidgetProblems(doc: WidgetDoc, view: VNode[]): string[] {
         for (const seg of v.segs) if (seg.problem) add(seg.problem);
       } else if (v.k === "el") {
         if (v.flawed) add(`${where(v.at)}<${v.tag}>: a prop was dropped — ${v.flawed}`);
+        const unchosen = choiceValueProblem(v);
+        if (unchosen) add(`${where(v.at)}${unchosen}`);
         for (const seg of v.segs) if (seg.problem) add(`${where(v.at)}${seg.problem}`);
         walk(v.children);
       }

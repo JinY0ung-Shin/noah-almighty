@@ -198,6 +198,17 @@ describe("checkWidget", () => {
     expect(errorOf("{@state total = 1}\n\nAn unclosed ` backtick does not hide {total}\n\n<divider />")).toMatch(/Top-level text is static Markdown/);
   });
 
+  it("a quoted prop is a literal: an interpolation in it is called out with the template to write", () => {
+    expect(errorOf('{@state y2 = 20}\n<callout tone="warning" title="기간을 {y2}년으로">x</callout>')).toContain(
+      'line 2:25 — Prop "title" of <callout> is a quoted string, so {y2…} is shown literally. Compute the text instead: title={`기간을 ${y2}년으로`}.',
+    );
+    // a loop item counts too
+    expect(errorOf('{#each ["a"] as item}\n<button send="{item} 알려줘">x</button>\n{/each}')).toContain('send={`${item} 알려줘`}');
+    // braces that name nothing in scope, and escaped ones, are text
+    expect(checkWidget('{@state y2 = 20}\n<callout tone="info" title="JSON {key: 1} 예시">x</callout>').ok).toBe(true);
+    expect(checkWidget('{@state y2 = 20}\n<callout tone="info" title="literal \\{y2}">x</callout>').ok).toBe(true);
+  });
+
   it("limits: nodes and state variables", () => {
     const many = "<col>\n" + "<divider />\n".repeat(MAX_WIDGET_NODES) + "</col>";
     // (the source cap bites first for most documents; the node limit is the tighter bound for dense ones)

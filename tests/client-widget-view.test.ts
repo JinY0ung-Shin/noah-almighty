@@ -404,6 +404,28 @@ describe("evaluating UI nodes", () => {
     expect(collectWidgetProblems(clean, buildWidgetView(clean, createRootEnv(clean, {}, rt, { get: () => undefined, set: () => {}, copy: () => {} }), rt))).toEqual([]);
   });
 
+  it("tells the avatar when a choice control's value is not one of its options", () => {
+    const rt = createRuntime();
+    const problemsOf = (src: string) => {
+      const doc = parseWidget(src);
+      const values = { ...restoreState(doc, null).values };
+      return collectWidgetProblems(doc, buildWidgetView(doc, createRootEnv(doc, values, rt, { get: (n) => values[n], set: () => {}, copy: () => {} }), rt));
+    };
+    // An index state against label options: the type changes on the first press (the 4-stroke engine answer).
+    const index = problemsOf(`{@state s = 0}\n<tabs label="행정" value={s} onChange={setS} options={["흡입", "압축", "폭발", "배기"]} />\n`);
+    expect(index).toHaveLength(1);
+    expect(index[0]).toMatch(/^line 2:1 <tabs>: value 0 is not one of its options' values \("흡입", "압축", "폭발", "배기"\), so no option shows as chosen\./);
+    expect(index[0]).toContain("onChange passes the chosen option's VALUE (a string, not a number)");
+    expect(index[0]).toContain("{label, value} objects");
+    // Same type, not among them.
+    const stale = problemsOf(`{@state c = "월"}\n<select label="요일" value={c} onChange={setC} options={["화", "수"]} />\n`);
+    expect(stale).toEqual([`line 2:1 <select>: value "월" is not one of its options' values ("화", "수"), so no option shows as chosen. Bind value to a state that holds one of those values.`]);
+    // Matching values, {label, value} options, and "nothing chosen yet" are all fine.
+    expect(problemsOf(`{@state s = "압축"}\n<tabs label="행정" value={s} onChange={setS} options={["흡입", "압축"]} />\n`)).toEqual([]);
+    expect(problemsOf(`{@state s = 1}\n<segmented-control label="행정" value={s} onChange={setS} options={[{ label: "흡입", value: 0 }, { label: "압축", value: 1 }]} />\n`)).toEqual([]);
+    expect(problemsOf(`{@state s = null}\n<select label="행정" value={s} onChange={setS} options={["흡입", "압축"]} />\n`)).toEqual([]);
+  });
+
   it("cuts a long list and says so", () => {
     const view = evaluate(`<col>\n  {#each 1500 as i}\n    <text>{i}</text>\n  {/each}\n</col>\n`);
     const children = el(view, "col").children;
