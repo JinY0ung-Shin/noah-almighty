@@ -74,7 +74,13 @@
   --accent-soft-strong: rgba(10, 132, 255, 0.28);
   --accent-ring: rgba(10, 132, 255, 0.42);
   --focus-ring: #66b2ff;
-  --on-accent: #000;
+  /* Filled accent surfaces carry WHITE text in dark too: the bright --accent
+     (#0a84ff) only reads with black text (white on it is 3.65:1), so fills use a
+     deeper blue — white on #0a68d6 is 5.30:1, on the hover #0b70e4 4.72:1.
+     --accent stays the bright blue for accent text, borders and rings. */
+  --accent-fill: #0a68d6;
+  --accent-fill-strong: #0b70e4;
+  --on-accent: #fff;
   --on-accent-selection: #000;
   --accent-selection: rgba(255, 255, 255, 0.42);
 
@@ -209,8 +215,8 @@ button:disabled {
   /* No border-radius here: the .btn family base (30-agent-md-composer.css) owns
      geometry, so .btn-sm can size primary and ghost siblings identically.
      .new-chat carries its own radius in 20-shell-chat.css. */
-  border-color: color-mix(in srgb, var(--accent) 84%, #000);
-  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent-fill) 84%, #000);
+  background: var(--accent-fill);
   color: var(--on-accent);
   box-shadow: 0 1px 1px rgba(255, 255, 255, 0.3) inset, var(--shadow-sm);
 }
@@ -219,8 +225,8 @@ button:disabled {
 .primary:hover:not(:disabled),
 .btn-primary:hover:not(:disabled),
 .new-chat:hover:not(:disabled) {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
+  border-color: var(--accent-fill-strong);
+  background: var(--accent-fill-strong);
   box-shadow: 0 1px 1px rgba(255, 255, 255, 0.24) inset, var(--shadow-sm);
 }
 
@@ -368,7 +374,7 @@ button:disabled {
 }
 
 .nav-item.active .nav-badge {
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
 }
 
@@ -612,7 +618,7 @@ button:disabled {
 
 .message.user .bubble {
   border-color: transparent;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
   box-shadow: none;
 }

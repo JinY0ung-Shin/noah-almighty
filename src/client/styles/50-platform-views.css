@@ -97,7 +97,18 @@ button.linkish {
 /* Rail nav + me row */
 .rail-nav {
   display: grid;
+  align-content: start;
   gap: var(--s-0-5);
+  /* Scrolls only when the window is too short for menu + list (see .rail). A
+     scroll box clips, so it is padded out — and pulled back by the same amount —
+     to keep the 2px+2px focus ring and the active row's lifted shadow inside. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--s-1-5) var(--s-3);
+  margin: calc(-1 * var(--s-1-5)) calc(-1 * var(--s-3));
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted) 38%, transparent) transparent;
 }
 .nav-item {
   display: flex;
@@ -109,9 +120,47 @@ button.linkish {
   background: transparent;
   color: var(--rail-text);
   border-radius: var(--r-md);
-  padding: var(--s-2-5) var(--s-3);
+  /* 32px rows (18px icon + 2 × 6px + border); ten 40px rows used to take the
+     whole rail on a laptop. A coarse pointer still gets 44px (80-apple-design.css)
+     and the ≤860px drawer 40px (below). */
+  padding: var(--s-1-5) var(--s-3);
   font-weight: 600;
   font-size: var(--t-sm);
+  line-height: 1.2;
+}
+/* The drawer is a phone/tablet surface: its menu keeps 40px rows, and scrolls
+   under the list floor (.rail) like the docked rail. */
+@media (max-width: 860px) {
+  .nav-item {
+    padding-block: var(--s-2-5);
+  }
+}
+/* A short desktop window (a 1280×720 laptop, or 125–150% Windows scaling): the
+   docked rail tightens its chrome so the menu AND several conversation rows fit
+   — 28px menu rows with no gap, smaller rail spacing. Below the list floor the
+   menu scrolls. A coarse pointer keeps its 44px rows (min-height wins). Kept
+   here, after the base rules it adjusts (20-shell-chat.css, above). */
+@media (min-width: 861px) and (max-height: 820px) {
+  .rail {
+    gap: var(--s-2);
+    padding-block: var(--s-3);
+  }
+  .rail-head {
+    gap: var(--s-2);
+  }
+  .rail-nav {
+    gap: 0;
+  }
+  .nav-item {
+    padding-block: var(--s-1);
+  }
+  .new-chat {
+    padding-block: var(--s-2);
+  }
+  .rail-footer {
+    gap: var(--s-2);
+    padding-top: var(--s-2);
+  }
 }
 .nav-item svg {
   width: 18px;
@@ -132,7 +181,7 @@ button.linkish {
   display: inline-grid;
   place-items: center;
   border-radius: var(--r-pill);
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
   font-size: var(--t-2xs);
   font-weight: 700;
@@ -835,7 +884,7 @@ body.col-resizing {
 }
 .routine-chip.active {
   border-color: transparent;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: var(--on-accent);
 }
 .routine-chip.danger:not(.active) {

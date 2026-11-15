@@ -177,7 +177,12 @@
   background: var(--rail);
   color: var(--rail-text);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  /* The conversation list always keeps room for a few rows: when the window is
+     too short for the menu AND that, the menu gives way (the head row shrinks
+     below its content and .rail-nav scrolls) — never the list. Without the
+     floor the menu took the whole rail at 1280×720 (0 rows). */
+  --rail-history-min: min(15rem, 45dvh);
+  grid-template-rows: minmax(0, auto) minmax(var(--rail-history-min), 1fr) auto;
   gap: var(--s-3);
   padding: var(--s-4) var(--s-3);
   border-right: 1px solid var(--rail-line);
@@ -188,7 +193,10 @@
 
 .rail-head {
   display: grid;
+  /* brand · menu · 새 대화 — only the menu row may shrink (it scrolls). */
+  grid-template-rows: auto minmax(0, auto) auto;
   gap: var(--s-3);
+  min-height: 0;
 }
 
 .rail-brand-row {
@@ -1389,8 +1397,8 @@ body.col-resizing .canvas-html-frame {
 }
 
 .message.user .bubble {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
   color: var(--on-accent);
   border-bottom-right-radius: var(--r-sm);
   white-space: pre-wrap;
