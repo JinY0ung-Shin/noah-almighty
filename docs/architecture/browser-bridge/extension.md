@@ -102,9 +102,10 @@
 - **`BUNDLE_FILES` is an explicit allowlist, not a directory walk** — a stray note here never ships, but a
   forgotten real file does not either, and neither failure shows in CI unless a byte-equality pin is added to
   `tests/infra.test.ts`.
-- **`background.js` imports TWO pure modules at load — `axtree.js` and `secretInput.js`.** Both are on
-  `BUNDLE_FILES` and byte-pinned in `tests/infra.test.ts`: an MV3 module worker whose import fails never
-  registers, so a bundle missing either kills every op (the extension reads as unreachable).
+- **`background.js` imports THREE pure modules at load — `axtree.js`, `secretInput.js` and (0.29.0)
+  `tabLeases.js`.** All are on `BUNDLE_FILES` and byte-pinned in `tests/infra.test.ts`: an MV3 module worker
+  whose import fails never registers, so a bundle missing any kills every op (the extension reads as
+  unreachable).
 - **The four `icon-*.png` are load-bearing and stay tracked in git.** `manifest.json` names them, so a missing or
   corrupted icon makes Chrome refuse the WHOLE extension. They are on `BUNDLE_FILES` + `BINARY_BUNDLE_FILES`, and
   every consumer reads them with a throwing `fs.readFileSync`, so an untracked icon 500s

@@ -23,6 +23,8 @@ const BUNDLE_FILES = [
   "axtree.js",
   // Same: the pure half of secret input, imported at load by background.js.
   "secretInput.js",
+  // Same again (0.29.0): per-conversation working tabs + tab leases.
+  "tabLeases.js",
   "options.html",
   "options.js",
   "options.css",

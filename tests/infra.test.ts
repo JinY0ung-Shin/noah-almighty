@@ -1224,13 +1224,15 @@ describe("browser extension bundle", () => {
     // BUNDLE_FILES would ship a bundle whose new_tab popup 404s. axtree.js is a
     // harder one — background.js imports it, so losing it breaks every op, and
     // secretInput.js is imported the same way (a bundle without it bricks the
-    // worker, so no browser op works at all — not just secret input).
+    // worker, so no browser op works at all — not just secret input), and so is
+    // tabLeases.js (0.29.0, per-conversation working tabs).
     // icon-128.png pins the BINARY path: the manifest names the icons, so a
     // bundle that mangles (or drops) them fails to load at install time.
     for (const name of [
       "background.js",
       "axtree.js",
       "secretInput.js",
+      "tabLeases.js",
       "options.js",
       "consent.js",
       "policy-schema.json",

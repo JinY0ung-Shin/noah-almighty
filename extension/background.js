@@ -96,6 +96,25 @@ import {
   secretUnverifiedNote,
   secretLengthMismatchNote,
 } from "./secretInput.js";
+import {
+  driverOf,
+  leaseHolder,
+  leaseConflict,
+  beginLease,
+  endLease,
+  touchLease,
+  pruneLeases,
+  serializeLeases,
+  restoreLeases,
+  setWorkingTab as setWorkingTabIn,
+  forgetWorkingTab,
+  serializeWorkingTabs,
+  restoreWorkingTabs,
+  pickFallbackTab,
+  busyTabMessage,
+  ALL_TABS_BUSY_MESSAGE,
+  createTabMutex,
+} from "./tabLeases.js";
 
 const GROUP_TITLE = "Noah";
 const CDP_VERSION = "1.3";
@@ -532,8 +551,11 @@ const lastSnapshotByTab = new Map();
  * `pxPerCssX`/`pxPerCssY` derive from them; `scale`/`pxPerCss` are the
  * theoretical factors the capture ASKED for and survive only as the fallback
  * (issue #66 — a request is not a measurement).
+ *
+ * Kept PER TAB (0.29.0): two conversations drive two tabs at once, and one
+ * global slot let B's screenshot void A's pixel coordinates.
  */
-let lastShot = null;
+const lastShotByTab = new Map();
 
 // ---------------------------------------------------------------- CDP plumbing
 
@@ -715,7 +737,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // Covers the closes the bridge did NOT do: a staging tab the user closed by
   // hand, or one abandoned on COPY_FAILED. Its return pairing is dead either way.
   forgetClipReturn(tabId);
-  if (currentTabId === tabId) setCurrentTab(null);
+  lastShotByTab.delete(tabId);
+  forgetTabOwnership(tabId);
 });
 
 // ----------------------------------------------------------- console capture
@@ -1002,7 +1025,10 @@ async function groupedTabs() {
   const group = await noahGroup();
   if (!group) return [];
   const tabs = await chrome.tabs.query({ groupId: group.id });
-  return tabs.filter((tab) => tab.id != null);
+  // read_url's short-lived reader tab sits in the group only while it reads; it
+  // is nobody's tab to list, select, fall back to or announce — another
+  // conversation's op running meanwhile must not see it at all.
+  return tabs.filter((tab) => tab.id != null && !readUrlTabs.has(tab.id));
 }
 
 const NO_TAB_MESSAGE =
@@ -1012,9 +1038,12 @@ const NO_TAB_MESSAGE =
   "Dragging a tab out of that group revokes access immediately.";
 
 /**
- * Which grouped tab subsequent operations act on. Sticky so a multi-step task
+ * Which grouped tab subsequent operations act on — PER DRIVER (0.29.0). A
+ * driver is one Noah conversation (`message.driver`, set server-side from the
+ * run; the model never chooses it); an op without one uses the LEGACY slot,
+ * which is the pre-0.29.0 single pointer exactly. Sticky so a multi-step task
  * doesn't silently hop tabs, but always re-validated against the group: if the
- * user dragged the current tab out, the pointer is stale and must not be used.
+ * user dragged the tab out, the pointer is stale and must not be used.
  *
  * Sticky was never the whole story: this is MV3 service-worker state, and the
  * worker idles out BETWEEN TURNS. The pointer came back null on the next turn
@@ -1022,40 +1051,225 @@ const NO_TAB_MESSAGE =
  * typically the user's own — so a `navigate` overwrote the page they were
  * reading. The mirror in chrome.storage.session survives the worker restart and
  * dies with the browser session, which is exactly the lifetime a working tab has.
+ *
+ * One pointer for the whole browser was the other half of the story: two of a
+ * user's conversations driving at once shared it, so one's new_tab re-pointed
+ * the other's working tab and uids landed on the wrong page. Hence the map, and
+ * the LEASES below that refuse a tab another driver is using right now.
  */
-let currentTabId = null;
-const WORKING_TAB_KEY = "workingTabId";
+const workingTabs = new Map(); // driver -> tabId
+const WORKING_TABS_KEY = "workingTabsByDriver";
+/** The pre-0.29.0 single pointer; read once, migrated into the LEGACY slot, removed. */
+const LEGACY_WORKING_TAB_KEY = "workingTabId";
 
-/** Point at a tab (or forget one), in module state AND across worker restarts. */
-function setCurrentTab(tabId) {
-  currentTabId = tabId;
-  // Fire and forget: the module state is already correct, and a storage failure
-  // must degrade to "forgets between turns" rather than fail the operation.
-  const write =
-    tabId == null
-      ? chrome.storage.session.remove(WORKING_TAB_KEY)
-      : chrome.storage.session.set({ [WORKING_TAB_KEY]: tabId });
-  Promise.resolve(write).catch(() => {});
-}
-
-async function storedTabId() {
-  try {
-    const stored = await chrome.storage.session.get(WORKING_TAB_KEY);
-    const id = stored?.[WORKING_TAB_KEY];
-    return typeof id === "number" ? id : null;
-  } catch {
-    return null;
-  }
+/**
+ * Merge the session mirror in ONCE per worker life. Module entries win: within
+ * one life they are the fresher truth (same rule as the clip-return mirror).
+ */
+let workingTabsLoaded = null;
+function loadWorkingTabs() {
+  workingTabsLoaded ??= (async () => {
+    try {
+      const stored = await chrome.storage.session.get([WORKING_TABS_KEY, LEGACY_WORKING_TAB_KEY]);
+      const restored = restoreWorkingTabs(stored?.[WORKING_TABS_KEY], stored?.[LEGACY_WORKING_TAB_KEY]);
+      for (const [driver, tabId] of restored) {
+        if (!workingTabs.has(driver)) workingTabs.set(driver, tabId);
+      }
+      if (stored?.[LEGACY_WORKING_TAB_KEY] !== undefined) {
+        await chrome.storage.session.remove(LEGACY_WORKING_TAB_KEY);
+        await chrome.storage.session.set({ [WORKING_TABS_KEY]: serializeWorkingTabs(workingTabs) });
+      }
+    } catch {
+      // No mirror readable = "forgets between turns", the pre-mirror behaviour.
+    }
+  })();
+  return workingTabsLoaded;
 }
 
 /**
- * Staging tab id -> the tab the agent was working in when it opened that
- * clipboard staging tab.
+ * Fire and forget: module state is already correct, and a storage failure must
+ * degrade to "forgets between turns" rather than fail the operation. Chained
+ * after the hydrate so a fresh worker's write merges instead of clobbering.
+ */
+function persistWorkingTabs() {
+  Promise.resolve(loadWorkingTabs())
+    .then(() => chrome.storage.session.set({ [WORKING_TABS_KEY]: serializeWorkingTabs(workingTabs) }))
+    .catch(() => {});
+}
+
+/** Point a driver at a tab (or forget its pointer), in module state AND across worker restarts. */
+function setWorkingTab(driver, tabId) {
+  setWorkingTabIn(workingTabs, driver, tabId);
+  persistWorkingTabs();
+}
+
+async function workingTabOf(driver) {
+  await loadWorkingTabs();
+  const id = workingTabs.get(driver);
+  return typeof id === "number" ? id : null;
+}
+
+/**
+ * Tab LEASES: tabId -> { driver, running, until }. A tab is in use by a driver
+ * while one of its ops runs there AND for TAB_LEASE_GRACE_MS after the last one
+ * (the model's think time between two ops — see tabLeases.js). Another driver's
+ * op on a leased tab is REFUSED, never queued: queuing would let it act on a page
+ * the other conversation is half-way through. Mirrored in chrome.storage.session
+ * because MV3 stops an idle worker after ~30 s — inside the grace.
+ */
+const leases = new Map();
+const TAB_LEASES_KEY = "tabLeases";
+let leasesLoaded = null;
+function loadLeases() {
+  leasesLoaded ??= (async () => {
+    try {
+      const stored = await chrome.storage.session.get(TAB_LEASES_KEY);
+      const restored = restoreLeases(stored?.[TAB_LEASES_KEY], Date.now());
+      for (const [tabId, lease] of restored) if (!leases.has(tabId)) leases.set(tabId, lease);
+    } catch {
+      // No mirror = leases restart empty: a conflict can slip through once after a
+      // worker restart, which is the pre-lease behaviour, never a stuck tab.
+    }
+  })();
+  return leasesLoaded;
+}
+
+function persistLeases() {
+  pruneLeases(leases, Date.now());
+  Promise.resolve(loadLeases())
+    .then(() =>
+      leases.size
+        ? chrome.storage.session.set({ [TAB_LEASES_KEY]: serializeLeases(leases) })
+        : chrome.storage.session.remove(TAB_LEASES_KEY),
+    )
+    .catch(() => {});
+}
+
+/** The per-tab mutex — two ops never execute on one tab at the same instant. */
+const tabMutex = createTabMutex();
+/**
+ * Both bounds are the Noah client's own wait for one op (40 s, sendToExtension):
+ * past it nobody is listening for the answer. Waiting longer only answers into
+ * the void, and HOLDING longer is what a renderer frozen by a native dialog does
+ * — its CDP call never returns — which must not wedge the tab (and its lease)
+ * for the rest of the browser session. A batch step is one op, so it fits.
+ */
+const TAB_MUTEX_WAIT_MS = 40_000;
+const TAB_HOLD_MAX_MS = 40_000;
+
+/**
+ * One op's context: who drives it, the which-tab caveat targetTab leaves for
+ * perform() to fold into the result, and the tabs it holds (lease + mutex),
+ * released on every exit path by perform(). Per OP rather than module state so
+ * two drivers' ops in flight can never drain each other's notice.
+ */
+function newOpContext(message) {
+  return { driver: driverOf(message), notice: "", held: new Map() };
+}
+
+/** Throws the refusal when another driver holds a live lease on the tab. */
+function assertTabFree(ctx, tabId) {
+  const conflict = leaseConflict(leases, tabId, ctx.driver, Date.now());
+  if (conflict) throw new TabBusyError(busyTabMessage(tabId, conflict.freeInMs));
+}
+
+/** A lease refusal: perform() answers it as ok:false, the op never ran. */
+class TabBusyError extends Error {}
+
+/**
+ * Take the tab for this op: refuse if another driver holds it, wait out the
+ * same tab's mutex, re-check (another driver may have taken it while this op
+ * waited), then lease it. Idempotent per op and tab. Released by releaseHeld.
+ */
+async function claimTab(ctx, tabId, { skipMutex = false } = {}) {
+  if (ctx.held.has(tabId)) return;
+  await loadLeases();
+  assertTabFree(ctx, tabId);
+  // dialog_status alone skips the mutex: it is the probe for a tab whose op
+  // HANGS, so queuing it behind that very op would hang the probe too.
+  const releaseMutex = skipMutex ? () => {} : await tabMutex.acquire(tabId, TAB_MUTEX_WAIT_MS);
+  try {
+    assertTabFree(ctx, tabId);
+  } catch (error) {
+    releaseMutex();
+    throw error;
+  }
+  beginLease(leases, tabId, ctx.driver, Date.now());
+  persistLeases();
+  let ended = false;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timer);
+    endLease(leases, tabId, ctx.driver, Date.now());
+    releaseMutex();
+    persistLeases();
+  };
+  const timer = setTimeout(end, TAB_HOLD_MAX_MS);
+  ctx.held.set(tabId, end);
+}
+
+/** End every lease this op holds (the grace starts now) and free the mutexes. */
+function releaseHeld(ctx) {
+  for (const end of ctx.held.values()) end();
+  ctx.held.clear();
+}
+
+/**
+ * A uid carries its OWN tab (ref.tabId), which can differ from the working tab:
+ * every uid an op names must be on a tab this driver may use, or another
+ * conversation's uid would act on that conversation's page. Claimed like the
+ * working tab, so its lease and mutex hold too.
+ */
+async function claimRefTabs(ctx, message) {
+  const uids = [
+    message.uid,
+    message.toUid,
+    ...(Array.isArray(message.fields) ? message.fields.map((field) => field?.uid) : []),
+  ];
+  for (const uid of uids) {
+    if (typeof uid !== "string" || !uid) continue;
+    const ref = refMap.get(uid);
+    if (ref && typeof ref.tabId === "number") await claimTab(ctx, ref.tabId);
+  }
+}
+
+/** The driver whose op ran last — the popup's uid map shows ITS working tab. */
+let lastActiveDriver = driverOf({});
+
+/** A tab closed: no driver points at it and nobody leases it any more. */
+function forgetTabOwnership(tabId) {
+  if (forgetWorkingTab(workingTabs, tabId)) persistWorkingTabs();
+  if (leases.delete(tabId)) persistLeases();
+}
+
+/**
+ * The `current`/`busy` marks on a tab list, from THIS op's driver: `current` is
+ * its own working tab; `busy` a tab another driver holds a live lease on (the
+ * agent must not touch it). Applied once, in perform(), to whatever tab list an
+ * op answers with, so no early-return shape can miss it.
+ */
+function markTabs(tabs, ctx) {
+  if (!Array.isArray(tabs)) return tabs;
+  const mine = workingTabs.get(ctx.driver);
+  const now = Date.now();
+  return tabs.map((tab) => {
+    const id = Number(tab.tabId);
+    const holder = leaseHolder(leases, id, now);
+    const busy = holder !== null && holder !== ctx.driver;
+    return { ...tab, current: id === mine, ...(busy ? { busy: true } : {}) };
+  });
+}
+
+/**
+ * Staging tab id -> { tab, driver }: the tab the DRIVER was working in when it
+ * opened that clipboard staging tab (per driver since 0.29.0 — the pointer the
+ * close restores is that driver's, never another conversation's).
  *
  * The auto-close has to put the working pointer BACK, and by the time the copy
  * button is clicked the pre-staging id exists nowhere else: `new_tab` already
- * overwrote `currentTabId` with the staging tab. Mirrored in
- * chrome.storage.session for the same reason WORKING_TAB_KEY is — the `new_tab`
+ * overwrote the driver's working tab with the staging tab. Mirrored in
+ * chrome.storage.session for the same reason WORKING_TABS_KEY is — the `new_tab`
  * and the `click` are separate agent TURNS and the MV3 worker idles out between
  * them, which would otherwise turn every copy into "no previous working tab was
  * remembered". Bounded because an abandoned staging tab (COPY_FAILED, or the
@@ -1079,8 +1293,15 @@ function loadClipReturns() {
       if (!plain || typeof plain !== "object") return;
       for (const [staging, back] of Object.entries(plain)) {
         const stagingId = Number(staging);
-        if (!Number.isInteger(stagingId) || typeof back !== "number") continue;
-        if (!clipStagingReturnTabs.has(stagingId)) clipStagingReturnTabs.set(stagingId, back);
+        if (!Number.isInteger(stagingId)) continue;
+        // A bare number is the pre-driver shape: it belonged to the LEGACY slot.
+        const entry =
+          typeof back === "number"
+            ? { tab: back, driver: driverOf({}) }
+            : back && typeof back.tab === "number" && typeof back.driver === "string"
+              ? { tab: back.tab, driver: driverOf({ driver: back.driver }) }
+              : null;
+        if (entry && !clipStagingReturnTabs.has(stagingId)) clipStagingReturnTabs.set(stagingId, entry);
       }
     } catch {
       // No mirror readable = the auto-close reports "nothing remembered", which
@@ -1091,7 +1312,7 @@ function loadClipReturns() {
 }
 
 /**
- * Fire and forget, exactly like setCurrentTab: module state is already correct,
+ * Fire and forget, exactly like setWorkingTab: module state is already correct,
  * and a storage failure must degrade to "forgets between turns" rather than fail
  * the operation. Chained after the hydrate so a write from a FRESH worker — its
  * map empty while the mirror still holds a pending pair — merges instead of
@@ -1108,9 +1329,9 @@ function writeClipReturns() {
     .catch(() => {});
 }
 
-function rememberClipReturn(stagingTabId, returnTabId) {
+function rememberClipReturn(stagingTabId, returnTabId, driver) {
   if (typeof stagingTabId !== "number" || typeof returnTabId !== "number") return;
-  clipStagingReturnTabs.set(stagingTabId, returnTabId);
+  clipStagingReturnTabs.set(stagingTabId, { tab: returnTabId, driver });
   // Insertion order, so the bound drops the STALEST pairing rather than the one
   // just made — the newest is the only one an agent is still driving.
   while (clipStagingReturnTabs.size > CLIP_RETURN_MAX) {
@@ -1124,11 +1345,10 @@ function forgetClipReturn(stagingTabId) {
   writeClipReturns();
 }
 
-/** Where a closing staging tab should send the pointer, or null if unknown. */
+/** Where a closing staging tab should send WHOSE pointer — `{ tab, driver }` — or null if unknown. */
 async function clipReturnFor(stagingTabId) {
   if (!clipStagingReturnTabs.has(stagingTabId)) await loadClipReturns();
-  const back = clipStagingReturnTabs.get(stagingTabId);
-  return typeof back === "number" ? back : null;
+  return clipStagingReturnTabs.get(stagingTabId) ?? null;
 }
 
 /**
@@ -1168,8 +1388,13 @@ async function settledClipStagingTab(staging, stagingOrigin) {
  * asynchronously — the result built below reads state that has to be correct
  * ALREADY, so it is done here by hand rather than raced.
  */
-async function closeClipStagingTab(staging, note) {
-  const back = await clipReturnFor(staging.id);
+async function closeClipStagingTab(staging, note, ctx) {
+  const remembered = await clipReturnFor(staging.id);
+  const back = remembered?.tab ?? null;
+  // The driver that OPENED the staging tab owns the pointer being restored. The
+  // lease makes that the driver closing it too; falling back to the op's own
+  // driver covers an entry that lost its driver.
+  const owner = remembered?.driver ?? ctx.driver;
   try {
     await chrome.tabs.remove(staging.id);
   } catch {
@@ -1188,7 +1413,8 @@ async function closeClipStagingTab(staging, note) {
   // "nothing remembered" rather than to a guess. targetTab's oldest-tab fallback
   // owns that case and says so out loud.
   const returnTab = back == null ? undefined : left.find((one) => one.id === back);
-  setCurrentTab(returnTab ? returnTab.id : null);
+  setWorkingTab(owner, returnTab ? returnTab.id : null);
+  forgetTabOwnership(staging.id);
   return {
     ok: true,
     // No snapshot: the tab that was acted on no longer EXISTS, and the tab the
@@ -1208,42 +1434,54 @@ async function closeClipStagingTab(staging, note) {
 }
 
 /**
- * BRIDGE-authored caveat about WHICH TAB the bridge is on, left here by
- * targetTab and drained by perform() into the result's `note`. A guess about the
- * working tab has to be visible in the same turn it is made — the field failure
- * was silent drift, not a wrong answer.
+ * The tab THIS op's driver works in. A guess about the working tab has to be
+ * visible in the same turn it is made — the field failure was silent drift, not
+ * a wrong answer — so a fallback leaves a BRIDGE-authored caveat on
+ * `ctx.notice`, which perform() folds into the result's `note`.
+ *
+ * Returns the driver's own working tab even when another driver has leased it
+ * since (its grace ran out and the other conversation took it): claimTab then
+ * refuses with the busy message, which is the honest answer — the tab this
+ * conversation was working in is someone else's now — rather than a silent
+ * switch to a different page.
  */
-let pendingTabNotice = "";
-
-function takeTabNotice() {
-  const notice = pendingTabNotice;
-  pendingTabNotice = "";
-  return notice;
-}
-
-async function targetTab() {
+async function targetTab(ctx) {
   const tabs = await groupedTabs();
   if (!tabs.length) throw new Error(NO_TAB_MESSAGE);
-  if (currentTabId == null) {
-    const stored = await storedTabId();
-    // Validated against the group like any other pointer: a stored id whose tab
-    // was closed or dragged out grants nothing.
-    if (stored != null && tabs.some((tab) => tab.id === stored)) currentTabId = stored;
-  }
-  const picked = tabs.find((tab) => tab.id === currentTabId);
+  await loadLeases();
+  // Validated against the group like any other pointer: a remembered id whose
+  // tab was closed or dragged out grants nothing.
+  const remembered = await workingTabOf(ctx.driver);
+  const picked = tabs.find((tab) => tab.id === remembered);
   if (picked) return picked;
-  // FALLING BACK: nothing was ever chosen, or the chosen tab is gone. tabs[0] is
-  // the oldest tab in the group, so with more than one candidate this is a guess
-  // — and the guess is the drift itself, so it must be said out loud.
-  const fallback = tabs[0];
+  // FALLING BACK: nothing was ever chosen, or the chosen tab is gone. The
+  // candidate is the OLDEST tab in the group that no OTHER conversation is
+  // driving right now (one nobody points at beats one another conversation
+  // points at), so with more than one tab this is a guess — and the guess is the
+  // drift itself, so it must be said out loud.
+  const fallbackId = pickFallbackTab(
+    tabs.map((tab) => tab.id),
+    ctx.driver,
+    workingTabs,
+    leases,
+    Date.now(),
+  );
+  if (fallbackId == null) throw new TabBusyError(ALL_TABS_BUSY_MESSAGE);
+  const fallback = tabs.find((tab) => tab.id === fallbackId);
   if (tabs.length > 1) {
-    pendingTabNotice =
-      `No working tab was remembered, so this operation ran on the OLDEST of the ${tabs.length} tabs in the group: ` +
-      `tabId ${fallback.id}, "${quoteForNote(fallback.title || "(untitled)")}" — ` +
-      `${quoteForNote(fallback.url, NOTE_URL_MAX)}. That tab may be the user's own rather than the one you were ` +
-      "working in; if it is not the one you meant, call mcp__browser__list_tabs and mcp__browser__select_tab before acting further.";
+    const skipped = tabs.filter((tab) => {
+      const holder = leaseHolder(leases, tab.id, Date.now());
+      return holder !== null && holder !== ctx.driver;
+    }).length;
+    ctx.notice =
+      `No working tab was remembered for this conversation, so this operation ran on the OLDEST free one of the ` +
+      `${tabs.length} tabs in the group: tabId ${fallback.id}, "${quoteForNote(fallback.title || "(untitled)")}" — ` +
+      `${quoteForNote(fallback.url, NOTE_URL_MAX)}` +
+      (skipped ? ` (${skipped} tab${skipped === 1 ? "" : "s"} another of the user's conversations is driving were skipped)` : "") +
+      ". That tab may be the user's own rather than the one you were working in; if it is not the one you meant, " +
+      "call mcp__browser__list_tabs and mcp__browser__select_tab (or open your own with mcp__browser__new_tab) before acting further.";
   }
-  setCurrentTab(fallback.id);
+  setWorkingTab(ctx.driver, fallback.id);
   return fallback;
 }
 
@@ -1261,12 +1499,16 @@ async function groupedTabById(tabId) {
   return found;
 }
 
+/**
+ * A tab as the agent sees it. `current` (and `busy`) depend on WHICH driver is
+ * asking, so they are filled in once by perform()'s markTabs, never here.
+ */
 function describeTab(tab) {
   return {
     tabId: String(tab.id),
     title: tab.title || "",
     url: tab.url || "",
-    current: tab.id === currentTabId,
+    current: false,
   };
 }
 
@@ -2907,6 +3149,7 @@ async function dragPointer(target, from, to) {
  * pixel is trusted.
  */
 async function shotCssPoint(tab, x, y) {
+  const lastShot = lastShotByTab.get(tab.id) || null;
   if (!lastShot || lastShot.tabId !== tab.id) {
     return {
       refusal: {
@@ -3257,12 +3500,17 @@ function showActionHighlight(ref) {
   }).catch(() => {});
 }
 
-/** Take every box down. Same fire-and-forget discipline, for the same reason. */
-function clearActionHighlight() {
-  for (const target of activeHighlights.values()) {
+/**
+ * Take the boxes down — every one, or only those on `tabIds` (one op's own tabs,
+ * so a finishing op never wipes another conversation's box mid-action). Same
+ * fire-and-forget discipline, for the same reason.
+ */
+function clearActionHighlight(tabIds) {
+  for (const [key, target] of activeHighlights) {
+    if (tabIds && !tabIds.has(target.tabId)) continue;
     sendCdp(target, "Overlay.hideHighlight", {}).catch(() => {});
+    activeHighlights.delete(key);
   }
-  activeHighlights.clear();
 }
 
 // ------------------------------------------------------ click-target guards
@@ -5543,7 +5791,7 @@ async function captureShot(tab, message) {
   // element/fullPage clips are page-absolute and must be refused there. URL,
   // scroll origin, and viewport size anchor the click-time drift check — which
   // reads CSS metrics, so the clip dimensions are stored in CSS px.
-  lastShot = {
+  lastShotByTab.set(tab.id, {
     tabId: tab.id,
     url: tab.url || "",
     mode,
@@ -5568,7 +5816,7 @@ async function captureShot(tab, message) {
     dsf,
     pageX: viewport.pageX || 0,
     pageY: viewport.pageY || 0,
-  };
+  });
   // Say what size image this IS. Nothing else in the five layers does, so a
   // pixel coordinate was previously measured against a guess. Appended AFTER the
   // beyondViewport caveat: that one says do not measure coordinates here at all,
@@ -5671,7 +5919,7 @@ async function captureZoom(tab, message) {
   const pxPerCss = scale * zoom * dsf;
   const imageWidth = measured?.width || Math.max(1, Math.round(width * pxPerCss));
   const imageHeight = measured?.height || Math.max(1, Math.round(height * pxPerCss));
-  lastShot = {
+  lastShotByTab.set(tab.id, {
     tabId: tab.id,
     url: tab.url || "",
     mode: "region",
@@ -5691,7 +5939,7 @@ async function captureZoom(tab, message) {
     dsf,
     pageX: viewport.pageX || 0,
     pageY: viewport.pageY || 0,
-  };
+  });
   const note = zoomImageNote({ imageWidth, imageHeight, x, y, cssWidth: width, cssHeight: height });
   return { imageBase64: data, imageMimeType: "image/jpeg", note };
 }
@@ -5976,19 +6224,19 @@ async function buildUidMap() {
   try {
     const { patterns } = await readPolicy();
     let tab;
+    // Whose working tab: the driver that acted LAST — the conversation the user
+    // just watched work, which is the tab whose uids they are asking about. The
+    // context is this build's own, so any which-tab caveat targetTab leaves on
+    // it is written FOR the agent and dies here instead of surfacing on some
+    // agent's next op as a fallback that happened during somebody else's read.
+    const ctx = { driver: lastActiveDriver, notice: "", held: new Map() };
     try {
-      tab = await targetTab();
+      tab = await targetTab(ctx);
     } catch {
       // targetTab throws NO_TAB_MESSAGE, which is agent-facing prose about tab
       // groups. The popup has its own sentence for this, so only the code travels.
       return { ok: false, code: "no_tab" };
     }
-    // targetTab may have left a which-tab caveat behind for perform() to drain.
-    // It is written FOR the agent ("call mcp__browser__list_tabs before acting
-    // further") and this build is not the agent's turn, so it is dropped here
-    // rather than surfacing on the agent's next op as a fallback that happened
-    // during somebody else's read.
-    takeTabNotice();
 
     // Gated exactly like a read, even though the user asked for this and only the
     // user's own browser ever sees the result. Two reasons to keep it literal: a
@@ -6294,6 +6542,8 @@ async function reattachAfterEscape(tabId) {
  * settle wait, the landing re-check and the dialog check still run.
  */
 async function performOp(message, stagingOrigin, opts = {}) {
+  // perform() always passes the op's context; a bare call (none today) gets one.
+  const ctx = opts.ctx || newOpContext(message);
   const { patterns, source } = await readPolicy();
   // The uid counter as it stands BEFORE this op acts: any uid above it in the
   // confirm snapshot belongs to an element that APPEARED because of the action
@@ -6310,7 +6560,14 @@ async function performOp(message, stagingOrigin, opts = {}) {
   if (message.op === "list_tabs") {
     const tabs = await groupedTabs();
     if (!tabs.length) return { ok: false, message: NO_TAB_MESSAGE };
-    await targetTab(); // settle `current` before describing
+    try {
+      await targetTab(ctx); // settle `current` before describing
+    } catch (error) {
+      // Every tab is another conversation's right now: still LIST them (each
+      // marked busy) — that is what list_tabs is for — and let the next acting
+      // op say how to get a tab of one's own.
+      if (!(error instanceof TabBusyError)) throw error;
+    }
     return { ok: true, tabs: (await groupedTabs()).map(describeTab) };
   }
 
@@ -6327,10 +6584,10 @@ async function performOp(message, stagingOrigin, opts = {}) {
     // A clipboard staging page is a THROWAWAY the bridge closes itself once the
     // page's title reports COPIED, so where the agent is right now is the thing
     // the close will have to restore. Read before anything below can move the
-    // pointer: setCurrentTab(created.id) overwrites it, and after that the
+    // pointer: setWorkingTab(created.id) overwrites it, and after that the
     // pre-staging id is gone for good.
     const stagingTab = isClipboardStagingUrl(message.url, stagingOrigin);
-    const returnTo = stagingTab ? (currentTabId ?? (await storedTabId())) : null;
+    const returnTo = stagingTab ? await workingTabOf(ctx.driver) : null;
     let group = await noahGroup();
     // No group = browser control is currently OFF in this browser. Turning it
     // on must be the user's click, not a tab-creation side effect, so ask
@@ -6351,14 +6608,25 @@ async function performOp(message, stagingOrigin, opts = {}) {
     if (!group) {
       await chrome.tabGroups.update(groupId, { title: GROUP_TITLE, color: "green" });
     }
-    setCurrentTab(created.id);
-    if (stagingTab && returnTo != null) rememberClipReturn(created.id, returnTo);
+    // The new tab is THIS driver's from its first instant: leased before the
+    // load wait, so no other conversation's fallback can pick it up meanwhile.
+    await loadLeases();
+    touchLease(leases, created.id, ctx.driver, Date.now());
+    persistLeases();
+    setWorkingTab(ctx.driver, created.id);
+    if (stagingTab && returnTo != null) rememberClipReturn(created.id, returnTo, ctx.driver);
     await waitForLoad(created.id);
   }
 
   if (message.op === "select_tab") {
     const picked = await groupedTabById(message.tabId);
-    setCurrentTab(picked.id);
+    // Another conversation is driving that tab right now: refused, never
+    // shared — and selecting it would make the very next op collide anyway.
+    await loadLeases();
+    assertTabFree(ctx, picked.id);
+    touchLease(leases, picked.id, ctx.driver, Date.now());
+    persistLeases();
+    setWorkingTab(ctx.driver, picked.id);
     // No snapshot: switching tabs used to fall through to the tail and return a
     // full page walk nobody asked for. Answer like list_tabs does — and from the
     // same pre-gate position, so a denied tab can still be switched away from.
@@ -6372,12 +6640,17 @@ async function performOp(message, stagingOrigin, opts = {}) {
 
   if (message.op === "close_tab") {
     const picked = await groupedTabById(message.tabId);
+    // Closing another conversation's tab mid-task is the most destructive
+    // collision there is: refused like any other use. Claimed (lease + mutex)
+    // so it never closes under an op still running on it.
+    await claimTab(ctx, picked.id);
     await chrome.tabs.remove(picked.id);
     attached.delete(picked.id);
     forgetTabRefs(picked.id);
     lastSnapshotByTab.delete(picked.id);
+    lastShotByTab.delete(picked.id);
     forgetClipReturn(picked.id);
-    if (currentTabId === picked.id) setCurrentTab(null);
+    forgetTabOwnership(picked.id);
     const left = await groupedTabs();
     if (!left.length) {
       return { ok: true, tabs: [], url: "", title: "", snapshot: "" };
@@ -6388,7 +6661,11 @@ async function performOp(message, stagingOrigin, opts = {}) {
   // tab-management branches so new_tab's own tab is not announced as a surprise.
   const tabIdsBefore = new Set((await groupedTabs()).map((one) => one.id));
 
-  const tab = await targetTab();
+  const tab = await targetTab(ctx);
+  // The tab is THIS driver's for the op (refused if another conversation is
+  // using it), and so is every tab a uid in the op points into.
+  await claimTab(ctx, tab.id, { skipMutex: message.op === "dialog_status" });
+  await claimRefTabs(ctx, message);
   // Check the tab we are ABOUT to read as well as any URL we are asked to open:
   // an allowed navigation can land somewhere else via a redirect, and a tab the
   // user dragged in may already be sitting on a denied site.
@@ -7539,7 +7816,7 @@ async function performOp(message, stagingOrigin, opts = {}) {
     if (INPUT_OPS.has(message.op)) fresh = await settledClipStagingTab(fresh, stagingOrigin);
     if (fresh.title === CLIPBOARD_COPIED_TITLE) {
       try {
-        return await closeClipStagingTab(fresh, note);
+        return await closeClipStagingTab(fresh, note, ctx);
       } catch {
         // Fail-open. The COPY already succeeded, so failing the op over the
         // tidying that follows it would send the agent to re-copy bytes that are
@@ -7649,8 +7926,22 @@ async function performOp(message, stagingOrigin, opts = {}) {
   // …and a target=_blank click ADDS one silently: the array changes and nothing
   // says so, so the agent kept driving the old page while the result it asked
   // for was on the new one. new_tab is exempt — its tab is in the baseline.
-  const opened = message.op === "new_tab" ? [] : groupNow.filter((one) => !tabIdsBefore.has(one.id));
+  // A tab ANOTHER conversation opened meanwhile (its new_tab leases it at once)
+  // is not this op's doing and not this conversation's business.
+  const opened =
+    message.op === "new_tab"
+      ? []
+      : groupNow.filter((one) => {
+          if (tabIdsBefore.has(one.id)) return false;
+          const holder = leaseHolder(leases, one.id, Date.now());
+          return holder === null || holder === ctx.driver;
+        });
   if (opened.length) {
+    // This conversation's action opened it, so it is this conversation's for the
+    // grace — another conversation's fallback must not pick it up before the
+    // agent had a chance to select_tab it.
+    for (const one of opened) touchLease(leases, one.id, ctx.driver, Date.now());
+    persistLeases();
     note = [
       note,
       ...opened.map(
@@ -7687,24 +7978,33 @@ async function performOp(message, stagingOrigin, opts = {}) {
  * because it reframes every other line and capNote truncates the tail.
  */
 async function perform(message, senderOrigin, opts = {}) {
-  if (message.op === "batch") return runBatch(message, senderOrigin);
+  const ctx = opts.ctx || newOpContext(message);
+  lastActiveDriver = ctx.driver;
   let result;
   try {
-    result = await performOp(message, senderOrigin, opts);
+    result =
+      message.op === "batch"
+        ? await runBatch(message, senderOrigin, ctx)
+        : await performOp(message, senderOrigin, { ...opts, ctx });
   } catch (error) {
-    takeTabNotice(); // never let a stale notice surface on the NEXT op
-    throw error;
+    // A lease refusal is an ANSWER (the op never ran), not a fault.
+    if (!(error instanceof TabBusyError)) throw error;
+    result = { ok: false, message: error.message };
   } finally {
     // OP-SCOPED, on every exit path — success, refusal, throw. The box lives
     // through the action, the settle wait and the snapshot tail (roughly half a
     // second to a second and a half of visibility) and dies with the op. A box
     // that persisted until the NEXT op instead would be stranded on screen for
     // good the moment the MV3 worker is torn down, because the restarted worker
-    // has no memory of having drawn it. Running before the notice merging below
-    // costs nothing: clearActionHighlight is synchronous fire-and-forget.
-    clearActionHighlight();
+    // has no memory of having drawn it. Only THIS op's tabs: another
+    // conversation's op on another tab keeps its own box. Then the leases start
+    // their grace and the tab mutexes open.
+    clearActionHighlight(new Set(ctx.held.keys()));
+    releaseHeld(ctx);
   }
-  const notice = takeTabNotice();
+  if (result && Array.isArray(result.tabs)) result = { ...result, tabs: markTabs(result.tabs, ctx) };
+  const notice = ctx.notice;
+  ctx.notice = "";
   if (!notice) return result;
   if (result?.ok === false) {
     return { ...result, message: `${notice} ${result.message || ""}`.trim() };
@@ -7734,7 +8034,7 @@ const BATCH_START_BUDGET_MS = 100_000;
  * are the answer, a failed step included — and ok:false only when it could not
  * start (no steps, too many).
  */
-async function runBatch(message, senderOrigin) {
+async function runBatch(message, senderOrigin, ctx) {
   const raw = Array.isArray(message.steps) ? message.steps : [];
   if (!raw.length) return { ok: false, message: `batch needs 1–${BATCH_MAX_STEPS} steps.` };
   if (raw.length > BATCH_MAX_STEPS) {
@@ -7764,7 +8064,12 @@ async function runBatch(message, senderOrigin) {
     if (isLast && step.maxChars == null && typeof message.maxChars === "number") step.maxChars = message.maxChars;
     let reply;
     try {
-      reply = await perform(step, senderOrigin, { skipSnapshot: !isLast && !BATCH_READ_OPS.has(step.op) });
+      // Each step is its own op of the SAME driver: it claims (and releases) its
+      // tab like a lone op, and the lease's grace spans the gap to the next step.
+      reply = await perform(step, senderOrigin, {
+        skipSnapshot: !isLast && !BATCH_READ_OPS.has(step.op),
+        ctx: { driver: ctx.driver, notice: "", held: new Map() },
+      });
     } catch (error) {
       reply = { ok: false, message: String(error?.message || error) };
     }

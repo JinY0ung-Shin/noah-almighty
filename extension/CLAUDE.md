@@ -10,8 +10,8 @@ browser", "Deploy topology"); install/policy in [`README.md`](README.md); mechan
   allowlist, not a directory walk; a forgotten new file silently bricks the zip. A binary file also needs
   `BINARY_BUNDLE_FILES` (else the updater corrupts it through utf8). Neither failure shows in CI without a
   byte pin in `tests/infra.test.ts`.
-- **Load-bearing files:** `background.js` imports `axtree.js` and `secretInput.js` at load — a bundle missing
-  either never registers the WORKER, so every op dies. The four `icon-*.png` must stay tracked: a missing
+- **Load-bearing files:** `background.js` imports `axtree.js`, `secretInput.js` and `tabLeases.js` at load — a
+  bundle missing any never registers the WORKER, so every op dies. The four `icon-*.png` must stay tracked: a missing
   icon makes Chrome refuse the WHOLE extension and breaks the zip route, release build and tests.
 - **`manifest.json` `key` IS the extension's identity.** Changing it moves the id in four places (see
   `extension.md`); the private half lives only on the release machine.
