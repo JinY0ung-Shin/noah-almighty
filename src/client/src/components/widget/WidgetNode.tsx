@@ -205,7 +205,7 @@ function element(v: ElVNode, ctx: WidgetCtx): ReactNode {
             {v.props.delta}
           </span>
         ) : null}
-        {typeof v.props.hint === "string" && v.props.hint ? <span className="stat-sub wg-hint">{v.props.hint}</span> : null}
+        {typeof v.props.hint === "string" && v.props.hint ? <span className="stat-sub wg-stat-hint">{v.props.hint}</span> : null}
       </div>
     );
   }
