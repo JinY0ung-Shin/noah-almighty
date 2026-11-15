@@ -1526,6 +1526,157 @@ describe("inline UI render reports (browser → the conversation's next turn)", 
   });
 });
 
+describe("inline UI state (per viewer, on the server; the avatar hears what changed)", () => {
+  const UI = "계산기예요.\n\n{@state n = 2}\n{@state tab = \"a\"}\n<slider label=\"수량\" value={n} onChange={setN} min={0} max={10} />\n";
+
+  async function setupState(name: string) {
+    const { store, app, services, config } = boot();
+    const owner = request.agent(app);
+    const ownerId = (await signup(owner, name).expect(201)).body.user.id as string;
+    H.impl = async (agentRequest, _pr, cfg, _store, events) => {
+      events.onDelta?.(UI);
+      return { kind: "text", runtime: cfg.agentRuntime, summary: "s", text: UI };
+    };
+    const turn = (body: Record<string, unknown> = {}, conversationId = "conv-st") =>
+      owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId, message: "계속", ...body }).expect(200);
+    const rows = (conversationId = "conv-st") => store.listMessages(ownerId, conversationId);
+    const lastAnswer = (conversationId = "conv-st") => rows(conversationId).filter((m) => m.role === "assistant").at(-1)!.id;
+    const put = (conversationId: string, messageId: string, body: unknown, agent = owner) =>
+      agent.put(`/api/conversations/${conversationId}/ui-states/${messageId}`).send(body as object);
+    const states = async (conversationId = "conv-st", agent = owner) =>
+      (await agent.get(`/api/messages?conversationId=${conversationId}`).expect(200)).body.inlineUiStates;
+    return { store, app, services, config, owner, ownerId, turn, rows, lastAnswer, put, states };
+  }
+
+  it("saves per viewer, returns them with the messages, and tells the NEXT turn once per change", async () => {
+    const { turn, lastAnswer, put, states } = await setupState("uistate");
+    await turn();
+    const answer = lastAnswer();
+    expect(await states()).toEqual({});
+    const values = { n: { sig: "n = 2", value: 7 }, tab: { sig: 'tab = "a"', value: "b" } };
+    await put("conv-st", answer, { values }).expect(204);
+    expect(await states()).toEqual({ [answer]: values });
+
+    await turn();
+    expect(H.requests[1].inlineUiStateChanges).toEqual([
+      { name: "n", value: 7 },
+      { name: "tab", value: "b" },
+    ]);
+    // A new answer is now the latest: the old one's values are not news, and nothing else changed.
+    await turn();
+    expect(H.requests[2].inlineUiStateChanges).toBeUndefined();
+
+    // The same values again are not news; a change is, once.
+    const latest = lastAnswer();
+    await put("conv-st", latest, { values: { n: { sig: "n = 2", value: 3 } } }).expect(204);
+    await turn({}, "conv-st-other"); // another conversation neither carries nor consumes it
+    expect(H.requests[3].inlineUiStateChanges).toBeUndefined();
+    await turn();
+    expect(H.requests[4].inlineUiStateChanges).toEqual([{ name: "n", value: 3 }]);
+    await put("conv-st", latest, { values: { n: { sig: "n = 2", value: 3 } } }).expect(204);
+    // (the answer of H.requests[4] is now latest; re-saving the older one is not about the latest answer)
+    await turn();
+    expect(H.requests[5].inlineUiStateChanges).toBeUndefined();
+  });
+
+  it("keeps only values whose declaration the answer still holds, and nothing unchanged", async () => {
+    const { turn, lastAnswer, put } = await setupState("uistatesig");
+    await turn();
+    await put("conv-st", lastAnswer(), {
+      values: { n: { sig: "n = 5", value: 9 }, gone: { sig: "gone = 1", value: 2 }, tab: { sig: 'tab = "a"', value: "c" } },
+    }).expect(204);
+    await turn();
+    expect(H.requests[1].inlineUiStateChanges).toEqual([{ name: "tab", value: "c" }]);
+    // Only stale declarations: nothing to tell.
+    await put("conv-st", lastAnswer(), { values: { n: { sig: "n = 5", value: 9 } } }).expect(204);
+    await turn();
+    expect(H.requests[2].inlineUiStateChanges).toBeUndefined();
+    // An empty record clears.
+    await put("conv-st", lastAnswer(), { values: { n: { sig: "n = 2", value: 1 } } }).expect(204);
+    await put("conv-st", lastAnswer(), { values: {} }).expect(204);
+    await turn();
+    expect(H.requests[3].inlineUiStateChanges).toBeUndefined();
+  });
+
+  it("404 for another user's conversation or an unknown message, 400 for a user message or no values, 413 over the cap, 401 signed out", async () => {
+    const { app, turn, rows, lastAnswer, put, states } = await setupState("uistategate");
+    await turn();
+    const answer = lastAnswer();
+    const userMessage = rows().find((m) => m.role === "user")!.id;
+    const stranger = request.agent(app);
+    await signup(stranger, "uistatestranger").expect(201);
+    const values = { n: { sig: "n = 2", value: 1 } };
+
+    const foreign = await put("conv-st", answer, { values }, stranger).expect(404);
+    const unknown = await put("conv-nope", answer, { values }).expect(404);
+    expect(foreign.body).toEqual(unknown.body);
+    expect(foreign.body.error).toBe("대화를 찾을 수 없습니다.");
+    expect(await states("conv-st", stranger)).toEqual({});
+    await put("conv-st", "no-such-message", { values }).expect(404);
+    await turn({}, "conv-st-2");
+    await put("conv-st-2", answer, { values }).expect(404); // an answer of ANOTHER conversation
+    expect((await put("conv-st", userMessage, { values }).expect(400)).body.error).toBe("아바타의 답변에만 입력값을 저장할 수 있습니다.");
+    await put("conv-st", answer, {}).expect(400);
+    await put("conv-st", answer, { values: [1, 2] }).expect(400);
+    await put("conv-st", answer, { values: "x" }).expect(400);
+    const huge = { text: { sig: 'text = ""', value: "가".repeat(200_001) } };
+    expect((await put("conv-st", answer, { values: huge }).expect(413)).body.error).toBe("입력값이 너무 커서 저장할 수 없습니다.");
+    await request(app).put(`/api/conversations/conv-st/ui-states/${answer}`).send({ values }).expect(401);
+    expect(await states()).toEqual({});
+  });
+
+  it("is never told to a task-API turn (left waiting for a chat turn); the rows die with a regenerated answer and with the conversation", async () => {
+    const { store, services, config, owner: setupOwner, ownerId, turn, lastAnswer, put } = await setupState("uistatecascade");
+    await turn();
+    await put("conv-st", lastAnswer(), { values: { n: { sig: "n = 2", value: 4 } } }).expect(204);
+
+    const target = resolveChatTarget({ store, viewerUserId: ownerId, avatarId: ownerId, ownerOnlyCommand: false });
+    if (!target.ok) throw new Error("expected the owner's own avatar to resolve");
+    await executeChatTurn(
+      { config, store, observedModel: services.observedModel },
+      {
+        ownerUserId: ownerId,
+        ownerDisplayName: "uistatecascade",
+        target: target.target,
+        conversationId: "conv-st",
+        agentMessage: "작업",
+        displayMessage: "작업",
+        images: [],
+        regenerate: false,
+        audit: () => {},
+        externalTaskId: "task-1",
+      },
+      { onRunOpen: () => true },
+    );
+    expect(H.requests[1].inlineUiStateChanges).toBeUndefined();
+
+    // 다시 생성 of the answer that holds values: the rows go with the message.
+    const doomed = lastAnswer();
+    await put("conv-st", doomed, { values: { n: { sig: "n = 2", value: 5 } } }).expect(204);
+    await turn({ message: "", regenerate: true });
+    // The regenerated turn continues from the FIRST answer again — whose values the task-API turn left waiting.
+    expect(H.requests[2].inlineUiStateChanges).toEqual([{ name: "n", value: 4 }]);
+    expect(Object.keys(store.listInlineUiStates(ownerId, "conv-st"))).not.toContain(doomed);
+
+    await put("conv-st", lastAnswer(), { values: { n: { sig: "n = 2", value: 6 } } }).expect(204);
+    const countRows = () =>
+      (store as unknown as { db: { prepare(sql: string): { get(): { c: number } } } }).db
+        .prepare("SELECT COUNT(*) AS c FROM inline_ui_states")
+        .get().c;
+    expect(countRows()).toBeGreaterThan(0);
+    await turn({}, "conv-st-keep");
+    await put("conv-st-keep", lastAnswer("conv-st-keep"), { values: { n: { sig: "n = 2", value: 1 } } }).expect(204);
+    expect(countRows()).toBe(3); // the first answer, the regenerated one, conv-st-keep
+    // Deleting the conversation takes its rows, and only its rows.
+    await setupOwner.delete("/api/conversations/conv-st").expect(200);
+    expect(countRows()).toBe(1);
+    expect(Object.keys(store.listInlineUiStates(ownerId, "conv-st-keep"))).toHaveLength(1);
+    // Deleting the user takes the rest.
+    expect(store.deleteUser(ownerId)).toBe(true);
+    expect(countRows()).toBe(0);
+  });
+});
+
 describe("SSE event fan-out", () => {
   it("forwards every non-blocking event as an SSE frame and persists thinking", async () => {
     const { store, app } = boot();

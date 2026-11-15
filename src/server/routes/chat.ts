@@ -133,6 +133,8 @@ import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace
 import { workspaceBrowserAvailable, workspacePathOfHostFile } from "../workspaceBrowser.js";
 import { sanitizeCanvasRenderErrors } from "../canvasRenderReports.js";
 import { inlineUiAllowed } from "../agent/ownerState.js";
+import { normalizeInlineUiStateRecord } from "../../shared/inlineUiState.js";
+import { inlineUiStateChanges } from "../agent/inlineUiStateReport.js";
 import { piRunWorkspace, piServicesFor, preparePiRunWorkspace, type PiRunClass } from "../agent/pi/piRuntime.js";
 import { isRoutineRunning } from "../routineRunRegistry.js";
 import {
@@ -1750,10 +1752,16 @@ export async function executeChatTurn(
       // turn is never headless or a consultation, so the task API decides). A
       // task-API turn leaves it waiting; it is dropped once the reported answer
       // is no longer the conversation's latest.
-      const inlineUiRenderErrors =
-        !ctx.compact && inlineUiAllowed({ externalTaskApi: Boolean(ctx.externalTaskId) })
-          ? store.takeInlineUiRenderErrors(ownerUserId, conversationId)
-          : [];
+      const inlineUiTurn = !ctx.compact && inlineUiAllowed({ externalTaskApi: Boolean(ctx.externalTaskId) });
+      const inlineUiRenderErrors = inlineUiTurn
+        ? store.takeInlineUiRenderErrors(ownerUserId, conversationId)
+        : [];
+      // …and what the person this turn answers (the conversation's owner — the
+      // only viewer whose values are kept for it) changed in the controls of the
+      // latest answer since the avatar was last told: consumed by the same gate,
+      // so a task-API turn or a compaction leaves it waiting for a chat turn.
+      const inlineUiState = inlineUiTurn ? store.takeInlineUiStateForTurn(ownerUserId, conversationId) : null;
+      const inlineUiStateChangeList = inlineUiState ? inlineUiStateChanges(inlineUiState.answer, inlineUiState.values) : [];
 
       const response = await runAgentStream(
         {
@@ -1801,6 +1809,7 @@ export async function executeChatTurn(
           mcpToolGroups: effectiveMcpToolGroupsForRun,
           ...(canvasRenderReports.length ? { canvasRenderReports } : {}),
           ...(inlineUiRenderErrors.length ? { inlineUiRenderErrors } : {}),
+          ...(inlineUiStateChangeList.length ? { inlineUiStateChanges: inlineUiStateChangeList } : {}),
           viewerUserId: ownerUserId,
           viewerName: ctx.ownerDisplayName,
           viewerIsOwner,
@@ -3140,6 +3149,10 @@ export function createChatRouter({
         // Visual-canvas artifacts (current version of each) so the side panel rebuilds
         // on reload from the dedicated tables, not from message.response.canvases (#50).
         canvases: store.listCanvasArtifacts(req.user!.id, conversationId),
+        // What THIS viewer changed in the inline UI of each answer (by message
+        // id), so a reload or another device draws the controls where they were
+        // left — in the same response as the messages, so nothing jumps.
+        inlineUiStates: store.listInlineUiStates(req.user!.id, conversationId),
       });
     },
   );
@@ -3250,6 +3263,44 @@ export function createChatRouter({
       );
       if (outcome === "not_found") {
         apiError(res, 404, "대화를 찾을 수 없습니다.");
+        return;
+      }
+      res.status(204).end();
+    },
+  );
+
+  // What the viewer changed in the inline UI of one stored ANSWER (slider
+  // positions, picks, quiz answers): `{ values: { name: { sig, value } } }`,
+  // setter-changed values only, kept per viewer on the server so a reload or
+  // another device shows them, and told to the avatar at the start of its next
+  // turn when the answer is the conversation's latest (takeInlineUiStateForTurn).
+  // Session auth only, the caller's own conversation only (anything else is ONE
+  // 404, as for ui-report); `values: {}` removes the answer's record. The client
+  // sends it debounced and, when the tab goes away, with `keepalive`.
+  router.put(
+    "/api/conversations/:conversationId/ui-states/:messageId",
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const record = normalizeInlineUiStateRecord(req.body?.values);
+      if (!record) {
+        apiError(res, 400, "values가 필요합니다.");
+        return;
+      }
+      const outcome = store.putInlineUiState(req.user!.id, req.params.conversationId, req.params.messageId, record);
+      if (outcome === "not_found") {
+        apiError(res, 404, "대화를 찾을 수 없습니다.");
+        return;
+      }
+      if (outcome === "message_not_found") {
+        apiError(res, 404, "메시지를 찾을 수 없습니다.");
+        return;
+      }
+      if (outcome === "not_assistant") {
+        apiError(res, 400, "아바타의 답변에만 입력값을 저장할 수 있습니다.");
+        return;
+      }
+      if (outcome === "too_large") {
+        apiError(res, 413, "입력값이 너무 커서 저장할 수 없습니다.");
         return;
       }
       res.status(204).end();

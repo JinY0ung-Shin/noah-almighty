@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ChatView from "../src/client/src/views/ChatView";
 import { resetCanvasRenderReports } from "../src/client/src/lib/canvasReport";
-import { clearLiveWidgetState } from "../src/client/src/lib/widgetState";
+import { clearLiveWidgetState, primeWidgetStates, resetWidgetStateMemory } from "../src/client/src/lib/widgetState";
 import * as chat from "../src/client/src/lib/chat";
 import { replaceState, updateState } from "../src/client/src/lib/state";
 import type { ChatPane } from "../src/client/src/lib/types";
@@ -114,8 +114,18 @@ async function uiDrawn(container: HTMLElement, selector = ".message.assistant .b
 
 const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ avatars: [], conversations: [], messages: [], skills: [] }) }));
 
+/** The values last PUT to the server for one answer of conv-1 (JSON text), or null. */
+function savedOnServer(messageId: string): string | null {
+  const calls = fetchMock.mock.calls.filter(
+    ([url, init]) => String(url) === `/api/conversations/conv-1/ui-states/${messageId}` && init?.method === "PUT",
+  );
+  const last = calls[calls.length - 1];
+  return last ? JSON.stringify(JSON.parse(String(last[1]?.body)).values) : null;
+}
+
 beforeEach(() => {
   localStorage.clear();
+  resetWidgetStateMemory();
   resetCanvasRenderReports();
   clearLiveWidgetState("pane-1");
   vi.mocked(chat.sendWidgetMessage).mockClear();
@@ -151,7 +161,7 @@ describe("inline UI in a stored answer", () => {
     expect(container.querySelector(".canvas-panel")).toBeNull();
   });
 
-  it("recomputes in the browser when an input changes, and keeps the value for this answer in this browser", async () => {
+  it("recomputes in the browser when an input changes, and saves the value for this answer on the server", async () => {
     const { container } = show(pane([assistant("m-1", CALC)]));
     const ui = await uiDrawn(container);
     fireEvent.change(within(ui).getByRole("slider", { name: "수량" }), { target: { value: "7" } });
@@ -159,7 +169,7 @@ describe("inline UI in a stored answer", () => {
     // The avatar is not called for it.
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/api/chat/stream"))).toBe(false);
     expect(chat.sendWidgetMessage).not.toHaveBeenCalled();
-    await waitFor(() => expect(localStorage.getItem("noah:inline-ui:u1:conv-1:m-1")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 7 } })), { timeout: 2000 });
+    await waitFor(() => expect(savedOnServer("m-1")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 7 } })), { timeout: 2000 });
   });
 
   it("restores what this browser kept, per answer", async () => {
@@ -172,6 +182,18 @@ describe("inline UI in a stored answer", () => {
     expect(uis[1].textContent).toContain("합계 6개");
   });
 
+  it("restores what the server kept for this viewer (loaded with the messages), ignoring a changed declaration", async () => {
+    primeWidgetStates("u1", "conv-1", {
+      "m-1": { n: { sig: "n = 3", value: 9 } },
+      "m-3": { n: { sig: "n = 2", value: 4 } },
+    });
+    const { container } = show(pane([assistant("m-1", CALC), user("m-2", "다음"), assistant("m-3", CALC)]));
+    await uiDrawn(container);
+    const uis = Array.from(container.querySelectorAll<HTMLElement>(".message.assistant .bubble > .answer-ui"));
+    expect(uis[0].textContent).toContain("합계 6개");
+    expect(uis[1].textContent).toContain("합계 12개");
+  });
+
   it("a send button and a submit post the viewer's NEXT chat message — the text the control declared", async () => {
     const { container } = show(pane([assistant("m-1", CALC)]));
     const ui = await uiDrawn(container);
@@ -179,6 +201,8 @@ describe("inline UI in a stored answer", () => {
     await waitFor(() => expect(ui.textContent).toContain("합계 12개"));
     fireEvent.click(within(ui).getByRole("button", { name: "이대로 주문" }));
     expect(chat.sendWidgetMessage).toHaveBeenLastCalledWith("pane-1", "수량 4개로 주문해 줘");
+    // The value went to the server first, without waiting for the debounce: the turn the message starts hears it.
+    expect(savedOnServer("m-1")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 4 } }));
     fireEvent.click(within(ui).getByRole("button", { name: "값 보내기" }));
     expect(chat.sendWidgetMessage).toHaveBeenLastCalledWith("pane-1", "값 보내기\n- n: 4\n- total: 12", 10_000);
   });
@@ -323,7 +347,7 @@ describe("inline UI while the answer is streaming", () => {
       const stored = container.querySelector<HTMLElement>(".message.assistant .bubble > .answer-ui");
       if (!stored || !stored.textContent?.includes("합계 27개")) throw new Error("the stored answer did not take the value over");
     });
-    await waitFor(() => expect(localStorage.getItem("noah:inline-ui:u1:conv-1:m-9")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 9 } })), { timeout: 2000 });
+    await waitFor(() => expect(savedOnServer("m-9")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 9 } })), { timeout: 2000 });
   });
 });
 

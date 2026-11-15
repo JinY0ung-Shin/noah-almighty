@@ -657,19 +657,19 @@
   (2026-11-11, the user's call: behave like ChatGPT's Intelligent UI and the repo it was ported from).**
   Markdown and UI are one text: `{@state}`/`{@const}` directives, `{#each}`/`{#if}` blocks and JSX-like tags
   with a JavaScript-subset expression language, between ordinary Markdown. There is NO tool call, NO canvas,
-  NO side panel, NO experimental flag and NO server step: the text streams as any answer does, is stored as
+  NO side panel, NO experimental flag and NO server step in drawing it: the text streams as any answer does, is stored as
   the message's text, and the viewer's browser detects, parses and evaluates it. The parser and interpreter
   are ported from `mireiffe/mirineereum` (`src/lib/genui` @ `0e469c4`, with the owner's permission; each
   file's header says so) and live in `src/shared/widget/` — the directory keeps the name from the canvas
   type it started as.
 - **What makes the model write it: a standing brief in the prompt.** `inlineUiPromptSpec()`
-  (`src/shared/widget/guide.ts`, ~5.6k chars, generated from the spec table) is appended for a run where
+  (`src/shared/widget/guide.ts`, ~6k chars, generated from the spec table) is appended for a run where
   `AgentRequest.inlineUiEnabled` is true — an interactive chat turn a person watches in the app: never
   `headless`, never `externalTaskApi`, never a consultation (their text is read by a machine or another avatar,
   where tags would be noise). ONE predicate decides it, `inlineUiAllowed` (`agent/ownerState.ts`), computed
   once in `runCapabilities`; it depends on no tool group, flag or events sink, and every viewer class gets it.
   `describe_system` reports the same state live (`- Inline UI: AVAILABLE in this run …` / `NOT available …`
-  with the reason), and the manual topic `inline-ui` holds the full reference (its page sits ~200 characters
+  with the reason), and the manual topic `inline-ui` holds the full reference (its page sits ~250 characters
   under the 16 000 cap — the next component means splitting the topic). The prompt is frozen per conversation,
   so two things cover the edges: a routine or task-API turn of a conversation that began as a chat hears
   `Answer format (this turn): plain Markdown only …` in its turn preamble (`inlineUiOffTurnNote`), and a
@@ -814,20 +814,51 @@
   elements and 60 000 characters per `<svg>`, charged to the render's output budget. Left out on purpose:
   `use`, `marker-mid`, filters, animation, `image`, `a`, `style`/`class`/`href`/`on*`, nested `svg`,
   `font-family`. Icons are an enum of the names `Icon.tsx` draws (`icons.ts`; a test fails on drift).
-- **State is per ANSWER and stays in the viewer's browser.** A stored message's values are mirrored to
-  `localStorage` under `noah:inline-ui:<userId>:<conversationId>:<messageId>` (`lib/widgetState.ts`: only
-  setter-changed values, 300 ms debounce flushed on `pagehide`/hidden, a 200 000-char cap measured with
-  `dataSize` BEFORE serializing, the 50 most recent answers, removed with the conversation, every access
-  guarded; a conversation deleted in this page load is never written to again, so a pending save cannot
-  bring its key back; a client-made message id that is replaced by the server's moves its key). A live
-  answer has no message id yet: its changes stay in memory and are handed to the stored message when the
+- **State is per ANSWER and per VIEWER, kept on the SERVER — and the avatar hears what changed (2026-11-15,
+  the user's call, reversing "never sent to the server": like ChatGPT, values survive a reload and show on
+  the viewer's other devices).** Only setter-changed values are kept, each with the declaration text it was
+  set under (`sig`); a value applies only while that declaration is unchanged. Server: table
+  `inline_ui_states` (PK `user_id, message_id`; `values_json`, `reported`, `updated_at`), mixin
+  `store/inlineUiStates.ts`, caps shared in `src/shared/inlineUiState.ts` (≤ 200 000 chars of JSON per
+  answer, the 50 most recently saved answers per viewer + conversation). `message_id` is the schema's ONE
+  foreign key (`REFERENCES messages(id) ON DELETE CASCADE`, `foreign_keys = ON` at open) on purpose: every
+  path that deletes a message — conversation delete, delete-all, `deleteUser`, rewind/다시 생성, the
+  retirements — takes the rows with it; `deleteUser` also deletes by `user_id`. A brand-new table: `CREATE
+  TABLE IF NOT EXISTS` is the existing-deployment migration. Routes (session auth only, the caller's own
+  conversation only — anything else is ONE 404, as for `ui-report`): `GET /api/messages` returns
+  `inlineUiStates` (`{ messageId: { name: { sig, value } } }`, the caller's) WITH the messages, so a remount
+  never jumps; `PUT /api/conversations/:id/ui-states/:messageId {values}` → 204 (`{}` removes), 404 unknown
+  message, 400 a non-assistant message or no `values` record, 413 over the cap. Client
+  (`lib/widgetState.ts`): `loadMessages` primes an in-memory copy (`primeWidgetStates`) before the messages
+  are applied; an answer saved in this page load keeps its own value over a later re-prime. Saves keep the
+  300 ms debounce, flushed on `pagehide`/hidden/unmount AND right before a `send`/`<submit>` posts (the turn
+  that message starts hears it); requests per answer go out one after another, with `keepalive` up to
+  60 000 chars. `localStorage` (`noah:inline-ui:<userId>:<conversationId>:<messageId>`, now
+  `{at, values}`) holds only what the server has not CONFIRMED (a failed or cut-off request); the next load
+  of that conversation uploads it (it wins over the server's copy) and drops it on 2xx/400/404/413. A bare
+  record there is what the browser-only build left: uploaded once where the server has nothing for that
+  answer, dropped where it has — the one-time move of existing users' values. A conversation deleted in this
+  page load is never written again; a client-made message id replaced by the server's moves its record. A
+  live answer has no message id yet: its changes stay in memory and are handed to the stored message when the
   turn ends (the live handover in the same file), so a slider moved mid-answer does not jump back. The entry
   is bound to the run and to the answer text it was written in: only the same run's live bubble (the chat
   view was reopened mid-stream) or the stored answer whose text continues that text takes it — an older
   answer with the same declaration, mounted first on the way back, does not. The focused control's key rides
-  along (`data-wg-key`), so a field the viewer was typing in keeps the focus across the remount at turn end. A value applies only while its declaration text (`sig`) is unchanged. Never sent to the server
-  — the avatar cannot read it; only a pressed `send`/`<submit>` reaches the conversation. Keys of the retired
-  canvas type (`noah:canvas-widget…`) are swept once per page load.
+  along (`data-wg-key`), so a field the viewer was typing in keeps the focus across the remount at turn end.
+  **What the avatar reads:** `executeChatTurn` consumes, under the render report's own gate (`!compact` +
+  `inlineUiAllowed` — never headless, task API or consultation; a steer's follow-up turn clears it),
+  `store.takeInlineUiStateForTurn(owner, conversation)`: the conversation OWNER's row (the only viewer
+  whose values a turn can answer) for the LATEST assistant message, only while `reported = 0`; it is then
+  marked reported. A save that CHANGES the values clears `reported`, so the avatar is told once per change
+  and never again while unchanged; values left on an older answer are not news (a regenerate that makes it
+  the latest again does surface unreported ones). `inlineUiStateChanges` (`agent/inlineUiStateReport.ts`)
+  re-parses the answer (`parseAnswer`) and keeps only names whose `sig` the answer still declares, in
+  declaration order → `AgentRequest.inlineUiStateChanges` → ONE paragraph of `buildPiTurnPreamble`,
+  titled `INLINE_UI_STATE_TITLE` ("Inline UI state"), framed as data, `<`→`<` so a value cannot close
+  `<inline_ui_state>`, ≤ 300 chars per value and ≤ 2 000 for the list (the rest counted). Both
+  metacognition surfaces say so (the brief in `guide.ts`, `describe_system`'s `- Inline UI: AVAILABLE` line)
+  and the manual's "What reaches you". Keys of the retired canvas type (`noah:canvas-widget…`) are swept once
+  per page load.
 - **Evaluation is one pass, in one place** (`lib/widgetView.ts`), and the `components/widget/*` components
   only draw the view model — they read nothing but the `VNode` they are handed, which is what keeps the
   budgets and the error isolation per top-level block. Re-evaluation is deferred until a running handler returns (evaluating puts

@@ -2257,3 +2257,78 @@ describe("store audit log reads", () => {
     expect(store.listAudit("u1", true, 2).map((event) => event.action)).toEqual(["third", "second"]);
   });
 });
+
+describe("inline UI state (inline_ui_states)", () => {
+  function makeStore() {
+    const { store } = createServices({ dataDir: path.join(tempDir, "uis"), agentRuntime: "local", sessionSecret: "t" });
+    const owner = store.createUser({ username: "uiowner", displayName: "Owner", password: "password123" });
+    store.touchConversation(owner.id, "conv-u", owner.id, "hi");
+    const answer = (text = "{@state n = 2}\n") =>
+      store.addMessage("conv-u", { role: "assistant", content: text, response: { kind: "text", runtime: "local", summary: "", text } }).id;
+    return { store, ownerId: owner.id, answer };
+  }
+  const rec = (value: number) => ({ n: { sig: "n = 2", value } });
+
+  it("keeps the 50 most recently saved answers per viewer and conversation", () => {
+    const { store, ownerId, answer } = makeStore();
+    const ids = Array.from({ length: 53 }, () => answer());
+    for (const [i, id] of ids.entries()) expect(store.putInlineUiState(ownerId, "conv-u", id, rec(i))).toBe("saved");
+    const kept = store.listInlineUiStates(ownerId, "conv-u");
+    expect(Object.keys(kept)).toHaveLength(50);
+    expect(kept[ids[0]]).toBeUndefined();
+    expect(kept[ids[2]]).toBeUndefined();
+    expect(kept[ids[52]]).toEqual(rec(52));
+  });
+
+  it("refuses a record over the cap without touching the stored one, and an empty record clears", () => {
+    const { store, ownerId, answer } = makeStore();
+    const id = answer();
+    store.putInlineUiState(ownerId, "conv-u", id, rec(1));
+    expect(store.putInlineUiState(ownerId, "conv-u", id, { t: { sig: 't = ""', value: "x".repeat(200_000) } })).toBe("too_large");
+    expect(store.listInlineUiStates(ownerId, "conv-u")[id]).toEqual(rec(1));
+    expect(store.putInlineUiState(ownerId, "conv-u", id, {})).toBe("cleared");
+    expect(store.listInlineUiStates(ownerId, "conv-u")).toEqual({});
+  });
+
+  it("is consumed once per change, for the latest answer only", () => {
+    const { store, ownerId, answer } = makeStore();
+    const first = answer();
+    store.putInlineUiState(ownerId, "conv-u", first, rec(4));
+    expect(store.takeInlineUiStateForTurn(ownerId, "conv-u")).toMatchObject({ messageId: first, values: rec(4) });
+    expect(store.takeInlineUiStateForTurn(ownerId, "conv-u")).toBeNull();
+    store.putInlineUiState(ownerId, "conv-u", first, rec(4)); // the same values: not news
+    expect(store.takeInlineUiStateForTurn(ownerId, "conv-u")).toBeNull();
+    store.putInlineUiState(ownerId, "conv-u", first, rec(5));
+    const other = store.createUser({ username: "uiother", displayName: "Other", password: "password123" });
+    expect(store.takeInlineUiStateForTurn(other.id, "conv-u")).toBeNull(); // someone else consumes nothing
+    answer(); // a newer answer: the first one's values are not about it
+    expect(store.takeInlineUiStateForTurn(ownerId, "conv-u")).toBeNull();
+    expect(store.putInlineUiState(other.id, "conv-u", first, rec(1))).toBe("not_found");
+  });
+
+  it("dies with its message: rewind, conversation delete, delete-all and user delete", () => {
+    const { store, ownerId, answer } = makeStore();
+    const a1 = answer();
+    store.addMessage("conv-u", { role: "user", content: "next" });
+    const a2 = answer();
+    store.putInlineUiState(ownerId, "conv-u", a1, rec(1));
+    store.putInlineUiState(ownerId, "conv-u", a2, rec(2));
+    const plan = store.planConversationRewind(ownerId, "conv-u", a2, "from")!;
+    store.applyConversationRewind(ownerId, "conv-u", plan);
+    expect(Object.keys(store.listInlineUiStates(ownerId, "conv-u"))).toEqual([a1]);
+    expect(store.deleteConversation(ownerId, "conv-u")).toBe(true);
+    const count = () =>
+      ((store as unknown as { db: Database.Database }).db.prepare("SELECT COUNT(*) AS c FROM inline_ui_states").get() as { c: number }).c;
+    expect(count()).toBe(0);
+
+    store.touchConversation(ownerId, "conv-u", ownerId, "again");
+    store.putInlineUiState(ownerId, "conv-u", answer(), rec(3));
+    store.deleteChatConversations(ownerId);
+    expect(count()).toBe(0);
+
+    store.touchConversation(ownerId, "conv-u", ownerId, "again");
+    store.putInlineUiState(ownerId, "conv-u", answer(), rec(3));
+    expect(store.deleteUser(ownerId)).toBe(true);
+    expect(count()).toBe(0);
+  });
+});

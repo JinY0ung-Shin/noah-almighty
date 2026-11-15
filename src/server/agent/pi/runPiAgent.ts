@@ -735,6 +735,7 @@ async function runPiAgentAs(
               externalTaskApi: false,
               canvasRenderReports: undefined,
               inlineUiRenderErrors: undefined,
+              inlineUiStateChanges: undefined,
               documents: undefined,
             },
             { now: now() },

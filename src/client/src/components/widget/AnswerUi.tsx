@@ -472,7 +472,11 @@ function createAnswerView(first: Current, surface: Surface) {
     // Never a slash command: the control is disabled for one, and this is the second lock.
     if (locked || !message.trim() || message.trim().startsWith("/")) return;
     if (p.outbox) p.outbox(message);
-    else void sendWidgetMessage(paneId, message);
+    else {
+      // What the viewer set goes out first: the turn this message starts hears it.
+      saver.flush();
+      void sendWidgetMessage(paneId, message);
+    }
   }
 
   function submit(raw: unknown, label: string): void {
@@ -492,7 +496,10 @@ function createAnswerView(first: Current, surface: Surface) {
     const lines = entries.map(([key, value]) => `- ${key}: ${Array.isArray(value) ? value.join(", ") : String(value)}`);
     const message = `${label.trim() || "보내기"}\n${lines.join("\n")}`;
     if (p.outbox) p.outbox(message);
-    else void sendWidgetMessage(paneId, message, 10_000);
+    else {
+      saver.flush();
+      void sendWidgetMessage(paneId, message, 10_000);
+    }
   }
 
   function domId(key: string): string {

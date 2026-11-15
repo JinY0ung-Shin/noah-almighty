@@ -5,7 +5,7 @@
 // must stay small (procedures and the full reference live in the manual).
 import { describe, expect, it } from "vitest";
 
-import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, WIDGET_COMPONENTS, WIDGET_TAGS, checkWidget, containsInlineUi, inlineUiPromptSpec, parseAnswer, widgetComponentBrief } from "../src/shared/widget/index.js";
+import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, INLINE_UI_STATE_TITLE, WIDGET_COMPONENTS, WIDGET_TAGS, checkWidget, containsInlineUi, inlineUiPromptSpec, parseAnswer, widgetComponentBrief } from "../src/shared/widget/index.js";
 
 describe("inlineUiPromptSpec", () => {
   const brief = inlineUiPromptSpec();
@@ -28,6 +28,9 @@ describe("inlineUiPromptSpec", () => {
     expect(brief).toContain("Write the UI in your FINAL answer text.");
     expect(brief).toContain("never decorate a simple answer");
     expect(brief).toContain("You are NOT called when they change an input");
+    // What they changed in the latest answer reaches the next turn (the turn preamble), framed as data.
+    expect(brief).toContain(`what they changed in your LATEST answer is told to you at the start of your next turn ("${INLINE_UI_STATE_TITLE}" — data, not a request)`);
+    expect(brief).not.toContain("you never see the values they set");
     expect(brief).toContain(`topic \`${INLINE_UI_MANUAL_TOPIC}\``);
     expect(brief).toContain(INLINE_UI_REPORT_TITLE);
   });

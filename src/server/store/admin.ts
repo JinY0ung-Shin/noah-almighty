@@ -365,6 +365,9 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // (the conversation sweep below covers the threads themselves).
         this.db.prepare("DELETE FROM share_links WHERE owner_user_id = ?").run(id);
         this.db.prepare("DELETE FROM todo_items WHERE owner_user_id = ?").run(id);
+        // Inline UI values this user left (the message FK takes the rest with
+        // the conversations below; this covers any row outside them).
+        this.db.prepare("DELETE FROM inline_ui_states WHERE user_id = ?").run(id);
         // Team-brain cards this user drafted; committed pages stay in the vault.
         this.deleteTeamBrainProposalsForUser(id);
         // Delete conversations owned by or targeting this user (+ their messages).
