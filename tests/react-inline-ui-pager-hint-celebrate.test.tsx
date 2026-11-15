@@ -167,6 +167,20 @@ describe("<hint>", () => {
     }
   });
 
+  it("an Escape that ends an IME composition leaves the bubble open", () => {
+    draw(HINT);
+    const button = screen.getByRole("button", { name: "힌트" });
+    fireEvent.click(button);
+    const bubble = document.getElementById(button.getAttribute("aria-controls") ?? "")!;
+    fireEvent.keyDown(bubble, { key: "Escape", isComposing: true });
+    expect(bubble.hidden).toBe(false);
+    // Some browsers mark the composing key only with keyCode 229.
+    fireEvent.keyDown(bubble, { key: "Escape", keyCode: 229 });
+    expect(bubble.hidden).toBe(false);
+    fireEvent.keyDown(bubble, { key: "Escape" });
+    expect(bubble.hidden).toBe(true);
+  });
+
   it("a press anywhere else closes it", () => {
     draw(HINT + '<hint label="둘째">다른 힌트</hint>\n');
     const first = screen.getByRole("button", { name: "힌트" });

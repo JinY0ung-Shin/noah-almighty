@@ -227,7 +227,7 @@
   color: var(--danger);
 }
 .wg-trend-flat,
-.wg-hint {
+.wg-stat-hint {
   color: var(--muted);
 }
 .wg-progress-head {

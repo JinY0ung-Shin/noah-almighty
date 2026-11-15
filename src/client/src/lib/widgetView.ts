@@ -40,6 +40,7 @@ import {
   type TNode,
   type WidgetDoc,
   type WidgetOption,
+  type WidgetProblemAt,
 } from "../../../shared/widget/index";
 
 /** A run of inline text and its Markdown styling. */
@@ -315,18 +316,33 @@ function inlineSegs(children: TNode[], env: Env, rt: Runtime): Seg[] {
   return piecesToSegs(inlinePieces(children, env, rt));
 }
 
+/**
+ * The piece of ONE inline node (`isInline`) at `index` of a children list of
+ * `count` (its first and last text lose their JSX edge whitespace). The one
+ * place a run's text, interpolations, `<link>`s and `<hint>`s become pieces.
+ */
+function inlinePiece(node: TNode, index: number, count: number, scope: Env, rt: Runtime, out: InlinePiece[]): void {
+  if (node.t === "text") {
+    const text = jsxWhitespace(node.value, index === 0, index === count - 1);
+    if (text) out.push(text);
+  } else if (node.t === "expr") {
+    // An interpolated VALUE is literal text: its `*` and `_` are not Markdown.
+    const text = interpolate(node, scope, rt);
+    if (text) out.push([{ text }]);
+  } else if (node.t === "el") {
+    const segs: Seg[] = [];
+    inlineElSegs(node, scope, rt, segs);
+    if (segs.length) out.push(segs);
+  }
+}
+
 /** The pieces of a children list, `{#if}`/`{#each}` output flattened into the same run. */
 function inlinePieces(children: TNode[], env: Env, rt: Runtime, out: InlinePiece[] = []): InlinePiece[] {
   const scope = childScope(children, env, rt);
   for (let i = 0; i < children.length; i++) {
     const node = children[i];
-    if (node.t === "text") {
-      const text = jsxWhitespace(node.value, i === 0, i === children.length - 1);
-      if (text) out.push(text);
-    } else if (node.t === "expr") {
-      // An interpolated VALUE is literal text: its `*` and `_` are not Markdown.
-      const text = interpolate(node, scope, rt);
-      if (text) out.push([{ text }]);
+    if (isInline(node)) {
+      inlinePiece(node, i, children.length, scope, rt, out);
     } else if (node.t === "if") {
       const branch = pickBranch(node, scope, rt);
       if (branch) inlinePieces(branch, scope, rt, out);
@@ -334,14 +350,6 @@ function inlinePieces(children: TNode[], env: Env, rt: Runtime, out: InlinePiece
       const { scopes } = eachScopes(node, scope, rt);
       if (scopes.length === 0 && node.empty) inlinePieces(node.empty, scope, rt, out);
       for (const item of scopes) inlinePieces(node.children, item, rt, out);
-    } else if (node.t === "el" && node.name === "link") {
-      const segs: Seg[] = [];
-      linkSegs(node, scope, rt, segs);
-      if (segs.length) out.push(segs);
-    } else if (node.t === "el" && node.name === "hint") {
-      const segs: Seg[] = [];
-      hintSegs(node, scope, rt, segs);
-      if (segs.length) out.push(segs);
     } else if (node.t === "el" && !componentSpec(node.name)) {
       // A tag that does not exist (`<b>`, `<span>`): its text still belongs to the sentence.
       inlinePieces(node.children, scope, rt, out);
@@ -452,20 +460,7 @@ function renderChildren(children: TNode[], env: Env, rt: Runtime, prefix: string
       const run = children.slice(i, j);
       try {
         const pieces: InlinePiece[] = [];
-        for (let k = 0; k < run.length; k++) {
-          const part = run[k];
-          if (part.t === "text") {
-            const text = jsxWhitespace(part.value, i + k === 0, i + k === children.length - 1);
-            if (text) pieces.push(text);
-          } else if (part.t === "expr") {
-            const text = interpolate(part, scope, rt);
-            if (text) pieces.push([{ text }]);
-          } else if (part.t === "el") {
-            const el: Seg[] = [];
-            inlineElSegs(part, scope, rt, el);
-            if (el.length) pieces.push(el);
-          }
-        }
+        for (let k = 0; k < run.length; k++) inlinePiece(run[k], i + k, children.length, scope, rt, pieces);
         const segs = piecesToSegs(pieces);
         if (segs.some(visibleSeg)) out.push({ k: "inline", key, segs });
       } catch (err) {
@@ -534,12 +529,53 @@ function choiceValueProblem(v: ElVNode): string | null {
   );
 }
 
+/** Every element of a document by its source offset (what an el VNode's `at` is). */
+function elementsByOffset(nodes: TNode[], out = new Map<number, ElNode>()): Map<number, ElNode> {
+  for (const n of nodes) {
+    if (n.t === "el") {
+      out.set(n.s, n);
+      elementsByOffset(n.children, out);
+    } else if (n.t === "each") {
+      elementsByOffset(n.children, out);
+      if (n.empty) elementsByOffset(n.empty, out);
+    } else if (n.t === "if") {
+      for (const b of n.branches) elementsByOffset(b.children, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * Whether the static check already reported on prop `name` of the element at
+ * `at`: one of its problems points inside that attribute (from its name to the
+ * next attribute, or to the end of the opening tag).
+ */
+function toldAboutProp(told: readonly WidgetProblemAt[], el: ElNode | undefined, name: string): boolean {
+  if (!el) return false;
+  const i = el.attrs.findIndex((attr) => attr.name === name);
+  if (i < 0) return false;
+  const start = el.attrs[i].s;
+  const end = el.attrs[i + 1]?.s ?? el.children[0]?.s ?? el.e;
+  return told.some((p) => p.pos >= start && p.pos < end);
+}
+
 /**
  * What went wrong in an evaluated view, as short ENGLISH lines for the avatar
  * (the render report): every error node, dropped prop and ignored call, each
  * with the line:column of the node it belongs to. Empty when the view is clean.
+ *
+ * `told` is what the static check (`widgetProblemsAt`) already says about the
+ * same document: a dropped prop or an unchosen choice value it reported at that
+ * very attribute is the same mistake, and is left to its (more precise) line.
  */
-export function collectWidgetProblems(doc: WidgetDoc, view: VNode[]): string[] {
+export function collectWidgetProblems(doc: WidgetDoc, view: VNode[], told: readonly WidgetProblemAt[] = []): string[] {
+  const elements = told.length ? elementsByOffset(doc.nodes) : null;
+  const propTold = (v: ElVNode, prop: string) => elements !== null && toldAboutProp(told, elements.get(v.at), prop);
+  // A dropped-prop line is the static check's only when EVERY prop in it is (`flawed` is "name: why; name: why").
+  const flawTold = (v: ElVNode) => v.flawed.split("; ").every((part) => {
+    const name = /^([A-Za-z][\w-]*): /.exec(part)?.[1];
+    return name !== undefined && propTold(v, name);
+  });
   const out: string[] = [];
   const where = (at: number): string => {
     if (at < 0) return "";
@@ -557,9 +593,9 @@ export function collectWidgetProblems(doc: WidgetDoc, view: VNode[]): string[] {
       else if (v.k === "inline") {
         for (const problem of segProblems(v.segs)) add(problem);
       } else if (v.k === "el") {
-        if (v.flawed) add(`${where(v.at)}<${v.tag}>: a prop was dropped — ${v.flawed}`);
+        if (v.flawed && !flawTold(v)) add(`${where(v.at)}<${v.tag}>: a prop was dropped — ${v.flawed}`);
         const unchosen = choiceValueProblem(v);
-        if (unchosen) add(`${where(v.at)}${unchosen}`);
+        if (unchosen && !propTold(v, "value")) add(`${where(v.at)}${unchosen}`);
         for (const problem of segProblems(v.segs)) add(`${where(v.at)}${problem}`);
         walk(v.children);
       }

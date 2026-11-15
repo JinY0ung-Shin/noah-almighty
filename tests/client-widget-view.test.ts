@@ -15,7 +15,7 @@ import {
   type ElVNode,
   type VNode,
 } from "../src/client/src/lib/widgetView.js";
-import { createRootEnv, createRuntime, parseAnswer, parseWidget, restoreState, type AnswerDoc, type Env, type Runtime, type WidgetDoc } from "../src/shared/widget/index.js";
+import { createRootEnv, createRuntime, parseAnswer, parseWidget, restoreState, widgetProblemsAt, type AnswerDoc, type Env, type Runtime, type WidgetDoc } from "../src/shared/widget/index.js";
 
 /** A strictly parsed source as the document the evaluator takes. */
 function asAnswer(doc: WidgetDoc): AnswerDoc {
@@ -470,6 +470,33 @@ describe("evaluating UI nodes", () => {
     expect(problemsOf(`{@state s = "압축"}\n<tabs label="행정" value={s} onChange={setS} options={["흡입", "압축"]} />\n`)).toEqual([]);
     expect(problemsOf(`{@state s = 1}\n<segmented-control label="행정" value={s} onChange={setS} options={[{ label: "흡입", value: 0 }, { label: "압축", value: 1 }]} />\n`)).toEqual([]);
     expect(problemsOf(`{@state s = null}\n<select label="행정" value={s} onChange={setS} options={["흡입", "압축"]} />\n`)).toEqual([]);
+  });
+
+  it("leaves a mistake the static check already told at that very prop to the static line", () => {
+    const rt = createRuntime();
+    const report = (src: string) => {
+      const doc = parseAnswer(src);
+      const values = { ...restoreState(doc, null).values };
+      const view = answerNodes(buildAnswerItems(doc, createRootEnv(doc, values, rt, { get: (n) => values[n], set: () => {}, copy: () => {} }), rt, values, createAnswerViewCache()));
+      const told = widgetProblemsAt(doc);
+      return { told: told.map((p) => p.text), alone: collectWidgetProblems(doc, view), merged: collectWidgetProblems(doc, view, told) };
+    };
+    // A quoted "{s}": the static check says why; the render report would tell the same mistake as "no option chosen".
+    const quoted = report(`{@state s = "a"}\n<select label="X" value="{s}" options={["a", "b"]} onChange={setS} />\n`);
+    expect(quoted.told).toEqual(['line 2:19 — Prop "value" of <select> is a quoted string, so {s…} is shown literally. Compute the text instead: value={`${s}`}.']);
+    expect(quoted.alone).toHaveLength(1);
+    expect(quoted.alone[0]).toMatch(/^line 2:1 <select>: value "\{s\}" is not one of its options' values/);
+    expect(quoted.merged).toEqual([]);
+    // A refused href: the static line names the prop, the render line would say it was dropped.
+    const href = report(`<button href="javascript:alert(1)">x</button>\n`);
+    expect(href.told).toHaveLength(1);
+    expect(href.alone).toEqual([expect.stringMatching(/^line 1:1 <button>: a prop was dropped — href: /)]);
+    expect(href.merged).toEqual([]);
+    // A static problem on ANOTHER prop of the same tag does not hide a drop only the render saw.
+    const other = report(`<stat label="a" value={1} trend="sideways" hint={[1].at(5).x} />\n`);
+    expect(other.told).toEqual(['line 1:27 — Prop "trend" of <stat> must be one of up, down, flat.']);
+    expect(other.alone).toEqual([expect.stringMatching(/^line 1:1 <stat>: a prop was dropped — hint: /)]);
+    expect(other.merged).toEqual(other.alone);
   });
 
   it("cuts a long list and says so", () => {

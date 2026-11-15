@@ -322,7 +322,7 @@ const LIST: ComponentSpec[] = [
     value: { type: { k: "value" }, required: true },
     delta: { type: { k: "string", max: 60 }, doc: 'e.g. "+3.8%"' },
     trend: { type: { k: "enum", values: ["up", "down", "flat"] } },
-    hint: { type: SHORT },
+    hint: { type: SHORT, doc: "the stat's small dim caption under the value (not the <hint> tag)" },
   }),
   component("progress", "Data", "none", "", {
     value: { type: { k: "number", min: 0, max: 1 }, required: true },

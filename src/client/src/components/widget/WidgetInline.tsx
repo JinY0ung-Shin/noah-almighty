@@ -14,6 +14,7 @@
 // under it stays open) and which puts the focus back on the button.
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
+import { clickOutside } from "../../lib/dom";
 import type { Seg } from "../../lib/widgetView";
 import Icon from "../Icon";
 
@@ -43,17 +44,18 @@ function HintRun({ label, segs }: { label: string; segs: Seg[] }) {
   const wrap = useRef<HTMLSpanElement>(null);
   const button = useRef<HTMLButtonElement>(null);
 
+  // Listening only while open: a closed hint costs the page nothing.
   useEffect(() => {
-    if (!open) return;
-    const outside = (event: Event) => {
-      if (wrap.current && event.target instanceof Node && !wrap.current.contains(event.target)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", outside, true);
-    return () => document.removeEventListener("pointerdown", outside, true);
+    if (!open || !wrap.current) return;
+    const outside = clickOutside(wrap.current, { onOutside: () => setOpen(false) });
+    return () => outside.destroy();
   }, [open]);
 
   function onKeyDown(event: KeyboardEvent<HTMLSpanElement>) {
-    if (event.key !== "Escape" || !open || event.nativeEvent.isComposing) return;
+    // An Escape that ends an IME composition (Hangul) is the input method's, not ours.
+    // TODO: lib/ime.ts isImeComposing
+    const composing = event.nativeEvent.isComposing || event.keyCode === 229;
+    if (event.key !== "Escape" || !open || composing) return;
     // Stopped here, so no window listener (a dialog this answer sits in) takes the same Escape.
     event.preventDefault();
     event.stopPropagation();

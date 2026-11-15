@@ -752,7 +752,9 @@
   that does nothing) and only one with no empty value (an icon name, a `send` text) is an error node; a node
   that throws is ONE error node and its siblings still render. The strictness moved to the advice:
   `widgetProblems(doc)` (the static checker in answer mode) + `collectWidgetProblems` + failed handlers and
-  charts are posted by `lib/canvasReport.ts` (`queueInlineUiReport`) to
+  charts — one mistake told ONCE: identical lines merge, and a render line about a prop (a dropped prop, a
+  choice `value` that is no option) is left out when `widgetProblemsAt` already put a problem INSIDE that
+  attribute of that element (e.g. `value="{s}"`) — are posted by `lib/canvasReport.ts` (`queueInlineUiReport`) to
   `POST /api/conversations/:conversationId/ui-report {messageId, errors}` — only for the conversation's
   LATEST stored answer, never while it streams (the report goes out on the update where `streaming` turns
   false: a turn's end almost always drains in first) — and reach the avatar once, at the start of its next turn,

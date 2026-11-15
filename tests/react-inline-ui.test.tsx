@@ -134,6 +134,15 @@ describe("AnswerUi across the end of a turn", () => {
     expect(body.errors.join("\n")).not.toMatch(/never closed|never finished/);
   });
 
+  it("tells one mistake once: a render line about a prop the static check already named is left out", async () => {
+    signIn();
+    const QUOTED = `{@state s = "a"}\n<select label="고르기" value="{s}" options={["a", "b"]} onChange={setS} />\n`;
+    render(<AnswerUi pane={idlePane} text={QUOTED} messageId="m-3" latest={true} />);
+    await waitFor(() => expect(reportCalls()).toHaveLength(1), { timeout: 4000 });
+    const errors: string[] = JSON.parse(String((reportCalls()[0][1] as RequestInit).body)).errors;
+    expect(errors).toEqual(['line 2:21 — Prop "value" of <select> is a quoted string, so {s…} is shown literally. Compute the text instead: value={`${s}`}.']);
+  });
+
   it("an answer that becomes the latest one later reports then", async () => {
     signIn();
     const view = render(<AnswerUi pane={idlePane} text={BROKEN} messageId="m-1" latest={false} />);
