@@ -30,8 +30,9 @@ import {
   normalizeSubmitValues,
   parseAnswer,
   restoreState,
-  widgetProblems,
+  widgetProblemsAt,
   type AnswerDoc,
+  type WidgetProblemAt,
   type WidgetHost,
 } from "../../../../shared/widget/index";
 import { answerPieces, type AnswerPiece } from "../../lib/answerLayout";
@@ -313,7 +314,12 @@ function createAnswerView(first: Current, surface: Surface) {
     // answer is finished NOW.
     streamingNow = nextStreaming;
     if (nextStreaming) written = true;
-    if (!nextStreaming) reportProblems([...staticProblems(doc), ...collectWidgetProblems(doc, drawn), ...knownDiagramIssues()]);
+    if (!nextStreaming) {
+      // One mistake is told once: a render line the static check already gave
+      // (the same prop of the same tag) is left to the static line.
+      const told = staticChecked(doc);
+      reportProblems([...told.map((problem) => problem.text), ...collectWidgetProblems(doc, drawn, told), ...knownDiagramIssues()]);
+    }
   }
 
   function hasSender(nodes: VNode[]): boolean {
@@ -350,17 +356,17 @@ function createAnswerView(first: Current, surface: Surface) {
   function noteLatest(isLatest: boolean): void {
     const became = isLatest && !wasLatest;
     wasLatest = isLatest;
-    if (became && doc && !streamingNow) reportProblems([...staticProblems(doc), ...knownDiagramIssues()]);
+    if (became && doc && !streamingNow) reportProblems([...staticChecked(doc).map((problem) => problem.text), ...knownDiagramIssues()]);
   }
 
   // The static check walks the whole document: once per finished text.
   let checkedText: string | null = null;
-  let checked: string[] = [];
-  function staticProblems(target: AnswerDoc): string[] {
+  let checked: WidgetProblemAt[] = [];
+  function staticChecked(target: AnswerDoc): WidgetProblemAt[] {
     if (target.src === checkedText) return checked;
     checkedText = target.src;
     try {
-      checked = target.failed ? [] : widgetProblems(target);
+      checked = target.failed ? [] : widgetProblemsAt(target);
     } catch {
       checked = [];
     }
@@ -387,7 +393,9 @@ function createAnswerView(first: Current, surface: Surface) {
     return continuesDiagramText() ? diagramIssues : [];
   }
 
-  function reportProblems(errors: string[]): void {
+  function reportProblems(found: string[]): void {
+    // Identical lines (the same text from two of the sources) go out once.
+    const errors = [...new Set(found)];
     if (!errors.length || !p.messageId || !p.latest || streamingNow) return;
     const content = parsedText ?? "";
     queueInlineUiReport({

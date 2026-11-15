@@ -101,6 +101,31 @@ const MAX_FINDINGS = 200;
 /** Names compared against for one "did you mean". */
 const MAX_HINT_CANDIDATES = 300;
 
+function blankText(n: TNode & { t: "text" }): boolean {
+  return n.value.trim() === "";
+}
+
+/**
+ * The first node of a children list, in source order, that `pred` accepts —
+ * `{#each}` (its body, then its `{:else}`) and `{#if}` (every branch) looked
+ * into when `pred` does not take the block itself. Elements are not entered.
+ */
+function findNode(nodes: TNode[], pred: (n: TNode) => boolean): TNode | null {
+  for (const n of nodes) {
+    if (pred(n)) return n;
+    if (n.t === "each") {
+      const inner = findNode(n.children, pred) ?? (n.empty ? findNode(n.empty, pred) : null);
+      if (inner) return inner;
+    } else if (n.t === "if") {
+      for (const b of n.branches) {
+        const inner = findNode(b.children, pred);
+        if (inner) return inner;
+      }
+    }
+  }
+  return null;
+}
+
 class Checker {
   problems: Finding[];
   nodeCount = 0;
@@ -517,51 +542,29 @@ class Checker {
     this.svgChildren(node.children, scope, tag, inResource || svgIsResource(tag), svg);
   }
 
+  /** Non-blank text, an `{expr}` or a block (which may yield either) directly in a children list. */
   hasText(nodes: TNode[]): boolean {
-    return nodes.some((n) => (n.t === "text" ? n.value.trim() !== "" : n.t === "expr" || n.t === "if" || n.t === "each"));
+    return findNode(nodes, (n) => (n.t === "text" ? !blankText(n) : n.t === "expr" || n.t === "if" || n.t === "each")) !== null;
   }
 
+  /** Anything but blank text directly in a children list. */
   hasContent(nodes: TNode[]): boolean {
-    return nodes.some((n) => (n.t === "text" ? n.value.trim() !== "" : true));
+    return findNode(nodes, (n) => n.t !== "text" || !blankText(n)) !== null;
   }
 
   /** Non-blank text or an `{expr}` in a children list, `{#each}`/`{#if}` looked into. */
   hasLooseText(nodes: TNode[]): boolean {
-    return nodes.some((n) =>
-      n.t === "text"
-        ? n.value.trim() !== ""
-        : n.t === "expr" ||
-          (n.t === "each" && (this.hasLooseText(n.children) || (n.empty ? this.hasLooseText(n.empty) : false))) ||
-          (n.t === "if" && n.branches.some((b) => this.hasLooseText(b.children))),
-    );
+    return findNode(nodes, (n) => (n.t === "text" ? !blankText(n) : n.t === "expr")) !== null;
   }
 
   /** Whether a children list holds one of `tags`, `{#each}`/`{#if}` looked into. */
   hasElement(nodes: TNode[], tags: readonly string[]): boolean {
-    return nodes.some((n) =>
-      n.t === "el"
-        ? tags.includes(n.name)
-        : (n.t === "each" && (this.hasElement(n.children, tags) || (n.empty ? this.hasElement(n.empty, tags) : false))) ||
-          (n.t === "if" && n.branches.some((b) => this.hasElement(b.children, tags))),
-    );
+    return findNode(nodes, (n) => n.t === "el" && tags.includes(n.name)) !== null;
   }
 
   /** The first element in an inline body that is not one of the `allowed` tags (blocks are looked into). */
   firstElement(nodes: TNode[], allowed: readonly string[] = []): ElNode | null {
-    for (const n of nodes) {
-      if (n.t === "el" && !allowed.includes(n.name)) return n;
-      if (n.t === "each") {
-        const inner = this.firstElement(n.children, allowed) ?? (n.empty ? this.firstElement(n.empty, allowed) : null);
-        if (inner) return inner;
-      }
-      if (n.t === "if") {
-        for (const b of n.branches) {
-          const inner = this.firstElement(b.children, allowed);
-          if (inner) return inner;
-        }
-      }
-    }
-    return null;
+    return findNode(nodes, (n) => n.t === "el" && !allowed.includes(n.name)) as ElNode | null;
   }
 
   /* ─────────── expressions ─────────── */
@@ -842,6 +845,20 @@ export function checkWidget(source: string): WidgetCheck {
  * document anyway; this is the advice that goes with the next turn.
  */
 export function widgetProblems(doc: WidgetDoc, limit = MAX_REPORTED): string[] {
+  return widgetProblemsAt(doc, limit).map((p) => p.text);
+}
+
+/** A `widgetProblems` line with the source offset it points at. */
+export interface WidgetProblemAt {
+  text: string;
+  pos: number;
+}
+
+/**
+ * `widgetProblems` with each line's source offset, so the renderer's own report
+ * can leave out what this check already said about the same prop.
+ */
+export function widgetProblemsAt(doc: WidgetDoc, limit = MAX_REPORTED): WidgetProblemAt[] {
   const checker = new Checker(doc, true);
   if (!(doc.nodes.length === 0 && doc.problems.length > 0)) {
     try {
@@ -851,11 +868,11 @@ export function widgetProblems(doc: WidgetDoc, limit = MAX_REPORTED): string[] {
       checker.problem("The UI source is nested too deeply to analyse. Flatten it.", 0);
     }
   }
-  const out: string[] = [];
+  const out: WidgetProblemAt[] = [];
   for (const p of [...checker.problems].sort((a, b) => a.pos - b.pos)) {
     const { line, col } = lineCol(doc.src, p.pos);
     const text = `line ${line}:${col} — ${p.full ? p.full() : p.message}`;
-    if (!out.includes(text)) out.push(text);
+    if (!out.some((o) => o.text === text)) out.push({ text, pos: p.pos });
     if (out.length >= limit) break;
   }
   return out;
