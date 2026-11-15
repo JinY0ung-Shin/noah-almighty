@@ -1077,6 +1077,22 @@
   margin: 0.8em 0;
 }
 
+/* Math (lib/mathMarkdown.ts): KaTeX's MathML, drawn by the browser itself. A
+   display formula scrolls sideways on a narrow screen instead of overflowing. */
+.md-math-block {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0.8em 0;
+  text-align: center;
+}
+.md-math math {
+  font-size: 1.1em;
+}
+.md-math .katex-error {
+  color: var(--danger);
+}
+
 /* Tables (markdown + structured response). GFM tables get wrapped in
    .table-wrap by enhanceCodeBlocks so they scroll horizontally on narrow
    screens instead of letter-breaking every cell. */
