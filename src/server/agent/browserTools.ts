@@ -254,7 +254,11 @@ export function wrapUntrustedPageContent(raw: string): string {
  */
 function formatTabs(tabs: BrowserTab[]): string {
   return tabs
-    .map((tab) => `${tab.current ? "*" : "-"} [${tab.tabId}] ${tab.title || "(untitled)"} — ${tab.url}`)
+    .map(
+      (tab) =>
+        `${tab.current ? "*" : "-"} [${tab.tabId}] ${tab.title || "(untitled)"} — ${tab.url}` +
+        (tab.busy ? " (BUSY: another of the user's conversations is driving this tab — do not use it)" : ""),
+    )
     .join("\n");
 }
 
@@ -1919,7 +1923,9 @@ export function buildBrowserTools(context: BrowserToolsContext) {
         "group (plus any you opened with new_tab); every other tab in their browser is off limits and " +
         "cannot be reached. `*` marks the WORKING tab — the one every other tool acts on. It stays the " +
         "working tab across turns until you switch with select_tab, open one with new_tab, or it closes; " +
-        "if it closes, the bridge picks another and says which in a note.",
+        "if it closes, the bridge picks another and says which in a note. With a current Noah extension " +
+        "the working tab is per CONVERSATION, and a tab marked BUSY is being driven by another of the user's " +
+        "conversations right now: every op on it is refused — open your own with new_tab instead.",
       {},
       async () => {
         const denied = gate();
@@ -1933,7 +1939,9 @@ export function buildBrowserTools(context: BrowserToolsContext) {
         "when you need to keep the current page — navigate replaces it. The new tab joins the Noah tab " +
         "group so the user can see and revoke it like any other. If that group does not exist yet, the " +
         "user is asked to approve creating it via a popup in their browser — when the call fails because " +
-        "the prompt went unanswered, tell the user to watch for the popup, then retry.",
+        "the prompt went unanswered, tell the user to watch for the popup, then retry. It is also the way " +
+        "out when a tab is refused as being driven by another of the user's conversations: the new tab is " +
+        "this conversation's own.",
       {
         url: z.string().min(1).max(2048).describe("Absolute http(s) URL to open."),
         maxChars: MAX_CHARS_SCHEMA,
@@ -1960,7 +1968,8 @@ export function buildBrowserTools(context: BrowserToolsContext) {
         "afterwards to see what is on it. Uids you already hold keep pointing at the elements (and tabs) " +
         "they came from. Switching works even when the target tab currently sits on a page outside the " +
         "operator's allowlist: MOVING to a tab is always allowed, READING it is not, so a snapshot there is " +
-        "still refused until the tab is navigated somewhere permitted.",
+        "still refused until the tab is navigated somewhere permitted. A tab another of the user's " +
+        "conversations is driving right now (BUSY in list_tabs) cannot be selected — use new_tab.",
       {
         tabId: z.string().min(1).max(64).describe("tabId from mcp__browser__list_tabs."),
       },

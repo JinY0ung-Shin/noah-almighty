@@ -409,6 +409,22 @@ const BROWSER_OP_TTL_MS = 45 * 1000;
 const BROWSER_BATCH_TTL_MS = 150 * 1000;
 
 /**
+ * The `driver` key every relayed browser op carries (0.29.0): WHICH of the
+ * user's conversations is driving, so the extension keeps one working tab per
+ * conversation and refuses a tab another conversation is using right now. It is
+ * the run's conversation id, taken from the RUN here — never from the tool call,
+ * so the model cannot pick (or impersonate) a driver. Opaque to the extension;
+ * bounded and reduced to id characters so nothing but an id ever rides it. An
+ * extension older than 0.29.0 ignores the field and keeps its one shared tab.
+ */
+export const BROWSER_DRIVER_MAX_CHARS = 128;
+export function browserDriverKey(conversationId: string): string {
+  return String(conversationId)
+    .replace(/[^A-Za-z0-9._:-]/g, "")
+    .slice(0, BROWSER_DRIVER_MAX_CHARS);
+}
+
+/**
  * A batch step as it goes on the wire: the fields a single op takes, never a
  * stored secret (the browser tool refuses `secretName` in a step; this is the
  * relay's own copy of that rule) and never a nested batch.
@@ -2174,6 +2190,8 @@ export async function executeChatTurn(
                 runId,
                 requestId,
                 op: requestData.op,
+                // Set from the RUN, never from requestData (see browserDriverKey).
+                driver: browserDriverKey(conversationId) || null,
                 url: requestData.url ?? null,
                 name: requestData.name ?? null,
                 kind: requestData.kind ?? null,
@@ -2684,6 +2702,7 @@ export async function executeChatTurn(
                       title?: unknown;
                       url?: unknown;
                       current?: unknown;
+                      busy?: unknown;
                     };
                     if (typeof tab.tabId !== "string") return [];
                     return [
@@ -2692,6 +2711,8 @@ export async function executeChatTurn(
                         title: typeof tab.title === "string" ? tab.title.slice(0, 300) : "",
                         url: typeof tab.url === "string" ? tab.url.slice(0, 2_000) : "",
                         current: tab.current === true,
+                        // 0.29.0: another of the user's conversations is driving it.
+                        ...(tab.busy === true ? { busy: true } : {}),
                       },
                     ];
                   })

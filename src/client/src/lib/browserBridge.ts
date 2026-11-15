@@ -32,7 +32,7 @@ export interface BridgeReply {
   note?: string;
   url?: string;
   title?: string;
-  tabs?: { tabId: string; title: string; url: string; current: boolean }[];
+  tabs?: { tabId: string; title: string; url: string; current: boolean; busy?: boolean }[];
   /** A JS dialog is open on the tab (page frozen, no snapshot possible). */
   dialog?: { type: string; message: string; defaultPrompt?: string };
   /** screenshot: captured image bytes, base64 (no data: prefix). */
@@ -127,6 +127,13 @@ export interface BridgeOperation {
    * browser_op frame, and only the extension sees them all.
    */
   requestId?: string;
+  /**
+   * WHICH of the user's conversations drives this op (the run's conversation
+   * id, stamped by the server's relay — never by the model). Extension 0.29.0
+   * keeps one working tab per driver and refuses a tab another driver is
+   * using; an older build ignores it and keeps its one shared working tab.
+   */
+  driver?: string | null;
   op:
     | "snapshot"
     | "navigate"

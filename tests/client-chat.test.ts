@@ -2734,6 +2734,23 @@ describe("browser-bridge relay", () => {
     expect(statuses()).toContain("페이지를 스크롤하며 본문을 읽는 중…");
   });
 
+  it("relays the server-stamped driver (the run's conversation) to the extension, bounded", async () => {
+    const id = seedPane();
+    const send = useExtension({ ok: true });
+    const { calls } = await driveEvents(id, [
+      ["browser", { requestId: "br-drv-1", runId: "rn-d", op: "click", uid: "u1", driver: "conv-a" }],
+      ["browser", { requestId: "br-drv-2", runId: "rn-d", op: "click", uid: "u1", driver: "c".repeat(300) }],
+      // An older server sends none: the extension then uses its legacy slot.
+      ["browser", { requestId: "br-drv-3", runId: "rn-d", op: "click", uid: "u1" }],
+    ]);
+    await waitFor(() => postedTo(calls, "/api/chat/respond").length === 3);
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send.mock.calls[0][1]).toMatchObject({ op: "click", driver: "conv-a" });
+    expect(send.mock.calls[1][1].driver).toBe("c".repeat(128));
+    expect(send.mock.calls[2][1].driver).toBeUndefined();
+  });
+
   it("answers the parked run even with no extension installed", async () => {
     const id = seedPane();
     const statuses = trackStatus(id);

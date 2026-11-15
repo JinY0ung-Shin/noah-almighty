@@ -2972,6 +2972,9 @@ function handleBrowserOp(paneId: string, data: any): void {
     // several open Noah tabs delivers this frame to EVERY tab, and the
     // handledBrowserOps dedupe above is a per-tab Set that cannot see them.
     requestId,
+    // Relayed as the server stamped it (the run's conversation): the extension
+    // keys its per-conversation working tab and tab leases on it.
+    driver: typeof data.driver === "string" && data.driver ? data.driver.slice(0, 128) : undefined,
     op: data.op,
     url: data.url,
     name: data.name,

@@ -31,6 +31,8 @@ import { chatImagesDir, MAX_CHAT_IMAGES_PER_MESSAGE, readChatImages, resolveStor
 import { renderDocumentPreviews } from "../src/server/deckRender.js";
 import { getActiveRunForConversation } from "../src/server/agent/runRegistry.js";
 import {
+  BROWSER_DRIVER_MAX_CHARS,
+  browserDriverKey,
   executeChatTurn,
   formatDurationKo,
   MAX_STEER_LENGTH,
@@ -2334,6 +2336,14 @@ describe("run-registry endpoint validation", () => {
 });
 
 describe("browser-bridge relay (onBrowser)", () => {
+  it("bounds the driver key to id characters and BROWSER_DRIVER_MAX_CHARS", () => {
+    const uuid = "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c";
+    expect(browserDriverKey(uuid)).toBe(uuid);
+    expect(browserDriverKey("conv a/b\n<script>")).toBe("convabscript");
+    expect(browserDriverKey("x".repeat(500))).toHaveLength(BROWSER_DRIVER_MAX_CHARS);
+    expect(BROWSER_DRIVER_MAX_CHARS).toBe(128);
+  });
+
   it("puts the whole op on the wire, audits a scrubbed url, and bounds every untrusted reply field", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);
@@ -2346,6 +2356,9 @@ describe("browser-bridge relay (onBrowser)", () => {
       results.push(
         await events.onBrowser!({
           op: "press_key",
+          // The tool layer never sets this; even when something does, the relay
+          // stamps the RUN's conversation instead.
+          driver: "spoofed-driver",
           uid: "u-7",
           url: "https://intranet.example.com/start",
           x: 12,
@@ -2394,6 +2407,8 @@ describe("browser-bridge relay (onBrowser)", () => {
           { tabId: 5, title: "numeric id" }, // dropped: tabId must be a string
           "not-an-object", // dropped
           { tabId: "t2" }, // missing fields default rather than fail
+          { tabId: "t3", title: "T3", url: "", current: false, busy: true }, // another conversation's
+          { tabId: "t4", busy: "yes" }, // busy only when literally true
         ],
         dialog: { message: "정말 삭제할까요?" }, // no type → alert
       }),
@@ -2403,6 +2418,9 @@ describe("browser-bridge relay (onBrowser)", () => {
     expect(relayed).toHaveLength(1);
     expect(relayed[0]).toMatchObject({
       op: "press_key",
+      // WHICH conversation drives (extension 0.29.0 per-conversation working
+      // tabs): the run's conversation id, never what the request carried.
+      driver: "conv-bridge",
       uid: "u-7",
       url: "https://intranet.example.com/start",
       x: 12,
@@ -2446,6 +2464,8 @@ describe("browser-bridge relay (onBrowser)", () => {
     expect(result.tabs).toEqual([
       { tabId: "t1", title: "T1", url: "https://a.example.com", current: true },
       { tabId: "t2", title: "", url: "", current: false },
+      { tabId: "t3", title: "T3", url: "", current: false, busy: true },
+      { tabId: "t4", title: "", url: "", current: false },
     ]);
     expect(result.dialog).toEqual({ type: "alert", message: "정말 삭제할까요?", defaultPrompt: undefined });
 

@@ -283,6 +283,14 @@ export interface BrowserRequest {
     | "read_console"
     | "read_network"
     | "batch";
+  /**
+   * WHICH of the user's conversations drives this op (extension 0.29.0: one
+   * working tab per driver, a tab another driver is using is refused). Never
+   * set by the browser tools or the model: the chat relay stamps it on the wire
+   * frame from the RUN's conversation id (`browserDriverKey`), whatever this
+   * field holds.
+   */
+  driver?: string;
   /** navigate/new_tab/read_url: absolute http(s) URL. */
   url?: string;
   /**
@@ -414,7 +422,13 @@ export interface BrowserTab {
   tabId: string;
   title: string;
   url: string;
+  /** The CALLING conversation's working tab (per conversation since extension 0.29.0). */
   current: boolean;
+  /**
+   * 0.29.0: another of the user's conversations is driving this tab right now —
+   * any op on it (select_tab and close_tab included) is refused.
+   */
+  busy?: boolean;
 }
 
 /**
