@@ -253,7 +253,9 @@ describe("WorkspaceTab", () => {
   });
 
   it("shows a document as the page images the server rendered, asking until they are ready", async () => {
-    previewAnswers = [{ status: "rendering" }, { status: "ready", id: "b".repeat(64), pages: 3 }];
+    // Page 3's size is unknown (null): it alone gets the placeholder.
+    const sizes = [{ width: 1280, height: 720 }, { width: 1280, height: 720 }, null];
+    previewAnswers = [{ status: "rendering" }, { status: "ready", id: "b".repeat(64), pages: 3, sizes }];
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const { container } = render(<WorkspaceTab pane={pane()} active />);
@@ -265,6 +267,15 @@ describe("WorkspaceTab", () => {
       await waitFor(() => expect(container.querySelectorAll(".ws-preview img")).toHaveLength(3));
       const sources = Array.from(container.querySelectorAll(".ws-preview img")).map((img) => img.getAttribute("src"));
       expect(sources[2]).toBe(`/api/me/workspace/preview/page?id=${"b".repeat(64)}&n=3`);
+      // Each page holds its box before it loads: the recorded size, or a placeholder.
+      const images = Array.from(container.querySelectorAll<HTMLImageElement>(".ws-preview img"));
+      expect(images.map((img) => [img.getAttribute("width"), img.getAttribute("height"), img.hasAttribute("data-pending")])).toEqual([
+        ["1280", "720", false],
+        ["1280", "720", false],
+        [null, null, true],
+      ]);
+      fireEvent.load(images[2]);
+      expect(images[2].hasAttribute("data-pending")).toBe(false);
       expect(screen.getByText("3 / 3")).toBeTruthy();
       expect(screen.getByText(/글꼴·배치가 조금 다를 수 있습니다/)).toBeTruthy();
       // The file's bytes were never fetched for the preview: only the conversion was asked for.

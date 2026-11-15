@@ -728,6 +728,15 @@ export interface MessageAttachment {
   /** File size in bytes (`kind:"file"` only) — shown on the download card. */
   size?: number;
   /**
+   * `kind:"image"` only: the pixel size as a browser draws it, read from the
+   * stored bytes' header when they were saved (`imageDimensions.ts`), so the
+   * `<img>` holds its box before the bytes arrive. Absent on rows stored before
+   * this field and when the header could not be read — the client then
+   * reserves a placeholder instead. A layout hint only, never trusted further.
+   */
+  width?: number;
+  height?: number;
+  /**
    * `kind:"file"` on a USER message only: a DOCUMENT the user attached in the
    * composer (`chatDocuments.ts`), as opposed to a file the avatar published
    * (`share_file`). Its bytes sit in the same chat-files store, so the download

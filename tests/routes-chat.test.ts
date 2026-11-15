@@ -645,6 +645,16 @@ describe("chat-stream request validation", () => {
     const stored = services.store.listMessages(ownerId, "conv-nv").find((m) => m.role === "user");
     expect(stored?.attachments).toHaveLength(1);
     expect(stored?.attachments?.[0].kind).toBe("image");
+    // Its pixel size is read from the bytes' header when stored and rides the
+    // row to the client (the bubble's box before the image loads)…
+    expect(stored?.attachments?.[0]).toMatchObject({ width: 1, height: 1 });
+    // …while a row stored before the field reads back as it was: no size, no migration.
+    const legacy = [{ id: "old-shot", kind: "image" as const, mediaType: "image/png" }];
+    services.store.addMessage("conv-nv", { role: "assistant", content: "예전 답변", attachments: legacy });
+    const reload = await owner.get("/api/messages").query({ conversationId: "conv-nv" }).expect(200);
+    const rows = reload.body.messages as { role: string; attachments?: unknown[] }[];
+    expect(rows.find((m) => m.role === "user")?.attachments?.[0]).toMatchObject({ kind: "image", width: 1, height: 1 });
+    expect(rows.at(-1)?.attachments).toEqual(legacy);
   });
 
   it("picks image content blocks vs staged files by pi's image setting for this turn's model", async () => {

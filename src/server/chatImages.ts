@@ -9,6 +9,7 @@ import type {
   ImageMediaType,
   MessageAttachment,
 } from "./types.js";
+import { imageDimensionFields } from "./imageDimensions.js";
 import { PinnedDir, fdPathIs, segmentsBelow } from "./pinnedFs.js";
 
 /**
@@ -171,7 +172,7 @@ export function saveChatImages(
         seen.add(id);
       }
     }
-    attachments.push({ id, kind: "image", mediaType: img.mediaType, name: img.name });
+    attachments.push({ id, kind: "image", mediaType: img.mediaType, name: img.name, ...imageDimensionFields(img.buffer) });
     images.push({ mediaType: img.mediaType, data: img.buffer.toString("base64") });
   }
   return { attachments, images };
@@ -428,6 +429,7 @@ export function publishWorkspaceImage(
       mediaType,
       name: path.basename(source).slice(0, 200),
       caption: caption?.trim().slice(0, 300) || undefined,
+      ...imageDimensionFields(buffer),
     },
   };
 }
@@ -450,7 +452,7 @@ export function saveHiddenChatImage(
   fs.mkdirSync(dir, { recursive: true });
   const id = crypto.randomUUID();
   fs.writeFileSync(path.join(dir, `${id}.${MIME_EXT[mediaType]}`), buffer, { flag: "wx" });
-  return { id, kind: "image", mediaType, name, hidden: true, parentId };
+  return { id, kind: "image", mediaType, name, hidden: true, parentId, ...imageDimensionFields(buffer) };
 }
 
 /**

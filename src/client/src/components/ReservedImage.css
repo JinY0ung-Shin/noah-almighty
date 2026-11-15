@@ -1,0 +1,22 @@
+/* ReservedImage's own styles, scoped to .cmp-reserved-image (an <img>, so the
+   root IS the element). Its box is held before the bytes arrive:
+   - with width/height attributes, `height: auto` turns them into the aspect
+     ratio, so the surface's own max-width/width rules still scale it;
+   - without them, [data-pending] reserves a placeholder until load or error,
+     sized per surface below (the guess is the common case there). */
+.cmp-reserved-image {
+  height: auto;
+}
+.cmp-reserved-image[data-pending] {
+  background: var(--surface-2);
+}
+/* A chat thumbnail (max 240×240): a landscape screenshot's box. */
+.cmp-reserved-image.msg-image[data-pending] {
+  width: 240px;
+  max-width: min(240px, 100%);
+  aspect-ratio: 3 / 2;
+}
+/* A page/slide in a side-panel tab (full width): a 16:9 slide's box. */
+:where(.file-preview-slide) > .cmp-reserved-image[data-pending] {
+  aspect-ratio: 16 / 9;
+}

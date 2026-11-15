@@ -151,10 +151,13 @@ export type WorkspaceDocumentPreviewFailure =
  * tens of seconds, so the route never holds a request for it: `rendering`
  * means "ask again" (`waiting`: the converter is busy with other documents and
  * this one has not started). `ready` names the page images
- * (`GET /api/me/workspace/preview/page?id=&n=`, 1-based).
+ * (`GET /api/me/workspace/preview/page?id=&n=`, 1-based); `sizes[n-1]` is
+ * page n's pixel size, read from the image header when it was stored, so the
+ * tab gives each page its box before it loads (null, or no `sizes` at all for
+ * a cache entry written before the field: the tab reserves a placeholder).
  */
 export type WorkspaceDocumentPreview =
-  | { status: "ready"; id: string; pages: number }
+  | { status: "ready"; id: string; pages: number; sizes?: ({ width: number; height: number } | null)[] }
   | { status: "rendering"; waiting?: boolean }
   | { status: "failed"; reason: WorkspaceDocumentPreviewFailure };
 

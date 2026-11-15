@@ -157,7 +157,8 @@ describe("chat image attachments", () => {
     // The user message persisted with the attachment metadata.
     const msgsRes = await owner.get(`/api/messages?conversationId=${conversationId}`).expect(200);
     const userMsg = (msgsRes.body.messages as { role: string; attachments?: unknown[] }[]).find((m) => m.role === "user");
-    expect(userMsg?.attachments).toEqual([{ id: "shot-1", kind: "image", mediaType: "image/png", name: "shot.png" }]);
+    // width/height: the stored bytes' header size (the bubble holds its box before the image loads).
+    expect(userMsg?.attachments).toEqual([{ id: "shot-1", kind: "image", mediaType: "image/png", name: "shot.png", width: 1, height: 1 }]);
 
     // The serving endpoint returns the image to the owner…
     const imgRes = await owner.get(`/api/conversations/${conversationId}/images/shot-1`).expect(200);

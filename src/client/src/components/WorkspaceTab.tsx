@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import CanvasHtmlFrame from "./CanvasHtmlFrame";
 import DrawioDiagram from "./DrawioDiagram";
 import Icon from "./Icon";
+import ReservedImage, { knownImageSize, type PixelSize } from "./ReservedImage";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
@@ -788,7 +789,8 @@ type PreviewState =
   | { status: "text"; text: string }
   /** A document the server is still turning into page images (`waiting`: behind other documents). */
   | { status: "converting"; waiting: boolean }
-  | { status: "pages"; id: string; pages: number }
+  /** `sizes[n]`: page n+1's pixel size when the server recorded it (the image's box is held before it loads). */
+  | { status: "pages"; id: string; pages: number; sizes?: readonly (PixelSize | null)[] }
   | { status: "none"; message: string };
 
 const RAW_TOGGLE_KINDS: ReadonlySet<WorkspacePreviewKind> = new Set(["markdown", "html", "csv", "json", "drawio"]);
@@ -855,7 +857,7 @@ function WorkspacePreview({
         const answer = await loadWorkspaceDocumentPreview(path, retry, controller.signal);
         if (controller.signal.aborted) return;
         if (answer.status === "ready") {
-          setState({ status: "pages", id: answer.id, pages: answer.pages });
+          setState({ status: "pages", id: answer.id, pages: answer.pages, sizes: answer.sizes });
         } else if (answer.status === "failed") {
           setState({ status: "none", message: DOCUMENT_FAILURES[answer.reason] ?? DOCUMENT_FAILURES.RENDER_FAILED });
         } else if (Date.now() - started > DOCUMENT_POLL_LIMIT_MS) {
@@ -942,7 +944,8 @@ function WorkspacePreview({
       <p className="muted">이미지를 표시할 수 없습니다. 다운로드해서 확인해 주세요.</p>
     ) : (
       <figure className="file-preview-slide">
-        <img src={workspaceFileUrl(path, true, version)} alt={workspaceDisplayName(entry.name)} onError={() => setImageFailed(true)} />
+        {/* A workspace file has no recorded size: a placeholder holds the box until it loads. */}
+        <ReservedImage src={workspaceFileUrl(path, true, version)} alt={workspaceDisplayName(entry.name)} onError={() => setImageFailed(true)} />
       </figure>
     );
   } else if (state.status === "loading") {
@@ -956,15 +959,16 @@ function WorkspacePreview({
       </p>
     );
   } else if (state.status === "pages") {
-    const { id, pages } = state;
+    const { id, pages, sizes } = state;
     body = (
       <>
         {Array.from({ length: pages }, (_, index) => (
           <figure className="file-preview-slide" key={index}>
-            <img
+            <ReservedImage
               src={workspacePreviewPageUrl(id, index + 1)}
               alt={`${workspaceDisplayName(entry.name)} ${index + 1}쪽`}
               loading="lazy"
+              size={knownImageSize(sizes?.[index]?.width, sizes?.[index]?.height)}
             />
             {pages > 1 ? (
               <figcaption className="muted">

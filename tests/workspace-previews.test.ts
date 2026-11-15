@@ -96,6 +96,26 @@ describe("WorkspaceDocumentPreviews", () => {
     expect(previews.page("bob", id, "1")).toBeNull();
   });
 
+  it("names each page's pixel size, read from its header when stored; an entry written before that names none", async () => {
+    const cfg = config();
+    const fake = fakeRenderer(2);
+    const previews = new WorkspaceDocumentPreviews(cfg, { available: () => true, render: fake.render });
+    put(cfg, "alice", "sized.pdf", PDF);
+
+    const first = await previews.request("alice", seg("sized.pdf"));
+    expect(first).toEqual({ status: "ready", id: expect.any(String), pages: 2, sizes: [{ width: 1, height: 1 }, { width: 1, height: 1 }] });
+    const id = (first as { id: string }).id;
+    // The cached answer says the same.
+    expect(await previews.request("alice", seg("sized.pdf"))).toEqual(first);
+
+    // An older build's meta.json (no sizes): still ready, simply without `sizes`.
+    const metaPath = path.join(cfg.dataDir, "workspace-previews", piUserKey("alice"), id, "meta.json");
+    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as { pages: Record<string, unknown>[] };
+    fs.writeFileSync(metaPath, JSON.stringify({ pages: meta.pages.map(({ file, mediaType }) => ({ file, mediaType })) }));
+    expect(await previews.request("alice", seg("sized.pdf"))).toEqual({ status: "ready", id, pages: 2 });
+    expect(fake.calls).toHaveLength(1);
+  });
+
   it("hands the converter Noah's own copy under a fixed name, and removes it", async () => {
     const cfg = config();
     const fake = fakeRenderer();
