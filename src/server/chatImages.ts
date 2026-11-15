@@ -10,6 +10,7 @@ import type {
   MessageAttachment,
 } from "./types.js";
 import { imageDimensionFields } from "./imageDimensions.js";
+import { detectImageMediaType } from "./imageFormat.js";
 import { PinnedDir, fdPathIs, segmentsBelow } from "./pinnedFs.js";
 
 /**
@@ -53,26 +54,8 @@ export function isInside(root: string, candidate: string): boolean {
   return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
-export function detectImageMediaType(buffer: Buffer): ImageMediaType | null {
-  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-    return "image/png";
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return "image/jpeg";
-  }
-  const header = buffer.subarray(0, 6).toString("ascii");
-  if (header === "GIF87a" || header === "GIF89a") {
-    return "image/gif";
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-    buffer.subarray(8, 12).toString("ascii") === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  return null;
-}
+// The one sniffer lives in imageFormat.ts; re-exported so this import path stays.
+export { detectImageMediaType };
 
 export function safeConversationDir(conversationId: string): string {
   if (SAFE_CONVERSATION_DIR.test(conversationId)) return conversationId;
@@ -172,7 +155,7 @@ export function saveChatImages(
         seen.add(id);
       }
     }
-    attachments.push({ id, kind: "image", mediaType: img.mediaType, name: img.name, ...imageDimensionFields(img.buffer) });
+    attachments.push({ id, kind: "image", mediaType: img.mediaType, name: img.name, ...imageDimensionFields(img.buffer, img.mediaType) });
     images.push({ mediaType: img.mediaType, data: img.buffer.toString("base64") });
   }
   return { attachments, images };
@@ -429,7 +412,7 @@ export function publishWorkspaceImage(
       mediaType,
       name: path.basename(source).slice(0, 200),
       caption: caption?.trim().slice(0, 300) || undefined,
-      ...imageDimensionFields(buffer),
+      ...imageDimensionFields(buffer, mediaType),
     },
   };
 }
@@ -452,7 +435,7 @@ export function saveHiddenChatImage(
   fs.mkdirSync(dir, { recursive: true });
   const id = crypto.randomUUID();
   fs.writeFileSync(path.join(dir, `${id}.${MIME_EXT[mediaType]}`), buffer, { flag: "wx" });
-  return { id, kind: "image", mediaType, name, hidden: true, parentId, ...imageDimensionFields(buffer) };
+  return { id, kind: "image", mediaType, name, hidden: true, parentId, ...imageDimensionFields(buffer, mediaType) };
 }
 
 /**
