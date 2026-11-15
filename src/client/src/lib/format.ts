@@ -1,5 +1,9 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import { mathExtension } from "./mathMarkdown";
+
+// `$…$` / `$$…$$` formulas become placeholders that lib/dom.ts draws with KaTeX (lib/mathMarkdown.ts).
+marked.use(mathExtension);
 
 export function avatarImageUrl(user: { id: string; hasImage?: boolean } | null, size = 96): string | null {
   if (!user?.id || !user.hasImage) return null;

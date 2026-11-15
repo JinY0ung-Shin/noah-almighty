@@ -3,6 +3,7 @@
 // horizontally-scrollable tables) the way enhanceCodeBlocks() used to.
 
 import { iconSvg } from "./icons";
+import { syncMath } from "./mathMarkdown";
 import { syncMermaidBlocks } from "./mermaidBlock";
 
 // Built from the shared icon map so these imperative copies can't drift from
@@ -353,8 +354,12 @@ function wrapCodeBlock(pre: HTMLElement): void {
   wrapper.append(head, pre);
 }
 
-/** Wrap every bare `<pre>` and `<table>` under `root` (an element or a fragment). Idempotent. */
+/**
+ * Wrap every bare `<pre>` and `<table>` under `root` (an element or a fragment),
+ * and draw its formulas (lib/mathMarkdown.ts — KaTeX loads on the first one). Idempotent.
+ */
 function enhanceRendered(root: ParentNode): void {
+  syncMath(root);
   root.querySelectorAll("pre").forEach((pre) => {
     if (pre.parentElement?.classList.contains("code-block")) return;
     wrapCodeBlock(pre);

@@ -77,6 +77,8 @@ Charts — a chart the user only needs to SEE also goes here, in the answer, not
 
 Diagrams — a flow, sequence, state or ER diagram the user only needs to SEE goes in the answer too, as an ordinary \`\`\`mermaid fenced code block (not a tag): the app draws it in place once the fence is closed, with a toggle to its source. Double-quote every label that contains punctuation: \`A["Login (SSO)"] -->|"POST /api"| B\`.
 
+Math — LaTeX in the Markdown is drawn as a formula: \`$…$\` inline, \`$$…$$\` for display (not inside a tag's text).
+
 Example
 {@state qty = 2}
 {@const total = qty * 12000}

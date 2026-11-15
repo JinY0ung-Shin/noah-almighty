@@ -832,6 +832,25 @@
   both describe_system lines and the `canvas-operations` page; the `mermaid` CANVAS stays for a side-panel
   diagram worked on with the user. Pinned by `tests/client-mermaid-block.test.ts` and, in a real browser
   under the app's CSP, `tests/visual/inline-ui.spec.ts`.
+- **MATH is LaTeX in the answer's Markdown, drawn by KaTeX as MathML (2026-11-15; lazy by the user's pick).**
+  `$…$` / `\(…\)` inline, `$$…$$` / `\[…\]` display. Like a diagram it is a property of the client's Markdown,
+  not of inline UI (a tag's own text is not Markdown-rendered, so no math there). `lib/mathMarkdown.ts` is a
+  marked extension (`marked.use` in `lib/format.ts`) that turns a formula into a placeholder
+  `<span class="md-math" data-tex>` showing its own source — so the html stays pure in the text (the stream
+  renderer's "same html" bar holds) and a surface that never draws it (a team-brain note) reads as before.
+  `syncMath`, from `enhanceRendered` in `lib/dom.ts` (both `enhanceMarkdown` and `markdownBlocks`), loads
+  `lib/mathRender.ts` + `katex` as their OWN chunk on the first placeholder, then draws in place (synchronously
+  once loaded; cached by source). Not math: currency (`$5 and $10` — no space inside either `$`, a closing `$`
+  never followed by a digit), code spans/fences (marked's own tokens; a formula never holds a backtick), and an
+  unclosed `$$` while streaming (matches nothing, stays text); a formula never crosses a blank line, and display
+  math never interrupts a paragraph (inside one the inline rule draws it). **Output is `mathml` only**: Chrome/Edge
+  draw MathML Core natively, so no KaTeX CSS, fonts or `style` attributes (the CSP's `style-src` does allow inline
+  styles, but MathML needs none). KaTeX runs with `throwOnError: false`, `trust: false` (no `\href`/`\url`/
+  `\html*`), `maxSize`/`maxExpand` bounds and a 4 000-char cap; its output passes its OWN DOMPurify allowlist
+  (`MATH_TAGS`/`MATH_ATTRS`: the MathML elements and presentation attributes KaTeX emits — no `style`, `href`,
+  data or event attributes). katex is pinned to the version mermaid already depends on, so it is one copy and
+  one shared chunk. The avatar hears of it from one "Math" line of the inline UI brief. Pinned by
+  `tests/client-math-markdown.test.ts`.
 - **`<svg>` is a drawing bound to state, checked THREE times.** `src/shared/widget/svg.ts` is its grammar: an
   allowlist of 20 elements and of attributes per element, every VALUE validated by SHAPE and re-emitted from
   the parsed form — never a blocklist. (1) the static check, (2) `svgRender.ts` re-validates the EVALUATED

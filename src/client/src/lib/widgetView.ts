@@ -255,32 +255,96 @@ function linkSegs(node: ElNode, env: Env, rt: Runtime, out: Seg[]): void {
   for (let i = 0; i < inner.length; i++) out.push(i === 0 ? { ...inner[i], problem } : inner[i]);
 }
 
+/**
+ * One inline run before its Markdown is parsed: the author's text (Markdown),
+ * or runs that are already final — an interpolated VALUE (literal text: its
+ * `*` and `_` are never Markdown) or a `<link>`'s styled runs.
+ */
+type InlinePiece = string | Seg[];
+
+// Each final piece stands in the run's text as ONE private-use character, so a
+// marker opened before an interpolation closes after it (`**{v}원**`).
+const PLACEHOLDER_BASE = 0xe000;
+const PLACEHOLDER_MAX = 0xf8ff - PLACEHOLDER_BASE;
+const PRIVATE_USE = /[\ue000-\uf8ff]/;
+
+/** The pieces as styled runs: the Markdown is parsed ONCE over the whole run, then each value is put back in its place. */
+function piecesToSegs(pieces: InlinePiece[], out: Seg[] = []): Seg[] {
+  const finals = pieces.filter((piece): piece is Seg[] => typeof piece !== "string");
+  // Author text that already holds a private-use character (or too many values to
+  // number) cannot carry placeholders: parse each text piece on its own, as before.
+  if (finals.length > PLACEHOLDER_MAX || pieces.some((piece) => typeof piece === "string" && PRIVATE_USE.test(piece))) {
+    for (const piece of pieces) {
+      if (typeof piece === "string") for (const seg of parseInlineMarkdown(piece)) out.push(seg);
+      else for (const seg of piece) out.push(seg);
+    }
+    return out;
+  }
+  let text = "";
+  let n = 0;
+  for (const piece of pieces) text += typeof piece === "string" ? piece : String.fromCharCode(PLACEHOLDER_BASE + n++);
+  if (n === 0) {
+    for (const seg of parseInlineMarkdown(text)) out.push(seg);
+    return out;
+  }
+  for (const seg of parseInlineMarkdown(text)) {
+    const { text: segText, ...style } = seg;
+    let buf = "";
+    for (const c of segText) {
+      const code = c.charCodeAt(0);
+      if (c.length === 1 && code >= PLACEHOLDER_BASE && code < PLACEHOLDER_BASE + n) {
+        if (buf) out.push({ ...style, text: buf });
+        buf = "";
+        // The value takes the surrounding style; a link's own runs keep their href and styling on top of it.
+        for (const inner of finals[code - PLACEHOLDER_BASE]) {
+          const merged: Seg = { ...style, ...inner };
+          for (const flag of ["b", "i", "code", "s"] as const) if (style[flag] || inner[flag]) merged[flag] = true;
+          out.push(merged);
+        }
+      } else {
+        buf += c;
+      }
+    }
+    if (buf) out.push({ ...style, text: buf });
+  }
+  return out;
+}
+
 /** The inline content of a children list: text runs, interpolations, and whatever `{#if}`/`{#each}` yield. */
-function inlineSegs(children: TNode[], env: Env, rt: Runtime, out: Seg[] = []): Seg[] {
+function inlineSegs(children: TNode[], env: Env, rt: Runtime): Seg[] {
+  return piecesToSegs(inlinePieces(children, env, rt));
+}
+
+/** The pieces of a children list, `{#if}`/`{#each}` output flattened into the same run. */
+function inlinePieces(children: TNode[], env: Env, rt: Runtime, out: InlinePiece[] = []): InlinePiece[] {
   const scope = childScope(children, env, rt);
   for (let i = 0; i < children.length; i++) {
     const node = children[i];
     if (node.t === "text") {
       const text = jsxWhitespace(node.value, i === 0, i === children.length - 1);
-      if (text) for (const seg of parseInlineMarkdown(text)) out.push(seg);
+      if (text) out.push(text);
     } else if (node.t === "expr") {
       // An interpolated VALUE is literal text: its `*` and `_` are not Markdown.
       const text = interpolate(node, scope, rt);
-      if (text) out.push({ text });
+      if (text) out.push([{ text }]);
     } else if (node.t === "if") {
       const branch = pickBranch(node, scope, rt);
-      if (branch) inlineSegs(branch, scope, rt, out);
+      if (branch) inlinePieces(branch, scope, rt, out);
     } else if (node.t === "each") {
       const { scopes } = eachScopes(node, scope, rt);
-      if (scopes.length === 0 && node.empty) inlineSegs(node.empty, scope, rt, out);
-      for (const item of scopes) inlineSegs(node.children, item, rt, out);
+      if (scopes.length === 0 && node.empty) inlinePieces(node.empty, scope, rt, out);
+      for (const item of scopes) inlinePieces(node.children, item, rt, out);
     } else if (node.t === "el" && node.name === "link") {
-      linkSegs(node, scope, rt, out);
+      const segs: Seg[] = [];
+      linkSegs(node, scope, rt, segs);
+      if (segs.length) out.push(segs);
     } else if (node.t === "el" && node.name === "hint") {
-      hintSegs(node, scope, rt, out);
+      const segs: Seg[] = [];
+      hintSegs(node, scope, rt, segs);
+      if (segs.length) out.push(segs);
     } else if (node.t === "el" && !componentSpec(node.name)) {
       // A tag that does not exist (`<b>`, `<span>`): its text still belongs to the sentence.
-      inlineSegs(node.children, scope, rt, out);
+      inlinePieces(node.children, scope, rt, out);
     }
     // A component inside inline content has no place to go (the static check says so).
   }
@@ -387,19 +451,22 @@ function renderChildren(children: TNode[], env: Env, rt: Runtime, prefix: string
       while (j < children.length && isInline(children[j])) j++;
       const run = children.slice(i, j);
       try {
-        const segs: Seg[] = [];
+        const pieces: InlinePiece[] = [];
         for (let k = 0; k < run.length; k++) {
           const part = run[k];
           if (part.t === "text") {
             const text = jsxWhitespace(part.value, i + k === 0, i + k === children.length - 1);
-            if (text) for (const seg of parseInlineMarkdown(text)) segs.push(seg);
+            if (text) pieces.push(text);
           } else if (part.t === "expr") {
             const text = interpolate(part, scope, rt);
-            if (text) segs.push({ text });
+            if (text) pieces.push([{ text }]);
           } else if (part.t === "el") {
-            inlineElSegs(part, scope, rt, segs);
+            const el: Seg[] = [];
+            inlineElSegs(part, scope, rt, el);
+            if (el.length) pieces.push(el);
           }
         }
+        const segs = piecesToSegs(pieces);
         if (segs.some(visibleSeg)) out.push({ k: "inline", key, segs });
       } catch (err) {
         if (err instanceof WidgetBudgetError) throw err;
