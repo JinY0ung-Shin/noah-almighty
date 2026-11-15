@@ -133,7 +133,7 @@ export default function ActivityTree({ agentId = "main", agents, tools, tasks = 
             {node.status === "failed" ? <span className="agent-failed">실패</span> : null}
             <span className="agent-meta">
               <span className="agent-count">{rowCount}</span>
-              <span className="agent-chevron" aria-hidden="true">
+              <span className="disclosure-chevron" aria-hidden="true">
                 <Icon name="chevron-right" size={12} />
               </span>
             </span>

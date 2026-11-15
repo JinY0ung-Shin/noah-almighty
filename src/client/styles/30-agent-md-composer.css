@@ -187,14 +187,16 @@
   display: none;
 }
 /* The ONE disclosure marker of the answer's secondary rows (activity, reasoning,
-   legacy plan): the same SVG chevron, on the left, turning down when open. */
+   legacy plan) and of the agent card's toggle: the same SVG chevron, turning
+   down when open — a <details> opens it, the agent toggle by aria-expanded. */
 .disclosure-chevron {
   display: inline-flex;
   flex: none;
   color: var(--muted);
   transition: transform 0.15s var(--ease-out);
 }
-details[open] > summary > .disclosure-chevron {
+details[open] > summary > .disclosure-chevron,
+.agent-toggle[aria-expanded="true"] .disclosure-chevron {
   transform: rotate(90deg);
 }
 .activity-done > summary:hover,
@@ -364,7 +366,7 @@ details[open] > summary > .disclosure-chevron {
 }
 .agent-toggle:hover .agent-label,
 .agent-toggle:hover .agent-count,
-.agent-toggle:hover .agent-chevron {
+.agent-toggle:hover .disclosure-chevron {
   color: var(--text);
 }
 .agent-meta {
@@ -378,15 +380,6 @@ details[open] > summary > .disclosure-chevron {
   color: var(--muted);
   font-size: var(--t-2xs);
   white-space: nowrap;
-}
-.agent-chevron {
-  display: inline-flex;
-  flex: none;
-  color: var(--muted);
-  transition: transform 0.15s var(--ease-out);
-}
-.agent-toggle[aria-expanded="true"] .agent-chevron {
-  transform: rotate(90deg);
 }
 
 .agent-tools {
