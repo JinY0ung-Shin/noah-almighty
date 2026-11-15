@@ -87,9 +87,13 @@ function assistantMessage(id: string, text: string) {
   };
 }
 
+/** What the mocked server holds for this test's widget values, by message id (reset by every mockApp). */
+let uiStates: Record<string, unknown> = {};
+
 async function mockApp(page: Page, options: { stored?: boolean; storedText?: string; streamText?: string } = {}): Promise<{ reports: { messageId: string; errors: string[] }[] }> {
   const streamText = options.streamText ?? DASHBOARD;
   const reports: { messageId: string; errors: string[] }[] = [];
+  uiStates = {};
   await page.addInitScript(() => {
     const seen: string[] = [];
     (window as unknown as { __csp: string[] }).__csp = seen;
@@ -177,6 +181,13 @@ async function mockApp(page: Page, options: { stored?: boolean; storedText?: str
       });
       return;
     }
+    // Widget values are kept on the server per viewer (PUT one answer's values; /api/messages hands them back).
+    const statePut = path.match(new RegExp(`^/api/conversations/${CONVERSATION_ID}/ui-states/([^/]+)$`));
+    if (statePut && request.method() === "PUT") {
+      uiStates[decodeURIComponent(statePut[1])] = (request.postDataJSON() as { values: Record<string, unknown> }).values;
+      await route.fulfill({ status: 204, body: "" });
+      return;
+    }
     if (path === `/api/conversations/${CONVERSATION_ID}/ui-report` && request.method() === "POST") {
       reports.push(request.postDataJSON());
       await route.fulfill({ status: 204, body: "" });
@@ -206,6 +217,7 @@ async function mockApp(page: Page, options: { stored?: boolean; storedText?: str
           ...(options.stored === false ? [] : [assistantMessage("m-a1", options.storedText ?? DASHBOARD)]),
         ],
         canvases: [],
+        inlineUiStates: uiStates,
       };
     } else if (path === "/api/chat/runs") {
       body = { run: null };
@@ -244,7 +256,7 @@ const firstBarHeight = (page: Page) =>
 const cspViolations = (page: Page) => page.evaluate(() => (window as unknown as { __csp: string[] }).__csp);
 const leaks = (page: Page) => page.evaluate(() => (window as unknown as { __leaks: string[] }).__leaks);
 
-test("a stored answer draws its UI in the bubble, recomputes locally and keeps the values in this browser", async ({ page }) => {
+test("a stored answer draws its UI in the bubble, recomputes locally and keeps the values on the server", async ({ page }) => {
   await mockApp(page);
   await openConversation(page);
   const ui = page.locator(UI).first();
@@ -278,8 +290,8 @@ test("a stored answer draws its UI in the bubble, recomputes locally and keeps t
   const frame = await bubble.boundingBox();
   expect(box && frame && box.x >= frame.x - 1 && box.x + box.width <= frame.x + frame.width + 1).toBe(true);
 
-  // 6. A reload brings the values back from this browser's storage.
-  await page.waitForFunction(() => Object.keys(localStorage).some((key) => key.startsWith("noah:inline-ui:user-1:c-ui:m-a1")));
+  // 6. The values are saved on the server, and a reload brings them back from there.
+  await expect.poll(() => uiStates["m-a1"]).toBeTruthy();
   await page.reload();
   await page.getByRole("button", { name: "대화 열기: 매출 대화" }).click();
   const again = page.locator(UI).first();
