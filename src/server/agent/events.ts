@@ -281,7 +281,8 @@ export interface BrowserRequest {
     | "zoom"
     | "read_url"
     | "read_console"
-    | "read_network";
+    | "read_network"
+    | "batch";
   /** navigate/new_tab/read_url: absolute http(s) URL. */
   url?: string;
   /**
@@ -325,6 +326,13 @@ export interface BrowserRequest {
   toYFraction?: number;
   /** read_console/read_network: how many of the newest captured entries to return. */
   limit?: number;
+  /**
+   * batch only: the steps, each an ordinary single-op request (no nested
+   * batch, never a stored secret — the route strips secret fields and the
+   * extension refuses a step that carries one). `maxChars` on the batch itself
+   * applies to the LAST step's snapshot.
+   */
+  steps?: BrowserRequest[];
   /** zoom only: the region's size in viewport CSS px. */
   width?: number;
   height?: number;
@@ -447,6 +455,23 @@ export interface BrowserConsoleEntry {
   time: number;
 }
 
+/** One batch step's outcome — the single-op result fields that matter, per step. */
+export interface BrowserBatchStep {
+  op: string;
+  ok: boolean;
+  /** Why the step failed, or that it was not run (bridge-authored). */
+  message?: string;
+  notRun?: boolean;
+  note?: string;
+  url?: string;
+  title?: string;
+  landedOn?: string;
+  snapshot?: string;
+  snapshotError?: string;
+  pageText?: { text: string; offset: number; total: number };
+  dialog?: { type: string; message: string; defaultPrompt?: string };
+}
+
 /** One read_network row. `status` 0 = no response yet; `durationMs` null = still in flight. */
 export interface BrowserNetworkEntry {
   method: string;
@@ -553,6 +578,13 @@ export type BrowserResult =
        */
       networkEntries?: BrowserNetworkEntry[];
       networkTotal?: number;
+      /**
+       * batch: one result per step that RAN (plus a final not-run or refused
+       * one), in order; `batchTotal` is how many steps were asked for. Every
+       * page-derived field inside is UNTRUSTED, exactly as on a lone op.
+       */
+      batchSteps?: BrowserBatchStep[];
+      batchTotal?: number;
       /**
        * read_url: the GET's outcome. `body` is UNTRUSTED page content (text,
        * JSON pretty-printed); `url` is the FINAL url after redirects — never

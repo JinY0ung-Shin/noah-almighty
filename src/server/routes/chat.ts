@@ -28,7 +28,9 @@ import type {
 import type { ConversationRewindPlan } from "../store/conversations.js";
 import { consultationHistoryText } from "../agent/avatarDirectoryTools.js";
 import type {
+  BrowserBatchStep,
   BrowserConsoleEntry,
+  BrowserRequest,
   BrowserCookie,
   BrowserNetworkEntry,
   BrowserStorageEntry,
@@ -400,6 +402,28 @@ const CHAT_IMAGE_ERROR: Record<DecodeError, string> = {
 const BROWSER_OP_TTL_MS = 45 * 1000;
 
 /**
+ * A `batch` parks longer: up to ten steps run in ONE round trip. The extension
+ * starts no step after 100 s and the client gives up at 140 s, so this TTL only
+ * ever fires when the bridge is really gone.
+ */
+const BROWSER_BATCH_TTL_MS = 150 * 1000;
+
+/**
+ * A batch step as it goes on the wire: the fields a single op takes, never a
+ * stored secret (the browser tool refuses `secretName` in a step; this is the
+ * relay's own copy of that rule) and never a nested batch.
+ */
+function batchStepForWire(step: BrowserRequest): BrowserRequest {
+  const { secret: _secret, secretText: _secretText, steps: _steps, fields, ...rest } = step;
+  return {
+    ...rest,
+    ...(fields
+      ? { fields: fields.map((field) => ({ uid: field.uid, value: field.value, ...(field.clear ? { clear: true } : {}) })) }
+      : {}),
+  };
+}
+
+/**
  * Reduce a URL to scheme://host/path for an audit row: credentials in userinfo
  * and tokens in the query string must not land in a table admins can read.
  */
@@ -412,6 +436,61 @@ function scrubAuditUrl(raw: string | null | undefined): string {
     return "(unparseable)";
   }
 }
+
+/**
+ * The audit-row parts every browser op shares — the op, where it acted, what
+ * it wrote (by NAME only for a stored secret, never a value, never `text`).
+ * Shared by the single-op row and each step row of a batch, so a step is
+ * recorded exactly as the same op sent alone would be.
+ */
+function browserOpAuditParts(req: BrowserRequest): string[] {
+  return [
+    `op=${req.op}`,
+    req.uid ? `uid=${req.uid}` : "",
+    typeof req.x === "number" && typeof req.y === "number"
+      ? `at=(${req.x},${req.y})`
+      : "",
+    // zoom's region: `at` is its top-left, this its size (CSS px).
+    typeof req.width === "number" && typeof req.height === "number"
+      ? `size=${req.width}x${req.height}`
+      : "",
+    // click_at's uid mode: the point is relative to the
+    // element above, so the row needs both to be readable.
+    typeof req.xFraction === "number" &&
+    typeof req.yFraction === "number"
+      ? `rel=(${req.xFraction},${req.yFraction})`
+      : "",
+    // drag's END, in whichever mode the start was given.
+    req.toUid ? `toUid=${req.toUid}` : "",
+    typeof req.toX === "number" && typeof req.toY === "number"
+      ? `to=(${req.toX},${req.toY})`
+      : "",
+    typeof req.toXFraction === "number" &&
+    typeof req.toYFraction === "number"
+      ? `relTo=(${req.toXFraction},${req.toYFraction})`
+      : "",
+    req.key
+      ? `key=${(req.modifiers ?? []).map((m) => `${m}+`).join("")}${req.key}${req.repeat && req.repeat > 1 ? ` x${req.repeat}` : ""}`
+      : "",
+    req.fields ? `fields=${req.fields.length}` : "",
+    // Browser secret input: the NAME only. The value never
+    // reaches an admin-visible row, and neither does `text`.
+    req.secret ? `secret=${req.secret.name}` : "",
+    req.fields?.some((f) => f.secret)
+      ? `secrets=[${req.fields
+          .flatMap((f) => (f.secret ? [f.secret.name] : []))
+          .join(",")}]`
+      : "",
+    req.option ? `option=${req.option.slice(0, 80)}` : "",
+    // A type that REPLACED what the field held, rather than
+    // adding to it — the destructive half of the same op.
+    req.clear ? "clear" : "",
+    req.expand ? "expand" : "",
+  ];
+}
+
+/** Ops that never get an audit row — see the policy comment at the call site. */
+const UNAUDITED_BROWSER_OPS = new Set(["snapshot", "wait_for", "dialog_status", "find"]);
 
 function prepareSse(res: Response): void {
   res.status(200);
@@ -2142,6 +2221,10 @@ export async function executeChatTurn(
                 offset: requestData.offset ?? null,
                 expand: typeof requestData.expand === "boolean" ? requestData.expand : null,
                 maxChars: typeof requestData.maxChars === "number" ? requestData.maxChars : null,
+                steps:
+                  requestData.op === "batch" && Array.isArray(requestData.steps)
+                    ? requestData.steps.slice(0, 10).map(batchStepForWire)
+                    : null,
               },
               // A frame carrying a plaintext secret is written to the live
               // clients and NOT kept in the run's replay buffer: it would
@@ -2149,7 +2232,11 @@ export async function executeChatTurn(
               // verbatim to every reconnecting client.
               carriesSecret ? { replay: false } : undefined,
             );
-            const answer = await awaitResponse(runId, requestId, BROWSER_OP_TTL_MS);
+            const answer = await awaitResponse(
+              runId,
+              requestId,
+              requestData.op === "batch" ? BROWSER_BATCH_TTL_MS : BROWSER_OP_TTL_MS,
+            );
             if (answer === CANCELLED) {
               return {
                 behavior: "error",
@@ -2195,6 +2282,8 @@ export async function executeChatTurn(
               consoleTotal?: number;
               networkEntries?: unknown[];
               networkTotal?: number;
+              batchSteps?: unknown[];
+              batchTotal?: number;
             };
             if (!reply?.ok) {
               const raw =
@@ -2337,6 +2426,55 @@ export async function executeChatTurn(
                     ];
                   })
                 : undefined;
+            // batch: one result per step, every page-derived string bounded
+            // like its single-op twin (snapshot/pageText at 60k each here, so
+            // ten steps cannot together balloon the turn past the report's own
+            // cap), every bridge-authored one too.
+            const str = (value: unknown, max: number) =>
+              typeof value === "string" && value ? value.slice(0, max) : undefined;
+            const batchSteps =
+              requestData.op === "batch" && Array.isArray(reply.batchSteps)
+                ? reply.batchSteps.slice(0, 11).flatMap((s: unknown): BrowserBatchStep[] => {
+                    if (!s || typeof s !== "object") return [];
+                    const step = s as Record<string, unknown>;
+                    const dialog = step.dialog as Record<string, unknown> | undefined;
+                    return [
+                      {
+                        op: typeof step.op === "string" ? step.op.slice(0, 32) : "?",
+                        ok: step.ok === true,
+                        message: str(step.message, 2_000),
+                        notRun: step.notRun === true ? true : undefined,
+                        note: str(step.note, 500),
+                        url: str(step.url, 4_000),
+                        title: str(step.title, 2_000),
+                        landedOn: str(step.landedOn, 300),
+                        snapshot: str(step.snapshot, 60_000),
+                        snapshotError: str(step.snapshotError, 1_000),
+                        pageText:
+                          typeof step.pageText === "string"
+                            ? {
+                                text: step.pageText.slice(0, 60_000),
+                                offset:
+                                  typeof step.pageTextOffset === "number" && step.pageTextOffset >= 0
+                                    ? step.pageTextOffset
+                                    : 0,
+                                total:
+                                  typeof step.pageTextTotal === "number" && step.pageTextTotal >= 0
+                                    ? step.pageTextTotal
+                                    : step.pageText.length,
+                              }
+                            : undefined,
+                        dialog:
+                          dialog && typeof dialog.message === "string"
+                            ? {
+                                type: typeof dialog.type === "string" ? dialog.type.slice(0, 32) : "alert",
+                                message: dialog.message.slice(0, 2_000),
+                              }
+                            : undefined,
+                      },
+                    ];
+                  })
+                : undefined;
             const storageKind =
               requestData.op === "read_storage"
                 ? requestData.kind === "local"
@@ -2354,58 +2492,14 @@ export async function executeChatTurn(
             // NEVER a cookie value.
             // URLs are scrubbed of userinfo and query string — an audit row
             // is admin-visible and a query string routinely carries tokens.
-            if (
-              requestData.op !== "snapshot" &&
-              requestData.op !== "wait_for" &&
-              requestData.op !== "dialog_status" &&
-              // find is a FILTERED snapshot (same AX read, fewer lines): it is
-              // snapshot-class, not a deliberate exfiltration read.
-              requestData.op !== "find"
-            ) {
+            // find is a FILTERED snapshot (same AX read, fewer lines): it is
+            // snapshot-class, not a deliberate exfiltration read, so it joins
+            // the skip list (UNAUDITED_BROWSER_OPS).
+            if (!UNAUDITED_BROWSER_OPS.has(requestData.op)) {
               audit({
                 action: `browser_${requestData.op}`,
                 detail: [
-                  `op=${requestData.op}`,
-                  requestData.uid ? `uid=${requestData.uid}` : "",
-                  typeof requestData.x === "number" && typeof requestData.y === "number"
-                    ? `at=(${requestData.x},${requestData.y})`
-                    : "",
-                  // zoom's region: `at` is its top-left, this its size (CSS px).
-                  typeof requestData.width === "number" && typeof requestData.height === "number"
-                    ? `size=${requestData.width}x${requestData.height}`
-                    : "",
-                  // click_at's uid mode: the point is relative to the
-                  // element above, so the row needs both to be readable.
-                  typeof requestData.xFraction === "number" &&
-                  typeof requestData.yFraction === "number"
-                    ? `rel=(${requestData.xFraction},${requestData.yFraction})`
-                    : "",
-                  // drag's END, in whichever mode the start was given.
-                  requestData.toUid ? `toUid=${requestData.toUid}` : "",
-                  typeof requestData.toX === "number" && typeof requestData.toY === "number"
-                    ? `to=(${requestData.toX},${requestData.toY})`
-                    : "",
-                  typeof requestData.toXFraction === "number" &&
-                  typeof requestData.toYFraction === "number"
-                    ? `relTo=(${requestData.toXFraction},${requestData.toYFraction})`
-                    : "",
-                  requestData.key
-                    ? `key=${(requestData.modifiers ?? []).map((m) => `${m}+`).join("")}${requestData.key}${requestData.repeat && requestData.repeat > 1 ? ` x${requestData.repeat}` : ""}`
-                    : "",
-                  requestData.fields ? `fields=${requestData.fields.length}` : "",
-                  // Browser secret input: the NAME only. The value never
-                  // reaches an admin-visible row, and neither does `text`.
-                  requestData.secret ? `secret=${requestData.secret.name}` : "",
-                  requestData.fields?.some((f) => f.secret)
-                    ? `secrets=[${requestData.fields
-                        .flatMap((f) => (f.secret ? [f.secret.name] : []))
-                        .join(",")}]`
-                    : "",
-                  requestData.option ? `option=${requestData.option.slice(0, 80)}` : "",
-                  // A type that REPLACED what the field held, rather than
-                  // adding to it — the destructive half of the same op.
-                  requestData.clear ? "clear" : "",
-                  requestData.expand ? "expand" : "",
+                  ...browserOpAuditParts(requestData),
                   // read_cookies: NAMES + count only. `cookies` above holds
                   // `.value` too, but only `.name` is ever read here — a cookie
                   // value must never reach an admin-visible audit row.
@@ -2434,10 +2528,40 @@ export async function executeChatTurn(
                   consoleEntries ? `entries=${consoleEntries.length}` : "",
                   // read_network: the row count only, never the URLs.
                   networkEntries ? `requests=${networkEntries.length}` : "",
+                  // batch: how many steps were asked for and how many ran;
+                  // each step that ran also gets its OWN row below.
+                  batchSteps
+                    ? `steps=${requestData.steps?.length ?? 0} ran=${batchSteps.filter((s) => !s.notRun).length}${
+                        batchSteps.some((s) => !s.ok) ? ` stopped_at=${batchSteps.length}` : ""
+                      }`
+                    : "",
                   `url=${scrubAuditUrl(fetched?.url || reply.url || requestData.url)}`,
                 ]
                   .filter(Boolean)
                   .join(" "),
+              });
+            }
+            // A batch's steps are audited ONE ROW EACH, exactly like the same
+            // op sent alone (same parts, same skip list) plus its position, so
+            // batching never hides an action from the admin view. A step that
+            // was refused before it ran (not a batch op, out of budget) is not
+            // an action and gets no row.
+            if (batchSteps && requestData.steps) {
+              batchSteps.forEach((stepResult, index) => {
+                const rawStep = requestData.steps?.[index];
+                const stepRequest = rawStep ? batchStepForWire(rawStep) : undefined;
+                if (!stepRequest || stepResult.notRun || UNAUDITED_BROWSER_OPS.has(stepRequest.op)) return;
+                audit({
+                  action: `browser_${stepRequest.op}`,
+                  detail: [
+                    ...browserOpAuditParts(stepRequest),
+                    `batch=${index + 1}/${requestData.steps?.length ?? 0}`,
+                    stepResult.ok ? "" : "failed",
+                    `url=${scrubAuditUrl(stepResult.url || stepRequest.url)}`,
+                  ]
+                    .filter(Boolean)
+                    .join(" "),
+                });
               });
             }
             // The screenshot rides the parked reply as base64. Bound it
@@ -2634,6 +2758,11 @@ export async function executeChatTurn(
               networkTotal:
                 typeof reply.networkTotal === "number" && reply.networkTotal >= 0
                   ? Math.round(reply.networkTotal)
+                  : undefined,
+              batchSteps,
+              batchTotal:
+                typeof reply.batchTotal === "number" && reply.batchTotal >= 0
+                  ? Math.min(Math.round(reply.batchTotal), 10)
                   : undefined,
             };
           },

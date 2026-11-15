@@ -579,7 +579,7 @@ export function browserInspectCapabilityLine(
   ctx: Pick<SystemToolsContext, "browserEnabled" | "visionEnabled">,
 ): string {
   if (!ctx.browserEnabled) {
-    return "- Browser inspection (find, zoom, read_url, read_console, read_network): unavailable in this run (browser control is not connected).";
+    return "- Browser inspection (find, zoom, read_url, read_console, read_network, batch): unavailable in this run (browser control is not connected).";
   }
   return (
     "- Browser inspection (needs Noah extension 0.29.0+; an older install answers these with an update prompt): " +
@@ -587,7 +587,8 @@ export function browserInspectCapabilityLine(
     "use it instead of a full snapshot when you know what you are looking for; " +
     "mcp__browser__read_url GETs ONE URL in the user's browser through a short-lived background tab (their cookies for that site, no custom headers or body; the URL and every redirect hop must be on the browser allowlist; text-like content types only, ~256 KB cap, JSON pretty-printed) and returns the body as untrusted text — for data pages and APIs, while ordinary pages are better read with navigate + read_text; " +
     "mcp__browser__read_console returns the current tab's recent console messages (console.* output, uncaught errors, browser-logged load/CSP failures; level, query-free source, token-shaped strings masked) behind a per-site, per-browser-session consent popup in the user's browser — capture starts at the first approved read on that tab+site (what Chrome still holds for the current page, then everything live), stops and clears on leaving the site or a revoked grant, and does not cover cross-site iframes; " +
-    "mcp__browser__read_network lists the current tab's recent requests (method, status or failure, resource type, duration, URL without its query string — never headers, cookies or bodies) behind its own per-site consent kind; capture starts at the first approved read with no earlier history (read, reload or repeat the action, read again), and stops and clears like read_console" +
+    "mcp__browser__read_network lists the current tab's recent requests (method, status or failure, resource type, duration, URL without its query string — never headers, cookies or bodies) behind its own per-site consent kind; capture starts at the first approved read with no earlier history (read, reload or repeat the action, read again), and stops and clears like read_console; " +
+    "mcp__browser__batch runs up to 10 steps (navigate, click, click_at, type, fill_form, select_option, press_key, hover, scroll, wait_for, snapshot, read_text, find — each with that tool's own arguments and checks, each audited) in ONE round trip, stopping at the first failing step or an open dialog; only the last step and read steps return page content, no step returns an image, and stored secrets, screenshots/zoom and the consent-gated reads are never batch steps" +
     (ctx.visionEnabled === false
       ? "; zoom is unavailable because the selected model does not accept images."
       : "; mcp__browser__zoom captures a magnified REGION of the viewport (x/y/width/height in viewport CSS px, up to 4 image px per CSS px), auto-shared and saved under captures/ like a screenshot, and afterwards click_at/drag pixel coordinates are positions on that zoom image.")

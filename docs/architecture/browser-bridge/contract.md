@@ -217,3 +217,12 @@
     `networkTotal`) — actions.md "read_network". Its own consent kind `network`; the relay keeps the newest 100
     rows, re-cuts every URL at `?`/`#` defensively and slices each field; the audit row records `requests=N`
     only, never a URL.
+  - `batch` (new `steps` — each an ordinary single-op request — plus the batch's own `maxChars` →
+    `batchSteps` `[{op, ok, message?, notRun?, note?, url?, title?, landedOn?, snapshot?, snapshotError?,
+    pageText…, dialog?}]` + `batchTotal`) — actions.md "batch". The ONE op with its own TTLs: the route parks
+    `BROWSER_BATCH_TTL_MS` (150 s) instead of 45 s, the client's `sendToExtension` waits 140 s instead of 40 s,
+    and the extension starts no step after 100 s. `batchStepForWire` strips `secret`/`secretText`/a field's
+    `secret`/`secretValue` and any nested `steps` from every step before the frame is emitted (the tool
+    refuses `secretName` in a step first; the extension refuses a step carrying a secret too — three layers
+    for one rule), so a batch frame never carries a plaintext and is always replayable. The relay keeps ≤ 11
+    step results and slices each field (snapshot and page text 60k per step, message 2k, note 500 …).

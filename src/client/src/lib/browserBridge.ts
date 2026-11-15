@@ -90,6 +90,9 @@ export interface BridgeReply {
     time: number;
   }[];
   networkTotal?: number;
+  /** batch: one result per step that ran (page-derived fields inside), and how many were asked for. */
+  batchSteps?: Record<string, unknown>[];
+  batchTotal?: number;
 }
 
 /**
@@ -154,7 +157,8 @@ export interface BridgeOperation {
     | "zoom"
     | "read_url"
     | "read_console"
-    | "read_network";
+    | "read_network"
+    | "batch";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
@@ -168,6 +172,12 @@ export interface BridgeOperation {
   y?: number | null;
   /** read_console/read_network: how many of the newest captured entries to return. */
   limit?: number | null;
+  /**
+   * batch only: the steps, relayed VERBATIM as the server built them (ordinary
+   * single-op fields; the server and the extension both refuse a stored secret
+   * in a step).
+   */
+  steps?: Record<string, unknown>[] | null;
   /** zoom only: region size in viewport CSS px. */
   width?: number | null;
   height?: number | null;
@@ -279,7 +289,10 @@ const NOT_INSTALLED: BridgeReply = {
  * `ok:false` reply so the parked run always gets a definite answer rather than
  * waiting out its TTL.
  */
-export function sendToExtension(operation: BridgeOperation): Promise<BridgeReply> {
+export function sendToExtension(
+  operation: BridgeOperation,
+  timeoutMs = 40000,
+): Promise<BridgeReply> {
   const rt = runtime();
   if (!rt) {
     return Promise.resolve(NOT_INSTALLED);
@@ -300,7 +313,7 @@ export function sendToExtension(operation: BridgeOperation): Promise<BridgeReply
           "The browser extension did not answer in time. The attached tab may have been closed or the page may be stuck loading. " +
           "Ask the user to check the attached tab, then retry.",
       });
-    }, 40000);
+    }, timeoutMs);
     try {
       rt.sendMessage(EXTENSION_ID, { source: "noah", ...operation }, (response) => {
         clearTimeout(timer);
@@ -416,7 +429,14 @@ export function extensionSupportsSecretInput(version: string | undefined | null)
 export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
 
 /** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
-export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url", "read_console", "read_network"]);
+export const INSPECT_OPS: ReadonlySet<string> = new Set([
+  "find",
+  "zoom",
+  "read_url",
+  "read_console",
+  "read_network",
+  "batch",
+]);
 
 /**
  * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-

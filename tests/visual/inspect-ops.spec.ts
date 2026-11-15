@@ -330,4 +330,63 @@ test.describe("0.29.0 browser ops in the real extension", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("batch: steps run in order through the ordinary guards, and it stops at the first failure", async () => {
+    const { context, noah, worker, dir } = await launch();
+    try {
+      await op(noah, { op: "setAllowedOrigins", patterns: ["localhost"] });
+      await groupFixture(worker);
+      const box = await op(noah, { op: "find", role: "textbox", name: "검색" });
+      const boxUid = /\[(e\d+)\]/.exec(String(box.snapshot))![1];
+      const save = await op(noah, { op: "find", role: "button", name: "저장하기" });
+      const saveUid = /\[(e\d+)\]/.exec(String(save.snapshot))![1];
+
+      const ran = await op(noah, {
+        op: "batch",
+        maxChars: 800,
+        steps: [
+          { op: "type", uid: boxUid, text: "광교", clear: true },
+          { op: "click", uid: saveUid },
+          { op: "wait_for", text: "saved:광교", timeoutS: 5 },
+          { op: "find", name: "saved:" },
+          { op: "read_text" },
+        ],
+      });
+      expect(ran.ok, ran.message).toBe(true);
+      const steps = ran.batchSteps as { op: string; ok: boolean; snapshot?: string; pageText?: string; message?: string }[];
+      expect(steps.map((step) => [step.op, step.ok])).toEqual([
+        ["type", true],
+        ["click", true],
+        ["wait_for", true],
+        ["find", true],
+        ["read_text", true],
+      ]);
+      // Intermediate ACTION steps skip the page walk; read steps and the last return content.
+      expect(steps[0].snapshot).toBeUndefined();
+      expect(steps[1].snapshot).toBeUndefined();
+      expect(String(steps[4].pageText)).toContain("saved:광교");
+
+      // A step that fails stops the batch: the later type never happens.
+      const stopped = await op(noah, {
+        op: "batch",
+        steps: [
+          { op: "click", uid: "e999999" },
+          { op: "type", uid: boxUid, text: "never", clear: true },
+        ],
+      });
+      expect(stopped.ok).toBe(true);
+      const after = stopped.batchSteps as { op: string; ok: boolean; message?: string }[];
+      expect(after).toHaveLength(1);
+      expect(after[0].ok).toBe(false);
+      const text = await op(noah, { op: "read_text" });
+      expect(String(text.pageText)).not.toContain("never");
+
+      // A step the extension does not allow is refused even if a client sends it.
+      const refused = await op(noah, { op: "batch", steps: [{ op: "read_cookies" }] });
+      expect((refused.batchSteps as { message: string }[])[0].message).toContain("cannot run inside a batch");
+    } finally {
+      await context.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

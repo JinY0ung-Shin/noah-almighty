@@ -2698,6 +2698,149 @@ describe("browser-bridge relay (onBrowser)", () => {
     expect(audit.detail).not.toContain("token=abc123");
   }, LIVE);
 
+  it("0.29.0 ops: read_url's final url rides its own field, console/network are bounded, a batch audits every step", async () => {
+    const { store, app } = boot();
+    const owner = request.agent(app);
+    const signupRes = await signup(owner, "bridgeinspect").expect(201);
+    const ownerId = signupRes.body.user.id as string;
+    const cookie = cookieOf(signupRes);
+
+    const results: BrowserResult[] = [];
+    H.impl = async (_req, _pr, config, _store, events) => {
+      results.push(await events.onBrowser!({ op: "read_url", url: "https://intra.example.com/api?token=abc" }));
+      results.push(await events.onBrowser!({ op: "read_console", limit: 5 }));
+      results.push(await events.onBrowser!({ op: "read_network" }));
+      results.push(
+        await events.onBrowser!({
+          op: "batch",
+          maxChars: 900,
+          steps: [
+            { op: "type", uid: "e1", text: "hello", clear: true },
+            {
+              op: "type",
+              uid: "e2",
+              text: "",
+              // A secret on a step must never reach the wire, whoever built it.
+              secret: { name: "PW", hosts: ["intra.example.com"], passwordOnly: true },
+              secretText: "hunter22",
+            },
+            { op: "snapshot" },
+            { op: "click", uid: "e3" },
+          ],
+        }),
+      );
+      results.push(await events.onBrowser!({ op: "find", role: "button" }));
+      return { kind: "text", runtime: config.agentRuntime, summary: "s", text: "ok" };
+    };
+
+    const { relayed } = await runWithBridge(
+      app,
+      cookie,
+      { avatarId: ownerId, conversationId: "conv-inspect", message: "inspect" },
+      (data) => {
+        switch (data.op) {
+          case "read_url":
+            return {
+              ok: true,
+              fetchUrl: "https://intra.example.com/final?session=zzz",
+              fetchStatus: 200,
+              fetchContentType: "application/json<script>",
+              fetchBody: "x".repeat(130_000),
+              fetchBytes: 130_000,
+              fetchTruncated: false,
+              fetchHops: 2,
+            };
+          case "read_console":
+            return {
+              ok: true,
+              url: "https://intra.example.com/app",
+              consoleEntries: [
+                ...Array.from({ length: 120 }, (_, i) => ({ level: "log", text: `m${i}`, source: "", time: i })),
+                { level: "error", text: "y".repeat(5000), source: "s", time: 1 },
+                { level: "error" }, // dropped: no text
+              ],
+              consoleTotal: 122,
+            };
+          case "read_network":
+            return {
+              ok: true,
+              url: "https://intra.example.com/app",
+              networkEntries: [
+                { method: "GET", url: "https://intra.example.com/api/x?leak=1", status: 200, type: "XHR", durationMs: 5, failed: "", time: 1 },
+              ],
+              networkTotal: 1,
+            };
+          case "batch":
+            return {
+              ok: true,
+              url: "https://intra.example.com/app",
+              batchTotal: 4,
+              batchSteps: [
+                { op: "type", ok: true, url: "https://intra.example.com/app?q=1" },
+                { op: "type", ok: true },
+                { op: "snapshot", ok: true, snapshot: "z".repeat(70_000) },
+                { op: "click", ok: false, message: "covered" },
+              ],
+            };
+          default:
+            return { ok: true, snapshot: "[e1] button", url: "https://intra.example.com/app" };
+        }
+      },
+    );
+
+    // read_url: only the url crosses; the final url rides `fetched`, never `url`.
+    expect(relayed[0]).toMatchObject({ op: "read_url", url: "https://intra.example.com/api?token=abc" });
+    const fetched = results[0];
+    expect(fetched.behavior).toBe("ok");
+    if (fetched.behavior !== "ok") return;
+    expect(fetched.url).toBeUndefined();
+    expect(fetched.fetched).toMatchObject({ status: 200, contentType: "application/jsonscript", hops: 2, truncated: true });
+    expect(fetched.fetched!.body.length).toBe(120_000);
+
+    // read_console/read_network: limit relayed, newest 100 kept, fields bounded, malformed dropped, queries cut.
+    expect(relayed[1]).toMatchObject({ op: "read_console", limit: 5 });
+    const consoleResult = results[1];
+    if (consoleResult.behavior !== "ok") throw new Error("console failed");
+    // The newest 100 are kept, then the malformed one among them is dropped.
+    expect(consoleResult.consoleEntries).toHaveLength(99);
+    expect(consoleResult.consoleEntries!.at(-1)!.text).toHaveLength(600);
+    const networkResult = results[2];
+    if (networkResult.behavior !== "ok") throw new Error("network failed");
+    expect(networkResult.networkEntries![0].url).toBe("https://intra.example.com/api/x");
+
+    // batch: the secret-carrying step is stripped on the wire; results are bounded.
+    const batchFrame = relayed[3] as { steps: Record<string, unknown>[]; maxChars: number };
+    expect(batchFrame.maxChars).toBe(900);
+    expect(batchFrame.steps).toHaveLength(4);
+    expect(JSON.stringify(batchFrame.steps)).not.toContain("hunter22");
+    expect(batchFrame.steps[1]).not.toHaveProperty("secret");
+    const batch = results[3];
+    if (batch.behavior !== "ok") throw new Error("batch failed");
+    expect(batch.batchSteps).toHaveLength(4);
+    expect(batch.batchSteps![2].snapshot).toHaveLength(60_000);
+
+    // find relays role, and is not audited (snapshot-class).
+    expect(relayed[4]).toMatchObject({ op: "find", role: "button" });
+
+    const rows = store.listAudit(ownerId, true);
+    const readUrlRow = rows.find((e) => e.action === "browser_read_url")!;
+    expect(readUrlRow.detail).toContain("status=200 bytes=130000 hops=2");
+    expect(readUrlRow.detail).toContain("url=https://intra.example.com/final");
+    expect(readUrlRow.detail).not.toContain("zzz");
+    expect(rows.find((e) => e.action === "browser_read_console")!.detail).toContain("entries=99");
+    expect(rows.find((e) => e.action === "browser_read_network")!.detail).toContain("requests=1");
+    expect(rows.find((e) => e.action === "browser_read_network")!.detail).not.toContain("api/x");
+    expect(rows.find((e) => e.action === "browser_batch")!.detail).toContain("steps=4 ran=4 stopped_at=4");
+    // One row per step that ran (snapshot skipped by the same policy as a lone snapshot).
+    const typeRows = rows.filter((e) => e.action === "browser_type" && e.detail.includes("batch="));
+    expect(typeRows.map((e) => e.detail.match(/batch=\d+\/\d+/)![0]).sort()).toEqual(["batch=1/4", "batch=2/4"]);
+    expect(typeRows.find((e) => e.detail.includes("batch=1/4"))!.detail).toContain("url=https://intra.example.com/app");
+    expect(typeRows.some((e) => e.detail.includes("secret="))).toBe(false);
+    expect(rows.find((e) => e.action === "browser_click" && e.detail.includes("batch=4/4"))!.detail).toContain("failed");
+    expect(rows.some((e) => e.action === "browser_snapshot")).toBe(false);
+    expect(rows.some((e) => e.action === "browser_find")).toBe(false);
+  }, LIVE);
+
   it("keeps snapshot/wait_for/dialog_status out of the audit trail and records unknown/unparseable urls", async () => {
     const { store, app } = boot();
     const owner = request.agent(app);

@@ -515,3 +515,34 @@
   ONE untrusted wrapper after a count line. Verified in a real Chromium (`tests/visual/inspect-ops.spec.ts`:
   an all-zero-buffer `Network.enable` is accepted over `chrome.debugger`, the first read is empty, a click's
   `fetch('/api/ping?secret=1')` comes back as `GET 200 …/api/ping` with no query).
+- **`batch` (0.29.0) runs up to 10 EXISTING ops in one round trip, each through the same `perform()` a lone op
+  takes.** The model sends `steps: [{op, …}]` with each standalone tool's own argument names; the server
+  translates every step with that tool's own checks (`batchStepRequest` — click_at both/neither and the
+  vision gate for pixel mode, read_text uid+expand, wait_for's text, fill_form's fields, press_key's
+  modifiers …) and refuses the WHOLE batch before anything runs when one step is invalid, so a batch can never
+  be half-performed by a validation error. Allowed steps: navigate, click, click_at, type, fill_form,
+  select_option, press_key, hover, scroll, wait_for, snapshot, read_text, find (`BATCH_OPS`, `axtree.js`,
+  mirrored as `BATCH_STEP_OPS` in `browserTools.ts`). Deliberately NOT: screenshot/zoom (decision: a batch
+  returns NO image — per-step images would need the screenshot share/save/vision machinery per step, and the
+  visual check is naturally its own call after the batch), the credential/data reads (cookies, storage,
+  console, network: each needs its own consent popup and its own deliberate, separately audited call),
+  read_url, tab/dialog tools, the clipboard staging flow, and stored secrets (`secretName` — the plaintext may
+  only ever travel on the transient single-op frame behind the client's version probe; refused by the tool,
+  stripped by the route, refused again by the extension). In the extension `runBatch` builds each step from a
+  field WHITELIST (`batchStepMessage` — nothing a step carries can set an internal option) and calls
+  `perform(step, origin, {skipSnapshot})`: the allowlist and landing check, the verification ladder, the
+  file-input/obscured-target refusals, the dialog guard and the working-tab notice all apply per step exactly
+  as if it had been sent alone. `skipSnapshot` (never settable from the wire) drops the action tail's page
+  walk for INTERMEDIATE action steps only — the settle wait, landing re-check and dialog check still run; the
+  LAST step (under the batch's `maxChars`) and every snapshot/read_text/find step return their content. It
+  stops at the first step that fails or leaves a JS dialog open; the batch itself answers ok:true with the
+  per-step results (ok:false only when it could not start). Uids minted by a step are real but the model
+  cannot see them until the batch returns, so the tool text says to snapshot first in a separate call. The
+  chat route audits a `browser_batch` row (`steps=N ran=M stopped_at=K`) AND one row per step that ran —
+  same parts (`browserOpAuditParts`) and the same skip list (`UNAUDITED_BROWSER_OPS`) as the op sent alone,
+  plus `batch=i/N` and `failed` — so batching never hides an action from the admin view. `reportBatch`: a
+  header naming where it stopped and that later steps did NOT run, one status line per step outside the
+  wrapper (its bridge note, a failure reason), and every page-derived piece inside ONE untrusted wrapper,
+  capped at 60k chars in all. Verified in a real Chromium (`tests/visual/inspect-ops.spec.ts`: type → click →
+  wait_for → find → read_text in one call with no snapshot on the intermediate action steps; a failing first
+  step stops a later type from ever happening; a client-sent `read_cookies` step is refused by the extension).

@@ -2895,7 +2895,11 @@ async function relayBrowserOp(
   carriesSecret: boolean,
 ): Promise<BridgeReply> {
   const inspectOp = INSPECT_OPS.has(String(operation.op));
-  if (!carriesSecret && !inspectOp) return sendToExtension(operation);
+  // A batch runs up to ten steps in ONE round trip: the extension starts no
+  // step after 100 s and the server parks 150 s, so wait 140 s, not the 40 s
+  // a single op gets.
+  const timeoutMs = operation.op === "batch" ? 140_000 : 40_000;
+  if (!carriesSecret && !inspectOp) return sendToExtension(operation, timeoutMs);
   const probe = await readAllowedOrigins();
   // Unreachable or erroring extension: its own reason is the true one (and is
   // already written for the model), so don't overwrite it with a version story.
@@ -2906,7 +2910,7 @@ async function relayBrowserOp(
   if (inspectOp && !extensionSupportsInspectOps(probe.version)) {
     return inspectOpUnsupportedReply(String(operation.op), probe.version);
   }
-  return sendToExtension(operation);
+  return sendToExtension(operation, timeoutMs);
 }
 
 function handleBrowserOp(paneId: string, data: any): void {
@@ -2946,6 +2950,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     read_url: "URL 내용을 읽는 중…",
     read_console: "콘솔 메시지를 읽는 중…",
     read_network: "네트워크 요청 기록을 읽는 중…",
+    batch: "브라우저 작업을 이어서 실행하는 중…",
   };
   // The value itself never reaches a label: only the fact that one rides along,
   // so the user can see the avatar is entering a credential rather than text.
@@ -2957,7 +2962,9 @@ function handleBrowserOp(paneId: string, data: any): void {
         ? "브라우저 폼을 채우는 중(시크릿 포함)…"
         : data.op === "read_text" && data.expand
           ? "페이지를 스크롤하며 본문을 읽는 중…"
-          : (BROWSER_OP_LABELS[String(data.op)] ?? "브라우저 화면을 읽는 중…");
+          : data.op === "batch" && Array.isArray(data.steps) && data.steps.length
+            ? `브라우저 작업 ${data.steps.length}단계를 이어서 실행하는 중…`
+            : (BROWSER_OP_LABELS[String(data.op)] ?? "브라우저 화면을 읽는 중…");
   setStatus(paneId, label, false);
 
   const operation: BridgeOperation = {
@@ -2976,6 +2983,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     width: data.width,
     height: data.height,
     limit: data.limit,
+    steps: Array.isArray(data.steps) ? data.steps : undefined,
     xFraction: data.xFraction,
     yFraction: data.yFraction,
     toUid: data.toUid,

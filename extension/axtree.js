@@ -3373,3 +3373,123 @@ export function networkEntryOut(entry) {
     time: entry.time,
   };
 }
+
+// --------------------------------------------------------------------- batch
+//
+// `batch` runs several EXISTING ops in one round trip. The extension runs each
+// step through the very same perform() a lone op takes — allowlist, landing
+// check, verification ladder, dialog guard — so these pure halves only decide
+// what may be a step and what of a step's reply travels back.
+
+export const BATCH_MAX_STEPS = 10;
+
+/**
+ * Ops a batch may run. Deliberately NOT: the credential/data reads
+ * (read_cookies, read_storage, read_console, read_network — each needs its own
+ * consent popup and a deliberate, separately audited call), screenshot/zoom
+ * (an image per step would need the screenshot share/save/vision machinery per
+ * step; a batch returns none), read_url, tab management, dialogs, the
+ * clipboard staging flow, and batch itself.
+ */
+export const BATCH_OPS = new Set([
+  "navigate",
+  "click",
+  "click_at",
+  "type",
+  "fill_form",
+  "select_option",
+  "press_key",
+  "hover",
+  "scroll",
+  "wait_for",
+  "snapshot",
+  "read_text",
+  "find",
+]);
+
+/** Steps whose OUTPUT is the point: they always return their page content. */
+export const BATCH_READ_OPS = new Set(["snapshot", "read_text", "find"]);
+
+const BATCH_STEP_FIELDS = [
+  "url",
+  "uid",
+  "x",
+  "y",
+  "xFraction",
+  "yFraction",
+  "text",
+  "submit",
+  "clear",
+  "keystrokes",
+  "key",
+  "modifiers",
+  "repeat",
+  "direction",
+  "pixels",
+  "textGone",
+  "timeoutS",
+  "option",
+  "offset",
+  "expand",
+  "maxChars",
+  "role",
+  "name",
+];
+
+/**
+ * One wire step → the message perform() runs, built from a WHITELIST of fields
+ * (nothing a step carries can reach an internal flag), or `{ error }`. A stored
+ * secret never rides a batch: its plaintext must only ever travel on the
+ * transient single-op frame the server builds for it, behind the client's
+ * version probe — so a step carrying one is refused outright rather than
+ * stripped and typed as nothing.
+ */
+export function batchStepMessage(raw) {
+  if (!raw || typeof raw !== "object") return { error: "a step must be an object with an `op`." };
+  const op = String(raw.op ?? "");
+  if (!BATCH_OPS.has(op)) {
+    return {
+      error: `"${op.slice(0, 32)}" cannot run inside a batch (allowed: ${[...BATCH_OPS].join(", ")}).`,
+    };
+  }
+  const fields = Array.isArray(raw.fields) ? raw.fields : null;
+  if (raw.secret || raw.secretText || fields?.some((field) => field?.secret || field?.secretValue)) {
+    return { error: "a stored secret never rides a batch — type it with its own type/fill_form call." };
+  }
+  const message = { op };
+  for (const key of BATCH_STEP_FIELDS) {
+    if (raw[key] !== undefined && raw[key] !== null) message[key] = raw[key];
+  }
+  if (fields) {
+    message.fields = fields.map((field) => ({
+      uid: String(field?.uid ?? ""),
+      value: String(field?.value ?? ""),
+      ...(field?.clear ? { clear: true } : {}),
+    }));
+  }
+  return { message };
+}
+
+/** What of one step's reply travels back — the per-op result shape, minus the tab list. */
+export function batchStepResult(op, reply) {
+  const out = { op, ok: Boolean(reply?.ok) };
+  if (!out.ok) {
+    out.message = String(reply?.message || "The step failed without a reason.");
+    return out;
+  }
+  for (const key of [
+    "note",
+    "url",
+    "title",
+    "landedOn",
+    "snapshot",
+    "snapshotError",
+    "pageText",
+    "pageTextOffset",
+    "pageTextTotal",
+    "dialog",
+  ]) {
+    if (reply[key] !== undefined && reply[key] !== "") out[key] = reply[key];
+  }
+  return out;
+}

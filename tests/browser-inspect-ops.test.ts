@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // by the unpacked-extension Playwright probe (tests/visual/inspect-ops.spec.ts).
 // Kept on ONE line: @ts-expect-error only covers the line after it.
 // @ts-expect-error — plain JS module that ships inside the extension bundle.
-import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX, networkCaptureApply, networkEntryOut, NETWORK_BUFFER_MAX } from "../extension/axtree.js";
+import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX, networkCaptureApply, networkEntryOut, NETWORK_BUFFER_MAX, batchStepMessage, batchStepResult, BATCH_OPS } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
 
@@ -380,5 +380,102 @@ describe("browser tool: read_network", () => {
     expect(text).toContain("2 requests (2 failed or ≥400)");
     expect(text).toContain("[22:13:20.000] GET 500 XHR 42ms https://a.example/api/x");
     expect(text).toContain("POST FAILED (net::ERR_FAILED) Fetch https://a.example/api/y");
+  });
+});
+
+describe("batch's pure halves (extension side)", () => {
+  it("builds a step from a whitelist and refuses ops and secrets that never ride a batch", () => {
+    expect(batchStepMessage({ op: "click", uid: "e1", injected: "x", steps: [] })).toEqual({
+      message: { op: "click", uid: "e1" },
+    });
+    for (const op of ["screenshot", "zoom", "read_cookies", "read_storage", "read_console", "read_network", "read_url", "batch", "new_tab", "handle_dialog"]) {
+      expect(BATCH_OPS.has(op), op).toBe(false);
+      expect(batchStepMessage({ op }).error, op).toContain("cannot run inside a batch");
+    }
+    expect(batchStepMessage({ op: "type", uid: "e1", secret: { name: "PW" }, secretText: "x" }).error).toContain("stored secret");
+    expect(
+      batchStepMessage({ op: "fill_form", fields: [{ uid: "e1", value: "", secret: { name: "PW" }, secretValue: "x" }] }).error,
+    ).toContain("stored secret");
+    // Field objects are rebuilt from uid/value/clear only.
+    expect(batchStepMessage({ op: "fill_form", fields: [{ uid: "e1", value: "a", clear: true, extra: 1 }] }).message).toEqual({
+      op: "fill_form",
+      fields: [{ uid: "e1", value: "a", clear: true }],
+    });
+  });
+
+  it("returns a failed step's reason and an ok step's content, never its tab list", () => {
+    expect(batchStepResult("click", { ok: false, message: "covered" })).toEqual({ op: "click", ok: false, message: "covered" });
+    expect(
+      batchStepResult("snapshot", { ok: true, snapshot: "[e1] button", url: "u", title: "t", tabs: [{}], note: "" }),
+    ).toEqual({ op: "snapshot", ok: true, snapshot: "[e1] button", url: "u", title: "t" });
+  });
+});
+
+describe("browser tool: batch", () => {
+  it("validates EVERY step before anything runs, with the standalone tools' own rules", async () => {
+    const execute = okResult();
+    const tools = buildBrowserTools({ execute, allowed: true, vision: false });
+    const refusals: [Record<string, unknown>[], string][] = [
+      [[{ op: "click", uid: "e1" }, { op: "screenshot" }], "no image"],
+      [[{ op: "read_cookies" }], "own consent"],
+      [[{ op: "type", uid: "e1", secretName: "PW" }], "stored secret is never typed inside a batch"],
+      [[{ op: "fill_form", fields: [{ uid: "e1", secretName: "PW" }] }], "stored secret"],
+      [[{ op: "click_at", x: 1, y: 2 }], "cannot receive images"],
+      [[{ op: "read_text", uid: "e1", expand: true }], "not both"],
+      [[{ op: "scroll", direction: "sideways" }], "direction"],
+      [[{ op: "find" }], "`role`, `name`"],
+      [[{ op: "wait_for" }], "`text`, `textGone`"],
+    ];
+    for (const [steps, expected] of refusals) {
+      const res = await call(tools, "batch", { steps });
+      expect(res.isError, JSON.stringify(steps)).toBe(true);
+      expect(res.content[0].text, JSON.stringify(steps)).toContain(expected);
+      expect(res.content[0].text).toContain("Nothing in this batch was run.");
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("relays the translated steps and reports where it stopped, one wrapper for all page content", async () => {
+    const execute = okResult({
+      batchTotal: 3,
+      batchSteps: [
+        { op: "type", ok: true, url: "https://intra.example/f", note: "Cleared with ime-rewrite." },
+        { op: "click", ok: true, landedOn: "button 저장" },
+        { op: "wait_for", ok: false, message: 'Timed out after 5s: "완료" did not appear.' },
+      ],
+    });
+    const tools = buildBrowserTools({ execute, allowed: true });
+    const res = await call(tools, "batch", {
+      steps: [
+        { op: "type", uid: "e1", value: "광교", clear: true },
+        { op: "click", uid: "e2" },
+        { op: "wait_for", text: "완료", timeoutS: 5 },
+      ],
+      maxChars: 800,
+    });
+    expect(execute).toHaveBeenLastCalledWith({
+      op: "batch",
+      maxChars: 800,
+      steps: [
+        { op: "type", uid: "e1", text: "광교", submit: undefined, clear: true, keystrokes: undefined, maxChars: undefined },
+        { op: "click", uid: "e2", maxChars: undefined },
+        { op: "wait_for", text: "완료", textGone: undefined, timeoutS: 5 },
+      ],
+    });
+    expect(res.isError).toBe(true);
+    const text = res.content[0].text ?? "";
+    expect(text).toContain("Batch STOPPED at step 3 of 3 (wait_for): it failed. Steps 1–2 ran");
+    expect(text).toContain("Step 1 (type): ok — note from the browser bridge: Cleared with ime-rewrite.");
+    expect(text).toContain('Step 3 (wait_for): FAILED — Timed out after 5s: "완료" did not appear.');
+    expect(text.match(/<page_content>/g)).toHaveLength(1);
+    expect(text).toContain("Step 2 (click) — element at the clicked point:\nbutton 저장");
+  });
+
+  it("caps the batch at 10 steps in its schema", () => {
+    const found = (buildBrowserTools({ execute: okResult(), allowed: true }) as unknown as Tool[]).find((t) => t.name === "batch")!;
+    const schema = found.inputSchema as Record<string, { safeParse: (v: unknown) => { success: boolean } }>;
+    expect(schema.steps.safeParse(Array.from({ length: 10 }, () => ({ op: "click", uid: "e1" }))).success).toBe(true);
+    expect(schema.steps.safeParse(Array.from({ length: 11 }, () => ({ op: "click", uid: "e1" }))).success).toBe(false);
+    expect(schema.steps.safeParse([]).success).toBe(false);
   });
 });

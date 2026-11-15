@@ -70,6 +70,10 @@ import {
   consoleEntryFrom,
   networkCaptureApply,
   networkEntryOut,
+  BATCH_MAX_STEPS,
+  BATCH_READ_OPS,
+  batchStepMessage,
+  batchStepResult,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -6283,7 +6287,13 @@ async function reattachAfterEscape(tabId) {
   }
 }
 
-async function performOp(message, stagingOrigin) {
+/**
+ * `opts.skipSnapshot` is set ONLY by runBatch, never from the wire: a batch's
+ * intermediate action steps skip the action tail's page walk (the next step
+ * acts anyway, and ten full snapshots would bury the one that matters). The
+ * settle wait, the landing re-check and the dialog check still run.
+ */
+async function performOp(message, stagingOrigin, opts = {}) {
   const { patterns, source } = await readPolicy();
   // The uid counter as it stands BEFORE this op acts: any uid above it in the
   // confirm snapshot belongs to an element that APPEARED because of the action
@@ -7599,7 +7609,7 @@ async function performOp(message, stagingOrigin) {
   // wait — often called several times in a row. Its loop above already matched
   // against a full (uncapped) walk, and the caller takes a snapshot when it
   // actually wants one. No snapshotError either: nothing was attempted.
-  if (message.op !== "wait_for") {
+  if (message.op !== "wait_for" && !opts.skipSnapshot) {
     try {
       snapshot = await readSnapshot();
       // A BYTE-IDENTICAL snapshot after an action that changed the page is the
@@ -7676,10 +7686,11 @@ async function performOp(message, stagingOrigin) {
  * BE that the bridge is on a tab the agent never chose. First in either string,
  * because it reframes every other line and capNote truncates the tail.
  */
-async function perform(message, senderOrigin) {
+async function perform(message, senderOrigin, opts = {}) {
+  if (message.op === "batch") return runBatch(message, senderOrigin);
   let result;
   try {
-    result = await performOp(message, senderOrigin);
+    result = await performOp(message, senderOrigin, opts);
   } catch (error) {
     takeTabNotice(); // never let a stale notice surface on the NEXT op
     throw error;
@@ -7699,6 +7710,83 @@ async function perform(message, senderOrigin) {
     return { ...result, message: `${notice} ${result.message || ""}`.trim() };
   }
   return { ...result, note: capNote([notice, result?.note].filter(Boolean).join(" ")) };
+}
+
+/**
+ * How long a batch may keep STARTING steps. The Noah client waits 140 s for a
+ * batch (the server parks 150 s), and one step can itself take ~25 s (wait_for)
+ * — so no step starts after 100 s; the ones left are reported as not run.
+ */
+const BATCH_START_BUDGET_MS = 100_000;
+
+/**
+ * Run up to BATCH_MAX_STEPS existing ops in order, in ONE round trip. Each step
+ * is built from a whitelist (batchStepMessage) and goes through perform() —
+ * the SAME path a lone op takes, so the allowlist, the landing check, the
+ * verification ladder, the file-input and obscured-target refusals, the dialog
+ * guard and the working-tab notice all apply per step exactly as if it had been
+ * sent alone. It stops at the first step that fails or leaves a JS dialog open,
+ * and reports which. Intermediate ACTION steps skip the post-action snapshot;
+ * the LAST step, and every snapshot/read_text/find step, return theirs (the
+ * last one under the batch's `maxChars` unless the step set its own).
+ *
+ * The batch itself always answers ok:true when it RAN — the per-step results
+ * are the answer, a failed step included — and ok:false only when it could not
+ * start (no steps, too many).
+ */
+async function runBatch(message, senderOrigin) {
+  const raw = Array.isArray(message.steps) ? message.steps : [];
+  if (!raw.length) return { ok: false, message: `batch needs 1–${BATCH_MAX_STEPS} steps.` };
+  if (raw.length > BATCH_MAX_STEPS) {
+    return { ok: false, message: `batch takes at most ${BATCH_MAX_STEPS} steps — split it into several calls.` };
+  }
+  const started = Date.now();
+  const results = [];
+  let last = null;
+  for (let index = 0; index < raw.length; index += 1) {
+    const built = batchStepMessage(raw[index]);
+    const op = built.message?.op || String(raw[index]?.op ?? "?").slice(0, 32);
+    if (built.error) {
+      results.push({ op, ok: false, message: built.error });
+      break;
+    }
+    if (Date.now() - started > BATCH_START_BUDGET_MS) {
+      results.push({
+        op,
+        ok: false,
+        notRun: true,
+        message: "Not run: the batch used up its time budget. Continue from this step in a new call.",
+      });
+      break;
+    }
+    const isLast = index === raw.length - 1;
+    const step = built.message;
+    if (isLast && step.maxChars == null && typeof message.maxChars === "number") step.maxChars = message.maxChars;
+    let reply;
+    try {
+      reply = await perform(step, senderOrigin, { skipSnapshot: !isLast && !BATCH_READ_OPS.has(step.op) });
+    } catch (error) {
+      reply = { ok: false, message: String(error?.message || error) };
+    }
+    results.push(batchStepResult(op, reply));
+    if (reply?.ok) last = reply;
+    if (!reply?.ok || reply?.dialog) break;
+  }
+  let tabs = last?.tabs;
+  if (!tabs) {
+    try {
+      tabs = (await groupedTabs()).map(describeTab);
+    } catch {
+      tabs = undefined;
+    }
+  }
+  return {
+    ok: true,
+    batchSteps: results,
+    batchTotal: raw.length,
+    ...(last?.url !== undefined ? { url: last.url, title: last.title } : {}),
+    ...(tabs ? { tabs } : {}),
+  };
 }
 
 // `externally_connectable` restricts senders to the Noah origins declared in the

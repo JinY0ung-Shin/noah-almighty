@@ -39,7 +39,7 @@ export const MCP_TOOL_GROUPS = [
     id: "browser",
     labelKo: "브라우저 조작",
     labelEn: "browser control",
-    descriptionKo: "내 브라우저에서 페이지 열기·클릭·입력·요소 찾기·URL 읽기·콘솔·네트워크 확인·화면 캡처·확대 (확장 프로그램 필요)",
+    descriptionKo: "내 브라우저에서 페이지 열기·클릭·입력·요소 찾기·URL 읽기·콘솔·네트워크 확인·화면 캡처·확대·여러 단계 한 번에 (확장 프로그램 필요)",
   },
   {
     id: "system",
