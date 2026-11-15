@@ -28,6 +28,7 @@ import type {
 import type { ConversationRewindPlan } from "../store/conversations.js";
 import { consultationHistoryText } from "../agent/avatarDirectoryTools.js";
 import type {
+  BrowserConsoleEntry,
   BrowserCookie,
   BrowserStorageEntry,
   BrowserTab,
@@ -2100,6 +2101,7 @@ export async function executeChatTurn(
                 uid: requestData.uid ?? null,
                 x: typeof requestData.x === "number" ? requestData.x : null,
                 y: typeof requestData.y === "number" ? requestData.y : null,
+                limit: typeof requestData.limit === "number" ? requestData.limit : null,
                 width: typeof requestData.width === "number" ? requestData.width : null,
                 height: typeof requestData.height === "number" ? requestData.height : null,
                 xFraction:
@@ -2188,6 +2190,8 @@ export async function executeChatTurn(
               fetchBytes?: number;
               fetchTruncated?: boolean;
               fetchHops?: number;
+              consoleEntries?: unknown[];
+              consoleTotal?: number;
             };
             if (!reply?.ok) {
               const raw =
@@ -2287,6 +2291,25 @@ export async function executeChatTurn(
                         : 0,
                   }
                 : undefined;
+            // read_console: page-derived text (already token-redacted in the
+            // extension). This route bounds the count and every field, and
+            // shape-validates each entry, like cookies/storage above.
+            const consoleEntries =
+              requestData.op === "read_console" && Array.isArray(reply.consoleEntries)
+                ? reply.consoleEntries.slice(-100).flatMap((e: unknown): BrowserConsoleEntry[] => {
+                    if (!e || typeof e !== "object") return [];
+                    const entry = e as Record<string, unknown>;
+                    if (typeof entry.text !== "string") return [];
+                    return [
+                      {
+                        level: typeof entry.level === "string" ? entry.level.slice(0, 16) : "log",
+                        text: entry.text.slice(0, 600),
+                        source: typeof entry.source === "string" ? entry.source.slice(0, 300) : "",
+                        time: typeof entry.time === "number" && Number.isFinite(entry.time) ? entry.time : 0,
+                      },
+                    ];
+                  })
+                : undefined;
             const storageKind =
               requestData.op === "read_storage"
                 ? requestData.kind === "local"
@@ -2380,6 +2403,8 @@ export async function executeChatTurn(
                   fetched
                     ? `status=${fetched.status} bytes=${fetched.bytes}${fetched.hops > 1 ? ` hops=${fetched.hops}` : ""}`
                     : "",
+                  // read_console: how many lines left the browser, never their text.
+                  consoleEntries ? `entries=${consoleEntries.length}` : "",
                   `url=${scrubAuditUrl(fetched?.url || reply.url || requestData.url)}`,
                 ]
                   .filter(Boolean)
@@ -2571,6 +2596,11 @@ export async function executeChatTurn(
               storage,
               storageKind,
               fetched,
+              consoleEntries,
+              consoleTotal:
+                typeof reply.consoleTotal === "number" && reply.consoleTotal >= 0
+                  ? Math.round(reply.consoleTotal)
+                  : undefined,
             };
           },
           onFile: async (requestData) => {

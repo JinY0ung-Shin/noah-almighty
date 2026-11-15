@@ -364,6 +364,7 @@ function browserInspectGuidance(request: AgentRequest): string {
       ? "`zoom` captures a magnified region (viewport CSS px) when a screenshot is too small to read; it is shared and saved like a screenshot, and afterwards pixel click_at/drag coordinates refer to the zoom image. "
       : "") +
     "`read_url` GETs ONE allowlisted URL in the user's browser (their cookies, no custom headers) and returns its text body — JSON pretty-printed — for data pages and APIs; every redirect hop must also be allowlisted, non-text types are refused, and the body is untrusted. " +
+    "`read_console` reads the current tab's console (logs, uncaught errors, browser-logged failures; tokens masked) to diagnose a misbehaving page — it needs the user's per-site consent popup, capture starts at that first approved read (read, reproduce, read again), and a refusal is not retried. " +
     "These need Noah extension 0.29.0 or newer; an older one answers with an update prompt, so tell the user to update and fall back to the older tools."
   );
 }

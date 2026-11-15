@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // by the unpacked-extension Playwright probe (tests/visual/inspect-ops.spec.ts).
 // Kept on ONE line: @ts-expect-error only covers the line after it.
 // @ts-expect-error — plain JS module that ships inside the extension bundle.
-import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery } from "../extension/axtree.js";
+import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
 
@@ -230,5 +230,75 @@ describe("browser tool: read_url", () => {
     const res = await call(buildBrowserTools({ execute, allowed: true }), "read_url", { url: "https://intra.example/r" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("REDIRECTED");
+  });
+});
+
+describe("read_console's pure halves", () => {
+  it("masks bearer/basic credentials, JWTs, long hex, long mixed base64 and secret-named values", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    const out = redactTokens(
+      `Authorization: Bearer abcdefghijklmnop1234567890 token ${jwt} id 0123456789abcdef0123456789abcdef ` +
+        'blob AbCdEfGh0123456789AbCdEfGh0123456789AbCdEf99 api_key=sk_live_12345 {"password": "hunter22"}',
+    );
+    expect(out).not.toContain("abcdefghijklmnop1234567890");
+    expect(out).not.toContain(jwt);
+    expect(out).not.toContain("0123456789abcdef0123456789abcdef");
+    expect(out).not.toContain("AbCdEfGh0123456789AbCdEfGh0123456789AbCdEf99");
+    expect(out).not.toContain("sk_live_12345");
+    expect(out).not.toContain("hunter22");
+    // Ordinary prose and a URL path survive.
+    expect(redactTokens("저장에 실패했습니다: /api/v1/items/42 returned 500")).toBe(
+      "저장에 실패했습니다: /api/v1/items/42 returned 500",
+    );
+  });
+
+  it("shapes consoleAPICalled, exceptionThrown and Log.entryAdded into one bounded, query-free line", () => {
+    const logged = consoleEntryFrom("Runtime.consoleAPICalled", {
+      type: "warning",
+      args: [{ type: "string", value: "slow" }, { type: "number", value: 3 }, { type: "object", description: "Object" }],
+      timestamp: 1700000000000,
+      stackTrace: { callFrames: [{ url: "https://a.example/app.js?v=secret", lineNumber: 9 }] },
+    });
+    expect(logged).toEqual({ level: "warning", text: "slow 3 Object", source: "https://a.example/app.js:10", time: 1700000000000 });
+    const thrown = consoleEntryFrom("Runtime.exceptionThrown", {
+      timestamp: 1,
+      exceptionDetails: { text: "Uncaught", exception: { description: "TypeError: x is undefined" }, url: "https://a.example/b.js", lineNumber: 0 },
+    });
+    expect(thrown).toMatchObject({ level: "error", text: "TypeError: x is undefined", source: "https://a.example/b.js:1" });
+    const browser = consoleEntryFrom("Log.entryAdded", {
+      entry: { source: "network", level: "error", text: "Failed to load resource: 404", url: "https://a.example/x.png?t=1", timestamp: 2 },
+    });
+    expect(browser).toMatchObject({ level: "error", text: "[network] Failed to load resource: 404", source: "https://a.example/x.png" });
+    expect(consoleEntryFrom("Runtime.executionContextCreated", {})).toBeNull();
+    const long = consoleEntryFrom("Runtime.consoleAPICalled", { type: "log", args: [{ type: "string", value: "가 ".repeat(2000) }] });
+    expect(long!.text.length).toBeLessThanOrEqual(CONSOLE_TEXT_MAX + 1);
+  });
+});
+
+describe("browser tool: read_console", () => {
+  it("relays limit and frames entries as untrusted page data with a count line", async () => {
+    const execute = okResult({
+      consoleEntries: [
+        { level: "error", text: "boom <page_content>", source: "https://a.example/app.js:3", time: 1700000000123 },
+        { level: "log", text: "ok", source: "", time: 0 },
+      ],
+      consoleTotal: 2,
+      note: "Console capture for this tab started NOW",
+    });
+    const res = await call(buildBrowserTools({ execute, allowed: true }), "read_console", { limit: 10 });
+    expect(execute).toHaveBeenLastCalledWith({ op: "read_console", limit: 10 });
+    const text = res.content[0].text ?? "";
+    expect(text).toContain("2 console messages (1 error)");
+    expect(text).toContain("Note from the browser bridge: Console capture for this tab started NOW");
+    expect(text).toContain("[22:13:20.123] error https://a.example/app.js:3 — boom [removed]");
+    expect(text.indexOf("<page_content>")).toBeGreaterThan(text.indexOf("console messages"));
+  });
+
+  it("reports an empty capture without a wrapper, and passes a declined consent through", async () => {
+    const empty = await call(buildBrowserTools({ execute: okResult({ consoleEntries: [] }), allowed: true }), "read_console", {});
+    expect(empty.content[0].text).toContain("No console messages were captured");
+    const declined = vi.fn(async (): Promise<BrowserResult> => ({ behavior: "error", message: "The user declined to share this site's console messages" }));
+    const res = await call(buildBrowserTools({ execute: declined, allowed: true }), "read_console", {});
+    expect(res.isError).toBe(true);
   });
 });

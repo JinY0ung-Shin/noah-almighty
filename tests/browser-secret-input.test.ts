@@ -447,6 +447,8 @@ describe("background.js keeps the invariants that only its source can show", () 
       "Input.dispatchMouseEvent",
       "Input.imeSetComposition",
       "Input.insertText",
+      "Log.disable",
+      "Log.enable",
       "Network.getCookies",
       "Overlay.enable",
       "Overlay.hideHighlight",
@@ -459,6 +461,8 @@ describe("background.js keeps the invariants that only its source can show", () 
       "Page.handleJavaScriptDialog",
       "Page.navigate",
       "Page.navigateToHistoryEntry",
+      "Runtime.disable",
+      "Runtime.enable",
       "Runtime.evaluate",
       "Target.setAutoAttach",
     ]);

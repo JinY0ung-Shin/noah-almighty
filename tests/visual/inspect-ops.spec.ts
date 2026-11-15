@@ -118,8 +118,16 @@ async function launch(): Promise<{ context: BrowserContext; noah: Page; worker: 
   return { context, noah, worker, dir };
 }
 
-/** One op, sent exactly like the Noah client sends it. */
+let requestSeq = 0;
+
+/**
+ * One op, sent exactly like the Noah client sends it — WITH a fresh requestId.
+ * Without one the extension coalesces identical payloads sent within 1.5 s
+ * (performCoalesced's twin-tab dedupe), so a second identical read would be
+ * handed the first one's reply instead of running.
+ */
 function op(noah: Page, message: Record<string, unknown>): Promise<Reply> {
+  const withId = { requestId: `test-${Date.now()}-${++requestSeq}`, ...message };
   return noah.evaluate(
     ([id, msg]) =>
       new Promise<Reply>((resolve) => {
@@ -128,7 +136,7 @@ function op(noah: Page, message: Record<string, unknown>): Promise<Reply> {
         }).chrome.runtime;
         rt.sendMessage(id as string, { source: "noah", ...(msg as object) }, (reply) => resolve(reply));
       }),
-    [EXTENSION_ID, message] as const,
+    [EXTENSION_ID, withId] as const,
   );
 }
 
@@ -143,8 +151,33 @@ async function groupFixture(worker: Worker): Promise<void> {
   }, `http://localhost:${port}/page.html`);
 }
 
+/**
+ * Send an op that raises the data-consent popup, and answer it the way the user
+ * would: the popup is the extension's own consent.html window.
+ */
+async function opWithConsent(
+  context: BrowserContext,
+  noah: Page,
+  message: Record<string, unknown>,
+  allow = true,
+): Promise<{ reply: Reply; kind: string }> {
+  const seen = new Set(context.pages());
+  const pending = op(noah, message);
+  // The popup is a chrome.windows.create window; its page may surface before its
+  // URL is set, so poll the context's pages instead of filtering the event.
+  let consent: Page | undefined;
+  for (let i = 0; i < 100 && !consent; i += 1) {
+    consent = context.pages().find((page) => !seen.has(page) && page.url().includes("consent.html"));
+    if (!consent) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!consent) throw new Error(`no consent popup appeared; pages: ${context.pages().map((p) => p.url()).join(", ")}`);
+  await consent.waitForLoadState();
+  const kind = new URL(consent.url()).searchParams.get("kind") || "";
+  await consent.click(allow ? "#allow" : "#deny");
+  return { reply: await pending, kind };
+}
 test.describe("0.29.0 browser ops in the real extension", () => {
-  test.setTimeout(120_000);
+  test.setTimeout(90_000);
 
   test("version, find and read_url (incl. redirect-out and non-text refusals)", async () => {
     const { context, noah, worker, dir } = await launch();
@@ -211,6 +244,57 @@ test.describe("0.29.0 browser ops in the real extension", () => {
       const image = await op(noah, { op: "read_url", url: `http://localhost:${port}/image.png` });
       expect(image.ok).toBe(false);
       expect(String(image.message)).toContain("not text");
+    } finally {
+      await context.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("read_console: consent per site, capture from the approved read, redaction, revoke", async () => {
+    const { context, noah, worker, dir } = await launch();
+    try {
+      await op(noah, { op: "setAllowedOrigins", patterns: ["localhost"] });
+      await groupFixture(worker);
+
+      // Declined: nothing captured, and the refusal is not a retry invitation.
+      const declined = await opWithConsent(context, noah, { op: "read_console" }, false);
+      expect(declined.kind).toBe("console");
+      expect(declined.reply.ok).toBe(false);
+      expect(String(declined.reply.message)).toContain("declined");
+
+      // Approved: the capture starts NOW, and Chrome's own buffer for the current
+      // document is replayed — the page's load-time warn predates the arm.
+      const first = await opWithConsent(context, noah, { op: "read_console" });
+      expect(first.reply.ok, first.reply.message).toBe(true);
+      expect(String(first.reply.note)).toContain("started NOW");
+      const loaded = (first.reply.consoleEntries as { level: string; text: string }[]).map((e) => `${e.level}:${e.text}`);
+      // Measured (Chromium 1234): Runtime.enable replays V8's buffered console
+      // messages of the current document, so a warn logged at page load —
+      // before any consent existed — is in the first approved read.
+      expect(loaded).toContain("warning:page loaded");
+
+      // Live messages after an action, with token-shaped strings masked. The
+      // grant is remembered, so no popup this time.
+      const found = await op(noah, { op: "find", role: "button", name: "저장하기" });
+      const uid = /\[(e\d+)\]/.exec(String(found.snapshot))![1];
+      await op(noah, { op: "click", uid, maxChars: 500 });
+      const second = await op(noah, { op: "read_console" });
+      expect(second.ok, second.message).toBe(true);
+      const texts = (second.consoleEntries as { level: string; text: string; source: string }[]).map((e) => e.text);
+      expect(texts.some((t) => t.includes("clicked save with token Bearer [REDACTED]"))).toBe(true);
+      expect(texts.some((t) => t.includes("[REDACTED_HEX]"))).toBe(true);
+      expect(JSON.stringify(second.consoleEntries)).not.toContain("abcdefghijklmnop1234567890");
+      expect(JSON.stringify(second.consoleEntries)).not.toContain("0123456789abcdef0123456789abcdef");
+
+      // Revoking the grant (the options page's 취소) stops and clears the capture,
+      // so the next read prompts again.
+      await worker.evaluate(async () => {
+        const c = (globalThis as unknown as { chrome: any }).chrome;
+        await c.storage.session.remove("dataConsentGrants");
+      });
+      const again = await opWithConsent(context, noah, { op: "read_console" });
+      expect(again.kind).toBe("console");
+      expect(String(again.reply.note)).toContain("started NOW");
     } finally {
       await context.close();
       fs.rmSync(dir, { recursive: true, force: true });

@@ -209,3 +209,7 @@
     secret host pre-check, and read_url never moves the working tab. The relay slices the body to 120k
     (the extension already caps it at 100k chars / 256 KB) and whitelists the media-type characters; the audit
     row carries `status=`/`bytes=`/`hops=` and the FINAL url, scrubbed.
+  - `read_console` (new `limit` → `consoleEntries` `[{level, text, source, time}]` + `consoleTotal`) —
+    actions.md "read_console". A NEW data-consent kind `console` in the same `dataConsentGrants` store and the
+    same popup (`consent.html?kind=console`); the relay keeps the newest 100 entries and slices every field
+    (text 600, source 300, level 16); the audit row records `entries=N` only, never text.

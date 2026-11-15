@@ -279,7 +279,8 @@ export interface BrowserRequest {
     // answers ok:false with an update prompt instead of forwarding.
     | "find"
     | "zoom"
-    | "read_url";
+    | "read_url"
+    | "read_console";
   /** navigate/new_tab/read_url: absolute http(s) URL. */
   url?: string;
   /**
@@ -321,6 +322,8 @@ export interface BrowserRequest {
   /** drag UID mode: where inside the END element's box to release, 0–1. */
   toXFraction?: number;
   toYFraction?: number;
+  /** read_console/read_network: how many of the newest captured entries to return. */
+  limit?: number;
   /** zoom only: the region's size in viewport CSS px. */
   width?: number;
   height?: number;
@@ -435,6 +438,14 @@ export interface BrowserStorageEntry {
   value: string;
 }
 
+/** One read_console line: level, redacted text, query-free source, epoch ms. */
+export interface BrowserConsoleEntry {
+  level: string;
+  text: string;
+  source: string;
+  time: number;
+}
+
 export type BrowserResult =
   | {
       behavior: "ok";
@@ -517,6 +528,13 @@ export type BrowserResult =
       storage?: BrowserStorageEntry[];
       /** read_storage: which store the `storage` entries came from. */
       storageKind?: "local" | "session";
+      /**
+       * read_console: the newest captured console entries of the tab (text is
+       * UNTRUSTED page content, already token-redacted by the extension) and
+       * how many were captured in all.
+       */
+      consoleEntries?: BrowserConsoleEntry[];
+      consoleTotal?: number;
       /**
        * read_url: the GET's outcome. `body` is UNTRUSTED page content (text,
        * JSON pretty-printed); `url` is the FINAL url after redirects — never

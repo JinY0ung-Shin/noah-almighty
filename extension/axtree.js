@@ -3180,3 +3180,116 @@ export function urlWithoutQuery(rawUrl, max = 300) {
     return rawUrl ? "(unparseable url)" : "";
   }
 }
+
+// ------------------------------------------------- read_console / read_network
+//
+// The two capture readers hand the model what a site logged or requested. Both
+// are consent-gated per site in background.js; these are the pure halves that
+// decide what an entry LOOKS like on the way out: bounded, query-free, and with
+// anything token-shaped masked.
+
+/** Most characters one console entry's text keeps (after redaction). */
+export const CONSOLE_TEXT_MAX = 500;
+
+/**
+ * Mask token-shaped substrings: `Bearer …`/`Basic …`/`Token …` credentials,
+ * JWTs, long hex runs (session ids, API keys, hashes ≥ 32), long base64/url-safe
+ * runs that mix letters and digits (≥ 40), and the value of `key=value` /
+ * `"key": "value"` pairs whose key names a secret. Over-masking a hash is the
+ * cheap direction: the model reads logs to see what HAPPENED, and no answer it
+ * needs hangs on the exact token.
+ */
+export function redactTokens(text) {
+  return String(text ?? "")
+    .replace(/\b(Bearer|Basic|Token|Digest)\s+[A-Za-z0-9\-._~+/]{8,}=*/gi, "$1 [REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, "[REDACTED_JWT]")
+    .replace(
+      /((?:access|refresh|id|auth|session|csrf|xsrf)[_-]?token|api[_-]?key|apikey|client[_-]?secret|secret|password|passwd|pwd|session[_-]?id|sid|authorization|cookie)(["']?\s*[:=]\s*["']?)([^\s"'&,;}]{4,})/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(/\b[0-9a-fA-F]{32,}\b/g, "[REDACTED_HEX]")
+    .replace(/(?<![A-Za-z0-9+_-])(?=[A-Za-z0-9+_-]*\d)(?=[A-Za-z0-9+_-]*[A-Za-z])[A-Za-z0-9+_-]{40,}={0,2}/g, "[REDACTED]");
+}
+
+/** One CDP RemoteObject (a console argument) as short text, never touching the page. */
+function remoteObjectText(arg) {
+  if (!arg || typeof arg !== "object") return String(arg ?? "");
+  if (arg.type === "string") return String(arg.value ?? "");
+  if ("value" in arg && arg.value !== undefined) {
+    try {
+      return typeof arg.value === "object" ? JSON.stringify(arg.value) : String(arg.value);
+    } catch {
+      return String(arg.description ?? arg.type ?? "");
+    }
+  }
+  if (arg.unserializableValue) return String(arg.unserializableValue);
+  return String(arg.description ?? arg.className ?? arg.type ?? "");
+}
+
+const CONSOLE_LEVELS = {
+  log: "log",
+  info: "info",
+  debug: "debug",
+  warning: "warning",
+  warn: "warning",
+  error: "error",
+  assert: "error",
+  trace: "log",
+  dir: "log",
+  dirxml: "log",
+  table: "log",
+  count: "log",
+  timeEnd: "log",
+  verbose: "debug",
+};
+
+/** "source.js:12" from a frame-ish {url, lineNumber} (0-based line), query-free. */
+function sourceOf(url, lineNumber) {
+  const bare = urlWithoutQuery(url, 200);
+  if (!bare) return "";
+  return Number.isFinite(Number(lineNumber)) ? `${redactTokens(bare)}:${Number(lineNumber) + 1}` : redactTokens(bare);
+}
+
+const clipText = (text) => {
+  const masked = redactTokens(String(text ?? "").replace(/\s+$/g, ""));
+  return masked.length > CONSOLE_TEXT_MAX ? `${masked.slice(0, CONSOLE_TEXT_MAX)}…` : masked;
+};
+
+/**
+ * One console entry from any of the three CDP events capture listens to:
+ * `Runtime.consoleAPICalled` (console.log/warn/error …), `Runtime.exceptionThrown`
+ * (an uncaught error), `Log.entryAdded` (what the BROWSER logged about the page:
+ * failed loads, CSP and mixed-content violations, interventions). Null for
+ * anything else. Shape: {level, text, source, time} — `time` in epoch ms.
+ */
+export function consoleEntryFrom(method, params) {
+  if (method === "Runtime.consoleAPICalled") {
+    const frame = params?.stackTrace?.callFrames?.[0];
+    return {
+      level: CONSOLE_LEVELS[params?.type] || "log",
+      text: clipText((params?.args || []).map(remoteObjectText).join(" ")),
+      source: frame ? sourceOf(frame.url, frame.lineNumber) : "",
+      time: Number(params?.timestamp) || Date.now(),
+    };
+  }
+  if (method === "Runtime.exceptionThrown") {
+    const details = params?.exceptionDetails || {};
+    const described = details.exception?.description || details.text || "Uncaught exception";
+    return {
+      level: "error",
+      text: clipText(described),
+      source: sourceOf(details.url || details.stackTrace?.callFrames?.[0]?.url, details.lineNumber),
+      time: Number(params?.timestamp) || Date.now(),
+    };
+  }
+  if (method === "Log.entryAdded") {
+    const entry = params?.entry || {};
+    return {
+      level: entry.level === "verbose" ? "debug" : String(entry.level || "info"),
+      text: clipText(`${entry.source ? `[${entry.source}] ` : ""}${entry.text || ""}`),
+      source: sourceOf(entry.url, entry.lineNumber),
+      time: Number(entry.timestamp) || Date.now(),
+    };
+  }
+  return null;
+}

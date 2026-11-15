@@ -67,6 +67,7 @@ import {
   decodeBody,
   formatFetchedBody,
   urlWithoutQuery,
+  consoleEntryFrom,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -203,6 +204,24 @@ const CDP_VERSION = "1.3";
  * (`takeResponseBodyAsStream` + `IO.read`, byte-capped) without the page ever
  * rendering or running a script — the request is failed after the read, and the
  * tab closed. No page JS runs: the document never commits.
+ *
+ * `Runtime.enable`/`Runtime.disable` and `Log.enable`/`Log.disable` exist for
+ * read_console (0.29.0) ONLY, and are sent only while the user has granted the
+ * per-site `console` consent for the tab's current host (armConsole /
+ * disarmConsole). `Runtime.enable` is an EVENT SUBSCRIPTION, not an execution
+ * path: it turns on `consoleAPICalled`/`exceptionThrown` (and the
+ * execution-context events, which are ignored). The no-page-JS fence is
+ * untouched by it — `Runtime.evaluate` is still structurally limited to the two
+ * read_storage constants, and no other `Runtime.*` method (callFunctionOn,
+ * getProperties, compileScript …) is on this list, so the RemoteObject ids the
+ * events carry cannot be dereferenced or called. Two honest costs: a page can
+ * detect an enabled Runtime domain (console-argument previews touch getters, the
+ * known anti-bot signal), which is one reason it is OFF until consent and
+ * switched off again when the tab leaves the granted site or the grant is
+ * revoked; and the arguments' previews are page data, which the capture reduces
+ * to short text, redacted (redactTokens), and never forwards raw. `Log.enable`
+ * is the browser's own log about the page (failed loads, CSP/mixed-content
+ * violations, interventions) — read-only, no page JS.
  */
 const CDP_ALLOWLIST = new Set([
   "Accessibility.enable",
@@ -226,6 +245,8 @@ const CDP_ALLOWLIST = new Set([
   "IO.read",
   "IO.close",
   "Input.dispatchKeyEvent",
+  "Log.disable",
+  "Log.enable",
   "Input.dispatchMouseEvent",
   "Input.imeSetComposition",
   "Input.insertText",
@@ -241,6 +262,8 @@ const CDP_ALLOWLIST = new Set([
   "Page.handleJavaScriptDialog",
   "Page.navigate",
   "Page.navigateToHistoryEntry",
+  "Runtime.disable",
+  "Runtime.enable",
   "Runtime.evaluate",
   "Target.setAutoAttach",
 ]);
@@ -632,6 +655,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
 chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId != null) {
     attached.delete(source.tabId);
+    // Detached = the Runtime/Log subscriptions are gone; the next read re-arms.
+    consoleCaptures.delete(source.tabId);
     pendingDialogs.delete(source.tabId);
     // Detached means UNOBSERVED: a navigation during the gap raises no
     // frameNavigated, so the epoch can no longer vouch for the ids minted before
@@ -645,6 +670,7 @@ chrome.debugger.onDetach.addListener((source) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   attached.delete(tabId);
+  consoleCaptures.delete(tabId);
   pendingDialogs.delete(tabId);
   forgetTabRefs(tabId);
   lastSnapshotByTab.delete(tabId);
@@ -652,6 +678,81 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // hand, or one abandoned on COPY_FAILED. Its return pairing is dead either way.
   forgetClipReturn(tabId);
   if (currentTabId === tabId) setCurrentTab(null);
+});
+
+// ----------------------------------------------------------- console capture
+//
+// read_console's capture, per TAB and per granted SITE. Nothing is recorded for
+// a tab until read_console has the user's `console` consent for that tab's
+// host: armConsole then enables Runtime + Log on the tab's ROOT session (a
+// cross-site iframe's console is not captured), and Chrome hands over what it
+// still holds for the current document — V8's buffered console messages
+// (replayed by Runtime.enable) and the Log domain's entries (replayed by
+// Log.enable) — followed by everything live. Leaving the granted host
+// (a main-frame navigation elsewhere), a revoked grant, a detach or a closed
+// tab disarms it and DROPS the buffer.
+
+/** Entries kept per tab; read_console returns the newest `limit` of them. */
+const CONSOLE_BUFFER_MAX = 300;
+/** tabId -> { host, entries: [{level, text, source, time}], dropped } while armed. */
+const consoleCaptures = new Map();
+
+async function armConsole(tabId, host) {
+  consoleCaptures.set(tabId, { host, entries: [], dropped: 0 });
+  await sendCdp({ tabId }, "Runtime.enable", {});
+  await sendCdp({ tabId }, "Log.enable", {});
+}
+
+function disarmConsole(tabId) {
+  if (!consoleCaptures.has(tabId)) return;
+  consoleCaptures.delete(tabId);
+  // Best effort: a detached or closed tab has nothing left to switch off.
+  if (attached.has(tabId)) {
+    sendCdp({ tabId }, "Runtime.disable", {}).catch(() => {});
+    sendCdp({ tabId }, "Log.disable", {}).catch(() => {});
+  }
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (source.tabId == null || source.sessionId) return;
+  const capture = consoleCaptures.get(source.tabId);
+  if (!capture) return;
+  const entry = consoleEntryFrom(method, params);
+  if (!entry) return;
+  capture.entries.push(entry);
+  if (capture.entries.length > CONSOLE_BUFFER_MAX) {
+    capture.entries.shift();
+    capture.dropped += 1;
+  }
+});
+
+/** The host of a main-frame navigation, for the capture readers' site check. */
+function hostOfFrameUrl(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "")).hostname;
+  } catch {
+    return "";
+  }
+}
+
+// The capture is consented PER SITE: a main-frame navigation to another host
+// ends it (a same-host navigation keeps it — same grant, same site).
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (method !== "Page.frameNavigated" || source.tabId == null || source.sessionId) return;
+  if (params?.frame?.parentId) return;
+  const host = hostOfFrameUrl(params?.frame?.url);
+  const consoleCapture = consoleCaptures.get(source.tabId);
+  if (consoleCapture && consoleCapture.host !== host) disarmConsole(source.tabId);
+});
+
+// A grant revoked on the options page (or cleared with the browser session)
+// stops a capture that is still running for that host.
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "session" || !changes[DATA_GRANTS_KEY]) return;
+  const grants = changes[DATA_GRANTS_KEY].newValue || {};
+  for (const [tabId, capture] of consoleCaptures) {
+    if (grants[capture.host]?.console !== true) disarmConsole(tabId);
+  }
 });
 
 // ------------------------------------------------------------------- dialogs
@@ -1349,7 +1450,20 @@ const DATA_GRANTS_KEY = "dataConsentGrants";
 const STORAGE_OPEN_FAILED = (error) =>
   `The storage-consent popup could not be opened (${String(error?.message || error)}), so no storage was read. ` +
   "Report this to the user rather than retrying.";
+const CONSOLE_CONSENT_DECLINED =
+  "The user declined to share this site's console messages, so nothing was captured or read. " +
+  "Do not retry — tell the user why you wanted the console output and let them decide.";
+const CONSOLE_CONSENT_UNANSWERED =
+  "The user did not answer the console-access prompt in time, so nothing was captured. " +
+  "Tell the user a confirmation popup appears in their browser when you read the console, and retry when they are ready.";
 const DATA_CONSENT_COPY = {
+  console: {
+    declined: CONSOLE_CONSENT_DECLINED,
+    unanswered: CONSOLE_CONSENT_UNANSWERED,
+    openFailed: (error) =>
+      `The console-consent popup could not be opened (${String(error?.message || error)}), so nothing was ` +
+      "captured. Report this to the user rather than retrying.",
+  },
   cookies: {
     declined: COOKIE_CONSENT_DECLINED,
     unanswered: COOKIE_CONSENT_UNANSWERED,
@@ -6512,6 +6626,50 @@ async function performOp(message, stagingOrigin) {
       ok: true,
       storage,
       storageKind: type,
+      url: tab.url || "",
+      title: tab.title || "",
+      tabs: (await groupedTabs()).map(describeTab),
+    };
+  }
+
+  if (message.op === "read_console") {
+    // Consent per site, per browser session — the SAME unified popup + grant
+    // store as cookies/storage, kind "console". Not origin-exempt: the tab
+    // already passed the allowlist above. Capture starts only once that grant
+    // exists (see armConsole for what Chrome hands over at that moment).
+    const host = hostOfFrameUrl(tab.url);
+    if (!host) return { ok: false, message: "read_console needs the tab to be on an http(s) page." };
+    const consent = await requestDataConsent(host, "console");
+    if (!consent.granted) return { ok: false, message: consent.reason };
+    let capture = consoleCaptures.get(tab.id);
+    let armedNow = false;
+    if (!capture || capture.host !== host) {
+      await armConsole(tab.id, host);
+      capture = consoleCaptures.get(tab.id);
+      armedNow = true;
+      // The enable-time replay arrives as events right after the commands; give
+      // it a beat to land before reading the buffer.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+    const limit = Math.min(Math.max(Math.round(Number(message.limit) || 50), 1), 100);
+    const entries = capture ? capture.entries.slice(-limit) : [];
+    const total = capture ? capture.entries.length + capture.dropped : 0;
+    const notes = [];
+    if (armedNow) {
+      notes.push(
+        "Console capture for this tab started NOW (first read with consent on this site): what is listed is what " +
+          "Chrome still held for the current page plus anything logged since; earlier pages and other tabs are " +
+          "not included. Reproduce the problem (reload or repeat the action) and read again to see fresh messages.",
+      );
+    }
+    if (total > entries.length) {
+      notes.push(`Showing the newest ${entries.length} of ${total} captured messages.`);
+    }
+    return {
+      ok: true,
+      consoleEntries: entries,
+      consoleTotal: total,
+      ...(notes.length ? { note: capNote(notes.join(" ")) } : {}),
       url: tab.url || "",
       title: tab.title || "",
       tabs: (await groupedTabs()).map(describeTab),

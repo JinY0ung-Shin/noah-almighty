@@ -206,6 +206,8 @@ const DATA_TYPE_LABELS = {
   local: "localStorage",
   session: "sessionStorage",
   secret: "시크릿 입력",
+  console: "콘솔",
+  network: "네트워크 기록",
 };
 
 /** The row's display name: the sentinel reads as a phrase, a host as itself. */

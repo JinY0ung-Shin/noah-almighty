@@ -11,6 +11,12 @@
 //   - kind=local / kind=session (read_storage): the avatar wants THIS site's
 //     localStorage / sessionStorage values — which may hold login/auth tokens —
 //     handed to it and stored in the chat.
+//   - kind=console (read_console): the avatar wants THIS site's console messages
+//     (logs, errors) in this tab — captured from now on, token-shaped strings
+//     masked — handed to it and stored in the chat.
+//   - kind=network (read_network): the avatar wants THIS site's request list in
+//     this tab — method, address without query, status, type, timing; never
+//     headers or bodies — captured from now on.
 //   - kind=secret (type / fill_form with a stored secret): the avatar wants to
 //     TYPE one of the owner's stored secrets into this site. The only kind that
 //     writes rather than reads, so it also names the secret and whether it is
@@ -67,6 +73,25 @@ if (kind === "cookies") {
     `${label}에 담긴 토큰이 노출되면 이 사이트에 로그인한 것과 같은 접근이 가능해집니다. 신뢰하는 작업에만 ` +
     "허용하세요. 허용은 이번 세션 동안 이 사이트의 이 저장소에 대해 유지되며, 확장 설정에서 언제든 취소할 수 " +
     "있습니다. 20초 안에 응답하지 않으면 이 요청은 만료됩니다.";
+  document.getElementById("allow").textContent = "허용";
+} else if (kind === "console" || kind === "network") {
+  const host = params.get("host") || "";
+  const isConsole = kind === "console";
+  const what = isConsole ? "콘솔 메시지(로그·오류)" : "네트워크 요청 목록";
+  document.title = isConsole ? "콘솔 접근 허용" : "네트워크 기록 접근 허용";
+  document.getElementById("title").textContent = `이 사이트의 ${what}을 아바타에게 넘길까요?`;
+  document.getElementById("lead").textContent =
+    `아바타가 현재 탭에서 이 사이트의 ${what}을 읽으려고 합니다. 허용하면 지금부터 이 탭의 ${what}을 ` +
+    "기록하기 시작하고, 읽은 내용은 아바타에게 전달되어 대화 기록에 저장됩니다. " +
+    (isConsole
+      ? "토큰처럼 보이는 문자열은 가려서 넘기지만, 페이지가 콘솔에 남긴 내용이 그대로 보일 수 있습니다. "
+      : "요청 방식·주소(검색어 부분 제외)·상태 코드·종류·소요 시간만 넘기고, 헤더나 본문은 넘기지 않습니다. ") +
+    "이 사이트는 이번 브라우저 세션 동안 기억되어, 확장 설정에서 취소하거나 브라우저를 닫기 전까지는 다시 묻지 않습니다.";
+  document.getElementById("host").textContent = host || "(알 수 없는 주소)";
+  document.getElementById("url").textContent = "";
+  document.getElementById("hint").textContent =
+    "다른 사이트로 이동하거나 허용을 취소하면 기록은 멈추고 지워집니다. 신뢰하는 작업에만 허용하세요. " +
+    "20초 안에 응답하지 않으면 이 요청은 만료됩니다.";
   document.getElementById("allow").textContent = "허용";
 } else if (kind === "secret") {
   const host = params.get("host") || "";

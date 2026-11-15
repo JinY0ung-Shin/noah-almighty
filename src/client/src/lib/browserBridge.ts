@@ -76,6 +76,9 @@ export interface BridgeReply {
   fetchBytes?: number;
   fetchTruncated?: boolean;
   fetchHops?: number;
+  /** read_console: newest captured console entries (page-derived, token-redacted) and the total captured. */
+  consoleEntries?: { level: string; text: string; source: string; time: number }[];
+  consoleTotal?: number;
 }
 
 /**
@@ -138,7 +141,8 @@ export interface BridgeOperation {
     /** 0.29.0+: only forwarded after the version probe (INSPECT_OPS_MIN_EXTENSION_VERSION). */
     | "find"
     | "zoom"
-    | "read_url";
+    | "read_url"
+    | "read_console";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
@@ -150,6 +154,8 @@ export interface BridgeOperation {
   /** click_at/drag pixel mode: coordinates on the most recent viewport screenshot. zoom: region origin (CSS px). */
   x?: number | null;
   y?: number | null;
+  /** read_console/read_network: how many of the newest captured entries to return. */
+  limit?: number | null;
   /** zoom only: region size in viewport CSS px. */
   width?: number | null;
   height?: number | null;
@@ -398,7 +404,7 @@ export function extensionSupportsSecretInput(version: string | undefined | null)
 export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
 
 /** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
-export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url"]);
+export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url", "read_console"]);
 
 /**
  * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-

@@ -2944,6 +2944,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     find: "페이지에서 요소를 찾는 중…",
     zoom: "화면 일부를 확대해 캡처하는 중…",
     read_url: "URL 내용을 읽는 중…",
+    read_console: "콘솔 메시지를 읽는 중…",
   };
   // The value itself never reaches a label: only the fact that one rides along,
   // so the user can see the avatar is entering a credential rather than text.
@@ -2973,6 +2974,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     y: data.y,
     width: data.width,
     height: data.height,
+    limit: data.limit,
     xFraction: data.xFraction,
     yFraction: data.yFraction,
     toUid: data.toUid,

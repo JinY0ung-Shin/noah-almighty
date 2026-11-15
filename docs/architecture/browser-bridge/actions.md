@@ -465,3 +465,31 @@
   (`tests/visual/inspect-ops.spec.ts`: JSON pretty-print, an allowed redirect followed, EUC-KR, a redirect to
   an off-list host refused with the server never seeing that request — with a positive control proving the
   host resolves — and a PNG refused unread).
+- **`read_console` (0.29.0) is consent-gated per site and captures only from the approved read on.** Consent
+  is a NEW data kind, `console`, in the SAME unified popup and grant store as cookies/storage
+  (`requestDataConsent(host, "console")`; `DATA_CONSENT_COPY`, `consent.js`'s `kind=console` branch and
+  `options.js`'s `DATA_TYPE_LABELS` moved together, per the adding-a-kind rule). Nothing is recorded for a tab
+  until that grant exists: the first approved read ARMS the tab (`armConsole`: `Runtime.enable` + `Log.enable`
+  on the ROOT session — a cross-site iframe's console is not captured), and Chrome then replays what it still
+  holds for the CURRENT document — measured: a `console.warn` logged at page load, long before consent,
+  arrives in the first read (`tests/visual/inspect-ops.spec.ts`) — and everything after streams into a
+  per-tab buffer (`CONSOLE_BUFFER_MAX` 300; `read_console` returns the newest `limit`, default 50, max 100,
+  and says how many were captured). A main-frame navigation to ANOTHER host, a revoked grant
+  (`chrome.storage.onChanged` on `dataConsentGrants`), a detach or a closed tab disarms it
+  (`Runtime.disable`/`Log.disable`) and DROPS the buffer; a same-host navigation keeps it. The MV3 worker
+  idling out detaches the debugger and loses the buffer with it — the next approved read re-arms, and the
+  replay recovers the current document's messages. Three event sources become one entry shape
+  (`consoleEntryFrom`, `axtree.js`, pure): `Runtime.consoleAPICalled` (arguments reduced to their primitive
+  value or CDP's own `description` — no object is ever dereferenced), `Runtime.exceptionThrown`, and
+  `Log.entryAdded` (the browser's own log: failed loads, CSP/mixed-content blocks, interventions). The source
+  is `urlWithoutQuery` + line, and text and source both pass `redactTokens` (Bearer/Basic/Token credentials,
+  JWTs, hex ≥ 32, mixed base64 ≥ 40, `key=value` pairs whose key names a secret) and a 500-char cap. Why
+  `Runtime.enable` does not widen JS execution: it is an EVENT SUBSCRIPTION; `Runtime.evaluate` stays fenced
+  to the two read_storage constants and no other `Runtime.*` method (callFunctionOn, getProperties,
+  compileScript, …) is on the allowlist, so the RemoteObject ids in those events cannot be dereferenced or
+  called. Its honest costs are stated where the allowlist is: an enabled Runtime is detectable by the page (the
+  console-preview getter trick), which is one more reason it is OFF until consent and switched off on leaving
+  the site. The tool result (`reportConsole`) puts a bridge-authored count line and a handling sentence first
+  and every entry inside ONE untrusted wrapper. Test-harness lesson: an op sent WITHOUT `requestId` is
+  coalesced with an identical payload sent within 1.5 s (`performCoalesced`) — a probe that repeats the same
+  read must send a fresh requestId, exactly as the client does.
