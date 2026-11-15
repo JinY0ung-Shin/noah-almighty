@@ -25,3 +25,9 @@ Two invariants that fail in the FIELD rather than in CI, repeated here because t
 a new file under `extension/` must be added to `BUNDLE_FILES` (and a BINARY file also to
 `BINARY_BUNDLE_FILES`), and `BROWSER_EXTENSION_MIN_COMPATIBLE` must never exceed the bundled manifest
 version. Details in [extension.md](browser-bridge/extension.md).
+- **Reader/proxy services are refused SERVER-side, whatever the user's allowlist says** (2026-11-16).
+  `navigate`/`new_tab` check `readerProxyRefusal` (`agent/browserTools.ts`: r.jina.ai, 12ft.io, archive.ph &
+  co., Google cache, `*.translate.goog`, Translate's `/translate` page mode, Wayback `/save`) before the op is
+  relayed: such a service fetches the URL on the avatar's behalf, so an internal URL would be handed to a third
+  party, and its copy is not what the user's login sees. Both metacognition surfaces say so; the redirect is to
+  open the page itself or `read_url`. Add a host to `READER_PROXY_HOSTS` when another one turns up.

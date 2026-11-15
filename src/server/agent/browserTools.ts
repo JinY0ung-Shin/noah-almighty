@@ -17,6 +17,53 @@ import { jpegDimensions, visionFitSize, visionFits } from "./visionImage.js";
 export const BROWSER_SERVER_NAME = "browser";
 
 /** Tool names the model may call, in `mcpAllowedTools` form. */
+/**
+ * Third-party services that fetch a page ON YOUR BEHALF (readers, caches,
+ * translation proxies, archivers). Opening `https://r.jina.ai/https://wiki.corp/…`
+ * hands the target URL — often an internal one — to that third party, and its
+ * copy of the page is not what the user's own login sees. Refused before the
+ * op reaches the extension, whatever the user's allowlist says (2026-11-16: an
+ * avatar reached for r.jina.ai to read a JSON API).
+ */
+export const READER_PROXY_HOSTS: readonly string[] = [
+  "r.jina.ai",
+  "s.jina.ai",
+  "12ft.io",
+  "archive.ph",
+  "archive.is",
+  "archive.today",
+  "archive.li",
+  "archive.md",
+  "archive.vn",
+  "webcache.googleusercontent.com",
+];
+/** Host suffixes of the same kind (Google Translate's page proxy serves `<site>.translate.goog`). */
+const READER_PROXY_SUFFIXES: readonly string[] = [".translate.goog"];
+
+/** The model-facing refusal for a URL that goes through a reader/proxy service, or null. */
+export function readerProxyRefusal(rawUrl: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return null; // the extension reports a malformed URL itself
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  const proxied =
+    READER_PROXY_HOSTS.some((h) => host === h || host.endsWith(`.${h}`)) ||
+    READER_PROXY_SUFFIXES.some((suffix) => host.endsWith(suffix)) ||
+    // Google Translate's whole-page mode and the Wayback Machine's "save now" fetch the target for you too.
+    (host === "translate.google.com" && url.pathname.startsWith("/translate")) ||
+    (host === "web.archive.org" && url.pathname.startsWith("/save"));
+  if (!proxied) return null;
+  return (
+    `Refused: ${host} is a third-party service that fetches pages on your behalf, so the URL (often an internal ` +
+    "one) would be handed to that third party, and its copy is not what the user's own login sees. Open the page " +
+    "itself with navigate/new_tab, or read a data/API URL with read_url. If the site you need is outside the " +
+    "allowlist, tell the user which site — do not route around it."
+  );
+}
+
 export const BROWSER_TOOL_NAMES = [
   "mcp__browser__snapshot",
   "mcp__browser__read_text",
@@ -1545,6 +1592,8 @@ export function buildBrowserTools(context: BrowserToolsContext) {
       async (args) => {
         const denied = gate();
         if (denied) return denied;
+        const proxied = readerProxyRefusal(args.url);
+        if (proxied) return text(proxied, true);
         return report(
           await ctx.execute({
             op: "navigate",
@@ -1892,6 +1941,8 @@ export function buildBrowserTools(context: BrowserToolsContext) {
       async (args) => {
         const denied = gate();
         if (denied) return denied;
+        const proxied = readerProxyRefusal(args.url);
+        if (proxied) return text(proxied, true);
         return report(
           await ctx.execute({
             op: "new_tab",
