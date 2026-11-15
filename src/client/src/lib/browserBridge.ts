@@ -68,6 +68,14 @@ export interface BridgeReply {
   storage?: { key: string; value: string }[];
   /** read_storage: which store the entries came from. */
   storageKind?: "local" | "session";
+  /** read_url: the final url after redirects, the HTTP outcome, and the text body (page-derived). */
+  fetchUrl?: string;
+  fetchStatus?: number;
+  fetchContentType?: string;
+  fetchBody?: string;
+  fetchBytes?: number;
+  fetchTruncated?: boolean;
+  fetchHops?: number;
 }
 
 /**
@@ -129,7 +137,8 @@ export interface BridgeOperation {
     | "close_tab"
     /** 0.29.0+: only forwarded after the version probe (INSPECT_OPS_MIN_EXTENSION_VERSION). */
     | "find"
-    | "zoom";
+    | "zoom"
+    | "read_url";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
@@ -389,7 +398,7 @@ export function extensionSupportsSecretInput(version: string | undefined | null)
 export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
 
 /** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
-export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom"]);
+export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url"]);
 
 /**
  * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-

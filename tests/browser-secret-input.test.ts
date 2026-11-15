@@ -416,7 +416,12 @@ describe("background.js keeps the invariants that only its source can show", () 
     const methods = [...list.matchAll(/"([A-Za-z]+\.[A-Za-z]+)"/g)].map((m) => m[1]).sort();
     // Everything secret input needs was already reachable: Page.getFrameTree and
     // DOMSnapshot.captureSnapshot for the frame attribution, DOM.describeNode for
-    // the shape, and the Input.* the ordinary write already used.
+    // the shape, and the Input.* the ordinary write already used. The list DID
+    // grow later, deliberately and for other ops: 0.29.0's read_url (Fetch.*/IO.*,
+    // fenced to its own tab), read_console (Runtime/Log enable+disable) and
+    // read_network (Network enable+disable, buffer-less) — pinned here so any
+    // FURTHER growth is a reviewed change, and fenced in
+    // tests/browser-inspect-ops.test.ts.
     expect(methods).toEqual([
       "Accessibility.enable",
       "Accessibility.getFullAXTree",
@@ -431,6 +436,13 @@ describe("background.js keeps the invariants that only its source can show", () 
       "DOM.getNodeForLocation",
       "DOM.scrollIntoViewIfNeeded",
       "DOMSnapshot.captureSnapshot",
+      "Fetch.continueRequest",
+      "Fetch.enable",
+      "Fetch.failRequest",
+      "Fetch.getResponseBody",
+      "Fetch.takeResponseBodyAsStream",
+      "IO.close",
+      "IO.read",
       "Input.dispatchKeyEvent",
       "Input.dispatchMouseEvent",
       "Input.imeSetComposition",

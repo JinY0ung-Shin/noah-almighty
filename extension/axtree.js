@@ -3075,3 +3075,108 @@ export function zoomImageNote(info) {
     `click_at/drag pixel coordinates are positions on THIS image (x 0–${width - 1}, y 0–${height - 1}).`
   );
 }
+
+// ------------------------------------------------------------------ read_url
+//
+// `read_url` GETs ONE URL through the browser's own navigation stack (a
+// short-lived background tab, intercepted with CDP's Fetch domain — see
+// background.js readUrl) and hands back the body as text. These are its pure
+// decisions: which content types count as text, how the body is decoded and
+// shaped, and how a URL is reduced for a note.
+
+/** The header value of `name` in CDP's `[{name, value}]` header list, case-insensitively. */
+export function headerValue(headers, name) {
+  const wanted = String(name).toLowerCase();
+  for (const header of Array.isArray(headers) ? headers : []) {
+    if (String(header?.name ?? "").toLowerCase() === wanted) return String(header?.value ?? "");
+  }
+  return "";
+}
+
+/** The bare media type of a Content-Type value: `application/json; charset=utf-8` → `application/json`. */
+export function mediaTypeOf(contentType) {
+  return String(contentType ?? "").split(";")[0].trim().toLowerCase();
+}
+
+/**
+ * Text-like media types read_url may return: `text/*` (HTML included — it is
+ * text, and the agent asked for this exact URL), JSON and XML in all their
+ * `+json`/`+xml` structured-suffix forms, CSV, NDJSON, JavaScript and YAML.
+ * Anything else — images, PDFs, archives, octet-stream, and a MISSING type — is
+ * refused before a byte of the body is read: a binary body decoded as text is
+ * noise at best, and an unlabeled one is not something to guess at.
+ */
+export function isTextLikeContentType(contentType) {
+  const type = mediaTypeOf(contentType);
+  if (!type) return false;
+  if (type.startsWith("text/")) return true;
+  if (/^application\/(?:[\w.-]+\+)?(?:json|xml)$/.test(type)) return true;
+  return [
+    "application/csv",
+    "application/x-ndjson",
+    "application/ndjson",
+    "application/javascript",
+    "application/x-javascript",
+    "application/ecmascript",
+    "application/yaml",
+    "application/x-yaml",
+    "application/x-www-form-urlencoded",
+  ].includes(type);
+}
+
+/** The `charset=` of a Content-Type value, or "utf-8". */
+export function charsetOf(contentType) {
+  const match = /;\s*charset\s*=\s*"?([\w.:-]+)"?/i.exec(String(contentType ?? ""));
+  return match ? match[1].toLowerCase() : "utf-8";
+}
+
+/**
+ * Decode the body bytes with the declared charset (EUC-KR pages exist), falling
+ * back to UTF-8 for a label TextDecoder does not know; never throws.
+ */
+export function decodeBody(bytes, contentType) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(0);
+  try {
+    return new TextDecoder(charsetOf(contentType), { fatal: false }).decode(data);
+  } catch {
+    return new TextDecoder("utf-8", { fatal: false }).decode(data);
+  }
+}
+
+/**
+ * The text read_url returns: JSON pretty-printed (2-space) when the WHOLE body
+ * parses — a truncated body never does, so it is returned as received — and
+ * everything cut to `maxChars` with the cut reported, never silent.
+ */
+export function formatFetchedBody(text, contentType, opts) {
+  const maxChars = Number(opts?.maxChars) > 0 ? Number(opts.maxChars) : 100_000;
+  let body = String(text ?? "");
+  let pretty = false;
+  const type = mediaTypeOf(contentType);
+  const looksJson = /json/.test(type) || /^\s*[[{]/.test(body);
+  if (looksJson && !opts?.bytesTruncated) {
+    try {
+      body = JSON.stringify(JSON.parse(body), null, 2);
+      pretty = true;
+    } catch {
+      // Not JSON after all (or malformed): the raw text is the honest answer.
+    }
+  }
+  const truncated = Boolean(opts?.bytesTruncated) || body.length > maxChars;
+  return { body: body.length > maxChars ? body.slice(0, maxChars) : body, pretty, truncated };
+}
+
+/**
+ * A URL reduced to scheme://host/path — no userinfo, no query, no fragment —
+ * for anything that is not the fetched content itself (notes, console sources,
+ * network rows). Non-http(s) URLs keep only their scheme; unparseable ones say so.
+ */
+export function urlWithoutQuery(rawUrl, max = 300) {
+  try {
+    const url = new URL(String(rawUrl ?? ""));
+    if (url.protocol !== "http:" && url.protocol !== "https:") return `${url.protocol}…`;
+    return `${url.protocol}//${url.host}${url.pathname}`.slice(0, max);
+  } catch {
+    return rawUrl ? "(unparseable url)" : "";
+  }
+}

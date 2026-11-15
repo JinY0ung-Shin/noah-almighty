@@ -61,6 +61,12 @@ import {
   zoomShotScale,
   zoomImageNote,
   ZOOM_MIN_EDGE_CSS,
+  headerValue,
+  mediaTypeOf,
+  isTextLikeContentType,
+  decodeBody,
+  formatFetchedBody,
+  urlWithoutQuery,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -177,6 +183,26 @@ const CDP_VERSION = "1.3";
  * No other `Runtime.*` belongs here: `Runtime.enable` (the console/exception
  * event stream) stays OFF, evaluate needing no enable exactly as
  * `Network.getCookies` needed no `Network.enable`.
+ *
+ * The `Fetch.*` and `IO.*` entries exist for read_url (0.29.0) ONLY, and sendCdp
+ * fences them structurally (READ_URL_FETCH_METHODS): they are refused on every
+ * tab except the short-lived background tab read_url itself created
+ * (`readUrlTabs`), `Fetch.enable` may only intercept DOCUMENT requests,
+ * `Fetch.continueRequest` may carry NOTHING but the requestId (no url, method,
+ * headers or postData override — the request goes out exactly as the browser
+ * built it), and `Fetch.failRequest` only a requestId plus a reason. There is
+ * no `Fetch.fulfillRequest`, so nothing can ever be injected into a page. Why a
+ * tab at all, rather than a `fetch()` from this worker: the extension FETCHES
+ * NOTHING on its own (no host_permissions — the 0.9.0 decision), and a worker
+ * fetch without host permissions is a cross-origin request from
+ * chrome-extension:// that most sites' CORS would refuse anyway. The browser's
+ * OWN navigation stack makes the request instead, with exactly the cookies a
+ * top-level navigation to that URL sends; interception is what lets every
+ * redirect HOP be judged against the allowlist BEFORE it is sent, the content
+ * type be judged before a byte of the body is read, and the body be read
+ * (`takeResponseBodyAsStream` + `IO.read`, byte-capped) without the page ever
+ * rendering or running a script — the request is failed after the read, and the
+ * tab closed. No page JS runs: the document never commits.
  */
 const CDP_ALLOWLIST = new Set([
   "Accessibility.enable",
@@ -192,6 +218,13 @@ const CDP_ALLOWLIST = new Set([
   "DOM.focus",
   "DOM.scrollIntoViewIfNeeded",
   "DOMSnapshot.captureSnapshot",
+  "Fetch.enable",
+  "Fetch.continueRequest",
+  "Fetch.failRequest",
+  "Fetch.takeResponseBodyAsStream",
+  "Fetch.getResponseBody",
+  "IO.read",
+  "IO.close",
   "Input.dispatchKeyEvent",
   "Input.dispatchMouseEvent",
   "Input.imeSetComposition",
@@ -457,10 +490,48 @@ let lastShot = null;
 
 // ---------------------------------------------------------------- CDP plumbing
 
+/**
+ * The read_url interception surface, and the shape each call may take. sendCdp
+ * refuses any of these outside a tab in `readUrlTabs`, and refuses any params
+ * beyond the listed keys — a continueRequest that could rewrite the URL,
+ * method, headers or body would turn a GET reader into a request forger.
+ */
+const READ_URL_FETCH_METHODS = new Map([
+  ["Fetch.enable", ["patterns"]],
+  ["Fetch.continueRequest", ["requestId"]],
+  ["Fetch.failRequest", ["requestId", "errorReason"]],
+  ["Fetch.takeResponseBodyAsStream", ["requestId"]],
+  ["Fetch.getResponseBody", ["requestId"]],
+  ["IO.read", ["handle", "size"]],
+  ["IO.close", ["handle"]],
+]);
+
+/** Background tabs read_url created and is still using — the ONLY place Fetch/IO may run. */
+const readUrlTabs = new Set();
+
+function readUrlCallRefusal(target, method, params) {
+  const keys = READ_URL_FETCH_METHODS.get(method);
+  if (!keys) return null;
+  if (!readUrlTabs.has(target?.tabId) || target?.sessionId) {
+    return `${method} is restricted to read_url's own background tab`;
+  }
+  const extra = Object.keys(params || {}).filter((key) => !keys.includes(key));
+  if (extra.length) return `${method} may not carry ${extra.join(", ")}`;
+  if (method === "Fetch.enable") {
+    const patterns = params?.patterns;
+    if (!Array.isArray(patterns) || !patterns.every((pattern) => pattern?.resourceType === "Document")) {
+      return "Fetch.enable may intercept Document requests only";
+    }
+  }
+  return null;
+}
+
 function sendCdp(target, method, params) {
   if (!CDP_ALLOWLIST.has(method)) {
     return Promise.reject(new Error(`Method not allowed: ${method}`));
   }
+  const readUrlRefusal = readUrlCallRefusal(target, method, params);
+  if (readUrlRefusal) return Promise.reject(new Error(readUrlRefusal));
   // Structural bar on the no-page-JS exception: Runtime.evaluate may run ONLY
   // the two fixed, bridge-authored read_storage expressions. A call site that
   // interpolated a page/model value would be refused HERE, restoring most of the
@@ -5428,6 +5499,233 @@ async function captureZoom(tab, message) {
   return { imageBase64: data, imageMimeType: "image/jpeg", note };
 }
 
+// ------------------------------------------------------------------ read_url
+
+/** Whole read_url budget: tab creation, every redirect hop, the body read. */
+const READ_URL_TIMEOUT_MS = 15_000;
+/** Raw body bytes read before the stream is abandoned. */
+const READ_URL_MAX_BYTES = 256 * 1024;
+/** Decoded (and pretty-printed) characters returned. */
+const READ_URL_MAX_CHARS = 100_000;
+/** Redirect hops followed before giving up (each one judged against the allowlist). */
+const READ_URL_MAX_HOPS = 10;
+const READ_URL_IO_CHUNK = 64 * 1024;
+
+/**
+ * GET one URL and return its body as text — the reader for data pages and
+ * APIs. See the CDP_ALLOWLIST paragraph for why a short-lived BACKGROUND TAB
+ * (inactive, inside the Noah group so the user can see it, closed before this
+ * returns) and not a worker fetch. What each request step is held to:
+ *
+ *  - every hop (the first request and each redirect's next one) is paused at the
+ *    REQUEST stage and must be http(s) and pass originAllowed with NO clipboard
+ *    staging exemption — Noah's own origin is never readable this way — or it is
+ *    failed before it is sent;
+ *  - the final response is paused at the RESPONSE stage: a non-text Content-Type
+ *    (isTextLikeContentType) is failed before the body is read, so a binary or
+ *    download never lands; a text one is read through a stream, at most
+ *    READ_URL_MAX_BYTES, and then the request is failed anyway — the document
+ *    never commits, so no page script runs and nothing renders;
+ *  - GET only (it is a navigation), no request body, no header from the model;
+ *    the browser sends the cookies a top-level navigation to that URL sends.
+ *
+ * Never touches the WORKING tab or its uids. The result carries the final URL on
+ * `fetchUrl`, never `url`, which every other op uses for the working tab.
+ */
+async function readUrl(message, patterns, source) {
+  const requested = typeof message.url === "string" ? message.url : "";
+  let parsed;
+  try {
+    parsed = new URL(requested);
+  } catch {
+    return { ok: false, message: "read_url needs an absolute http(s) URL." };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { ok: false, message: "read_url reads http(s) URLs only." };
+  }
+  if (!originAllowed(requested, patterns, null)) return refuseOrigin(requested, source);
+  const group = await noahGroup();
+  if (!group) {
+    return {
+      ok: false,
+      message:
+        `read_url works through a short-lived background tab inside the "${GROUP_TITLE}" tab group, and there is ` +
+        "no such group yet. Open a page with mcp__browser__new_tab first (the user approves creating the group), " +
+        "then retry.",
+    };
+  }
+  const created = await chrome.tabs.create({ url: "about:blank", active: false });
+  const tabId = created.id;
+  readUrlTabs.add(tabId);
+  let listener = null;
+  try {
+    await chrome.tabs.group({ tabIds: [tabId], groupId: group.id });
+    await attachDebugger(tabId);
+    const target = { tabId };
+    const outcome = await new Promise((resolve) => {
+      let hops = 0;
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(
+        () =>
+          finish({
+            ok: false,
+            message:
+              `read_url timed out after ${READ_URL_TIMEOUT_MS / 1000}s without a response it could read. The ` +
+              "server may be slow, or a service worker answered the page (which this reader cannot intercept) — " +
+              "open it with mcp__browser__new_tab and read it with mcp__browser__read_text instead.",
+          }),
+        READ_URL_TIMEOUT_MS,
+      );
+      const fail = (requestId, reason) =>
+        sendCdp(target, "Fetch.failRequest", { requestId, errorReason: reason }).catch(() => {});
+      listener = (src, method, params) => {
+        if (src.tabId !== tabId || src.sessionId || method !== "Fetch.requestPaused" || settled) return;
+        const requestId = params?.requestId;
+        const hopUrl = String(params?.request?.url || "");
+        const atResponse =
+          params?.responseStatusCode != null || params?.responseErrorReason != null;
+        void (async () => {
+          try {
+            if (!atResponse) {
+              hops += 1;
+              if (hops > READ_URL_MAX_HOPS + 1) {
+                await fail(requestId, "BlockedByClient");
+                finish({ ok: false, message: `read_url gave up after ${READ_URL_MAX_HOPS} redirects.` });
+                return;
+              }
+              if (!originAllowed(hopUrl, patterns, null)) {
+                await fail(requestId, "BlockedByClient");
+                const refused = refuseOrigin(hopUrl, source);
+                finish({
+                  ok: false,
+                  message:
+                    (hops > 1
+                      ? `read_url was REDIRECTED to ${urlWithoutQuery(hopUrl)}, outside the allowlist, so that ` +
+                        "hop was never requested and nothing was read. "
+                      : "") + refused.message,
+                });
+                return;
+              }
+              await sendCdp(target, "Fetch.continueRequest", { requestId });
+              return;
+            }
+            if (params?.responseErrorReason) {
+              finish({ ok: false, message: `read_url's request failed: ${params.responseErrorReason}.` });
+              return;
+            }
+            const status = Number(params.responseStatusCode);
+            // A redirect surfaced at the response stage: continue, and its next
+            // hop arrives at the REQUEST stage above to be judged.
+            if (status >= 300 && status < 400 && headerValue(params.responseHeaders, "location")) {
+              await sendCdp(target, "Fetch.continueRequest", { requestId });
+              return;
+            }
+            const contentType = headerValue(params.responseHeaders, "content-type");
+            if (!isTextLikeContentType(contentType)) {
+              await fail(requestId, "BlockedByClient");
+              finish({
+                ok: false,
+                message:
+                  `${urlWithoutQuery(hopUrl)} answered HTTP ${status} with content type ` +
+                  `"${mediaTypeOf(contentType).slice(0, 80) || "(none)"}", which is not text, so its body was not ` +
+                  "read. read_url returns text only (JSON, text/*, XML, CSV); for an image or document, open it " +
+                  "with mcp__browser__new_tab and use screenshot, or ask the user for the file.",
+              });
+              return;
+            }
+            const chunks = [];
+            let total = 0;
+            let bytesTruncated = false;
+            try {
+              const { stream } = await sendCdp(target, "Fetch.takeResponseBodyAsStream", { requestId });
+              try {
+                for (;;) {
+                  const read = await sendCdp(target, "IO.read", { handle: stream, size: READ_URL_IO_CHUNK });
+                  if (read.data) {
+                    const bytes = read.base64Encoded
+                      ? base64ToBytes(read.data)
+                      : new TextEncoder().encode(read.data);
+                    chunks.push(bytes);
+                    total += bytes.length;
+                  }
+                  if (total >= READ_URL_MAX_BYTES) {
+                    bytesTruncated = !read.eof || total > READ_URL_MAX_BYTES;
+                    break;
+                  }
+                  if (read.eof) break;
+                }
+              } finally {
+                await sendCdp(target, "IO.close", { handle: stream }).catch(() => {});
+              }
+            } catch {
+              // A build without stream support: one bounded whole-body read.
+              const body = await sendCdp(target, "Fetch.getResponseBody", { requestId });
+              const bytes = body.base64Encoded
+                ? base64ToBytes(body.body || "")
+                : new TextEncoder().encode(body.body || "");
+              chunks.push(bytes);
+              total = bytes.length;
+              bytesTruncated = total > READ_URL_MAX_BYTES;
+            }
+            await fail(requestId, "Aborted");
+            const all = new Uint8Array(Math.min(total, READ_URL_MAX_BYTES));
+            let offset = 0;
+            for (const chunk of chunks) {
+              if (offset >= all.length) break;
+              const piece = chunk.subarray(0, all.length - offset);
+              all.set(piece, offset);
+              offset += piece.length;
+            }
+            const shaped = formatFetchedBody(decodeBody(all, contentType), contentType, {
+              maxChars: READ_URL_MAX_CHARS,
+              bytesTruncated,
+            });
+            finish({
+              ok: true,
+              fetchUrl: hopUrl,
+              fetchStatus: status,
+              fetchContentType: mediaTypeOf(contentType).slice(0, 100),
+              fetchBody: shaped.body,
+              fetchBytes: all.length,
+              fetchTruncated: shaped.truncated,
+              fetchHops: hops,
+            });
+          } catch (error) {
+            finish({ ok: false, message: `read_url failed: ${String(error?.message || error)}` });
+          }
+        })();
+      };
+      chrome.debugger.onEvent.addListener(listener);
+      sendCdp(target, "Fetch.enable", {
+        patterns: [
+          { urlPattern: "*", resourceType: "Document", requestStage: "Request" },
+          { urlPattern: "*", resourceType: "Document", requestStage: "Response" },
+        ],
+      })
+        .then(() =>
+          // Not awaited for its result: with the request paused, Page.navigate
+          // only answers once the listener above has decided, and a navigation
+          // we fail on purpose answers with an error that means nothing here.
+          sendCdp(target, "Page.navigate", { url: requested }).catch(() => {}),
+        )
+        .catch((error) =>
+          finish({ ok: false, message: `read_url could not start: ${String(error?.message || error)}` }),
+        );
+    });
+    return outcome;
+  } finally {
+    if (listener) chrome.debugger.onEvent.removeListener(listener);
+    readUrlTabs.delete(tabId);
+    await chrome.tabs.remove(tabId).catch(() => {});
+  }
+}
+
 /** Wait for the tab to stop loading, so a snapshot reflects the new page. */
 function waitForLoad(tabId, timeoutMs = 15000) {
   return new Promise((resolve) => {
@@ -5811,6 +6109,12 @@ async function performOp(message, stagingOrigin) {
     if (!tabs.length) return { ok: false, message: NO_TAB_MESSAGE };
     await targetTab(); // settle `current` before describing
     return { ok: true, tabs: (await groupedTabs()).map(describeTab) };
+  }
+
+  // read_url never touches the working tab: it runs in its own short-lived
+  // background tab, so it is answered before the working tab is even resolved.
+  if (message.op === "read_url") {
+    return readUrl(message, patterns, source);
   }
 
   if (message.op === "new_tab") {

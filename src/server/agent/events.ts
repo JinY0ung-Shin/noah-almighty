@@ -278,8 +278,9 @@ export interface BrowserRequest {
     // the installed version first (INSPECT_OPS_MIN_EXTENSION_VERSION) and
     // answers ok:false with an update prompt instead of forwarding.
     | "find"
-    | "zoom";
-  /** navigate/new_tab: absolute http(s) URL. */
+    | "zoom"
+    | "read_url";
+  /** navigate/new_tab/read_url: absolute http(s) URL. */
   url?: string;
   /**
    * read_cookies: return just this one cookie by name (omit for all).
@@ -516,6 +517,20 @@ export type BrowserResult =
       storage?: BrowserStorageEntry[];
       /** read_storage: which store the `storage` entries came from. */
       storageKind?: "local" | "session";
+      /**
+       * read_url: the GET's outcome. `body` is UNTRUSTED page content (text,
+       * JSON pretty-printed); `url` is the FINAL url after redirects — never
+       * the working tab's, which is why it does not ride `url` above.
+       */
+      fetched?: {
+        url: string;
+        status: number;
+        contentType: string;
+        body: string;
+        bytes: number;
+        truncated: boolean;
+        hops: number;
+      };
     }
   | { behavior: "error"; message: string };
 

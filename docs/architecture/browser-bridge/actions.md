@@ -434,3 +434,34 @@
   has already closed the staging tab and its note says which page the working tab is back on; older,
   the tab stays open, so `select_tab` back to the target and `close_tab` the staging tab by hand. The
   forbidden action is identical in both: never paste on anything but `COPIED`.
+- **`read_url` (0.29.0) GETs ONE URL through the browser's own navigation stack, in a throwaway tab — never a
+  worker `fetch()`.** The lead design was "the extension fetches it"; that collides with "the extension
+  FETCHES NOTHING on its own" (no `host_permissions` since 0.9.0 — a worker fetch without them is a
+  cross-origin request from `chrome-extension://` that most sites' CORS refuses anyway, and adding them is a
+  new install-time permission and the dropper-shaped surface Defender flagged). So `readUrl` (`background.js`)
+  opens an INACTIVE `about:blank` tab inside the Noah group (visible, revocable; refused when no group exists
+  — new_tab makes one with the user's consent), attaches, `Fetch.enable`s DOCUMENT interception at both the
+  request and response stage, and `Page.navigate`s it. Each REQUEST-stage pause — the first request and every
+  redirect hop — must be http(s) and pass `originAllowed` with NO clipboard-staging exemption (Noah's own
+  origin is never readable this way), or it is `Fetch.failRequest`ed BEFORE it is sent; the refusal says the
+  hop was a redirect when it was. At the RESPONSE stage a 3xx with `Location` is continued (its next hop
+  pauses at the request stage), a non-text type (`isTextLikeContentType`, `axtree.js`: `text/*`, `+json`/`+xml`,
+  CSV, NDJSON, JS, YAML; a MISSING type is refused) is failed before a byte is read, and a text one is read
+  through `Fetch.takeResponseBodyAsStream` + `IO.read` (64 KB chunks, `READ_URL_MAX_BYTES` 256 KB;
+  `Fetch.getResponseBody` only as the fallback), then failed anyway — the document never commits, so no page
+  script runs, nothing renders and nothing downloads. Decoding follows the declared charset (EUC-KR works),
+  JSON is pretty-printed only when the WHOLE body parses (`formatFetchedBody`), and the text is cut at 100k
+  chars with the cut reported. GET only, no body, no model-chosen header; the cookies are what a top-level
+  navigation to that URL sends. 15 s budget for the whole thing (a service worker that answers the navigation
+  itself is not interceptable — the timeout says to use new_tab + read_text). The tab is closed in a
+  `finally`. `CDP_ALLOWLIST` gains `Fetch.enable`/`continueRequest`/`failRequest`/`takeResponseBodyAsStream`/
+  `getResponseBody` and `IO.read`/`IO.close`, and `sendCdp` FENCES them structurally (`readUrlCallRefusal`):
+  refused on any tab not in `readUrlTabs` (or on a child session), refused with any param beyond the listed
+  keys (`continueRequest` takes `requestId` ONLY — no url/method/header/postData override), and
+  `Fetch.enable` refused unless every pattern is `resourceType: "Document"`. There is no
+  `Fetch.fulfillRequest`, so nothing can be injected into a page. The result is framed like read_text: a
+  server-authored header (status, media type, size, redirects, cut/error flags) and the final URL + body
+  inside ONE untrusted wrapper (`reportFetched`). Verified in a real Chromium with the unpacked extension
+  (`tests/visual/inspect-ops.spec.ts`: JSON pretty-print, an allowed redirect followed, EUC-KR, a redirect to
+  an off-list host refused with the server never seeing that request — with a positive control proving the
+  host resolves — and a PNG refused unread).

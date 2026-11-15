@@ -203,3 +203,9 @@
     snapshots.md "zoom". Vision-gated like `screenshot`, and the chat route treats it as one: the same
     base64 cap and mime whitelist, the same auto-share card (`publishBrowserScreenshot`) and `captures/` copy
     (`saveBrowserCapture`) under the same per-turn/per-run budgets, and an audit row with `at=`/`size=`.
+  - `read_url` (`url` → `fetchUrl`/`fetchStatus`/`fetchContentType`/`fetchBody`/`fetchBytes`/
+    `fetchTruncated`/`fetchHops`, relayed as `BrowserResult.fetched`) — actions.md "read_url". The final URL
+    rides its OWN field, never `url`: `buildBrowserTools` tracks `url` as the working tab's location for the
+    secret host pre-check, and read_url never moves the working tab. The relay slices the body to 120k
+    (the extension already caps it at 100k chars / 256 KB) and whitelists the media-type characters; the audit
+    row carries `status=`/`bytes=`/`hops=` and the FINAL url, scrubbed.

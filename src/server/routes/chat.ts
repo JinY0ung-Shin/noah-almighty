@@ -2181,6 +2181,13 @@ export async function executeChatTurn(
               cookies?: BrowserCookie[];
               storage?: BrowserStorageEntry[];
               storageKind?: "local" | "session";
+              fetchUrl?: string;
+              fetchStatus?: number;
+              fetchContentType?: string;
+              fetchBody?: string;
+              fetchBytes?: number;
+              fetchTruncated?: boolean;
+              fetchHops?: number;
             };
             if (!reply?.ok) {
               const raw =
@@ -2252,6 +2259,34 @@ export async function executeChatTurn(
             // Which store was read — authoritative from what WE asked for (the
             // extension keys its read off this exact value), normalized so a
             // bad field can only ever read "session", never leak or throw.
+            // read_url's body is UNTRUSTED page content headed for the model
+            // turn; this route is its primary size gate (the extension already
+            // caps it at 100k chars). The final url rides its OWN field: `url`
+            // means the working tab everywhere else.
+            const fetched =
+              requestData.op === "read_url" && typeof reply.fetchBody === "string"
+                ? {
+                    url: typeof reply.fetchUrl === "string" ? reply.fetchUrl.slice(0, 4_000) : "",
+                    status:
+                      typeof reply.fetchStatus === "number" && Number.isFinite(reply.fetchStatus)
+                        ? Math.round(reply.fetchStatus)
+                        : 0,
+                    contentType:
+                      typeof reply.fetchContentType === "string"
+                        ? reply.fetchContentType.replace(/[^\w.+\-/]/g, "").slice(0, 100)
+                        : "",
+                    body: reply.fetchBody.slice(0, 120_000),
+                    bytes:
+                      typeof reply.fetchBytes === "number" && reply.fetchBytes >= 0
+                        ? Math.round(reply.fetchBytes)
+                        : 0,
+                    truncated: reply.fetchTruncated === true || reply.fetchBody.length > 120_000,
+                    hops:
+                      typeof reply.fetchHops === "number" && reply.fetchHops >= 0
+                        ? Math.min(Math.round(reply.fetchHops), 100)
+                        : 0,
+                  }
+                : undefined;
             const storageKind =
               requestData.op === "read_storage"
                 ? requestData.kind === "local"
@@ -2340,7 +2375,12 @@ export async function executeChatTurn(
                         .join(",")
                         .slice(0, 400)}]`
                     : "",
-                  `url=${scrubAuditUrl(reply.url || requestData.url)}`,
+                  // read_url: status + size, and the FINAL url (after any
+                  // redirect) below, scrubbed like every other.
+                  fetched
+                    ? `status=${fetched.status} bytes=${fetched.bytes}${fetched.hops > 1 ? ` hops=${fetched.hops}` : ""}`
+                    : "",
+                  `url=${scrubAuditUrl(fetched?.url || reply.url || requestData.url)}`,
                 ]
                   .filter(Boolean)
                   .join(" "),
@@ -2530,6 +2570,7 @@ export async function executeChatTurn(
               // storageKind is authoritative from the request.
               storage,
               storageKind,
+              fetched,
             };
           },
           onFile: async (requestData) => {

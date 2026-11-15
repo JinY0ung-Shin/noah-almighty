@@ -26,7 +26,9 @@
   needs none of this: the download route stamps the requesting origin into that bundle's manifest.
 - **Chrome facts verified by experiment, not by docs.** `externally_connectable` match patterns IGNORE
   the port (a pattern with no port matched a `:48787` page ⇒ writing a port grants EVERY port on that
-  host); the scheme IS matched; IP literals are valid; trailing `/*` is mandatory. Chrome LOADS an
+  host) — but a pattern WITH a port did NOT match a different port in Playwright's Chromium 1234
+  (2026-11-16, `tests/visual/inspect-ops.spec.ts`, which therefore loads a temp copy with its fixture
+  origin added); treat the port as unreliable in both directions; the scheme IS matched; IP literals are valid; trailing `/*` is mandatory. Chrome LOADS an
   extension whose pattern is invalid, dropping the entry as a warning — **"it loaded" is not evidence a
   pattern works; always run a negative control.** GitHub redirects release-asset downloads to
   `release-assets.githubusercontent.com`, not `objects.*` (a 404 probe never redirects, which is why

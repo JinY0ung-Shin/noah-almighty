@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // by the unpacked-extension Playwright probe (tests/visual/inspect-ops.spec.ts).
 // Kept on ONE line: @ts-expect-error only covers the line after it.
 // @ts-expect-error — plain JS module that ships inside the extension bundle.
-import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits } from "../extension/axtree.js";
+import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
 
@@ -147,5 +147,88 @@ describe("browser tool: zoom", () => {
     expect(execute).toHaveBeenLastCalledWith({ op: "zoom", x: 10, y: 20, width: 100, height: 40 });
     expect(res.content[1]).toMatchObject({ type: "image", data: "AAAA", mimeType: "image/jpeg" });
     expect(res.content[0].text).toContain("UNTRUSTED page content");
+  });
+});
+
+describe("read_url's pure decisions", () => {
+  it("accepts text-like content types only, and refuses a missing one", () => {
+    for (const ok of [
+      "application/json",
+      "application/json; charset=utf-8",
+      "application/vnd.api+json",
+      "application/problem+json",
+      "text/plain",
+      "text/html; charset=EUC-KR",
+      "text/csv",
+      "application/xml",
+      "application/atom+xml",
+      "application/x-ndjson",
+    ]) {
+      expect(isTextLikeContentType(ok), ok).toBe(true);
+    }
+    for (const no of ["", "image/png", "application/pdf", "application/octet-stream", "application/zip", "video/mp4"]) {
+      expect(isTextLikeContentType(no), no).toBe(false);
+    }
+  });
+
+  it("reads headers case-insensitively and decodes with the declared charset", () => {
+    expect(headerValue([{ name: "Content-Type", value: "text/plain" }], "content-type")).toBe("text/plain");
+    expect(charsetOf("text/html; charset=\"EUC-KR\"")).toBe("euc-kr");
+    expect(charsetOf("application/json")).toBe("utf-8");
+    // "한글" in EUC-KR.
+    expect(decodeBody(new Uint8Array([0xc7, 0xd1, 0xb1, 0xdb]), "text/plain; charset=euc-kr")).toBe("한글");
+    // An unknown label falls back to UTF-8 instead of throwing.
+    expect(decodeBody(new TextEncoder().encode("ok"), "text/plain; charset=nonsense-9")).toBe("ok");
+  });
+
+  it("pretty-prints whole JSON, keeps a truncated body raw, and reports the cut", () => {
+    expect(formatFetchedBody('{"a":[1,2]}', "application/json").body).toBe('{\n  "a": [\n    1,\n    2\n  ]\n}');
+    const cut = formatFetchedBody('{"a":', "application/json", { bytesTruncated: true });
+    expect(cut).toEqual({ body: '{"a":', pretty: false, truncated: true });
+    const long = formatFetchedBody("x".repeat(50), "text/plain", { maxChars: 10 });
+    expect(long.body).toHaveLength(10);
+    expect(long.truncated).toBe(true);
+  });
+
+  it("reduces a URL to scheme://host/path for notes", () => {
+    expect(urlWithoutQuery("https://u:p@a.example:8443/x/y?token=1#f")).toBe("https://a.example:8443/x/y");
+    expect(urlWithoutQuery("data:text/plain,hi")).toBe("data:…");
+  });
+});
+
+describe("browser tool: read_url", () => {
+  it("refuses a non-http URL before the wire and relays only the url", async () => {
+    const execute = okResult({
+      fetched: { url: "https://intra.example/api", status: 200, contentType: "application/json", body: "{}", bytes: 2, truncated: false, hops: 1 },
+    });
+    const tools = buildBrowserTools({ execute, allowed: true });
+    expect((await call(tools, "read_url", { url: "file:///etc/passwd" })).isError).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+    const res = await call(tools, "read_url", { url: "https://intra.example/api" });
+    expect(execute).toHaveBeenLastCalledWith({ op: "read_url", url: "https://intra.example/api" });
+    const text = res.content[0].text ?? "";
+    expect(text).toContain("HTTP 200, application/json, 2 bytes.");
+    expect(text).toContain("<page_content>\nFinal URL: https://intra.example/api\n\nBody:\n{}\n</page_content>");
+  });
+
+  it("says a cut body is incomplete and names redirects and error statuses", async () => {
+    const execute = okResult({
+      fetched: { url: "https://intra.example/b", status: 404, contentType: "text/html", body: "nope", bytes: 4, truncated: true, hops: 3 },
+    });
+    const text = (await call(buildBrowserTools({ execute, allowed: true }), "read_url", { url: "https://intra.example/a" }))
+      .content[0].text ?? "";
+    expect(text).toContain("after 2 redirects");
+    expect(text).toContain("CUT at the size limit");
+    expect(text).toContain("ERROR status");
+  });
+
+  it("passes the bridge's refusal through as an error", async () => {
+    const execute = vi.fn(async (): Promise<BrowserResult> => ({
+      behavior: "error",
+      message: "read_url was REDIRECTED to https://evil.example/, outside the allowlist",
+    }));
+    const res = await call(buildBrowserTools({ execute, allowed: true }), "read_url", { url: "https://intra.example/r" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("REDIRECTED");
   });
 });

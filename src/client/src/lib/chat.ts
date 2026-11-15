@@ -2943,6 +2943,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     close_tab: "탭을 닫는 중…",
     find: "페이지에서 요소를 찾는 중…",
     zoom: "화면 일부를 확대해 캡처하는 중…",
+    read_url: "URL 내용을 읽는 중…",
   };
   // The value itself never reaches a label: only the fact that one rides along,
   // so the user can see the avatar is entering a credential rather than text.
