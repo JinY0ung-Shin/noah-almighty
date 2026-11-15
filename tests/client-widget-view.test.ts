@@ -263,6 +263,52 @@ describe("evaluating UI nodes", () => {
     expect(el(view, "text").segs).toEqual([{ text: "정적 " }, { text: "굵게", b: true }, { text: " " }, { text: "**굵게 아님** <i>x</i>" }]);
   });
 
+  it("pairs Markdown markers across an interpolation", () => {
+    const view = evaluate(`{@state v = 1200}\n\n<text>월 **{v}원** 입니다, *{v} ~~{v}~~*</text>\n`);
+    expect(el(view, "text").segs).toEqual([
+      { text: "월 " },
+      { text: "1200", b: true },
+      { text: "원", b: true },
+      { text: " 입니다, " },
+      { text: "1200", i: true },
+      { text: " ", i: true },
+      { text: "1200", i: true, s: true },
+    ]);
+    // A callout's body is a block child list: its inline run pairs the same way.
+    const callout = el(evaluate(`{@state a = 5}\n\n<callout>첫 달 **이자 {a}**, 원금</callout>\n`), "callout");
+    const inline = callout.children[0];
+    expect(inline.k === "inline" && inline.segs).toEqual([{ text: "첫 달 " }, { text: "이자 ", b: true }, { text: "5", b: true }, { text: ", 원금" }]);
+  });
+
+  it("keeps an interpolated value literal inside a bold run", () => {
+    const view = evaluate(`{@state s = "a**b**_c_"}\n\n<text>**값 {s}** 끝</text>\n`);
+    expect(el(view, "text").segs).toEqual([{ text: "값 ", b: true }, { text: "a**b**_c_", b: true }, { text: " 끝" }]);
+  });
+
+  it("pairs markers across {#if} and {#each} output in the same run", () => {
+    const view = evaluate(`{@state n = 2}\n\n<text>**{#if n > 1}많음{:else}적음{/if}** {#each [1, 2] as k}*{k}*,{/each}</text>\n`);
+    expect(el(view, "text").segs).toEqual([
+      { text: "많음", b: true },
+      { text: " " },
+      { text: "1", i: true },
+      { text: "," },
+      { text: "2", i: true },
+      { text: "," },
+    ]);
+  });
+
+  it("keeps a Markdown link and a <link> working next to an interpolation", () => {
+    const view = evaluate(`{@state v = 3}\n\n<text>[문서 {v}](https://wiki.example.com/a) **{v}** <link href="https://b.example.com">B</link></text>\n`);
+    expect(el(view, "text").segs).toEqual([
+      { text: "문서 ", href: "https://wiki.example.com/a" },
+      { text: "3", href: "https://wiki.example.com/a" },
+      { text: " " },
+      { text: "3", b: true },
+      { text: " " },
+      { text: "B", href: "https://b.example.com/" },
+    ]);
+  });
+
   it("drops props a component does not declare and values outside its tokens", () => {
     const doc = parseWidget(`<text color="red" style="position:fixed" class="x" onclick="alert(1)" size="lg">글</text>\n`);
     const rt = createRuntime();
