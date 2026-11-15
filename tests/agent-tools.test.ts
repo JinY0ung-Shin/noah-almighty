@@ -54,7 +54,7 @@ import {
 import { gitRepoClonePath, gitRepoContextFromRecord } from "../src/server/gitRepos.js";
 import { getWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildCanvasTools, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES, MAX_CANVAS_CONTENT_CHARS } from "../src/server/agent/canvasTools.js";
-import { buildBrowserTools } from "../src/server/agent/browserTools.js";
+import { buildBrowserTools, readerProxyRefusal } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, CanvasRequest, CanvasResult } from "../src/server/agent/events.js";
 import {
   buildFileOutputTools,
@@ -5083,6 +5083,31 @@ describe("browser bridge interaction ops", () => {
       toY: 250,
     });
     expect(res.content[0].text).toContain("Dragged from (100, 200) to (300, 250).");
+  });
+
+  it("refuses third-party reader/proxy services on navigate and new_tab, before the extension is asked", async () => {
+    const execute = ok({ snapshot: "page" });
+    const tools = buildBrowserTools({ execute, allowed: true });
+    for (const url of [
+      "https://r.jina.ai/https://api.worldbank.org/v2/country/KOR",
+      "https://12ft.io/https://news.example/a",
+      "https://archive.ph/newest/https://wiki.corp/x",
+      "https://wiki-corp-com.translate.goog/page?_x_tr_sl=en",
+      "https://translate.google.com/translate?u=https://wiki.corp/x",
+      "https://web.archive.org/save/https://wiki.corp/x",
+    ]) {
+      for (const name of ["navigate", "new_tab"]) {
+        const res = await callTool(tools, name, { url });
+        expect(res.isError, `${name} ${url}`).toBe(true);
+        expect(res.content[0].text).toContain("third-party service that fetches pages on your behalf");
+      }
+    }
+    expect(execute).not.toHaveBeenCalled();
+    // Ordinary sites — and reading the Wayback archive itself — still go through.
+    expect(readerProxyRefusal("https://api.worldbank.org/v2/country/KOR")).toBeNull();
+    expect(readerProxyRefusal("https://jina.ai/news")).toBeNull();
+    expect(readerProxyRefusal("https://web.archive.org/web/2020/https://example.com")).toBeNull();
+    expect(readerProxyRefusal("not a url")).toBeNull();
   });
 
   it("reports a failed post-action snapshot as a done action, not a failed one", async () => {
