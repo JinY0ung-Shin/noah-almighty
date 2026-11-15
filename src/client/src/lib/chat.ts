@@ -63,7 +63,6 @@ import {
 const MAX_CHAT_PANES = 4;
 
 /** Asked before leaving a pane whose answer is still streaming for a new conversation. */
-const SWITCH_WHILE_STREAMING_CONFIRM = "응답 생성 중입니다. 새 대화로 전환할까요?";
 
 /** The second half every history-cutting confirm ends with (여기서부터 다시, 다시 생성):
  *  side effects already done are NOT undone. */
@@ -256,13 +255,9 @@ export async function startChatWith(
   summary: AvatarSummary,
   split = false,
 ): Promise<void> {
-  if (
-    !split &&
-    readState().chatPanes.some((pane) => pane.streaming) &&
-    !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
-  ) {
-    return;
-  }
+  // Switching never asks, whatever is streaming: leaving a pane only drops this
+  // page's stream (settlePaneSwap); the run goes on and is re-attached when its
+  // conversation is opened again. Only CLOSING a streaming pane stops it (closePane).
   // Resume the most recent existing conversation with this avatar instead of
   // spawning a duplicate thread (matches the old explore behavior). Only for a
   // single, non-split open.
@@ -314,11 +309,7 @@ export async function openSeededChat(
 ): Promise<void> {
   const me = readState().user;
   if (!me) return;
-  if (
-    readState().chatPanes.some((pane) => pane.streaming) &&
-    !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
-  )
-    return;
+  // No confirm while something streams — switching leaves the run going (see startChatWith).
   const { avatar } = await api<{ avatar: AvatarDetail }>(
     `/api/avatars/${encodeURIComponent(me.id)}`,
   );
@@ -486,7 +477,7 @@ export function newChat(paneId?: string, opts?: { force?: boolean }): void {
     state.activePaneId = next.id;
     state.currentAvatar = next.avatar;
   });
-  // force:true can replace a still-streaming pane (startNewChat's confirm path).
+  // force:true replaces a still-streaming pane without asking (its run goes on).
   settlePaneSwap(before);
   syncHash();
 }
@@ -494,8 +485,8 @@ export function newChat(paneId?: string, opts?: { force?: boolean }): void {
 /**
  * Rail "새 대화" action: start a fresh thread IMMEDIATELY (same meaning as the
  * chat-header button), instead of merely navigating to explore. Target: the
- * active pane's avatar; with no open pane, the user's own avatar. Streaming
- * panes get the same confirm as startChatWith before being replaced.
+ * active pane's avatar; with no open pane, the user's own avatar. A streaming
+ * pane is replaced without asking: its run goes on (see startChatWith).
  */
 export async function startNewChat(): Promise<void> {
   const state = readState();
@@ -503,12 +494,6 @@ export async function startNewChat(): Promise<void> {
     state.chatPanes.find((item) => item.id === state.activePaneId) ??
     state.chatPanes[0];
   if (pane) {
-    if (
-      pane.streaming &&
-      !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
-    ) {
-      return;
-    }
     newChat(pane.id, { force: true });
     updateState((s) => {
       s.view = "chat";

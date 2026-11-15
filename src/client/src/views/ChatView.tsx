@@ -135,7 +135,7 @@ export default function ChatView() {
           </div>{" "}
           <div className="chat-head-actions">
             {splitControls(ctx)} {workspaceButton(ctx)}{" "}
-            <button className="ghost-sm" type="button" disabled={pane.streaming} onClick={() => newChat(pane.id)}>
+            <button className="ghost-sm" type="button" onClick={() => newChat(pane.id, { force: true })}>
               새 대화
             </button>
           </div>
@@ -182,10 +182,9 @@ export default function ChatView() {
                     <button
                       className="ghost-sm"
                       type="button"
-                      disabled={item.streaming}
                       onClick={(event) => {
                         event.stopPropagation();
-                        newChat(item.id);
+                        newChat(item.id, { force: true });
                       }}
                     >
                       새 대화
@@ -248,7 +247,7 @@ export default function ChatView() {
             </div>{" "}
             <div className="chat-head-actions">
               {splitControls(ctx)} {workspaceButton(ctx)}{" "}
-              <button className="ghost-sm" type="button" disabled={pane.streaming} onClick={() => newChat(pane.id)}>
+              <button className="ghost-sm" type="button" onClick={() => newChat(pane.id, { force: true })}>
                 새 대화
               </button>
             </div>

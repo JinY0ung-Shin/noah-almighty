@@ -418,6 +418,12 @@ Server half and the contract: [server-core.md](server-core.md) (#admin-notice).
   `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus every teammate's 팀 공개
   (`group`) avatar — every visible non-own avatar is a teammate's, so Explore carries no membership badge.
 
+- **Switching never asks; only closing stops** (2026-11-16, the user's call: one rule everywhere). Leaving a
+  streaming pane — rail 새 대화, the chat header's 새 대화 (enabled while streaming, `force`), opening another
+  avatar or conversation, a seeded handoff — only drops this page's stream (`settlePaneSwap` aborts the
+  fetch); the run goes on server-side and is re-attached when its conversation opens again. Closing a split
+  pane (`closePane`) cancels the run, so that one alone asks (danger confirm).
+
 ## Composer drafts (`lib/chatDrafts.ts`)
 - **A keystroke never publishes the app state.** `setPaneDraft`/`setPaneRewindDraft` write `pane.draft` /
   `pane.rewindEdit.draft` IN PLACE and bump `draftEdits`; only the composer and the rewind editor subscribe

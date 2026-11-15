@@ -43,6 +43,7 @@ import {
 import { resolveSideTab } from "../src/client/src/lib/sidePanel.js";
 import { appState, readState, replaceState, toasts, updateState } from "../src/client/src/lib/state.js";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm.js";
+import { resetDraftsForTest } from "../src/client/src/lib/chatDrafts.js";
 import { DRAWIO_MEDIA_TYPE } from "../src/client/src/lib/drawioViewer.js";
 import { DEFAULT_MCP_TOOL_GROUPS } from "../src/shared/mcpToolGroups.js";
 import type { ClientState } from "../src/client/src/lib/state.js";
@@ -290,6 +291,8 @@ function postedTo(calls: { url: string; init: RequestInit }[], path: string): an
 beforeEach(() => {
   appState.set(structuredClone(PRISTINE));
   toasts.set([]);
+  // Drafts stashed by a pane swap live in module memory: one test's must not reach the next.
+  resetDraftsForTest();
   replaceState({ user: { id: "owner", roles: [] } as any });
   history.replaceState(null, "", "/");
 });
@@ -544,14 +547,18 @@ describe("opening + resuming conversations", () => {
     expect(s.activePaneId).toBe(s.chatPanes[0].id);
   });
 
-  it("startChatWith bails out when the owner declines the streaming-switch confirm", async () => {
-    seedPane({ streaming: true });
-    const fetchFn = noFetch();
-    const opening = startChatWith({ id: "av9" } as any);
-    resolveConfirmation(false);
-    await opening;
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(readState().chatPanes).toHaveLength(1); // unchanged
+  it("startChatWith switches away from a streaming pane without asking (its run goes on)", async () => {
+    const streaming = seedPane({ streaming: true });
+    useFetch((url) => {
+      if (url === "/api/avatars/av9") return jsonRes({ avatar: { id: "av9", alias: "동료", isOwn: false } });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await startChatWith({ id: "av9" } as any);
+    expect(get(confirmation)).toBeNull();
+    expect(readState().chatPanes).toHaveLength(1);
+    expect(readState().chatPanes[0].id).not.toBe(streaming);
+    expect(readState().chatPanes[0].avatar.id).toBe("av9");
   });
 
   it("startChatWith(split) pushes an extra pane", async () => {
@@ -1221,14 +1228,17 @@ describe("opening a seeded or brand-new chat", () => {
     expect(get(toasts).some((t) => t.message === "예약 작업 내용을 입력창에 담았습니다.")).toBe(true);
   });
 
-  it("openSeededChat leaves a streaming pane alone when the switch is declined", async () => {
+  it("openSeededChat switches away from a streaming pane without asking", async () => {
     const id = seedPane({ streaming: true, draft: "원래 초안" });
-    const fetchFn = noFetch();
-    const opening = openSeededChat("새 주제");
-    resolveConfirmation(false);
-    await opening;
-    expect(fetchFn).not.toHaveBeenCalled();
-    expect(pane(id).draft).toBe("원래 초안");
+    useFetch((url) => {
+      if (url === "/api/avatars/owner") return jsonRes({ avatar: { id: "owner", alias: "내 아바타", isOwn: true } });
+      if (url === "/api/conversations") return jsonRes({ conversations: [] });
+      return undefined;
+    });
+    await openSeededChat("새 주제");
+    expect(get(confirmation)).toBeNull();
+    expect(readState().chatPanes[0].id).not.toBe(id);
+    expect(readState().chatPanes[0].draft).toBe("새 주제");
   });
 
   it("openSeededChat does nothing when no one is signed in", async () => {
@@ -1255,19 +1265,11 @@ describe("opening a seeded or brand-new chat", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("startNewChat replaces a streaming pane only once the owner confirms", async () => {
+  it("startNewChat replaces a streaming pane without asking", async () => {
     const id = seedPane({ streaming: true, messages: [{ id: "m" } as any] });
     noFetch();
-
-    const declined = startNewChat();
-    resolveConfirmation(false);
-    await declined;
-    expect(readState().chatPanes[0].id).toBe(id);
-    expect(pane(id).messages).toHaveLength(1);
-
-    const accepted = startNewChat();
-    resolveConfirmation(true);
-    await accepted;
+    await startNewChat();
+    expect(get(confirmation)).toBeNull();
     expect(readState().chatPanes[0].id).not.toBe(id);
     expect(readState().chatPanes[0].messages).toEqual([]);
   });
