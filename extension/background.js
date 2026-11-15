@@ -68,6 +68,8 @@ import {
   formatFetchedBody,
   urlWithoutQuery,
   consoleEntryFrom,
+  networkCaptureApply,
+  networkEntryOut,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -96,11 +98,13 @@ const CDP_VERSION = "1.3";
 
 /**
  * Default-deny allowlist of CDP methods. Everything the bridge needs and
- * nothing else — of `Runtime.*` ONLY the single `Runtime.evaluate` behind
- * read_storage (its own paragraph below — the ONE exception to this file's
- * no-page-JS invariant), no `Storage.*`, no `Browser.*`, and of `Network.*` ONLY
- * the consent-gated `Network.getCookies` (its own paragraph below), never the
- * event-streaming rest. The read-only additions stay
+ * nothing else — of `Runtime.*` ONLY the `Runtime.evaluate` behind read_storage
+ * (its own paragraph below — the ONE exception to this file's no-page-JS
+ * invariant) plus read_console's consent-gated event subscription
+ * (`Runtime.enable`/`disable`, paragraph at the end), no `Storage.*`, no
+ * `Browser.*`, and of `Network.*` ONLY the consent-gated `Network.getCookies`
+ * and read_network's consent-gated, buffer-less `Network.enable`/`disable`
+ * (paragraphs below). The read-only additions stay
  * inside that line: `DOM.describeNode` reads structure, `Page.captureScreenshot`
  * reads pixels — the same exfiltration class as a snapshot, gated by the same
  * origin allowlist — `DOM.getNodeForLocation` hit-tests a point so a
@@ -148,8 +152,10 @@ const CDP_VERSION = "1.3";
  * open door the domain's name suggests: it is a COMMAND that reads the cookie
  * store for a given URL, NOT an event subscription — probe-measured
  * (`tests/visual/cookie-facts.spec.ts`) to answer with only DOM/Page enabled, so
- * `Network.enable` (which would stream every request and response — a far wider
- * read) stays OFF the list, the DOMSnapshot.enable rule once more. read_cookies
+ * read_cookies itself never sends `Network.enable` (which streams every request
+ * and response — a far wider read), the DOMSnapshot.enable rule once more; since
+ * 0.29.0 that enable IS on the list, for read_network alone, behind its own
+ * per-site consent and with every body buffer forced to 0 (paragraph at the end). read_cookies
  * calls it with `urls:[tab.url]`, so ONLY the current tab's origin is ever read
  * (never a cross-site cookie), and it runs ONLY after the user approves a
  * per-site, per-session popup in their own browser (requestDataConsent — the
@@ -181,9 +187,10 @@ const CDP_VERSION = "1.3";
  * (localStorage routinely holds bearer/JWT tokens) AND untrusted page content —
  * the reason for the consent gate, the audit that logs entry KEY names only
  * (never values), and the untrusted-data framing the tool result puts around it.
- * No other `Runtime.*` belongs here: `Runtime.enable` (the console/exception
- * event stream) stays OFF, evaluate needing no enable exactly as
- * `Network.getCookies` needed no `Network.enable`.
+ * read_storage needs no `Runtime.enable` (evaluate answers without it, exactly as
+ * `Network.getCookies` needs no `Network.enable`); the enable that IS on the list
+ * since 0.29.0 belongs to read_console alone (paragraph at the end), and no other
+ * `Runtime.*` method belongs here.
  *
  * The `Fetch.*` and `IO.*` entries exist for read_url (0.29.0) ONLY, and sendCdp
  * fences them structurally (READ_URL_FETCH_METHODS): they are refused on every
@@ -222,6 +229,17 @@ const CDP_VERSION = "1.3";
  * to short text, redacted (redactTokens), and never forwards raw. `Log.enable`
  * is the browser's own log about the page (failed loads, CSP/mixed-content
  * violations, interventions) — read-only, no page JS.
+ *
+ * `Network.enable`/`Network.disable` exist for read_network (0.29.0) ONLY — the
+ * request EVENT STREAM that the read_cookies paragraph above kept off this list
+ * — and the same consent rule applies: sent only while the user has granted the
+ * per-site `network` consent for the tab's host (armNetwork / disarmNetwork).
+ * sendCdp fences the enable structurally (NETWORK_ENABLE_PARAMS): all three
+ * buffer sizes must be 0, so Chrome keeps no response bodies or post data for
+ * this session, and `Network.getResponseBody`/`getRequestPostData` are not on
+ * the list anyway. The events carry headers and more; the capture
+ * (networkCaptureApply) copies only method, query-free URL, status, type and
+ * timing, and drops everything else at the event.
  */
 const CDP_ALLOWLIST = new Set([
   "Accessibility.enable",
@@ -250,6 +268,8 @@ const CDP_ALLOWLIST = new Set([
   "Input.dispatchMouseEvent",
   "Input.imeSetComposition",
   "Input.insertText",
+  "Network.disable",
+  "Network.enable",
   "Network.getCookies",
   "Overlay.enable",
   "Overlay.highlightNode",
@@ -532,6 +552,18 @@ const READ_URL_FETCH_METHODS = new Map([
 /** Background tabs read_url created and is still using — the ONLY place Fetch/IO may run. */
 const readUrlTabs = new Set();
 
+/** The ONE shape Network.enable may take: no body or post-data buffering at all. */
+const NETWORK_ENABLE_PARAMS = { maxTotalBufferSize: 0, maxResourceBufferSize: 0, maxPostDataSize: 0 };
+
+function networkEnableRefusal(method, params) {
+  if (method !== "Network.enable") return null;
+  const keys = Object.keys(params || {});
+  const exact =
+    keys.length === Object.keys(NETWORK_ENABLE_PARAMS).length &&
+    keys.every((key) => params[key] === NETWORK_ENABLE_PARAMS[key]);
+  return exact ? null : "Network.enable must disable every body/post-data buffer";
+}
+
 function readUrlCallRefusal(target, method, params) {
   const keys = READ_URL_FETCH_METHODS.get(method);
   if (!keys) return null;
@@ -553,7 +585,7 @@ function sendCdp(target, method, params) {
   if (!CDP_ALLOWLIST.has(method)) {
     return Promise.reject(new Error(`Method not allowed: ${method}`));
   }
-  const readUrlRefusal = readUrlCallRefusal(target, method, params);
+  const readUrlRefusal = readUrlCallRefusal(target, method, params) || networkEnableRefusal(method, params);
   if (readUrlRefusal) return Promise.reject(new Error(readUrlRefusal));
   // Structural bar on the no-page-JS exception: Runtime.evaluate may run ONLY
   // the two fixed, bridge-authored read_storage expressions. A call site that
@@ -657,6 +689,7 @@ chrome.debugger.onDetach.addListener((source) => {
     attached.delete(source.tabId);
     // Detached = the Runtime/Log subscriptions are gone; the next read re-arms.
     consoleCaptures.delete(source.tabId);
+    networkCaptures.delete(source.tabId);
     pendingDialogs.delete(source.tabId);
     // Detached means UNOBSERVED: a navigation during the gap raises no
     // frameNavigated, so the epoch can no longer vouch for the ids minted before
@@ -671,6 +704,7 @@ chrome.debugger.onDetach.addListener((source) => {
 chrome.tabs.onRemoved.addListener((tabId) => {
   attached.delete(tabId);
   consoleCaptures.delete(tabId);
+  networkCaptures.delete(tabId);
   pendingDialogs.delete(tabId);
   forgetTabRefs(tabId);
   lastSnapshotByTab.delete(tabId);
@@ -743,6 +777,8 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   const host = hostOfFrameUrl(params?.frame?.url);
   const consoleCapture = consoleCaptures.get(source.tabId);
   if (consoleCapture && consoleCapture.host !== host) disarmConsole(source.tabId);
+  const networkCapture = networkCaptures.get(source.tabId);
+  if (networkCapture && networkCapture.host !== host) disarmNetwork(source.tabId);
 });
 
 // A grant revoked on the options page (or cleared with the browser session)
@@ -753,6 +789,36 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   for (const [tabId, capture] of consoleCaptures) {
     if (grants[capture.host]?.console !== true) disarmConsole(tabId);
   }
+  for (const [tabId, capture] of networkCaptures) {
+    if (grants[capture.host]?.network !== true) disarmNetwork(tabId);
+  }
+});
+
+// ----------------------------------------------------------- network capture
+//
+// read_network's capture: the console capture's twin (same consent rule, same
+// arm-on-first-approved-read, same disarm triggers), minus the replay — Chrome
+// keeps no request history for a Network domain enabled late, so the first read
+// starts an EMPTY list and says so.
+
+/** tabId -> { host, entries, byId, dropped } while armed. */
+const networkCaptures = new Map();
+
+async function armNetwork(tabId, host) {
+  networkCaptures.set(tabId, { host, entries: [], byId: new Map(), dropped: 0 });
+  await sendCdp({ tabId }, "Network.enable", { ...NETWORK_ENABLE_PARAMS });
+}
+
+function disarmNetwork(tabId) {
+  if (!networkCaptures.has(tabId)) return;
+  networkCaptures.delete(tabId);
+  if (attached.has(tabId)) sendCdp({ tabId }, "Network.disable", {}).catch(() => {});
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (source.tabId == null || source.sessionId || !method.startsWith("Network.")) return;
+  const capture = networkCaptures.get(source.tabId);
+  if (capture) networkCaptureApply(capture, method, params);
 });
 
 // ------------------------------------------------------------------- dialogs
@@ -1456,7 +1522,20 @@ const CONSOLE_CONSENT_DECLINED =
 const CONSOLE_CONSENT_UNANSWERED =
   "The user did not answer the console-access prompt in time, so nothing was captured. " +
   "Tell the user a confirmation popup appears in their browser when you read the console, and retry when they are ready.";
+const NETWORK_CONSENT_DECLINED =
+  "The user declined to share this site's network requests, so nothing was captured or read. " +
+  "Do not retry — tell the user why you wanted the request list and let them decide.";
+const NETWORK_CONSENT_UNANSWERED =
+  "The user did not answer the network-access prompt in time, so nothing was captured. " +
+  "Tell the user a confirmation popup appears in their browser when you read network requests, and retry when they are ready.";
 const DATA_CONSENT_COPY = {
+  network: {
+    declined: NETWORK_CONSENT_DECLINED,
+    unanswered: NETWORK_CONSENT_UNANSWERED,
+    openFailed: (error) =>
+      `The network-consent popup could not be opened (${String(error?.message || error)}), so nothing was ` +
+      "captured. Report this to the user rather than retrying.",
+  },
   console: {
     declined: CONSOLE_CONSENT_DECLINED,
     unanswered: CONSOLE_CONSENT_UNANSWERED,
@@ -6669,6 +6748,44 @@ async function performOp(message, stagingOrigin) {
       ok: true,
       consoleEntries: entries,
       consoleTotal: total,
+      ...(notes.length ? { note: capNote(notes.join(" ")) } : {}),
+      url: tab.url || "",
+      title: tab.title || "",
+      tabs: (await groupedTabs()).map(describeTab),
+    };
+  }
+
+  if (message.op === "read_network") {
+    // read_console's twin: same consent store (kind "network"), same capture
+    // start rule — but no replay, so the first approved read starts EMPTY.
+    const host = hostOfFrameUrl(tab.url);
+    if (!host) return { ok: false, message: "read_network needs the tab to be on an http(s) page." };
+    const consent = await requestDataConsent(host, "network");
+    if (!consent.granted) return { ok: false, message: consent.reason };
+    let capture = networkCaptures.get(tab.id);
+    let armedNow = false;
+    if (!capture || capture.host !== host) {
+      await armNetwork(tab.id, host);
+      capture = networkCaptures.get(tab.id);
+      armedNow = true;
+    }
+    const limit = Math.min(Math.max(Math.round(Number(message.limit) || 50), 1), 100);
+    const entries = capture ? capture.entries.slice(-limit).map(networkEntryOut) : [];
+    const total = capture ? capture.entries.length + capture.dropped : 0;
+    const notes = [];
+    if (armedNow) {
+      notes.push(
+        "Network capture for this tab started NOW (first read with consent on this site), so nothing before this " +
+          "moment is listed. Reload the page or repeat the action, then read again.",
+      );
+    }
+    if (total > entries.length) {
+      notes.push(`Showing the newest ${entries.length} of ${total} captured requests.`);
+    }
+    return {
+      ok: true,
+      networkEntries: entries,
+      networkTotal: total,
       ...(notes.length ? { note: capNote(notes.join(" ")) } : {}),
       url: tab.url || "",
       title: tab.title || "",

@@ -3293,3 +3293,83 @@ export function consoleEntryFrom(method, params) {
   }
   return null;
 }
+
+/** Requests kept per tab by read_network's capture. */
+export const NETWORK_BUFFER_MAX = 300;
+
+/**
+ * Fold one CDP `Network.*` event into a read_network capture
+ * (`{ entries, byId, dropped }`). Only what the op promises survives: method,
+ * URL WITHOUT query/fragment (and token-redacted), status, resource type,
+ * duration, a failure reason. Headers, bodies, post data, initiators and timing
+ * breakdowns in the event are never copied. A redirect closes the hop it ended
+ * (with the 3xx status) and opens a new entry for where it went; `data:`/`blob:`
+ * requests are skipped (they are not network traffic and their URL IS the data).
+ */
+export function networkCaptureApply(capture, method, params) {
+  if (!capture || !params) return;
+  const id = String(params.requestId ?? "");
+  const finish = (entry, timestamp) => {
+    if (entry.durationMs == null && Number.isFinite(Number(timestamp)) && Number.isFinite(entry.start)) {
+      entry.durationMs = Math.max(0, Math.round((Number(timestamp) - entry.start) * 1000));
+    }
+  };
+  if (method === "Network.requestWillBeSent") {
+    const previous = capture.byId.get(id);
+    if (previous && params.redirectResponse) {
+      previous.status = Number(params.redirectResponse.status) || previous.status;
+      finish(previous, params.timestamp);
+      capture.byId.delete(id);
+    }
+    const rawUrl = String(params.request?.url ?? "");
+    if (/^(?:data|blob):/i.test(rawUrl)) return;
+    const entry = {
+      method: String(params.request?.method ?? "GET").slice(0, 16),
+      url: redactTokens(urlWithoutQuery(rawUrl, 400)),
+      status: 0,
+      type: String(params.type ?? "Other").slice(0, 32),
+      durationMs: null,
+      failed: "",
+      time: Number.isFinite(Number(params.wallTime)) ? Math.round(Number(params.wallTime) * 1000) : Date.now(),
+      start: Number(params.timestamp),
+    };
+    capture.entries.push(entry);
+    capture.byId.set(id, entry);
+    if (capture.entries.length > NETWORK_BUFFER_MAX) {
+      const gone = capture.entries.shift();
+      capture.dropped += 1;
+      for (const [key, value] of capture.byId) {
+        if (value === gone) capture.byId.delete(key);
+      }
+    }
+    return;
+  }
+  const entry = capture.byId.get(id);
+  if (!entry) return;
+  if (method === "Network.responseReceived") {
+    entry.status = Number(params.response?.status) || entry.status;
+    if (params.type) entry.type = String(params.type).slice(0, 32);
+  } else if (method === "Network.loadingFinished") {
+    finish(entry, params.timestamp);
+    capture.byId.delete(id);
+  } else if (method === "Network.loadingFailed") {
+    entry.failed = String(
+      params.canceled ? "canceled" : params.blockedReason ? `blocked: ${params.blockedReason}` : params.errorText || "failed",
+    ).slice(0, 120);
+    finish(entry, params.timestamp);
+    capture.byId.delete(id);
+  }
+}
+
+/** A capture entry as it leaves the extension — the internal start clock dropped. */
+export function networkEntryOut(entry) {
+  return {
+    method: entry.method,
+    url: entry.url,
+    status: entry.status,
+    type: entry.type,
+    durationMs: entry.durationMs,
+    failed: entry.failed,
+    time: entry.time,
+  };
+}

@@ -213,3 +213,7 @@
     actions.md "read_console". A NEW data-consent kind `console` in the same `dataConsentGrants` store and the
     same popup (`consent.html?kind=console`); the relay keeps the newest 100 entries and slices every field
     (text 600, source 300, level 16); the audit row records `entries=N` only, never text.
+  - `read_network` (`limit` → `networkEntries` `[{method, url, status, type, durationMs, failed, time}]` +
+    `networkTotal`) — actions.md "read_network". Its own consent kind `network`; the relay keeps the newest 100
+    rows, re-cuts every URL at `?`/`#` defensively and slices each field; the audit row records `requests=N`
+    only, never a URL.

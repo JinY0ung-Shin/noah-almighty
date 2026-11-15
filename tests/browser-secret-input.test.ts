@@ -449,6 +449,8 @@ describe("background.js keeps the invariants that only its source can show", () 
       "Input.insertText",
       "Log.disable",
       "Log.enable",
+      "Network.disable",
+      "Network.enable",
       "Network.getCookies",
       "Overlay.enable",
       "Overlay.hideHighlight",

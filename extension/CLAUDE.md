@@ -20,7 +20,9 @@ browser", "Deploy topology"); install/policy in [`README.md`](README.md); mechan
 - **The extension FETCHES NOTHING on its own — a security decision.** No `host_permissions`, no network call
   (a self-updater got the zip quarantined by Defender). `CDP_ALLOWLIST` stays default-deny; its only page-JS
   exception is `read_storage`'s fixed bridge-authored expressions, and its only `Network.*` call the
-  consent-gated `read_cookies`. → `contract.md`.
+  consent-gated `read_cookies` plus `read_network`'s consent-gated, buffer-less `Network.enable` (0.29.0).
+  `read_url` (0.29.0) is NOT a fetch by the extension: the browser's own navigation stack GETs in a throwaway
+  tab, and its `Fetch.*`/`IO.*` are fenced in `sendCdp` to that tab. → `contract.md`, `actions.md`.
 - **Consent lives HERE, where the server cannot bypass it.** Data reads are consented per (host, data type)
   in one store; `secret` is the one WRITING kind and the one session-wide grant (the per-site limit is the
   owner's host allowlist, re-checked at every write) — its consent copy must SAY the grant widens no reach.

@@ -30,6 +30,7 @@ import { consultationHistoryText } from "../agent/avatarDirectoryTools.js";
 import type {
   BrowserConsoleEntry,
   BrowserCookie,
+  BrowserNetworkEntry,
   BrowserStorageEntry,
   BrowserTab,
   DeckSidecarFact,
@@ -2192,6 +2193,8 @@ export async function executeChatTurn(
               fetchHops?: number;
               consoleEntries?: unknown[];
               consoleTotal?: number;
+              networkEntries?: unknown[];
+              networkTotal?: number;
             };
             if (!reply?.ok) {
               const raw =
@@ -2310,6 +2313,30 @@ export async function executeChatTurn(
                     ];
                   })
                 : undefined;
+            // read_network: request rows, bounded and shape-validated here. The
+            // URL is query-free from the extension; it is re-cut defensively
+            // at "?"/"#" in case an older or odd build sent one with a query.
+            const networkEntries =
+              requestData.op === "read_network" && Array.isArray(reply.networkEntries)
+                ? reply.networkEntries.slice(-100).flatMap((e: unknown): BrowserNetworkEntry[] => {
+                    if (!e || typeof e !== "object") return [];
+                    const entry = e as Record<string, unknown>;
+                    if (typeof entry.url !== "string") return [];
+                    const num = (value: unknown) =>
+                      typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
+                    return [
+                      {
+                        method: typeof entry.method === "string" ? entry.method.slice(0, 16) : "GET",
+                        url: entry.url.split(/[?#]/)[0].slice(0, 400),
+                        status: num(entry.status) ?? 0,
+                        type: typeof entry.type === "string" ? entry.type.slice(0, 32) : "",
+                        durationMs: num(entry.durationMs),
+                        failed: typeof entry.failed === "string" ? entry.failed.slice(0, 120) : "",
+                        time: num(entry.time) ?? 0,
+                      },
+                    ];
+                  })
+                : undefined;
             const storageKind =
               requestData.op === "read_storage"
                 ? requestData.kind === "local"
@@ -2405,6 +2432,8 @@ export async function executeChatTurn(
                     : "",
                   // read_console: how many lines left the browser, never their text.
                   consoleEntries ? `entries=${consoleEntries.length}` : "",
+                  // read_network: the row count only, never the URLs.
+                  networkEntries ? `requests=${networkEntries.length}` : "",
                   `url=${scrubAuditUrl(fetched?.url || reply.url || requestData.url)}`,
                 ]
                   .filter(Boolean)
@@ -2600,6 +2629,11 @@ export async function executeChatTurn(
               consoleTotal:
                 typeof reply.consoleTotal === "number" && reply.consoleTotal >= 0
                   ? Math.round(reply.consoleTotal)
+                  : undefined,
+              networkEntries,
+              networkTotal:
+                typeof reply.networkTotal === "number" && reply.networkTotal >= 0
+                  ? Math.round(reply.networkTotal)
                   : undefined,
             };
           },

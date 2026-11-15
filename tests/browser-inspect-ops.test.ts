@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // by the unpacked-extension Playwright probe (tests/visual/inspect-ops.spec.ts).
 // Kept on ONE line: @ts-expect-error only covers the line after it.
 // @ts-expect-error — plain JS module that ships inside the extension bundle.
-import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX } from "../extension/axtree.js";
+import { findAtoms, findFold, FIND_MAX_MATCHES, FIND_ATOM_PRINT_MAX, zoomShotScale, zoomImageNote, ZOOM_MAX_PX_PER_CSS, visionFits, headerValue, isTextLikeContentType, charsetOf, decodeBody, formatFetchedBody, urlWithoutQuery, redactTokens, consoleEntryFrom, CONSOLE_TEXT_MAX, networkCaptureApply, networkEntryOut, NETWORK_BUFFER_MAX } from "../extension/axtree.js";
 import { buildBrowserTools } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, BrowserResult } from "../src/server/agent/events.js";
 
@@ -300,5 +300,85 @@ describe("browser tool: read_console", () => {
     const declined = vi.fn(async (): Promise<BrowserResult> => ({ behavior: "error", message: "The user declined to share this site's console messages" }));
     const res = await call(buildBrowserTools({ execute: declined, allowed: true }), "read_console", {});
     expect(res.isError).toBe(true);
+  });
+});
+
+describe("read_network's capture fold", () => {
+  const fresh = () => ({ entries: [] as Record<string, unknown>[], byId: new Map(), dropped: 0 });
+
+  it("keeps method, query-free URL, status, type and duration — and nothing else", () => {
+    const cap = fresh();
+    networkCaptureApply(cap, "Network.requestWillBeSent", {
+      requestId: "1",
+      request: { url: "https://a.example/api/items?token=secret#x", method: "POST", headers: { Authorization: "Bearer zzz" }, postData: "pw=1" },
+      type: "Fetch",
+      timestamp: 10,
+      wallTime: 1700000000,
+    });
+    networkCaptureApply(cap, "Network.responseReceived", {
+      requestId: "1",
+      type: "Fetch",
+      response: { status: 201, headers: { "set-cookie": "s=1" } },
+    });
+    networkCaptureApply(cap, "Network.loadingFinished", { requestId: "1", timestamp: 10.25 });
+    const out = networkEntryOut(cap.entries[0] as never);
+    expect(out).toEqual({
+      method: "POST",
+      url: "https://a.example/api/items",
+      status: 201,
+      type: "Fetch",
+      durationMs: 250,
+      failed: "",
+      time: 1700000000000,
+    });
+    expect(JSON.stringify(cap.entries)).not.toMatch(/Bearer|pw=1|set-cookie|token=secret/);
+  });
+
+  it("closes a redirect hop with its 3xx and opens the next, skips data: URLs, and records failures", () => {
+    const cap = fresh();
+    networkCaptureApply(cap, "Network.requestWillBeSent", { requestId: "r", request: { url: "https://a.example/old", method: "GET" }, type: "Document", timestamp: 1 });
+    networkCaptureApply(cap, "Network.requestWillBeSent", {
+      requestId: "r",
+      request: { url: "https://a.example/new", method: "GET" },
+      redirectResponse: { status: 302 },
+      type: "Document",
+      timestamp: 1.1,
+    });
+    networkCaptureApply(cap, "Network.loadingFailed", { requestId: "r", errorText: "net::ERR_ABORTED", timestamp: 1.3 });
+    networkCaptureApply(cap, "Network.requestWillBeSent", { requestId: "d", request: { url: "data:image/png;base64,AAAA" }, timestamp: 2 });
+    const out = cap.entries.map((e) => networkEntryOut(e as never));
+    expect(out.map((e) => [e.url, e.status, e.failed])).toEqual([
+      ["https://a.example/old", 302, ""],
+      ["https://a.example/new", 0, "net::ERR_ABORTED"],
+    ]);
+    expect(out[0].durationMs).toBe(100);
+  });
+
+  it("is bounded, counting what it dropped", () => {
+    const cap = fresh();
+    for (let i = 0; i < NETWORK_BUFFER_MAX + 5; i += 1) {
+      networkCaptureApply(cap, "Network.requestWillBeSent", { requestId: String(i), request: { url: `https://a.example/${i}` }, timestamp: i });
+    }
+    expect(cap.entries).toHaveLength(NETWORK_BUFFER_MAX);
+    expect(cap.dropped).toBe(5);
+    expect(cap.byId.size).toBe(NETWORK_BUFFER_MAX);
+  });
+});
+
+describe("browser tool: read_network", () => {
+  it("relays limit and renders one row per request inside the untrusted wrapper", async () => {
+    const execute = okResult({
+      networkEntries: [
+        { method: "GET", url: "https://a.example/api/x", status: 500, type: "XHR", durationMs: 42, failed: "", time: 1700000000000 },
+        { method: "POST", url: "https://a.example/api/y", status: 0, type: "Fetch", durationMs: null, failed: "net::ERR_FAILED", time: 0 },
+      ],
+      networkTotal: 2,
+    });
+    const res = await call(buildBrowserTools({ execute, allowed: true }), "read_network", { limit: 5 });
+    expect(execute).toHaveBeenLastCalledWith({ op: "read_network", limit: 5 });
+    const text = res.content[0].text ?? "";
+    expect(text).toContain("2 requests (2 failed or ≥400)");
+    expect(text).toContain("[22:13:20.000] GET 500 XHR 42ms https://a.example/api/x");
+    expect(text).toContain("POST FAILED (net::ERR_FAILED) Fetch https://a.example/api/y");
   });
 });

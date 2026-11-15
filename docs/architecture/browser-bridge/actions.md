@@ -15,8 +15,11 @@
   here, in the user's own logged-in session, so the edit is attributable, visible and undoable.
 - **No page JS execution (beyond `read_storage`'s fixed bridge-authored expressions, one per storage type), and
   that shapes op design.** `CDP_ALLOWLIST` is default-deny: no `Storage.*`; of `Runtime.*` ONLY the `Runtime.evaluate` behind
-  `read_storage` (not `Runtime.enable`); of `Network.*` ONLY the consent-gated, current-origin
-  `Network.getCookies` behind `read_cookies` ([contract.md](contract.md)). That allowlist — NOT the permission
+  `read_storage` plus read_console's consent-gated EVENT subscription (`Runtime.enable`/`disable` — no
+  other method, so nothing it reports can be called); of `Network.*` ONLY the consent-gated, current-origin
+  `Network.getCookies` behind `read_cookies` and read_network's consent-gated, buffer-less
+  `Network.enable`/`disable` ([contract.md](contract.md), and the 0.29.0 bullets at the end of this page);
+  `Fetch.*`/`IO.*` only inside read_url's own throwaway tab. That allowlist — NOT the permission
   manifest — is the security boundary. Elements are AX-tree `backendNodeId`s. So `select_option` clicks a
   rendered option, or drives a collapsed native `<select>` from the KEYBOARD (next bullet). Every later
   entry has had to pass the SAME test — read-only, executes no page JS, opens no exfiltration class
@@ -493,3 +496,22 @@
   and every entry inside ONE untrusted wrapper. Test-harness lesson: an op sent WITHOUT `requestId` is
   coalesced with an identical payload sent within 1.5 s (`performCoalesced`) — a probe that repeats the same
   read must send a fresh requestId, exactly as the client does.
+- **`read_network` (0.29.0) is read_console's twin with one difference: no replay.** Its own consent kind
+  `network` (approving the console never approves the request list, and vice versa — the e2e spec asserts
+  it), the same arm-on-first-approved-read, the same disarm triggers (another host, a revoked grant, a
+  detach, a closed tab — the buffer is dropped). `armNetwork` sends `Network.enable` on the ROOT session
+  with `maxTotalBufferSize`, `maxResourceBufferSize` and `maxPostDataSize` all 0, and `sendCdp` refuses any
+  other shape of that call (`NETWORK_ENABLE_PARAMS`), so Chrome buffers no response body or post data for
+  the session at all — and `Network.getResponseBody`/`getRequestPostData` are not on the allowlist anyway.
+  This is the "event stream" `read_cookies` deliberately never needed; it is on the list now ONLY behind this
+  consent. Chrome keeps no request history for a domain enabled late, so the first approved read is EMPTY
+  and says so: read, reload or repeat the action, read again. The events carry headers, initiators and post
+  data; `networkCaptureApply` (`axtree.js`, pure) copies only method, `urlWithoutQuery` + `redactTokens` of
+  the URL, status, resource type, duration (`loadingFinished`/`loadingFailed` timestamp − start) and a
+  failure reason, and drops the rest at the event. A redirect closes its hop with the 3xx and opens the next;
+  `data:`/`blob:` requests are skipped (their URL IS the data). Buffer `NETWORK_BUFFER_MAX` 300 per tab,
+  newest `limit` (default 50, max 100) returned. Cross-site iframes' requests ride child sessions and are not
+  captured; neither are service-worker or worker requests. `reportNetwork` prints one row per request inside
+  ONE untrusted wrapper after a count line. Verified in a real Chromium (`tests/visual/inspect-ops.spec.ts`:
+  an all-zero-buffer `Network.enable` is accepted over `chrome.debugger`, the first read is empty, a click's
+  `fetch('/api/ping?secret=1')` comes back as `GET 200 …/api/ping` with no query).

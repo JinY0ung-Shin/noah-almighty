@@ -280,7 +280,8 @@ export interface BrowserRequest {
     | "find"
     | "zoom"
     | "read_url"
-    | "read_console";
+    | "read_console"
+    | "read_network";
   /** navigate/new_tab/read_url: absolute http(s) URL. */
   url?: string;
   /**
@@ -446,6 +447,17 @@ export interface BrowserConsoleEntry {
   time: number;
 }
 
+/** One read_network row. `status` 0 = no response yet; `durationMs` null = still in flight. */
+export interface BrowserNetworkEntry {
+  method: string;
+  url: string;
+  status: number;
+  type: string;
+  durationMs: number | null;
+  failed: string;
+  time: number;
+}
+
 export type BrowserResult =
   | {
       behavior: "ok";
@@ -535,6 +547,12 @@ export type BrowserResult =
        */
       consoleEntries?: BrowserConsoleEntry[];
       consoleTotal?: number;
+      /**
+       * read_network: the newest captured requests of the tab — method, URL
+       * WITHOUT query/fragment, status, type, timing; never headers or bodies.
+       */
+      networkEntries?: BrowserNetworkEntry[];
+      networkTotal?: number;
       /**
        * read_url: the GET's outcome. `body` is UNTRUSTED page content (text,
        * JSON pretty-printed); `url` is the FINAL url after redirects — never

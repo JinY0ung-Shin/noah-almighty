@@ -300,4 +300,34 @@ test.describe("0.29.0 browser ops in the real extension", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("read_network: its own consent, empty first read, then query-free rows", async () => {
+    const { context, noah, worker, dir } = await launch();
+    try {
+      await op(noah, { op: "setAllowedOrigins", patterns: ["localhost"] });
+      await groupFixture(worker);
+      const first = await opWithConsent(context, noah, { op: "read_network" });
+      expect(first.kind).toBe("network");
+      expect(first.reply.ok, first.reply.message).toBe(true);
+      expect(String(first.reply.note)).toContain("started NOW");
+      // Approving the network list did not approve the console.
+      const consoleAsk = await opWithConsent(context, noah, { op: "read_console" }, false);
+      expect(consoleAsk.kind).toBe("console");
+
+      const found = await op(noah, { op: "find", role: "button", name: "저장하기" });
+      const uid = /\[(e\d+)\]/.exec(String(found.snapshot))![1];
+      await op(noah, { op: "click", uid, maxChars: 500 });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const second = await op(noah, { op: "read_network" });
+      expect(second.ok, second.message).toBe(true);
+      const rows = second.networkEntries as { method: string; url: string; status: number; type: string }[];
+      const ping = rows.find((row) => row.url.endsWith("/api/ping"));
+      expect(ping, JSON.stringify(rows)).toBeTruthy();
+      expect(ping).toMatchObject({ method: "GET", status: 200, url: `http://localhost:${port}/api/ping` });
+      expect(JSON.stringify(rows)).not.toContain("secret=1");
+    } finally {
+      await context.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -79,6 +79,17 @@ export interface BridgeReply {
   /** read_console: newest captured console entries (page-derived, token-redacted) and the total captured. */
   consoleEntries?: { level: string; text: string; source: string; time: number }[];
   consoleTotal?: number;
+  /** read_network: newest captured requests (no query, no headers, no bodies) and the total captured. */
+  networkEntries?: {
+    method: string;
+    url: string;
+    status: number;
+    type: string;
+    durationMs: number | null;
+    failed: string;
+    time: number;
+  }[];
+  networkTotal?: number;
 }
 
 /**
@@ -142,7 +153,8 @@ export interface BridgeOperation {
     | "find"
     | "zoom"
     | "read_url"
-    | "read_console";
+    | "read_console"
+    | "read_network";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
@@ -404,7 +416,7 @@ export function extensionSupportsSecretInput(version: string | undefined | null)
 export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
 
 /** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
-export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url", "read_console"]);
+export const INSPECT_OPS: ReadonlySet<string> = new Set(["find", "zoom", "read_url", "read_console", "read_network"]);
 
 /**
  * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-

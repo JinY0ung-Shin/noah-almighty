@@ -2945,6 +2945,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     zoom: "화면 일부를 확대해 캡처하는 중…",
     read_url: "URL 내용을 읽는 중…",
     read_console: "콘솔 메시지를 읽는 중…",
+    read_network: "네트워크 요청 기록을 읽는 중…",
   };
   // The value itself never reaches a label: only the fact that one rides along,
   // so the user can see the avatar is entering a credential rather than text.
