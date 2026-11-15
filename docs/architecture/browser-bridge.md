@@ -29,5 +29,6 @@ version. Details in [extension.md](browser-bridge/extension.md).
   `navigate`/`new_tab` check `readerProxyRefusal` (`agent/browserTools.ts`: r.jina.ai, 12ft.io, archive.ph &
   co., Google cache, `*.translate.goog`, Translate's `/translate` page mode, Wayback `/save`) before the op is
   relayed: such a service fetches the URL on the avatar's behalf, so an internal URL would be handed to a third
-  party, and its copy is not what the user's login sees. Both metacognition surfaces say so; the redirect is to
-  open the page itself or `read_url`. Add a host to `READER_PROXY_HOSTS` when another one turns up.
+  party, and its copy is not what the user's login sees. `describe_system` and the manual topic
+  `browser-inspection` say so (the standing prompt has no room left under its 18 000-char budget, and the refusal
+  itself redirects): open the page itself or `read_url`. Add a host to `READER_PROXY_HOSTS` when another one turns up.
