@@ -5,6 +5,7 @@ import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import Icon from "./Icon";
 import { normalizeTags } from "../lib/format";
 import { usePropState } from "../lib/hooks";
+import { isImeComposing } from "../lib/ime";
 import { notify } from "../lib/state";
 import "./HashtagChipEditor.css";
 
@@ -58,7 +59,7 @@ export default function HashtagChipEditor({ tags: tagsProp = NO_TAGS, onTagsChan
     // A Korean IME owns these keys until it commits: Enter or space while
     // composing would add the tag from the uncommitted value and leave (or
     // repeat) the last syllable, and Backspace only edits the syllable.
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    if (isImeComposing(e)) return;
     if (e.key === "Enter" || e.key === ",") {
       e.preventDefault();
       addFromInput();

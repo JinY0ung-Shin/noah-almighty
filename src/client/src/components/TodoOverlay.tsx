@@ -85,6 +85,7 @@ import {
 } from "../lib/transition";
 import type { TodoFilter, TodoItem } from "../lib/types";
 import { todoDueBucket } from "../../../shared/todos";
+import { isImeComposing } from "../lib/ime";
 import "./TodoOverlay.css";
 
 export interface TodoOverlayProps {
@@ -935,7 +936,7 @@ export default function TodoOverlay({ ownAvatar = false }: TodoOverlayProps) {
   function onWindowKeydown(event: KeyboardEvent) {
     if (event.key !== "Escape" || !isTransient() || readState().todoOverlayDismissed || event.defaultPrevented) return;
     // An IME composition owns Escape until it commits; a dialog keeps its own.
-    if (event.isComposing || event.keyCode === 229) return;
+    if (isImeComposing(event)) return;
     const active = document.activeElement;
     if (active?.closest('[role="dialog"], [aria-modal="true"], .modal-overlay')) return;
     event.preventDefault();

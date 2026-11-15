@@ -35,6 +35,7 @@ import { quartOut, slide } from "../lib/transition";
 import type { TransitionConfig } from "../lib/transition";
 import type { ConversationSummary, User, ViewName } from "../lib/types";
 import type { FeatureHintAnchor } from "../../../server/releaseNotes";
+import { isImeComposing } from "../lib/ime";
 
 export interface ShellProps {
   user: User;
@@ -231,7 +232,7 @@ function ConversationRow({
               // A Korean IME owns Enter/Escape until it commits the syllable — and
               // the key must not reach the window either (the rail drawer closes on
               // Escape, which would blur this input and save the half-typed name).
-              if (event.nativeEvent.isComposing || event.keyCode === 229) {
+              if (isImeComposing(event)) {
                 event.stopPropagation();
                 return;
               }

@@ -33,6 +33,7 @@ import {
   type BrowserSecretPolicy,
 } from "../../../server/secretPolicy";
 import type { SharedMcpServerUserView, User } from "../lib/types";
+import { isImeComposing } from "../lib/ime";
 import "./SettingsAccessTab.css";
 
 export interface SettingsAccessTabProps {
@@ -981,7 +982,8 @@ export default function SettingsAccessTab({ active = false }: SettingsAccessTabP
                 // Enter saves the POLICY. In a preset row this input sits
                 // inside the <form> that saves the secret VALUE, so the
                 // default submit has to be stopped.
-                if (event.key !== "Enter") return;
+                // An IME composition owns its Enter until it commits.
+                if (event.key !== "Enter" || isImeComposing(event)) return;
                 event.preventDefault();
                 saveBrowserPolicy(name);
               }}

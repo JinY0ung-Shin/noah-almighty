@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useLatest, useWindowEvent } from "../lib/hooks";
 import { inertOutside, trapTab } from "../lib/modalBehavior";
+import { isImeComposing } from "../lib/ime";
 import type { ShareViewSlide } from "../lib/types";
 import "./SlidePresenter.css";
 
@@ -101,7 +102,7 @@ export default function SlidePresenter({ slides = NO_SLIDES, start = 0, title = 
   }
 
   function onKeydown(event: KeyboardEvent): void {
-    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || isImeComposing(event)) return;
     switch (event.key) {
       case "Escape":
         event.preventDefault();

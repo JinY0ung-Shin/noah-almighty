@@ -88,6 +88,7 @@ import {
 } from "../../../../shared/mcpToolGroups";
 import { TOUR_SCENARIOS, type TourScenario } from "../../../../shared/tourScenarios";
 import { isPptxCard } from "../../../../shared/shareLinks";
+import { isImeComposing } from "../../lib/ime";
 
 /* ------------------------------------------------------------------ */
 /* helpers that read only their arguments                              */
@@ -1229,7 +1230,9 @@ export function useChatController() {
         else setSlashIndex((slashIndexRef.current + (event.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
         return;
       }
-      if (event.key === "Enter") {
+      // An Enter that commits an IME syllable is not a pick: the query would miss
+      // its last syllable (it falls through to the composer's own guard below).
+      if (event.key === "Enter" && !isImeComposing(event)) {
         event.preventDefault();
         applySlash(item, matches[Math.min(slashIndexRef.current, matches.length - 1)]);
         return;
@@ -1247,7 +1250,7 @@ export function useChatController() {
     }
     // As drawn: the key that reveals a physical keyboard does not itself send.
     if (!enterSends) return;
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+    if (event.key === "Enter" && !event.shiftKey && !isImeComposing(event)) {
       if (item.streaming) {
         // Mid-turn message: the server hands it to the model between the running
         // turn's tool calls.
@@ -1321,7 +1324,7 @@ export function useChatController() {
   function onRewindEditKeydown(event: KeyboardEvent<HTMLTextAreaElement>, item: ChatPane) {
     if (/^(Key|Digit|Numpad|Arrow|F\d)/.test(event.code || "")) setPhysicalKeyboard(true);
     // An IME composition owns Enter and Escape until it commits.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (isImeComposing(event)) return;
     if (event.key === "Escape") {
       event.preventDefault();
       cancelRewindEdit(item.id);

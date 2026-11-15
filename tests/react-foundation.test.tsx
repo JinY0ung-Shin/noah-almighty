@@ -544,6 +544,20 @@ describe("Modal", () => {
     expect(view.getByTestId("deep").querySelector(".modal-overlay")).toBeNull();
   });
 
+  it("leaves an Escape that belongs to an IME composition alone", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal onClose={onClose}>
+        <input aria-label="이름" />
+      </Modal>,
+    );
+    fireEvent.keyDown(window, { key: "Escape", isComposing: true });
+    fireEvent.keyDown(window, { key: "Escape", keyCode: 229 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("leaves Escape to the dialog on top: a confirmation over a form closes alone", async () => {
     // The 예약 작업 편집 → 삭제 → Esc case: one Escape used to close the
     // confirmation AND the form under it, throwing the edits away.

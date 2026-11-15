@@ -3,6 +3,7 @@ import Icon from "./Icon";
 import { answerPrompt } from "../lib/chat";
 import { cx, useAppState, useWindowEvent } from "../lib/hooks";
 import { isTopDialogLayer, openModalFocus, trapTab } from "../lib/modalBehavior";
+import { isImeComposing } from "../lib/ime";
 
 export interface PromptModalProps {
   // When `paneId` is set the modal is scoped to one chat pane (rendered inside it
@@ -208,7 +209,7 @@ export default function PromptModal({ paneId = null }: PromptModalProps) {
     if (event.key === "Escape") {
       // Escape while a Korean IME composes a 직접 입력 answer cancels the
       // composition, never the whole question.
-      if (event.isComposing || event.keyCode === 229) return;
+      if (isImeComposing(event)) return;
       // A question must not be silently dismissible, so Escape maps to the same
       // SAFE decision as the 건너뛰기 button rather than to a no-answer close.
       // A pane instance only answers for its own card so that one Escape can't

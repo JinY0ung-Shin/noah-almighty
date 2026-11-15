@@ -7,6 +7,7 @@ import { cssColor, cssToken, currentTheme, theme } from "../lib/theme";
 import type { ResolvedTheme } from "../lib/theme";
 import { SECTION_COLORS, SECTION_ORDER, defaultHiddenSections, nodeDegrees, sectionColor, sectionKey, sectionLabel } from "../lib/knowledgeGraph";
 import type { KnowledgeGraph, KnowledgeGraphNode } from "../lib/types";
+import { isImeComposing } from "../lib/ime";
 import "./GraphCanvas.css";
 
 // Reusable interactive knowledge-graph canvas (Obsidian-style). Renders a
@@ -494,7 +495,7 @@ export default function GraphCanvas({ graph, selectedId = null, onSelect }: Grap
   function onSearchKey(event: ReactKeyboardEvent<HTMLInputElement>): void {
     // A Korean IME owns the keys until it commits: Enter while composing would
     // pick a match for the query WITHOUT its last syllable.
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (isImeComposing(event)) return;
     if (event.key === "ArrowDown" && matches.length) {
       event.preventDefault();
       setSearchOpen(true);

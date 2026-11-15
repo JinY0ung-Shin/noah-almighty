@@ -14,6 +14,7 @@ import { cx, useAppState } from "../lib/hooks";
 import { loadAdminOverview } from "../lib/loaders";
 import { notify, readState, replaceState, updateState, type ClientState } from "../lib/state";
 import { timeLabel } from "../lib/format";
+import { isImeComposing } from "../lib/ime";
 import type { AdminTab, AdminUserSummary, SignupMode } from "../lib/types";
 import {
   ADMIN_NOTICE_LEVELS,
@@ -1278,7 +1279,8 @@ export default function AdminView() {
                               setToolSkillError("");
                             }}
                             onKeyDown={(event) => {
-                              if (event.key === "Enter") {
+                              // An Enter that commits an IME syllable must not add the name without it.
+                              if (event.key === "Enter" && !isImeComposing(event)) {
                                 event.preventDefault();
                                 addCustomDisabledSkill();
                               }

@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEven
 import { createPortal } from "react-dom";
 import { cx, useLatest, useWindowEvent } from "../lib/hooks";
 import { isTopDialogLayer, openModalFocus, trapTab } from "../lib/modalBehavior";
+import { isImeComposing } from "../lib/ime";
 import { prefersReducedMotion, project, rubberband, springValue } from "../lib/motion";
 import { useTransition } from "../lib/presence";
 import { fade, fly, quartOut } from "../lib/transition";
@@ -151,6 +152,9 @@ export default function Modal({
     // under its own confirmation) leaves Escape and Tab to the one on top.
     if (!isTopDialogLayer(overlayRef.current)) return;
     if (event.key === "Escape") {
+      // Escape while an IME composes (a Korean syllable in a form field) only
+      // ends the composition; it must not close the dialog with it.
+      if (isImeComposing(event)) return;
       close();
     } else if (event.key === "Tab") {
       trapTab(event, cardRef.current);
