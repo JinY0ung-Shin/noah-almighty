@@ -188,7 +188,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return row ? this.toConversationSummary(row) : null;
     }
 
-    private ownsConversation(ownerId: string, conversationId: string): boolean {
+    /** Whether the conversation exists and is `ownerId`'s (the ONE owner check; StoreBase). */
+    ownsConversation(ownerId: string, conversationId: string): boolean {
       const row = this.db
         .prepare("SELECT owner_user_id FROM conversations WHERE id = ?")
         .get(conversationId) as { owner_user_id: string } | undefined;
@@ -951,8 +952,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
      */
     private readonly inlineUiReportQueue = new CanvasRenderReportQueue();
 
-    /** The id of the conversation's newest assistant message, or null when it has none. */
-    private latestAssistantMessageId(conversationId: string): string | null {
+    /** The id of the conversation's newest assistant message, or null when it has none (StoreBase). */
+    latestAssistantMessageId(conversationId: string): string | null {
       const row = this.db
         .prepare("SELECT id FROM messages WHERE conversation_id = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 1")
         .get(conversationId) as { id: string } | undefined;

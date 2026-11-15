@@ -1550,6 +1550,10 @@ export interface StoreBase {
     firstUserText: string,
     opts?: { isRoutine?: boolean },
   ): void;
+  /** Whether the conversation exists and is `ownerId`'s (store/conversations.ts). */
+  ownsConversation(ownerId: string, conversationId: string): boolean;
+  /** The id of the conversation's newest assistant message, or null (store/conversations.ts). */
+  latestAssistantMessageId(conversationId: string): string | null;
   deleteCanvasArtifactsForConversation(conversationId: string): void;
   /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */
   deleteShareLinksForConversation(conversationId: string): void;
