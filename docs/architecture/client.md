@@ -418,6 +418,26 @@ Server half and the contract: [server-core.md](server-core.md) (#admin-notice).
   `GET /api/avatars` (`listPublishedAvatars`) includes the viewer's OWN avatar plus every teammate's 팀 공개
   (`group`) avatar — every visible non-own avatar is a teammate's, so Explore carries no membership badge.
 
+## Composer drafts (`lib/chatDrafts.ts`)
+- **A keystroke never publishes the app state.** `setPaneDraft`/`setPaneRewindDraft` write `pane.draft` /
+  `pane.rewindEdit.draft` IN PLACE and bump `draftEdits`; only the composer and the rewind editor subscribe
+  (`useStoreVersion(draftEdits)`), so typing redraws the field, not every `MessageRow` (pinned by
+  `tests/react-chat-typing.test.tsx`, which counts row renders). Consequence: anything that DRAWS a draft-
+  derived value (send enabled, slash matches, `aria-activedescendant`) must be computed inside `Composer`,
+  never in `useChatController` — the controller does not re-render on a keystroke. Every OTHER draft write
+  (a send clearing it, a failure restoring it, a seeded chat) still goes through `updateState`.
+- **Drafts survive switching conversations** (memory only, page lifetime). Every pane swap in `lib/chat.ts`
+  ends with `settlePaneSwap(before)`: dropped panes are stashed (text, staged images, fully-read documents,
+  an open rewind edit), then each NEW pane with no draft of its own takes what was stashed for it — stash
+  before take, so reopening the conversation on screen keeps its draft. Key (`draftKey`): a saved
+  conversation (has messages or is in a conversation list) → `conversation:<id>`; a never-sent new chat →
+  `new:<avatarId>`. A taken draft leaves the stash; a sent one is never stashed; `forgetConversationWidgets`
+  (every deletion path) also forgets the draft; another user signing in starts empty. **A new pane swap
+  calls `settlePaneSwap`.**
+- **`beforeunload` is armed only while some draft (on screen or stashed) holds unsent work** — text that is
+  not blank, staged files, or a rewind edit that differs from its message (`watchUnsentDrafts`, installed by
+  `App`, checked once per microtask so a swap does not flap it).
+
 ## 할 일 tab and chat card
 Mechanics → [`todos.md`](todos.md). Load-bearing for any change here: ONE store slice feeds the rail
 badge, the tab and the card; concurrent loads share one in-flight GET and only WRITES make a load stale

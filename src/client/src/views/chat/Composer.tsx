@@ -10,7 +10,8 @@ import { autosize, clickOutside } from "../../lib/dom";
 import { featureHintAnchor } from "../../lib/featureHints";
 import { IMAGE_ACCEPT, IMAGE_AND_DOCUMENT_ACCEPT, documentTypeLabel, removePendingDocument } from "../../lib/composerDocuments";
 import { formatFileSize, formatUsageLabel } from "../../lib/format";
-import { cx, useAction } from "../../lib/hooks";
+import { draftEdits } from "../../lib/chatDrafts";
+import { cx, useAction, useStoreVersion } from "../../lib/hooks";
 import type { ChatPane } from "../../lib/types";
 import { DEFAULT_EFFORT_LEVEL } from "../../../../server/effortLevels";
 import { MCP_TOOL_GROUPS, isRequiredMcpToolGroup } from "../../../../shared/mcpToolGroups";
@@ -78,6 +79,11 @@ function ToolsPanel({ ctx, item }: { ctx: ChatController; item: ChatPane }) {
 export function Composer({ ctx, item, compact, index }: { ctx: ChatController; item: ChatPane; compact: boolean; index: number }) {
   const { state, pane, enterSends, adminBlockedMcpToolGroupSet, bridgeCompat, slashIndex } = ctx;
   const { todoLoaded, todoOpenCount, todoOverdueCount, todoCountPop } = ctx;
+  // A keystroke writes `item.draft` in place without an app-state publication
+  // (lib/chatDrafts.ts), so the composer redraws on THIS signal alone — the
+  // view around it (and every transcript row) does not. Everything below that
+  // depends on the draft is therefore derived HERE, in this render.
+  useStoreVersion(draftEdits);
   // Grows with the draft, and shrinks back when a send clears it.
   const box = useAction(autosize, item.draft);
   const takesDocuments = paneTakesDocuments(item, state);
@@ -89,7 +95,8 @@ export function Composer({ ctx, item, compact, index }: { ctx: ChatController; i
   const todoHere = ctx.todoOverlayShown && pane?.id === item.id;
   const settingsOpen = ctx.composerSettingsOpenPaneId === item.id;
   const toolsOpen = ctx.mcpToolsOpenPaneId === item.id;
-  const activeDescendant = ctx.activeSlashDescendant[item.id];
+  // aria-activedescendant follows ArrowUp/Down over the CURRENT matches.
+  const activeDescendant = matches.length ? slashOptionId(item.id, Math.min(slashIndex, matches.length - 1)) : undefined;
   const badge =
     bridgeCompat && selectedMcpToolGroups(item).includes("browser") && !adminBlockedMcpToolGroupSet.has("browser") ? bridgeBadge(bridgeCompat) : null;
   // The document-attach hint (#feature-hints) points at the + button — only

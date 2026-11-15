@@ -10,6 +10,7 @@ import { appState, newId, notify, readState, updateState, type ClientState } fro
 import { isDrawioAttachment } from "./drawioViewer";
 import { WORKSPACE_TAB, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState } from "./widgetState";
+import { forgetConversationDraft, setPaneRewindDraft, stashPaneDraft, takeDraft } from "./chatDrafts";
 import { inlineUiPlainText } from "../../../shared/widget/detect";
 import { formatTokenCount } from "./format";
 import { flushReveal, handoffReveal, noteLiveText, resetReveal } from "./streamReveal";
@@ -206,12 +207,42 @@ function makePane(
  * — the server run is untouched (only POST /api/chat/runs/:id/cancel ends one),
  * so reattaching to it later still works. Pass the pane list captured BEFORE the
  * swap; whatever survived into the new state is left alone.
+ *
+ * The same swap moves DRAFTS (lib/chatDrafts.ts): a dropped pane's unsent text,
+ * staged files and open edit are stashed first, then every pane that is new on
+ * screen takes back what was stashed for its conversation (or, for a new chat,
+ * its avatar) — stash before take, so reopening the conversation that was just
+ * on screen keeps its draft. A pane that already holds a draft of its own (a
+ * seeded chat) takes nothing. Call this after EVERY pane swap.
  */
-function abortDroppedPanes(before: ChatPane[]): void {
-  const live = new Set(readState().chatPanes.map((item) => item.id));
+function settlePaneSwap(before: ChatPane[]): void {
+  const state = readState();
+  const live = new Set(state.chatPanes.map((item) => item.id));
+  const prior = new Set(before.map((item) => item.id));
   for (const pane of before) {
-    if (!live.has(pane.id)) pane.abortController?.abort();
+    if (live.has(pane.id)) continue;
+    stashPaneDraft(pane, state);
+    pane.abortController?.abort();
   }
+  const restored = new Map<string, NonNullable<ReturnType<typeof takeDraft>>>();
+  for (const pane of state.chatPanes) {
+    if (prior.has(pane.id) || pane.draft || pane.pendingImages?.length || pane.pendingDocuments?.length || pane.rewindEdit) continue;
+    const record = takeDraft(pane, state);
+    if (record) restored.set(pane.id, record);
+  }
+  if (!restored.size) return;
+  updateState((s) => {
+    for (const pane of s.chatPanes) {
+      const record = restored.get(pane.id);
+      if (!record) continue;
+      pane.draft = record.text;
+      if (record.images.length) pane.pendingImages = record.images;
+      if (record.documents.length) pane.pendingDocuments = record.documents;
+      // The edit comes back only onto a row that can still be edited.
+      const edit = record.rewindEdit;
+      if (edit && isRewindAnchor(pane.messages.find((m) => m.id === edit.messageId))) pane.rewindEdit = edit;
+    }
+  });
 }
 
 export async function startChatWith(
@@ -254,7 +285,7 @@ export async function startChatWith(
     state.activePaneId = pane.id;
     state.view = "chat";
   });
-  abortDroppedPanes(before);
+  settlePaneSwap(before);
   syncHash();
   void loadConversations();
 }
@@ -293,7 +324,7 @@ export async function openSeededChat(
     state.activePaneId = pane.id;
     state.view = "chat";
   });
-  abortDroppedPanes(before);
+  settlePaneSwap(before);
   syncHash();
   void loadConversations();
   notify(notice, "info");
@@ -381,7 +412,7 @@ export async function selectConversation(
     s.activePaneId = pane.id;
     s.view = "chat";
   });
-  abortDroppedPanes(before);
+  settlePaneSwap(before);
   syncHash(true);
   // NOT awaited: attachActiveRun resolves only when the RUN ends, and a run
   // parked on a blocking canvas can wait 30 minutes. Awaiting it would hold this
@@ -417,6 +448,7 @@ export async function addConversationToSplit(
   // The SAME load-and-apply as selectConversation (prefetch reuse included).
   const pane = await loadPaneForConversation(conversationId);
   if (!pane) return;
+  const before = [...readState().chatPanes];
   updateState((s) => {
     if (s.chatPanes.length >= MAX_CHAT_PANES) return;
     s.chatPanes.push(pane);
@@ -424,6 +456,7 @@ export async function addConversationToSplit(
     s.currentAvatar = pane.avatar;
     s.view = "chat";
   });
+  settlePaneSwap(before);
   syncHash(true);
   // Not awaited, same as selectConversation: this resolves only at run end, and
   // the sidebar's "분할 대화에 추가" button is disabled until the caller returns.
@@ -447,7 +480,7 @@ export function newChat(paneId?: string, opts?: { force?: boolean }): void {
     state.currentAvatar = next.avatar;
   });
   // force:true can replace a still-streaming pane (startNewChat's confirm path).
-  abortDroppedPanes(before);
+  settlePaneSwap(before);
   syncHash();
 }
 
@@ -482,12 +515,14 @@ export async function startNewChat(): Promise<void> {
     `/api/avatars/${encodeURIComponent(me.id)}`,
   );
   const fresh = makePane(avatar);
+  const before = [...readState().chatPanes];
   updateState((s) => {
     s.currentAvatar = avatar;
     s.chatPanes = [fresh];
     s.activePaneId = fresh.id;
     s.view = "chat";
   });
+  settlePaneSwap(before);
   syncHash();
   void loadConversations();
 }
@@ -499,6 +534,9 @@ export async function startNewChat(): Promise<void> {
  */
 export function forgetConversationWidgets(conversationId: string): void {
   removeConversationWidgetState(readState().user?.id, conversationId);
+  // Its unsent draft too (lib/chatDrafts.ts): kept, it would bring the page's
+  // leave prompt back for a conversation that no longer exists.
+  forgetConversationDraft(conversationId);
 }
 
 export async function clearChatHistory(): Promise<number> {
@@ -511,11 +549,7 @@ export async function clearChatHistory(): Promise<number> {
     return 0;
   }
   for (const id of ids) forgetConversationWidgets(id);
-  for (const pane of readState().chatPanes) {
-    if (ids.has(pane.conversationId)) {
-      pane.abortController?.abort();
-    }
-  }
+  const before = [...readState().chatPanes];
   updateState((state) => {
     state.conversations = state.conversations.filter(
       (conversation) => !ids.has(conversation.id),
@@ -531,6 +565,8 @@ export async function clearChatHistory(): Promise<number> {
     );
     state.currentAvatar = activePane?.avatar ?? state.currentAvatar;
   });
+  // Aborts the deleted conversations' panes (their drafts were forgotten above).
+  settlePaneSwap(before);
   syncHash(true);
   return result.deleted || ids.size;
 }
@@ -702,10 +738,12 @@ export function startRewindEdit(paneId: string, messageId: string): void {
   });
 }
 
+/**
+ * A keystroke in the rewind editor: written in place without publishing the app
+ * state (lib/chatDrafts.ts) — the editor redraws itself, the transcript does not.
+ */
 export function setRewindEditDraft(paneId: string, draft: string): void {
-  updatePane(paneId, (pane) => {
-    if (pane.rewindEdit) pane.rewindEdit.draft = draft;
-  });
+  setPaneRewindDraft(paneId, draft);
 }
 
 export function cancelRewindEdit(paneId: string): void {
@@ -763,15 +801,39 @@ export async function submitRewindEdit(paneId: string): Promise<void> {
  * 다시 생성: re-run the LAST ordinary user turn. Every row after it goes — each
  * answer segment and steer of that turn, not just the final
  * row (the server drops the same set, so a reload shows what the screen shows).
+ * It deletes what 여기서부터 다시 deletes (the answer, its shared file cards,
+ * their share links), so it asks first the same way, with the same two halves:
+ * what is deleted, and that work already done stays. Cancel changes nothing.
  */
-export function regenerate(paneId: string): void {
+export async function regenerate(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane || pane.streaming || !canRegenerate(pane.messages)) return;
-  const anchorIndex = lastTurnOpenerIndex(pane.messages);
-  void sendMessage(paneId, pane.messages[anchorIndex].content, {
+  const anchorId = pane.messages[lastTurnOpenerIndex(pane.messages)].id;
+  const confirmed = await confirmAction(REGENERATE_CONFIRM, {
+    title: "다시 생성",
+    confirmLabel: "다시 생성",
+    tone: "danger",
+  });
+  if (!confirmed) return;
+  // The dialog is asynchronous: the pane may have started streaming, moved to
+  // another conversation, or gained a newer turn meanwhile.
+  const current = readState().chatPanes.find((item) => item.id === paneId);
+  if (
+    !current ||
+    current.streaming ||
+    current.conversationId !== pane.conversationId ||
+    !canRegenerate(current.messages) ||
+    current.messages[lastTurnOpenerIndex(current.messages)].id !== anchorId
+  )
+    return;
+  await sendMessage(paneId, current.messages[lastTurnOpenerIndex(current.messages)].content, {
     regenerate: true,
   });
 }
+
+/** 다시 생성's confirm text, worded like 여기서부터 다시's. */
+export const REGENERATE_CONFIRM =
+  "답변을 다시 생성할까요?\n\n지금 답변과 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. 작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.";
 
 /**
  * Per pane, the optimistic USER bubble of the send in flight. The `open` frame
@@ -1741,12 +1803,15 @@ export async function closePane(paneId: string): Promise<void> {
   const pane = readState().chatPanes.find((item) => item.id === paneId);
   if (!pane) return;
   if (pane.streaming) void stopPane(paneId);
+  const before = [...readState().chatPanes];
   updateState((s) => {
     s.chatPanes = s.chatPanes.filter((item) => item.id !== paneId);
     if (!s.chatPanes.length && s.currentAvatar)
       s.chatPanes = [makePane(s.currentAvatar)];
     s.activePaneId = s.chatPanes[0]?.id || null;
   });
+  // A closed pane's draft is kept for its conversation, as on any switch.
+  settlePaneSwap(before);
 }
 
 /* ---------- SSE handling ---------- */

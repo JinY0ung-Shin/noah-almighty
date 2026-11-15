@@ -767,7 +767,7 @@ describe("pane lifecycle", () => {
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => !pane(id).streaming && pane(id).messages.length === 2);
     expect(bodies[0].regenerate).toBe(true);
     expect(pane(id).messages.map((m) => m.content)).toEqual(["질문", "새 답변"]);
@@ -3368,6 +3368,19 @@ async function confirmNext(answer: boolean): Promise<void> {
   resolveConfirmation(answer);
 }
 
+/**
+ * 다시 생성 asks first (a danger confirm, worded like 여기서부터 다시's): start it
+ * and press 다시 생성. Returns right after the press, before the send's first
+ * await, so the optimistic cut can be observed "at once".
+ */
+async function regenerateConfirmed(id: string): Promise<void> {
+  void regenerate(id);
+  await flush();
+  expect(get(confirmation)).toMatchObject({ title: "다시 생성", confirmLabel: "다시 생성", tone: "danger" });
+  resolveConfirmation(true);
+  await Promise.resolve();
+}
+
 describe("여기서부터 다시 (rewind) + 다시 생성", () => {
   it("regenerate re-runs the last turn opener and drops EVERY row after it — segments, steers, background reports", async () => {
     const id = seedPane({
@@ -3397,7 +3410,7 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     // The optimistic cut happens at once: nothing after the opener survives.
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2"]);
     await waitFor(() => !pane(id).streaming);
@@ -3405,6 +3418,38 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
     expect(bodies[0]).toMatchObject({ regenerate: true, message: "둘째 질문" });
     expect(bodies[0].rewindFromMessageId).toBeUndefined();
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1", "u2", "n1"]);
+  });
+
+  it("regenerate asks first — what goes, and that work already done stays — and 취소 changes nothing", async () => {
+    const messages = [row("u1", "user", "질문"), row("a1", "assistant", "답")];
+    const id = seedPane({ conversationId: "c", messages });
+    const fetchFn = noFetch();
+    const pending = regenerate(id);
+    await flush();
+    const asked = get(confirmation);
+    expect(asked).toMatchObject({ title: "다시 생성", confirmLabel: "다시 생성", tone: "danger" });
+    expect(asked?.message).toContain("지금 답변과 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다");
+    expect(asked?.message).toContain("이미 실행된 작업은 그대로 남습니다");
+    resolveConfirmation(false);
+    await pending;
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "a1"]);
+    expect(pane(id).streaming).toBe(false);
+  });
+
+  it("regenerate sends nothing when the turn changed while the confirm was open", async () => {
+    const id = seedPane({ conversationId: "c", messages: [row("u1", "user", "질문"), row("a1", "assistant", "답")] });
+    const fetchFn = noFetch();
+    const pending = regenerate(id);
+    await flush();
+    // A newer turn landed (another tab) while the dialog was up.
+    updateState((s) => {
+      s.chatPanes.find((p) => p.id === id)!.messages.push(row("u2", "user", "새 질문"), row("a2", "assistant", "새 답"));
+    });
+    resolveConfirmation(true);
+    await pending;
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(pane(id).messages).toHaveLength(4);
   });
 
   it("regenerate leaves the composer's draft and staged images for the next message", async () => {
@@ -3426,7 +3471,7 @@ describe("여기서부터 다시 (rewind) + 다시 생성", () => {
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => !pane(id).streaming);
     await flush();
     expect(bodies[0].images).toBeUndefined();
@@ -3711,7 +3756,7 @@ describe("여기서부터 다시: image-only rows, adoption and re-reads", () =>
       return undefined;
     });
     expect(canRegenerate(pane(id).messages)).toBe(true);
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => bodies.length === 1);
     expect(bodies[0]).toMatchObject({ regenerate: true, message: "" });
   });
@@ -3794,7 +3839,7 @@ describe("여기서부터 다시: image-only rows, adoption and re-reads", () =>
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => pane(id).messages.some((m) => m.id === "u0"));
     // The anchor kept its own id; the pane now shows exactly the server's rows.
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "u0", "srv-a"]);
@@ -3882,7 +3927,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => pane(id).liveRunId === "r1");
     // Picked mid-run: "다음 메시지부터 적용됩니다".
     updateState((s) => {
@@ -3956,7 +4001,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => pane(id).liveText.length > 0);
     await stopPane(id);
     await waitFor(() => !pane(id).streaming);
@@ -3984,7 +4029,7 @@ describe("여기서부터 다시: re-reads leave the pickers alone and never rol
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    await regenerateConfirmed(id);
     await waitFor(() => pane(id).messages[1]?.content === "쓰다 만 (서버)");
     expect(pane(id).messages.map((m) => m.id)).toEqual(["u1", "srv-stop"]);
   });

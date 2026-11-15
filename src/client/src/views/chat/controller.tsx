@@ -34,6 +34,7 @@ import {
   submitRewindEdit,
 } from "../../lib/chat";
 import { api } from "../../lib/api";
+import { setPaneDraft } from "../../lib/chatDrafts";
 import {
   allowlistSeed,
   browserBridgeReachable,
@@ -451,11 +452,11 @@ export function streamingPlaceholder(sends: boolean): string {
     : `응답 중에도 메시지를 보낼 수 있어요 · 보내기 버튼을 누르면 ${STEER_WHEN}`;
 }
 
+// Written in place WITHOUT publishing the app state (lib/chatDrafts.ts): only the
+// composer redraws on a keystroke, never the transcript. Everything that reads
+// the draft reads `item.draft` live.
 function setDraft(paneId: string, value: string) {
-  updateState((state) => {
-    const target = state.chatPanes.find((item) => item.id === paneId);
-    if (target) target.draft = value;
-  });
+  setPaneDraft(paneId, value);
 }
 
 function setActive(paneId: string) {
@@ -936,16 +937,6 @@ export function useChatController() {
       destroy: release,
     };
   }
-
-  // Per-pane active slash-option id, so aria-activedescendant tracks ArrowUp/Down.
-  function activeSlashOptionId(item: ChatPane): string | undefined {
-    if (slashPaneId !== item.id) return undefined;
-    const matches = slashMatches(item);
-    if (!matches.length) return undefined;
-    return slashOptionId(item.id, Math.min(slashIndex, matches.length - 1));
-  }
-  const activeSlashDescendant: Record<string, string | undefined> = {};
-  for (const p of state.chatPanes) activeSlashDescendant[p.id] = activeSlashOptionId(p);
 
   function toggleComposerSettings(item: ChatPane) {
     const closing = composerSettingsOpenPaneIdRef.current === item.id;
@@ -1566,7 +1557,6 @@ export function useChatController() {
     // composer
     slashPaneId,
     slashIndex,
-    activeSlashDescendant,
     applySlash,
     mcpToolsOpenPaneId,
     composerSettingsOpenPaneId,

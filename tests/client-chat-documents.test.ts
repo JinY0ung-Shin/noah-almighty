@@ -462,7 +462,10 @@ describe("sendMessage with staged documents", () => {
       if (url === "/api/conversations") return jsonRes({ conversations: [] });
       return undefined;
     });
-    regenerate(id);
+    // 다시 생성 asks first (a danger confirm): press it.
+    void regenerate(id);
+    await flush();
+    resolveConfirmation(true);
     await waitFor(() => bodies.length === 1 && !pane(id).streaming);
     await flush();
     expect(bodies[0]).toMatchObject({ regenerate: true, message: "" });

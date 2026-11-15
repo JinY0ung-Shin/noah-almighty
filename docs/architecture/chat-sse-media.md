@@ -28,7 +28,9 @@
   message}`) REPLACES that row and every row after it; 다시 생성 (`regenerate: true`) re-runs the LAST
   NON-STEER user row in place — its STORED text, slash commands re-expanded — and drops every row after
   it: all answer segments and steers of that run. (The old `dropLastAssistant` removed only the last row, so
-  segments resurfaced on reload and the user text reached the model twice.)
+  segments resurfaced on reload and the user text reached the model twice.) BOTH ask first with a danger
+  confirm (`confirmAction`, tone `danger`) naming what is deleted (the rows, their file cards and share
+  links) and that work already done stays; a cancel sends nothing.
   - **Exact context via recorded resume points.** The runner fires `onResumePoint({sessionId, uuid})` with the
     committed response id (both fields carry it). The route keeps the latest per run and stamps it on the
     assistant rows the SUCCESS boundaries persist (`turn_end`, `done`) as `messages.sdk_session_id`/`sdk_uuid`

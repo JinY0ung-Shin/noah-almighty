@@ -34,7 +34,8 @@ import {
 import { autosize, enhanceMarkdown, markdownBlocks } from "../../lib/dom";
 import { DOCUMENT_TYPE_LIST, documentTypeLabel } from "../../lib/composerDocuments";
 import { formatFileSize, renderMarkdownCached, timeLabel } from "../../lib/format";
-import { cx, useAction, useMergedRef } from "../../lib/hooks";
+import { draftEdits } from "../../lib/chatDrafts";
+import { cx, useAction, useMergedRef, useStoreVersion } from "../../lib/hooks";
 import type { StreamBlock } from "../../lib/streamMarkdown";
 import { messageRevealKey, revealedAttachments, revealedText } from "../../lib/streamReveal";
 import { formatThinkingDuration, thinkingElapsed, thinkingTopic } from "../../lib/streamThinking";
@@ -278,6 +279,9 @@ function streamedAnswer(
 
 /** The inline editor of 여기서부터 다시: the bubble's text, in place. */
 function RewindEditor({ ctx, item, message }: { ctx: ChatController; item: ChatPane; message: StoredMessage }) {
+  // A keystroke writes the edit in place without an app-state publication
+  // (lib/chatDrafts.ts): the editor redraws on this signal, the transcript not.
+  useStoreVersion(draftEdits);
   const draft = item.rewindEdit?.draft ?? "";
   const node = useRef<HTMLTextAreaElement | null>(null);
   const ref = useMergedRef<HTMLTextAreaElement>(node, useAction(autosize, draft));
@@ -524,7 +528,7 @@ function MessageRow({ ctx, item, message, index }: { ctx: ChatController; item: 
             </button>
           ) : null
         ) : index === item.messages.length - 1 && !item.streaming && canRegenerate(item.messages) ? (
-          <button className="msg-act regen" type="button" aria-label="다시 생성" title="다시 생성" onClick={() => regenerate(item.id)}>
+          <button className="msg-act regen" type="button" aria-label="다시 생성" title="다시 생성" onClick={() => void regenerate(item.id)}>
             <Icon name="refresh" />
           </button>
         ) : null}

@@ -12,6 +12,7 @@ import WhatsNewModal from "./components/WhatsNewModal";
 import { dismissAdminNotice } from "./lib/adminNotice";
 import { api, setSessionExpiredHandler } from "./lib/api";
 import { selectConversation } from "./lib/chat";
+import { watchUnsentDrafts } from "./lib/chatDrafts";
 import { cx, useAppState } from "./lib/hooks";
 import { loadRailCollapsed, persistRailCollapsed } from "./lib/layout";
 import { loadInboxData, startKnowledgeWatch, stopKnowledgeWatch } from "./lib/loaders";
@@ -234,9 +235,12 @@ export default function App() {
         notify(`대화를 열지 못했습니다: ${(err as Error).message}`, "warn"),
       );
     });
+    // Leaving the page asks first only while a draft holds unsent work.
+    const stopDraftGuard = watchUnsentDrafts();
     void boot();
     return () => {
       cleanup();
+      stopDraftGuard();
       stopKnowledgeWatch();
     };
   }, []);
