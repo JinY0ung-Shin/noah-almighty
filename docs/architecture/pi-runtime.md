@@ -155,7 +155,7 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    pi keeps the stopped turn but does NOT feed its partial text back to the model (seen live in S05: the continued
    request carries the stopped prompt, no assistant message), so the route hands the stopped row's text as
    `AgentRequest.stoppedAnswer` and a CONTINUED turn's input restates it (`Stopped answer: …<stopped_answer>`, tail
-   4 000 chars; `buildPiTurnPreamble`). A fresh session needs no note — its text history ends with that row.
+   4 000 chars, every `<` inside written `\u003c` so the answer cannot close the frame; `buildPiTurnPreamble`). A fresh session needs no note — its text history ends with that row.
 8. **Mid-turn messages (P2)** — a steer (or an async `ask_avatar` answer) is handed to the RUNNING response
    (`POST /v1/responses/{id}/input`); pi folds it in at its next tool-call boundary and streams
    `response.input_consumed`, which marks it delivered. One pi did not deliver (`undelivered_input`) stays queued and
