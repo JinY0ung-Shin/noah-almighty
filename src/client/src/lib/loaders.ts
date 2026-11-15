@@ -3,6 +3,8 @@ import { api, refreshMe } from "./api";
 import { goView } from "./nav";
 import { notify, readState, replaceState, updateState } from "./state";
 import { emptyTodoState, refreshTodos, resetTodoClientState } from "./todos";
+import { primeWidgetStates } from "./widgetState";
+import type { InlineUiStatesByMessage } from "../../../shared/inlineUiState";
 import type {
   AdminPresence,
   AdminStats,
@@ -56,8 +58,19 @@ export async function loadMessages(
   selectedEffort?: string | null;
   selectedMcpToolGroups?: import("../../../shared/mcpToolGroups").McpToolGroupId[] | null;
   canvases?: CanvasArtifact[];
+  inlineUiStates?: InlineUiStatesByMessage;
 }> {
-  return api(`/api/messages?conversationId=${encodeURIComponent(conversationId)}`);
+  const loaded = await api<{
+    messages: StoredMessage[];
+    selectedModel?: string | null;
+    selectedEffort?: string | null;
+    selectedMcpToolGroups?: import("../../../shared/mcpToolGroups").McpToolGroupId[] | null;
+    canvases?: CanvasArtifact[];
+    inlineUiStates?: InlineUiStatesByMessage;
+  }>(`/api/messages?conversationId=${encodeURIComponent(conversationId)}`);
+  // Before the messages are drawn: an answer's controls mount where the viewer left them.
+  primeWidgetStates(readState().user?.id, conversationId, loaded.inlineUiStates);
+  return loaded;
 }
 
 export async function loadSettingsData(): Promise<void> {

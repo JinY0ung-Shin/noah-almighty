@@ -1352,6 +1352,12 @@ export interface TodoPromptSnapshot {
   items: { title: string; dueDate: string | null; priority: TodoPriority; source: TodoSource; status: OpenTodoStatus }[];
 }
 
+/** One `{@state}` value the user left in the controls of the latest answer (`AgentRequest.inlineUiStateChanges`). */
+export interface InlineUiStateChange {
+  name: string;
+  value: unknown;
+}
+
 export interface AgentRequest {
   message: string;
   avatar: AgentAvatar;
@@ -1667,6 +1673,16 @@ export interface AgentRequest {
    * content, never instructions. Absent = nothing to report.
    */
   inlineUiRenderErrors?: string[];
+  /**
+   * What the person this turn answers changed in the controls of the
+   * conversation's LATEST answer (`PUT /api/conversations/:id/ui-states/:mid`,
+   * `store.takeInlineUiStateForTurn`): the `{@state}` names whose declaration
+   * the answer still holds, with the value the user left. CONSUMED by the host
+   * when it started this turn — told once per change, never repeated while
+   * unchanged — and only on a run with `inlineUiEnabled`. User-set DATA, never
+   * instructions. Absent = nothing changed since the avatar was last told.
+   */
+  inlineUiStateChanges?: InlineUiStateChange[];
   /**
    * Canvas render errors the viewer's browser reported since this conversation's
    * last turn (`POST /api/canvases/:canvasId/render-report`), CONSUMED by the

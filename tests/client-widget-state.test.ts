@@ -1,8 +1,10 @@
-// Inline UI state in localStorage (lib/widgetState.ts): one key per
-// (user, conversation, message), a size cap, an LRU of 50 answers, no throw
-// when storage is unavailable — and the in-memory handover of a streaming
-// answer's state to the stored message it becomes.
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Inline UI state (lib/widgetState.ts): kept on the server per viewer, held in
+// this page's memory, and in localStorage only until the server confirms it
+// (one key per (user, conversation, message), a size cap, an LRU of 50 answers,
+// no throw when storage is unavailable); the one-time upload of what the
+// browser-only build left; and the in-memory handover of a streaming answer's
+// state to the stored message it becomes.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   MAX_WIDGET_STATE_CHARS,
@@ -14,7 +16,12 @@ import {
   peekLiveWidgetState,
   removeConversationWidgetState,
   removeWidgetState,
+  primeWidgetStates,
+  resetWidgetStateMemory,
   saveWidgetState,
+  setWidgetStateTransport,
+  settleWidgetStateRequests,
+  type WidgetStatePutResult,
   setLiveWidgetState,
   takeLiveWidgetState,
   widgetStateKey,
@@ -47,7 +54,25 @@ const brokenStorage = {
   },
 };
 
-afterEach(() => vi.useRealTimers());
+// The server, faked: every PUT is recorded; what it answers is set per test
+// ("failed" by default, so what was saved stays waiting in localStorage).
+const puts: { conversationId: string; messageId: string; record: unknown }[] = [];
+let putResult: WidgetStatePutResult = "failed";
+
+beforeEach(() => {
+  resetWidgetStateMemory();
+  puts.length = 0;
+  putResult = "failed";
+  setWidgetStateTransport(async (target, record) => {
+    puts.push({ ...target, record });
+    return putResult;
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  setWidgetStateTransport(null);
+});
 
 describe("widgetState", () => {
   it("round-trips a record under a per-user, per-canvas key", () => {
@@ -133,15 +158,19 @@ describe("widgetState", () => {
 
   it("keeps the most recently saved canvases and evicts the oldest", () => {
     const storage = memoryStorage();
+    const local = (id: string) => {
+      resetWidgetStateMemory(); // read what this browser holds, not the page's copy
+      return loadWidgetState(ref("u1", id), storage);
+    };
     for (let i = 0; i < MAX_WIDGET_STATE_ENTRIES + 3; i++) saveWidgetState(ref("u1", `cv${i}`), { n: { sig: "n = 2", value: i } }, dataSize, storage);
-    expect(loadWidgetState(ref("u1", "cv0"), storage)).toBeNull();
-    expect(loadWidgetState(ref("u1", "cv2"), storage)).toBeNull();
-    expect(loadWidgetState(ref("u1", "cv3"), storage)).toEqual({ n: { sig: "n = 2", value: 3 } });
+    expect(local("cv0")).toBeNull();
+    expect(local("cv2")).toBeNull();
+    expect(local("cv3")).toEqual({ n: { sig: "n = 2", value: 3 } });
     // Saving an old canvas again makes it recent.
     saveWidgetState(ref("u1", "cv3"), { n: { sig: "n = 2", value: 33 } }, dataSize, storage);
     saveWidgetState(ref("u1", "new"), { n: { sig: "n = 2", value: 0 } }, dataSize, storage);
-    expect(loadWidgetState(ref("u1", "cv3"), storage)).toEqual({ n: { sig: "n = 2", value: 33 } });
-    expect(loadWidgetState(ref("u1", "cv4"), storage)).toBeNull();
+    expect(local("cv3")).toEqual({ n: { sig: "n = 2", value: 33 } });
+    expect(local("cv4")).toBeNull();
     expect(JSON.parse(storage.data.get(WIDGET_STATE_INDEX_KEY)!)).toHaveLength(MAX_WIDGET_STATE_ENTRIES);
   });
 
@@ -197,12 +226,17 @@ describe("widgetState", () => {
     }).not.toThrow();
   });
 
-  it("never throws when storage is blocked or missing", () => {
+  it("never throws when storage is blocked or missing", async () => {
     expect(loadWidgetState(ref("u1", "cv1"), brokenStorage)).toBeNull();
-    expect(saveWidgetState(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } }, dataSize, brokenStorage)).toBe(false);
+    // Without storage the page's copy and the server still hold it.
+    expect(saveWidgetState(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } }, dataSize, brokenStorage)).toBe(true);
+    expect(loadWidgetState(ref("u1", "cv1"), brokenStorage)).toEqual({ n: { sig: "n = 2", value: 5 } });
     expect(() => removeWidgetState(ref("u1", "cv1"), brokenStorage)).not.toThrow();
     expect(loadWidgetState(ref("u1", "cv1"), null)).toBeNull();
-    expect(saveWidgetState(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } }, dataSize, null)).toBe(false);
+    expect(saveWidgetState(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } }, dataSize, null)).toBe(true);
+    await settleWidgetStateRequests();
+    expect(puts.map((put) => put.messageId)).toEqual(["cv1", "cv1"]);
+    expect(() => primeWidgetStates("u1", "conv-1", { cv2: { n: { sig: "n = 2", value: 1 } } }, brokenStorage)).not.toThrow();
     const saver = createWidgetStateSaver(dataSize, 10, brokenStorage);
     expect(() => {
       saver.schedule(ref("u1", "cv1"), { n: { sig: "n = 2", value: 5 } });
@@ -237,6 +271,127 @@ describe("widgetState", () => {
     expect(loadWidgetState(ref("u1", "cv1", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 5 } });
     vi.advanceTimersByTime(300);
     expect(loadWidgetState(ref("u1", "cv2", "conv-saver"), storage)).toEqual({ n: { sig: "n = 2", value: 6 } });
+  });
+});
+
+describe("widgetState on the server", () => {
+  const record = { n: { sig: "n = 2", value: 5 } };
+
+  it("sends every save as a PUT of that answer, and keeps the local copy only until the server confirms it", async () => {
+    const storage = memoryStorage();
+    const key = widgetStateKey(ref("u1", "m1"))!;
+    // Offline: the save waits in localStorage.
+    expect(saveWidgetState(ref("u1", "m1"), record, dataSize, storage)).toBe(true);
+    await settleWidgetStateRequests();
+    expect(puts).toEqual([{ conversationId: "conv-1", messageId: "m1", record }]);
+    expect(JSON.parse(storage.data.get(key)!)).toMatchObject({ values: record });
+    // Back online: confirmed, and the local copy goes.
+    putResult = "ok";
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 6 } }, dataSize, storage);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(key)).toBe(false);
+    expect(loadWidgetState(ref("u1", "m1"), storage)).toEqual({ n: { sig: "n = 2", value: 6 } });
+    // Refused for good (the message is gone): nothing is kept to retry.
+    putResult = "gone";
+    saveWidgetState(ref("u1", "m2"), record, dataSize, storage);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(widgetStateKey(ref("u1", "m2"))!)).toBe(false);
+  });
+
+  it("an empty or oversized record clears the server's copy too", async () => {
+    putResult = "ok";
+    saveWidgetState(ref("u1", "m1"), record, dataSize, memoryStorage());
+    saveWidgetState(ref("u1", "m1"), {}, dataSize, memoryStorage());
+    const huge = { text: { sig: 'text = ""', value: "가".repeat(MAX_WIDGET_STATE_CHARS) } };
+    saveWidgetState(ref("u1", "m2"), huge, dataSize, memoryStorage());
+    await settleWidgetStateRequests();
+    expect(puts.filter((put) => put.messageId === "m1").map((put) => put.record)).toEqual([record, {}]);
+    expect(puts.filter((put) => put.messageId === "m2").map((put) => put.record)).toEqual([{}]);
+  });
+
+  it("sends the requests of one answer in order, the next after the previous has finished", async () => {
+    let release: () => void = () => {};
+    const order: string[] = [];
+    setWidgetStateTransport(async (target, sent) => {
+      order.push(`start ${JSON.stringify(sent)}`);
+      if (order.length === 1) await new Promise<void>((resolve) => (release = resolve));
+      order.push(`end ${JSON.stringify(sent)}`);
+      return "ok";
+    });
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 1 } }, dataSize, memoryStorage());
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 2 } }, dataSize, memoryStorage());
+    await Promise.resolve();
+    expect(order).toHaveLength(1);
+    release();
+    await settleWidgetStateRequests();
+    expect(order.map((line) => line.split(" ")[0])).toEqual(["start", "end", "start", "end"]);
+    expect(order[2]).toContain('"value":2');
+  });
+
+  it("primes the page from the messages response; what this page saved since wins over it", () => {
+    primeWidgetStates("u1", "conv-1", { m1: record, m2: { bad: { value: 1 } } as never }, memoryStorage());
+    expect(loadWidgetState(ref("u1", "m1"), null)).toEqual(record);
+    expect(loadWidgetState(ref("u1", "m2"), null)).toBeNull();
+    // Another account on this browser never reads it.
+    expect(loadWidgetState(ref("u2", "m1"), null)).toBeNull();
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 9 } }, dataSize, null);
+    primeWidgetStates("u1", "conv-1", { m1: record }, null);
+    expect(loadWidgetState(ref("u1", "m1"), null)).toEqual({ n: { sig: "n = 2", value: 9 } });
+    // An older server (no field) changes nothing.
+    expect(() => primeWidgetStates("u1", "conv-1", undefined, null)).not.toThrow();
+  });
+
+  it("moves what the browser-only build kept to the server once, then drops the local key", async () => {
+    putResult = "ok";
+    const legacy = widgetStateKey(ref("u1", "m-old"))!;
+    const both = widgetStateKey(ref("u1", "m-both"))!;
+    const other = widgetStateKey(ref("u1", "m-x", "conv-2"))!;
+    const storage = memoryStorage({
+      [legacy]: JSON.stringify(record),
+      [both]: JSON.stringify({ n: { sig: "n = 2", value: 1 } }),
+      [other]: JSON.stringify(record),
+      [WIDGET_STATE_INDEX_KEY]: JSON.stringify([legacy, both, other]),
+    });
+    primeWidgetStates("u1", "conv-1", { "m-both": { n: { sig: "n = 2", value: 8 } } }, storage);
+    // The server has nothing for m-old: uploaded. It has m-both: the server's copy wins, the old one is dropped.
+    expect(puts).toEqual([{ conversationId: "conv-1", messageId: "m-old", record }]);
+    expect(loadWidgetState(ref("u1", "m-old"), null)).toEqual(record);
+    expect(loadWidgetState(ref("u1", "m-both"), null)).toEqual({ n: { sig: "n = 2", value: 8 } });
+    expect(storage.data.has(both)).toBe(false);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(legacy)).toBe(false);
+    // Another conversation's key waits for that conversation.
+    expect(storage.data.has(other)).toBe(true);
+    // Done once: the next load has nothing left to move.
+    puts.length = 0;
+    primeWidgetStates("u1", "conv-1", { "m-old": record }, storage);
+    expect(puts).toEqual([]);
+  });
+
+  it("a save the server never confirmed is sent again on the next load, and wins over the server's older copy", async () => {
+    const storage = memoryStorage();
+    saveWidgetState(ref("u1", "m1"), { n: { sig: "n = 2", value: 7 } }, dataSize, storage);
+    await settleWidgetStateRequests();
+    // Next page load.
+    resetWidgetStateMemory();
+    puts.length = 0;
+    putResult = "ok";
+    primeWidgetStates("u1", "conv-1", { m1: { n: { sig: "n = 2", value: 3 } } }, storage);
+    expect(loadWidgetState(ref("u1", "m1"), null)).toEqual({ n: { sig: "n = 2", value: 7 } });
+    expect(puts).toEqual([{ conversationId: "conv-1", messageId: "m1", record: { n: { sig: "n = 2", value: 7 } } }]);
+    await settleWidgetStateRequests();
+    expect(storage.data.has(widgetStateKey(ref("u1", "m1"))!)).toBe(false);
+  });
+
+  it("never sends for a conversation deleted in this page load, even a save that was pending", () => {
+    vi.useFakeTimers();
+    const saver = createWidgetStateSaver(dataSize, 300, memoryStorage());
+    saver.schedule(ref("u1", "m1", "conv-gone"), record);
+    removeConversationWidgetState("u1", "conv-gone", memoryStorage());
+    vi.advanceTimersByTime(300);
+    primeWidgetStates("u1", "conv-gone", { m1: record }, memoryStorage());
+    expect(puts).toEqual([]);
+    expect(loadWidgetState(ref("u1", "m1", "conv-gone"), null)).toBeNull();
   });
 });
 

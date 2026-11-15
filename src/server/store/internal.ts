@@ -640,6 +640,27 @@ export class StoreBase {
         updated_at TEXT NOT NULL,
         completed_at TEXT
       );
+      -- Inline UI state (store/inlineUiStates.ts): what ONE viewer changed in the
+      -- controls of ONE stored answer (values_json = { name: { sig, value } },
+      -- setter-changed values only, ≤ MAX_INLINE_UI_STATE_CHARS, the 50 most
+      -- recently saved answers per viewer + conversation). reported = the avatar
+      -- has already been told these values (a later change clears it). The ONE
+      -- foreign key of the schema, on purpose: every path that deletes a message
+      -- (conversation delete, deleteUser, rewind/다시 생성, retirements) takes
+      -- the rows with it, so no message-deleting path can forget the cascade
+      -- (foreign_keys = ON at open). A brand-new table: CREATE TABLE IF NOT
+      -- EXISTS IS the existing-deployment migration.
+      CREATE TABLE IF NOT EXISTS inline_ui_states (
+        user_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        values_json TEXT NOT NULL,
+        reported INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, message_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_inline_ui_states_message ON inline_ui_states(message_id);
+      CREATE INDEX IF NOT EXISTS idx_inline_ui_states_conversation ON inline_ui_states(conversation_id, user_id);
       -- Team brain (팀 브레인) cards (docs/architecture/team-brain.md). COMMITTED
       -- content lives in the local git vault <dataDir>/team-brain; this table holds
       -- each card's draft + its provenance (who, from which conversation, what).

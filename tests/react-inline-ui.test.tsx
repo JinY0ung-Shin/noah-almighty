@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AnswerUi from "../src/client/src/components/widget/AnswerUi";
 import { resetCanvasRenderReports } from "../src/client/src/lib/canvasReport.js";
-import { clearLiveWidgetState } from "../src/client/src/lib/widgetState.js";
+import { clearLiveWidgetState, resetWidgetStateMemory } from "../src/client/src/lib/widgetState.js";
 import * as chat from "../src/client/src/lib/chat.js";
 import { replaceState } from "../src/client/src/lib/state.js";
 import type { ChatPane } from "../src/client/src/lib/types.js";
@@ -77,8 +77,18 @@ function pane(messages: StoredMessage[], over: Record<string, unknown> = {}): Ch
 
 const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => ({ ok: true, status: 200, json: async () => ({ avatars: [], conversations: [], messages: [], skills: [] }) }));
 
+/** The values last PUT to the server for one answer of conv-1 (JSON text), or null. */
+function savedOnServer(messageId: string): string | null {
+  const calls = fetchMock.mock.calls.filter(
+    ([url, init]) => String(url) === `/api/conversations/conv-1/ui-states/${messageId}` && init?.method === "PUT",
+  );
+  const last = calls[calls.length - 1];
+  return last ? JSON.stringify(JSON.parse(String(last[1]?.body)).values) : null;
+}
+
 beforeEach(() => {
   localStorage.clear();
+  resetWidgetStateMemory();
   resetCanvasRenderReports();
   clearLiveWidgetState("pane-1");
   vi.mocked(chat.sendWidgetMessage).mockClear();
@@ -151,8 +161,8 @@ describe("AnswerUi across the end of a turn", () => {
     // The turn ends: the stored answer that continues the live text takes it, and keeps it.
     const stored = render(<AnswerUi pane={idlePane} text={CALC} messageId="m-new" latest={true} />);
     await waitFor(() => expect(stored.container.textContent).toContain("합계 27개"));
-    await waitFor(() => expect(localStorage.getItem("noah:inline-ui:u1:conv-1:m-new")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 9 } })), { timeout: 2000 });
-    expect(localStorage.getItem("noah:inline-ui:u1:conv-1:m-old")).toBeNull();
+    await waitFor(() => expect(savedOnServer("m-new")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 9 } })), { timeout: 2000 });
+    expect(savedOnServer("m-old")).toBeNull();
     // A live bubble of ANOTHER run starts clean.
     const next = render(<AnswerUi pane={pane([], { streaming: true, liveRunId: "run-2" })} text={CALC} streaming={true} />);
     await act(async () => {});
@@ -178,9 +188,9 @@ describe("AnswerUi across the end of a turn", () => {
     signIn();
     const view = render(<AnswerUi pane={idlePane} text={CALC} messageId="local-1" latest={true} />);
     fireEvent.change(within(view.container).getByRole("slider", { name: "수량" }), { target: { value: "8" } });
-    await waitFor(() => expect(localStorage.getItem("noah:inline-ui:u1:conv-1:local-1")).not.toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(savedOnServer("local-1")).not.toBeNull(), { timeout: 2000 });
     view.rerender(<AnswerUi pane={idlePane} text={CALC} messageId="srv-1" latest={true} />);
-    await waitFor(() => expect(localStorage.getItem("noah:inline-ui:u1:conv-1:srv-1")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 8 } })), { timeout: 2000 });
+    await waitFor(() => expect(savedOnServer("srv-1")).toBe(JSON.stringify({ n: { sig: "n = 2", value: 8 } })), { timeout: 2000 });
     expect(localStorage.getItem("noah:inline-ui:u1:conv-1:local-1")).toBeNull();
   });
 });

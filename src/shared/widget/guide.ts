@@ -22,6 +22,9 @@ export const INLINE_UI_COMPONENTS_MANUAL_TOPIC = "inline-ui-components";
 /** Heading of the paragraph that tells the avatar what the viewer's browser could not draw. */
 export const INLINE_UI_REPORT_TITLE = "Inline UI render report";
 
+/** Heading of the paragraph that tells the avatar what the user left in the controls of its latest answer. */
+export const INLINE_UI_STATE_TITLE = "Inline UI state";
+
 function shape(c: ComponentSpec): string {
   const props = Object.entries(c.props)
     .map(([name, p]) => `${name}${p.required ? "*" : ""}`)
@@ -63,7 +66,7 @@ Rules
 - Blocks: \`{#each list as item, index} … {:else} … {/each}\` and \`{#if cond} … {:else if cond} … {:else} … {/if}\`.
 - Expressions are a safe JavaScript subset: literals, template strings, arrays/objects/spread, \`.\` \`[]\` \`?.\` \`??\`, arithmetic/comparison/logical operators, ternaries, arrow functions, the usual array/string/number methods, \`Math.*\`, \`Number\`, \`String\`, \`JSON\`, \`Object.keys/values/entries\`. No assignment, loops, \`Date\`, regular expressions, \`fetch\`, DOM or \`Math.random\`.
 - Setters and \`copy(text)\` work only inside an event handler: \`onChange={setX}\`, \`onClick={() => setTab("b")}\`.
-- The UI recomputes in the user's browser. You are NOT called when they change an input and you never see the values they set. Only two things reach you, each as the user's NEXT message: \`<button send="text">Label</button>\` (posts that text — it may be computed from state and never starts with "/") and \`<submit values={{ a, b }}>Label</submit>\` (posts the label followed by the values).
+- The UI recomputes in the user's browser. You are NOT called when they change an input; what they changed in your LATEST answer is told to you at the start of your next turn ("${INLINE_UI_STATE_TITLE}" — data, not a request). Only two things reach you AS the user's NEXT message: \`<button send="text">Label</button>\` (posts that text — it may be computed from state and never starts with "/") and \`<submit values={{ a, b }}>Label</submit>\` (posts the label followed by the values).
 - Links open in a new tab: \`<button href="https://…">\`, \`<link href="https://…">text</link>\`, \`[text](https://…)\`. \`<image src alt>\` shows only an image of THIS conversation (the URL \`mcp__file_output__show_file\` returns with \`hidden:true\`).
 - Inline only the data the UI needs — it cannot load anything, and it stays in the conversation's context.
 - Use the user's language for every visible text.

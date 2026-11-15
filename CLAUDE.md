@@ -164,6 +164,11 @@ These are the invariants the project is built around. New work should reinforce 
   side-panel artifact. Everything it can draw is on show at `#/uiGallery`, drawn by the SAME renderer:
   **a new component or chart type gets its sample in `lib/uiGallery.ts`** (a test fails without one).
   → `chat-sse-media.md` ("Inline UI").
+- **What a viewer sets in inline UI is THEIR data, kept on the server per viewer per answer** (it survives
+  reloads and devices), and the avatar hears it ONLY as untrusted data: what the conversation owner changed
+  in the LATEST answer, once per change, in the next interactive turn's preamble — never live, never a
+  command. Its rows hang off `messages` by foreign key, so every message-deleting path cascades them.
+  → `chat-sse-media.md` ("State is per ANSWER").
 - **A release note with a control on screen also SHOWS itself there.** The 새로워진 기능 dialog stays; an
   item's `hint` (same registry) rings that control and explains it in a bubble until the user presses
   알겠어요 or uses the control — recorded per account, never for a bubble that merely could not be shown.
