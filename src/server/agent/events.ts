@@ -273,7 +273,11 @@ export interface BrowserRequest {
     | "list_tabs"
     | "new_tab"
     | "select_tab"
-    | "close_tab";
+    | "close_tab"
+    // 0.29.0 additions. An older extension never sees these: the client probes
+    // the installed version first (INSPECT_OPS_MIN_EXTENSION_VERSION) and
+    // answers ok:false with an update prompt instead of forwarding.
+    | "find";
   /** navigate/new_tab: absolute http(s) URL. */
   url?: string;
   /**
@@ -284,6 +288,11 @@ export interface BrowserRequest {
   name?: string;
   /** read_storage only: which store to read — localStorage vs sessionStorage. */
   kind?: "local" | "session";
+  /**
+   * find only: exact AX role to match (case-insensitive). `name` is find's
+   * case-insensitive substring of the element's printed label/value.
+   */
+  role?: string;
   /**
    * Element uid minted by a previous snapshot. Required by click/type/hover,
    * optional on press_key/scroll/click_at (uid mode), and a SCOPE on

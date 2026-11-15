@@ -1154,6 +1154,28 @@ describe("browser extension bundle", () => {
     expect(BROWSER_EXTENSION_MIN_COMPATIBLE).toBe("0.6.0");
   });
 
+  it("never asks for an inspect-op build newer than the one it ships, and never moves the fleet floor", () => {
+    // Same two failure shapes as the secret-input pin above, for the 0.29.0 op
+    // set (find/zoom/read_url/read_console/read_network/batch): the client gates
+    // each on INSPECT_OPS_MIN_EXTENSION_VERSION and tells the user to update, so
+    // that version must be one the bundled download actually provides — and the
+    // reinstall floor must not move for ops an older build simply refuses.
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), "src", "client", "src", "lib", "browserBridge.ts"),
+      "utf8",
+    );
+    const declared = /export const INSPECT_OPS_MIN_EXTENSION_VERSION = "([^"]+)"/.exec(clientSource);
+    expect(declared, "browserBridge.ts must export INSPECT_OPS_MIN_EXTENSION_VERSION").toBeTruthy();
+    const need = declared![1].split(".").map(Number);
+    const bundled = browserExtensionVersion()!.split(".").map(Number);
+    let cmp = 0;
+    for (let i = 0; i < Math.max(need.length, bundled.length) && cmp === 0; i += 1) {
+      cmp = (need[i] ?? 0) - (bundled[i] ?? 0);
+    }
+    expect(cmp, `inspect-op floor ${declared![1]} exceeds bundled ${browserExtensionVersion()}`).toBeLessThanOrEqual(0);
+    expect(BROWSER_EXTENSION_MIN_COMPATIBLE).toBe("0.6.0");
+  });
+
   it("ships every extension/ file except deliberate dev-only excludes", () => {
     // Field-bricking invariant: a new file under extension/ that a coder forgets
     // to add to BUNDLE_FILES silently ships an incomplete zip/install. Diff the

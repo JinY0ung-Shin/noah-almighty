@@ -2096,6 +2096,7 @@ export async function executeChatTurn(
                 url: requestData.url ?? null,
                 name: requestData.name ?? null,
                 kind: requestData.kind ?? null,
+                role: requestData.role ?? null,
                 uid: requestData.uid ?? null,
                 x: typeof requestData.x === "number" ? requestData.x : null,
                 y: typeof requestData.y === "number" ? requestData.y : null,
@@ -2269,7 +2270,10 @@ export async function executeChatTurn(
             if (
               requestData.op !== "snapshot" &&
               requestData.op !== "wait_for" &&
-              requestData.op !== "dialog_status"
+              requestData.op !== "dialog_status" &&
+              // find is a FILTERED snapshot (same AX read, fewer lines): it is
+              // snapshot-class, not a deliberate exfiltration read.
+              requestData.op !== "find"
             ) {
               audit({
                 action: `browser_${requestData.op}`,

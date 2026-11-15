@@ -126,12 +126,16 @@ export interface BridgeOperation {
     | "list_tabs"
     | "new_tab"
     | "select_tab"
-    | "close_tab";
+    | "close_tab"
+    /** 0.29.0+: only forwarded after the version probe (INSPECT_OPS_MIN_EXTENSION_VERSION). */
+    | "find";
   url?: string | null;
   /** read_cookies: one cookie by name; read_storage: one entry by key (else all). */
   name?: string | null;
   /** read_storage only: which store to read — localStorage vs sessionStorage. */
   kind?: "local" | "session" | null;
+  /** find only: exact accessibility role to match. */
+  role?: string | null;
   uid?: string | null;
   /** click_at/drag pixel mode: coordinates on the most recent viewport screenshot. */
   x?: number | null;
@@ -362,6 +366,36 @@ export const SECRET_INPUT_MIN_EXTENSION_VERSION = "0.28.0";
 export function extensionSupportsSecretInput(version: string | undefined | null): boolean {
   if (!version) return false;
   const cmp = compareBridgeVersions(version, SECRET_INPUT_MIN_EXTENSION_VERSION);
+  return cmp !== null && cmp >= 0;
+}
+
+/**
+ * First extension build that knows the 0.29.0 op set (`INSPECT_OPS`). An older
+ * build answers those ops "Unsupported operation" at best — the server
+ * translates that into a generic update prompt — but the gate lives HERE, like
+ * the secret-input one, so the reply can name the op and the version that is
+ * missing, and so nothing new is even forwarded to a build that predates it.
+ * `BROWSER_EXTENSION_MIN_COMPATIBLE` deliberately does NOT move: every op an
+ * older build already knows keeps working, which is a degrade, not a break.
+ *
+ * KEEP THIS DECLARATION ON ONE LINE — `tests/infra.test.ts` pins it against the
+ * bundled manifest version by REGEX over this file's text, exactly like
+ * SECRET_INPUT_MIN_EXTENSION_VERSION above.
+ */
+export const INSPECT_OPS_MIN_EXTENSION_VERSION = "0.29.0";
+
+/** The ops that need INSPECT_OPS_MIN_EXTENSION_VERSION; probed before forwarding. */
+export const INSPECT_OPS: ReadonlySet<string> = new Set(["find"]);
+
+/**
+ * May the installed build be handed one of `INSPECT_OPS`? Same fail-toward-
+ * refusal reading as extensionSupportsSecretInput: an unknown or unparseable
+ * version is a NO, so the model gets an update prompt instead of a silent
+ * "Unsupported operation".
+ */
+export function extensionSupportsInspectOps(version: string | undefined | null): boolean {
+  if (!version) return false;
+  const cmp = compareBridgeVersions(version, INSPECT_OPS_MIN_EXTENSION_VERSION);
   return cmp !== null && cmp >= 0;
 }
 

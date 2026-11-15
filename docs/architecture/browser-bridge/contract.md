@@ -187,3 +187,15 @@
   contract, both metacognition surfaces, and the relay are untouched, so nothing can branch on this version
   and nothing should: the cure for an affected install is simply taking the update (composer badge
   `compatible` → update prompt), not a reinstall order.
+- **0.29.0 adds a SET of new ops, degraded on an older build by a CLIENT-side version probe — and the floor
+  still stays 0.6.0.** `browserBridge.ts` exports `INSPECT_OPS_MIN_EXTENSION_VERSION` (`0.29.0`, one line,
+  pinned against the bundled manifest by `tests/infra.test.ts` exactly like the secret-input constant),
+  `INSPECT_OPS` (the op names) and `extensionSupportsInspectOps`; `relayBrowserOp` (client `lib/chat.ts`)
+  runs the same `readAllowedOrigins` probe the secret path uses before forwarding any op in that set, and on
+  an older or unknown version answers the server `ok:false` with an English update prompt naming the op and
+  the version — the op is never forwarded. The server's "Unsupported operation" translation stays as the
+  second net (a client older than the server). Every op an older build already knows keeps working, so this
+  is a degrade, not a break, and `BROWSER_EXTENSION_MIN_COMPATIBLE` does not move. The set, one per bullet
+  in actions.md / snapshots.md:
+  - `find` (`role`, `name`, optional `uid` scope → the matching `[eN] …` atoms in `snapshot`, a count in
+    `note`) — snapshots.md "find".

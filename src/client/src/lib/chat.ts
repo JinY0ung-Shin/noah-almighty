@@ -17,6 +17,9 @@ import { flushReveal, handoffReveal, noteLiveText, resetReveal } from "./streamR
 import { noteThinking, resetThinkingClock, thinkingElapsedMs } from "./streamThinking";
 import {
   extensionSupportsSecretInput,
+  extensionSupportsInspectOps,
+  INSPECT_OPS,
+  INSPECT_OPS_MIN_EXTENSION_VERSION,
   readAllowedOrigins,
   SECRET_INPUT_MIN_EXTENSION_VERSION,
   sendToExtension,
@@ -2870,17 +2873,38 @@ function secretInputUnsupportedReply(version: string | undefined): BridgeReply {
  * extension version, so this probe is the only place it can be read, and it
  * runs BEFORE the plaintext leaves this frame.
  */
+/**
+ * Model-facing refusal for an install that predates the 0.29.0 op set. The op
+ * is NOT forwarded: an older build would answer "Unsupported operation", which
+ * says nothing about which version would.
+ */
+function inspectOpUnsupportedReply(op: string, version: string | undefined): BridgeReply {
+  return {
+    ok: false,
+    message:
+      `The installed Noah browser extension (${version ? `v${version}` : "version unknown"}) predates ` +
+      `mcp__browser__${op} (needs ${INSPECT_OPS_MIN_EXTENSION_VERSION} or newer), so nothing was done. ` +
+      "Tell the user to update the extension from 설정 → 접근/보안 → 브라우저 브릿지 " +
+      "(download the zip again, replace the loaded folder's contents, press ↻ on the extension card). " +
+      "Until then use the older tools (snapshot, read_text, screenshot, click, type and the tab tools).",
+  };
+}
+
 async function relayBrowserOp(
   operation: BridgeOperation,
   carriesSecret: boolean,
 ): Promise<BridgeReply> {
-  if (!carriesSecret) return sendToExtension(operation);
+  const inspectOp = INSPECT_OPS.has(String(operation.op));
+  if (!carriesSecret && !inspectOp) return sendToExtension(operation);
   const probe = await readAllowedOrigins();
   // Unreachable or erroring extension: its own reason is the true one (and is
   // already written for the model), so don't overwrite it with a version story.
   if (!probe.ok) return { ok: false, message: probe.message };
-  if (!extensionSupportsSecretInput(probe.version)) {
+  if (carriesSecret && !extensionSupportsSecretInput(probe.version)) {
     return secretInputUnsupportedReply(probe.version);
+  }
+  if (inspectOp && !extensionSupportsInspectOps(probe.version)) {
+    return inspectOpUnsupportedReply(String(operation.op), probe.version);
   }
   return sendToExtension(operation);
 }
@@ -2917,6 +2941,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     new_tab: "새 탭을 여는 중…",
     select_tab: "탭을 전환하는 중…",
     close_tab: "탭을 닫는 중…",
+    find: "페이지에서 요소를 찾는 중…",
   };
   // The value itself never reaches a label: only the fact that one rides along,
   // so the user can see the avatar is entering a credential rather than text.
@@ -2940,6 +2965,7 @@ function handleBrowserOp(paneId: string, data: any): void {
     url: data.url,
     name: data.name,
     kind: data.kind,
+    role: data.role,
     uid: data.uid,
     x: data.x,
     y: data.y,

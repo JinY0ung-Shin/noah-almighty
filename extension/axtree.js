@@ -2937,3 +2937,83 @@ export function clipboardCopiedNote(info) {
     "copy tool's result said, then re-read the page to confirm the paste landed."
   );
 }
+
+// ---------------------------------------------------------------------- find
+//
+// `find` answers "where is the X?" without making the agent read a whole page:
+// it filters the SAME atoms a snapshot renders, so every uid it prints is one
+// the snapshot would have printed (minted through the same mintUid, valid for
+// click/type exactly as long as a snapshot's). Pure here so the matching rules —
+// which are the whole contract — are unit-tested.
+
+/** How many matches one find returns before it says "more". */
+export const FIND_MAX_MATCHES = 20;
+
+/** A matched atom is printed at most this long; a 40 KB textbox value is not a search hit. */
+export const FIND_ATOM_PRINT_MAX = 300;
+
+/** One `[eN] role …` piece inside a (possibly row-joined) snapshot atom. */
+const FIND_PIECE = /^\[(e\d+)\] (\S+)(.*)$/s;
+
+/**
+ * Case- and width-insensitive form for matching. NFKC folds full-width Latin and
+ * compatibility jamo onto their ordinary forms; Hangul has no case, so lowering
+ * is a no-op for it and the match stays an exact syllable substring (a query of
+ * "저장" matches "저장하기", never a decomposed partial syllable). Whitespace
+ * runs collapse so a name the renderer re-spaced still matches.
+ */
+export function findFold(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Filter rendered snapshot atoms down to the uid elements matching `role`
+ * (exact AX role, case-insensitive) and/or `name` (substring of everything the
+ * line prints after the role: the quoted label, its `= "value"`, state flags).
+ *
+ * A table row is ONE atom holding several `[eN] …` cells joined by " | ", so the
+ * atom is split at those seams and each cell is judged on its own — a match
+ * prints the cell, never the whole row. Lines without a uid (prose, headings
+ * the renderer did not mint) cannot be acted on, so they never count as
+ * matches; `textOnly` reports how many of them contained `name`, so a zero-hit
+ * answer can say the words ARE on the page but not on anything clickable.
+ *
+ * Returns `{ lines, total, textOnly }`: `lines` holds at most `limit` matches in
+ * document order, `total` how many there were in all.
+ */
+export function findAtoms(atoms, opts) {
+  const wantRole = findFold(opts?.role);
+  const wantName = findFold(opts?.name);
+  const limit = Number(opts?.limit) > 0 ? Math.floor(Number(opts.limit)) : FIND_MAX_MATCHES;
+  const lines = [];
+  let total = 0;
+  let textOnly = 0;
+  for (const atom of Array.isArray(atoms) ? atoms : []) {
+    if (typeof atom !== "string" || !atom.trim()) continue;
+    const pieces = atom.trim().split(/ \| (?=\[e\d+\] )/);
+    let pieceMatched = false;
+    for (const piece of pieces) {
+      const parsed = FIND_PIECE.exec(piece.trim());
+      if (!parsed) continue;
+      const [, , role, rest] = parsed;
+      if (wantRole && findFold(role) !== wantRole) continue;
+      if (wantName && !findFold(rest).includes(wantName)) continue;
+      pieceMatched = true;
+      total += 1;
+      if (lines.length < limit) {
+        const text = piece.trim();
+        lines.push(
+          text.length > FIND_ATOM_PRINT_MAX ? `${text.slice(0, FIND_ATOM_PRINT_MAX)}… [cut]` : text,
+        );
+      }
+    }
+    if (!pieceMatched && wantName && !wantRole && findFold(atom).includes(wantName)) {
+      textOnly += 1;
+    }
+  }
+  return { lines, total, textOnly };
+}

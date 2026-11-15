@@ -56,6 +56,8 @@ import {
   CLIPBOARD_COPY_FAILED_TITLE,
   EXTRA_CLICKABLE_MAX,
   EXTRA_CLICKABLE_GROUP_HEAD,
+  findAtoms,
+  FIND_MAX_MATCHES,
 } from "./axtree.js";
 import {
   SECRET_CONSENT_TYPE,
@@ -5871,6 +5873,58 @@ async function performOp(message, stagingOrigin) {
       pageText: full.slice(offset, offset + READ_TEXT_MAX),
       pageTextOffset: Math.min(offset, full.length),
       pageTextTotal: full.length,
+      url: tab.url || "",
+      title: tab.title || "",
+      tabs: (await groupedTabs()).map(describeTab),
+    };
+  }
+
+  // `find` filters the SAME atoms a snapshot renders (findAtoms, axtree.js), so
+  // it reads exactly what `snapshot` reads — getFullAXTree plus the one
+  // DOMSnapshot capture — and adds NOTHING to the CDP allowlist. Its uids are
+  // minted by the same mintUid as a snapshot's, so click/type take them as-is.
+  // No audit row (the route treats it like snapshot) and no lastSnapshotByTab
+  // write: a filtered view must not become the baseline the stale-snapshot
+  // re-poll compares a full one against.
+  if (message.op === "find") {
+    let scope = null;
+    if (message.uid) {
+      const refused = await assertRefTabUsable(message.uid, patterns, source, stagingOrigin);
+      if (refused) return refused;
+      scope = resolveRef(message.uid);
+    }
+    const role = typeof message.role === "string" ? message.role.slice(0, 64) : "";
+    const name = typeof message.name === "string" ? message.name.slice(0, 200) : "";
+    if (!role.trim() && !name.trim()) {
+      return { ok: false, message: "find needs `role`, `name`, or both." };
+    }
+    const atoms = scope ? await buildScopedSnapshot(tab, scope) : await buildSnapshot(tab);
+    const found = findAtoms(atoms, { role, name, limit: FIND_MAX_MATCHES });
+    const asked = [
+      role.trim() ? `role "${quoteForNote(role.trim())}"` : "",
+      name.trim() ? `name containing "${quoteForNote(name.trim())}"` : "",
+    ]
+      .filter(Boolean)
+      .join(" and ");
+    let findNote;
+    if (found.total === 0) {
+      findNote =
+        `No element with a uid matched ${asked}${scope ? " inside that element" : ""}.` +
+        (found.textOnly
+          ? ` The text does appear in ${found.textOnly} line${found.textOnly === 1 ? "" : "s"} that carry no uid ` +
+            "(plain text, not actionable) — read around it with mcp__browser__read_text or a scoped snapshot."
+          : " Try a shorter name, drop the role, or take a snapshot to see what the page calls it.");
+    } else if (found.total > found.lines.length) {
+      findNote =
+        `${found.total} elements matched ${asked}; showing the first ${found.lines.length} in page order. ` +
+        "More matches exist — narrow it with `role`, a longer `name`, or a `uid` scope.";
+    } else {
+      findNote = `${found.total} element${found.total === 1 ? "" : "s"} matched ${asked}.`;
+    }
+    return {
+      ok: true,
+      snapshot: found.lines.join("\n"),
+      note: capNote(findNote),
       url: tab.url || "",
       title: tab.title || "",
       tabs: (await groupedTabs()).map(describeTab),

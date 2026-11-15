@@ -48,6 +48,9 @@ import {
   compareBridgeVersions,
   extensionSupportsSecretInput,
   SECRET_INPUT_MIN_EXTENSION_VERSION,
+  extensionSupportsInspectOps,
+  INSPECT_OPS,
+  INSPECT_OPS_MIN_EXTENSION_VERSION,
 } from "../src/client/src/lib/browserBridge.js";
 import { defaultAllowlistFor, patternMatchesHost } from "../src/shared/originPatterns.js";
 import {
@@ -1140,6 +1143,18 @@ describe("browser bridge versioning", () => {
     expect(bridgeVersionVerdict("0.4.0", "0.5.0", "beta")).toBe("outdated");
     // String equality precedes parsing, so odd-but-equal versions stay green.
     expect(bridgeVersionVerdict("beta", "beta", null)).toBe("current");
+  });
+
+  it("extensionSupportsInspectOps gates the 0.29.0 op set, failing toward refusal", () => {
+    expect(INSPECT_OPS_MIN_EXTENSION_VERSION).toBe("0.29.0");
+    expect(extensionSupportsInspectOps("0.29.0")).toBe(true);
+    expect(extensionSupportsInspectOps("0.30.1")).toBe(true);
+    expect(extensionSupportsInspectOps("0.28.2")).toBe(false);
+    expect(extensionSupportsInspectOps(undefined)).toBe(false);
+    expect(extensionSupportsInspectOps("beta")).toBe(false);
+    expect(INSPECT_OPS.has("find")).toBe(true);
+    // An op every older build knows is never probed.
+    expect(INSPECT_OPS.has("snapshot")).toBe(false);
   });
 
   it("extensionSupportsSecretInput gates stored-secret typing at 0.28.0, failing toward refusal", () => {

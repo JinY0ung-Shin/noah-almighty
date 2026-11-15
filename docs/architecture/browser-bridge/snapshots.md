@@ -347,3 +347,15 @@
 - **The vision-tier constants are mirrored on purpose.** `VISION_STANDARD_MAX_EDGE`/`VISION_STANDARD_MAX_TOKENS`
   (`extension/axtree.js`) follow Claude's documented vision limits, and the server keeps an INDEPENDENT TypeScript
   port for old installs (`agent/visionImage.ts`). When the documented limits move, both move.
+- **`find` (0.29.0) is a FILTERED snapshot, not a new reader.** The extension builds the same atoms a
+  snapshot does (`buildSnapshot`, or `buildScopedSnapshot` with a `uid` scope — AX tree plus the one
+  DOMSnapshot capture, nothing added to `CDP_ALLOWLIST`) and `findAtoms` (`axtree.js`, pure, unit-tested in
+  `tests/browser-inspect-ops.test.ts`) keeps the uid pieces whose ROLE equals `role` (case-insensitive) and/or
+  whose printed rest (label, `= "value"`, state flags) contains `name` after `findFold` (NFKC + lowercase +
+  whitespace collapse — Hangul has no case, so a Korean query is an exact syllable substring). A table row is
+  ONE atom of `[eN] …` cells joined by ` | `, so it is split at those seams and each cell is judged alone. Only
+  uid pieces are returned (≤ `FIND_MAX_MATCHES` 20, each cut at 300 chars), and the bridge note says how many
+  matched in all, or — on zero — how many uid-less text lines held the words, so "not clickable" and "not on
+  the page" read differently. The uids come from the same `mintUid`, so click/type take them as-is and they
+  die with the document exactly like a snapshot's. It does NOT write `lastSnapshotByTab` (a filtered view must
+  not become the stale-snapshot baseline), and the chat route skips its audit row like `snapshot`'s.
