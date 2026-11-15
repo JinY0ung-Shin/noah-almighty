@@ -62,6 +62,13 @@ import {
 
 const MAX_CHAT_PANES = 4;
 
+/** Asked before leaving a pane whose answer is still streaming for a new conversation. */
+const SWITCH_WHILE_STREAMING_CONFIRM = "응답 생성 중입니다. 새 대화로 전환할까요?";
+
+/** The second half every history-cutting confirm ends with (여기서부터 다시, 다시 생성):
+ *  side effects already done are NOT undone. */
+const SIDE_EFFECTS_STAY_NOTE = "작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.";
+
 // Internal orchestration tools the viewer shouldn't see as activity rows.
 const HIDDEN_TOOLS = new Set(SDK_HIDDEN_ACTIVITY_TOOLS);
 
@@ -252,7 +259,7 @@ export async function startChatWith(
   if (
     !split &&
     readState().chatPanes.some((pane) => pane.streaming) &&
-    !(await confirmAction("응답 생성 중입니다. 새 대화로 전환할까요?"))
+    !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
   ) {
     return;
   }
@@ -309,7 +316,7 @@ export async function openSeededChat(
   if (!me) return;
   if (
     readState().chatPanes.some((pane) => pane.streaming) &&
-    !(await confirmAction("응답 생성 중입니다. 새 대화로 전환할까요?"))
+    !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
   )
     return;
   const { avatar } = await api<{ avatar: AvatarDetail }>(
@@ -498,7 +505,7 @@ export async function startNewChat(): Promise<void> {
   if (pane) {
     if (
       pane.streaming &&
-      !(await confirmAction("응답 생성 중입니다. 새 대화로 전환할까요?"))
+      !(await confirmAction(SWITCH_WHILE_STREAMING_CONFIRM))
     ) {
       return;
     }
@@ -778,8 +785,8 @@ export async function submitRewindEdit(paneId: string): Promise<void> {
   // undone.
   const confirmed = await confirmAction(
     later > 0
-      ? `이 메시지부터 다시 시작할까요?\n\n이후 메시지 ${later}개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. 작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.`
-      : "이 메시지부터 다시 시작할까요?\n\n작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.",
+      ? `이 메시지부터 다시 시작할까요?\n\n이후 메시지 ${later}개와 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. ${SIDE_EFFECTS_STAY_NOTE}`
+      : `이 메시지부터 다시 시작할까요?\n\n${SIDE_EFFECTS_STAY_NOTE}`,
     { title: "여기서부터 다시", confirmLabel: "다시 시작", tone: "danger" },
   );
   if (!confirmed) return;
@@ -833,7 +840,7 @@ export async function regenerate(paneId: string): Promise<void> {
 
 /** 다시 생성's confirm text, worded like 여기서부터 다시's. */
 export const REGENERATE_CONFIRM =
-  "답변을 다시 생성할까요?\n\n지금 답변과 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. 작업 폴더의 파일 변경·커밋 등 이미 실행된 작업은 그대로 남습니다.";
+  `답변을 다시 생성할까요?\n\n지금 답변과 거기에 딸린 첨부 파일·공유 링크가 삭제되며 되돌릴 수 없습니다. ${SIDE_EFFECTS_STAY_NOTE}`;
 
 /**
  * Per pane, the optimistic USER bubble of the send in flight. The `open` frame
