@@ -300,14 +300,14 @@ describe("request-derived browser inputs", () => {
   });
 });
 
-describe("copy_image tool handler", () => {
+describe("clipboard tool handler, action \"image\"", () => {
   const execute = () =>
     vi.fn(async () => ({ behavior: "ok" as const, url: "https://intra.example/x", title: "T" }));
   const stage = () => vi.fn(async () => ({ path: "/browser-clip/abc123" }));
 
   function description(tools: readonly { name: string; description?: string }[]): string {
-    const found = tools.find((t) => t.name === "copy_image");
-    if (!found) throw new Error("copy_image tool not found");
+    const found = tools.find((t) => t.name === "clipboard");
+    if (!found) throw new Error("clipboard tool not found");
     return found.description ?? "";
   }
 
@@ -319,7 +319,7 @@ describe("copy_image tool handler", () => {
       appOrigin: "https://noah.example",
       stageClipboardImage,
     });
-    const res = await callTool(tools, "copy_image", { path: "shot.png" });
+    const res = await callTool(tools, "clipboard", { action: "image", path: "shot.png" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("talking to their OWN avatar");
     expect(stageClipboardImage).not.toHaveBeenCalled();
@@ -328,8 +328,8 @@ describe("copy_image tool handler", () => {
   it("refuses when the run has no app origin or no stager", async () => {
     const noStager = await callTool(
       buildBrowserTools({ execute: execute(), allowed: true, appOrigin: "https://noah.example" }),
-      "copy_image",
-      { path: "shot.png" },
+      "clipboard",
+      { action: "image", path: "shot.png" },
     );
     expect(noStager.isError).toBe(true);
     expect(noStager.content[0].text).toContain("not available in this run");
@@ -339,8 +339,8 @@ describe("copy_image tool handler", () => {
 
     const noOrigin = await callTool(
       buildBrowserTools({ execute: execute(), allowed: true, stageClipboardImage: stage() }),
-      "copy_image",
-      { path: "shot.png" },
+      "clipboard",
+      { action: "image", path: "shot.png" },
     );
     expect(noOrigin.isError).toBe(true);
     expect(noOrigin.content[0].text).toContain("not available in this run");
@@ -356,7 +356,7 @@ describe("copy_image tool handler", () => {
       stageClipboardImage,
       viewerPlatform: "mac",
     });
-    const res = await callTool(tools, "copy_image", { path: "shot.png" });
+    const res = await callTool(tools, "clipboard", { action: "image", path: "shot.png" });
     expect(res.isError).toBeFalsy();
     expect(stageClipboardImage).toHaveBeenCalledWith("shot.png");
 
@@ -373,15 +373,16 @@ describe("copy_image tool handler", () => {
     // staging tab and re-points the working tab, an older install does not, and
     // the tool cannot tell which one the viewer has installed.
     expect(body).toContain("CLOSES the staging tab itself");
-    expect(body).toContain("mcp__browser__close_tab the staging tab");
-    expect(description(tools)).toContain("COPY_FAILED");
-    expect(description(tools)).toContain("CLOSES the staging tab itself");
-    expect(description(tools)).toContain("`close_tab` the staging tab");
-    expect(description(tools)).not.toContain("VERIFY the copy with `list_tabs`");
+    expect(body).toContain('mcp__browser__tabs action "select" back to your target page and action "close" on the staging tab');
+    expect(body).toContain('open this URL with mcp__browser__tabs action "new"');
+    // The description keeps only the call-time guard; the step-by-step flow is
+    // in this result and in manual topic `browser-operations`.
+    expect(description(tools)).toContain("paste ONLY when that click's result says COPIED (never on COPY_FAILED)");
+    expect(description(tools)).toContain("manual topic `browser-operations`");
+    expect(description(tools)).not.toMatch(/\b(list_tabs|new_tab|select_tab|close_tab|copy_image|copy_text)\b/);
     // Ctrl+V is not paste on macOS; a hardcoded ["Control"] would paste nothing.
     expect(body).toContain('["Meta"]');
     expect(body).not.toContain('["Control"]');
-    expect(description(tools)).toContain('["Meta"]');
   });
 
   it("names the Control modifier on Windows and both when the OS is unknown", async () => {
@@ -393,8 +394,8 @@ describe("copy_image tool handler", () => {
         stageClipboardImage: stage(),
         viewerPlatform: "windows",
       }),
-      "copy_image",
-      { path: "shot.png" },
+      "clipboard",
+      { action: "image", path: "shot.png" },
     );
     expect(win.content[0].text).toContain('["Control"]');
     expect(win.content[0].text).not.toContain('["Meta"]');
@@ -406,11 +407,35 @@ describe("copy_image tool handler", () => {
         appOrigin: "https://noah.example",
         stageClipboardImage: stage(),
       }),
-      "copy_image",
-      { path: "shot.png" },
+      "clipboard",
+      { action: "image", path: "shot.png" },
     );
     expect(unknown.content[0].text).toContain('["Control"]');
     expect(unknown.content[0].text).toContain('["Meta"]');
+  });
+
+  it("redirects an unknown action or a missing argument without staging anything", async () => {
+    const stageClipboardImage = stage();
+    const stageClipboardText = stage();
+    const tools = buildBrowserTools({
+      execute: execute(),
+      allowed: true,
+      appOrigin: "https://noah.example",
+      stageClipboardImage,
+      stageClipboardText,
+    });
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ action: "png", path: "shot.png" }, 'Unknown action "png" for mcp__browser__clipboard. Use "image" (with `path`) or "text" (with `text`).'],
+      [{ action: "image" }, 'mcp__browser__clipboard action "image" needs `path`'],
+      [{ action: "text" }, 'mcp__browser__clipboard action "text" needs `text`'],
+    ];
+    for (const [args, message] of cases) {
+      const res = await callTool(tools, "clipboard", args);
+      expect(res.isError, JSON.stringify(args)).toBe(true);
+      expect(res.content[0].text).toContain(message);
+    }
+    expect(stageClipboardImage).not.toHaveBeenCalled();
+    expect(stageClipboardText).not.toHaveBeenCalled();
   });
 
   it("reports a staging failure as a tool error instead of a staging URL", async () => {
@@ -422,7 +447,7 @@ describe("copy_image tool handler", () => {
         throw new Error("The image file does not exist.");
       }),
     });
-    const res = await callTool(tools, "copy_image", { path: "missing.png" });
+    const res = await callTool(tools, "clipboard", { action: "image", path: "missing.png" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("The image file does not exist.");
   });

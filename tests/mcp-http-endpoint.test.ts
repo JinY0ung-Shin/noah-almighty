@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpRunRegistry, RETIRED_TOOL_MESSAGES, RUN_TOKEN_PREFIX, createMcpHttpRouter } from "../src/server/mcpHttp/endpoint.js";
+import { BROWSER_RETIRED_TOOLS, retiredToolAliases } from "../src/server/agent/retiredTools.js";
 
 const PNG_1PX =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -269,7 +270,7 @@ describe("McpRunRegistry + /mcp/:server", () => {
     for (const token of [open, gated]) {
       const client = await connect("brain", token);
       expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["prepare_team_changes"]);
-      for (const key of Object.keys(RETIRED_TOOL_MESSAGES)) {
+      for (const key of Object.keys(RETIRED_TOOL_MESSAGES).filter((name) => name.startsWith("brain/"))) {
         const tool = key.slice("brain/".length);
         const refused = await client.callTool({ name: tool, arguments: { title: "t" } });
         expect(refused.isError).toBe(true);
@@ -281,13 +282,56 @@ describe("McpRunRegistry + /mcp/:server", () => {
       // The live tool is untouched, and an unknown name is not mistaken for a retired one.
       expect((await client.callTool({ name: "prepare_team_changes", arguments: {} })).content).toEqual([{ type: "text", text: "card shown" }]);
     }
-    expect(Object.keys(RETIRED_TOOL_MESSAGES).sort()).toEqual(
+    expect(Object.keys(RETIRED_TOOL_MESSAGES).filter((name) => name.startsWith("brain/")).sort()).toEqual(
       ["answer_team_questions", "get_team_proposal", "list_team_proposals", "prepare_team_review", "propose_team_note"].map((t) => `brain/${t}`),
     );
     // Only on the server that had them.
     const repo = await connect("repo", registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } }));
     const elsewhere = await repo.callTool({ name: "propose_team_note", arguments: {} }).catch((error: unknown) => String(error));
     expect(JSON.stringify(elsewhere)).not.toContain("was removed");
+  });
+
+  it("a merged browser tool's OLD name stays callable as a hidden alias that names the new call", async () => {
+    // 2026-11-16: list_tabs/new_tab/select_tab/close_tab → tabs, copy_image/copy_text → clipboard
+    // (agent/retiredTools.ts). The old names are never listed, but a session whose frozen list still
+    // has them reaches Noah — before any gate, without running anything.
+    expect(Object.keys(BROWSER_RETIRED_TOOLS).sort()).toEqual(
+      ["close_tab", "copy_image", "copy_text", "list_tabs", "new_tab", "select_tab"].map((t) => `browser/${t}`),
+    );
+    for (const key of Object.keys(BROWSER_RETIRED_TOOLS)) expect(RETIRED_TOOL_MESSAGES[key]).toBe(BROWSER_RETIRED_TOOLS[key]);
+    let ran = 0;
+    const browser = () => {
+      const mcp = new McpServer({ name: "browser", version: "1.0.0" });
+      mcp.registerTool("tabs", { description: "Manage tabs", inputSchema: { action: z.string() } }, async () => {
+        ran += 1;
+        return { content: [{ type: "text", text: "tabs ran" }] };
+      });
+      return mcp;
+    };
+    const token = registry.register({
+      servers: { browser: browser() },
+      gates: { allowCall: () => false, refusalMessage: () => "generic refusal" },
+    });
+    const client = await connect("browser", token);
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["tabs"]);
+    const expected: Record<string, string> = {
+      list_tabs: 'It is now mcp__browser__tabs with action "list" — call that.',
+      new_tab: 'It is now mcp__browser__tabs with action "new" — call that with the same `url` (and `maxChars`).',
+      select_tab: 'It is now mcp__browser__tabs with action "select" — call that with the same `tabId`.',
+      close_tab: 'It is now mcp__browser__tabs with action "close" — call that with the same `tabId`.',
+      copy_image: 'It is now mcp__browser__clipboard with action "image" — call that with the same `path`.',
+      copy_text: 'It is now mcp__browser__clipboard with action "text" — call that with the same `text`.',
+    };
+    for (const [tool, redirect] of Object.entries(expected)) {
+      const refused = await client.callTool({ name: tool, arguments: { url: "https://intra.example", tabId: "1" } });
+      expect(refused.isError).toBe(true);
+      expect((refused.content as Array<{ text: string }>)[0].text).toBe(
+        `Tool 'mcp__browser__${tool}' was retired and is no longer listed; nothing was run. ${redirect}`,
+      );
+    }
+    expect(ran).toBe(0);
+    // A duplicate alias is a programming error, caught when the table is built.
+    expect(() => retiredToolAliases("browser", [{ name: "x", redirect: "a" }, { name: "x", redirect: "b" }])).toThrow("listed twice");
   });
 
   it("tokens are scoped to their own run's servers", async () => {
