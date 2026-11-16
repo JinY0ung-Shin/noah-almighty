@@ -1765,8 +1765,8 @@ describe("buildPrompt", () => {
     );
     expect(p).toContain("Noah Almighty (avatar-chat)");
     expect(p).toContain("mcp__system__describe_system");
-    expect(p).toContain("mcp__system__create_routine");
-    expect(p).toContain("mcp__system__add_plugin");
+    expect(p).toContain("`mcp__system__routine` or `mcp__system__plugin` (each takes an `action`)");
+    expect(p).not.toContain("mcp__system__create_routine");
     expect(p).toContain("load starting from the next conversation");
   });
 

@@ -595,7 +595,7 @@ describe("register_repo and later use", () => {
 });
 
 // The plugin clone path takes a USER-named source too (`POST /api/me/plugins`,
-// `mcp__system__add_plugin`), and `looksLikeRepo` accepts anything ending in
+// `mcp__system__plugin` action "add"), and `looksLikeRepo` accepts anything ending in
 // `.git`. Before the policy ran here, another user's clone or the team-brain
 // vault could be added as a plugin and its files landed in the adder's plugin
 // clone; git connected to loopback in every spelling.
@@ -705,7 +705,7 @@ describe("plugin sources", () => {
       g("add", "-A");
       g("commit", "-q", "-m", "init");
     }
-    // As an older version stored and cloned it (also what mcp__system__add_plugin still stores unchecked).
+    // As an older version stored and cloned it (also what mcp__system__plugin action "add" still stores unchecked).
     const repo = `${victimClone}/.git`;
     const plugin = s.store.addPlugin(attacker.id, { repo });
     const stale = pluginClonePath(attacker.id, repo, s.config);

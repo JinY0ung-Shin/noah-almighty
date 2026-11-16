@@ -221,7 +221,7 @@ For "I remembered this but cannot find it", check which avatar was used, which r
 Skills are reusable instructions/procedures; plugins can bundle skills and MCP integrations. Noah loads its default skills together with the user's enabled plugins and eligible personal knowledge-repository content. A skill being listed does not override disabled tools or deployment policy.
 
 ## Add or author
-Use the plugin controls in 내 아바타, or ask your own avatar to add a repository using mcp__system__add_plugin (repo, optional ref and label). list_plugins shows registered plugins; set_plugin_enabled toggles one by id. Plugin additions/enabling normally take effect from the NEXT conversation, so start a new conversation when validating a change.
+Use the plugin controls in 내 아바타, or ask your own avatar to add a repository using mcp__system__plugin with action "add" (repo, optional ref and label). Action "list" shows registered plugins; action "set_enabled" (id, enabled) toggles one by id. Plugin additions/enabling normally take effect from the NEXT conversation, so start a new conversation when validating a change.
 To create your own skill, connect the personal knowledge repository first, then ask the avatar to scaffold skills/<name>/SKILL.md, write the procedure and commit it. Example: "우리 배포 체크리스트를 반복해서 쓸 수 있는 스킬로 만들어줘."
 
 ## Learn and share
@@ -260,10 +260,10 @@ Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인�
     title: "Scheduled work",
     summary: "One-time/daily/weekly/interval schedules, KST, results and failures.",
     body: `## Create and manage
-Open 예약 작업 → 예약 작업 추가, or ask your own avatar to create a routine. /routine <task> starts the interactive scheduling workflow. Give a self-contained instruction including sources, desired output and what to do if data is missing. Confirm ambiguous dates/times before creating it. Use list_routines to find ids, update_routine to change a schedule/prompt or pause it (enabled:false), and delete_routine to remove it.
+Open 예약 작업 → 예약 작업 추가, or ask your own avatar to create a routine. /routine <task> starts the interactive scheduling workflow. Give a self-contained instruction including sources, desired output and what to do if data is missing. Confirm ambiguous dates/times before creating it. The avatar manages routines with mcp__system__routine: action "list" finds ids, "update" (id + the fields to change) changes a schedule/prompt or pauses it (enabled:false), and "delete" (id) removes it.
 
-## Tool examples (mcp__system__create_routine)
-All wall-clock times are KST (UTC+9). The tool accepts name (optional) and prompt plus:
+## Tool examples (mcp__system__routine, action "create")
+All wall-clock times are KST (UTC+9). The call takes "action":"create", name (optional) and prompt plus:
 - One time: {"scheduleKind":"once","date":"YYYY-MM-DD","time":"09:00"}. Use an actual future KST date. One-time jobs are disabled after their single attempt, including a failed attempt.
 - Daily: {"scheduleKind":"daily","time":"09:00"}.
 - Weekdays: {"scheduleKind":"weekly","daysOfWeek":[1,2,3,4,5],"time":"09:00"}. 0=Sunday through 6=Saturday.

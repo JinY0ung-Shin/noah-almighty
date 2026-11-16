@@ -48,6 +48,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import logger from "../logger.js";
+import { RETIRED_TOOL_ALIASES } from "../agent/retiredTools.js";
 import type { McpNetworkAcl } from "./networkAcl.js";
 
 const log = logger.child({ module: "mcp-http" });
@@ -277,12 +278,16 @@ const RETIRED_SERVER_MESSAGES: Record<string, string> = {
  */
 const TEAM_BRAIN_QUEUE_RETIRED =
   "was removed: the team brain has no submissions and no review queue any more — every teammate's avatar writes it directly, and submissions that were still open were closed. Do not retry it. To put knowledge into the team brain (or to redo a closed submission), read SCHEMA.md and wiki/index.md with mcp__brain__get_note (scope \"team\"), then draft the page changes with mcp__brain__prepare_team_changes — nothing changes until the user presses 팀 브레인에 반영 on its card. mcp__brain__team_brain_health reports what the team brain needs and which of the owner's personal notes are linked to team pages.";
-export const RETIRED_TOOL_MESSAGES: Readonly<Record<string, string>> = Object.fromEntries(
-  ["propose_team_note", "answer_team_questions", "list_team_proposals", "get_team_proposal", "prepare_team_review"].map((tool) => [
-    `brain/${tool}`,
-    `Tool 'mcp__brain__${tool}' ${TEAM_BRAIN_QUEUE_RETIRED}`,
-  ]),
-);
+export const RETIRED_TOOL_MESSAGES: Readonly<Record<string, string>> = {
+  ...Object.fromEntries(
+    ["propose_team_note", "answer_team_questions", "list_team_proposals", "get_team_proposal", "prepare_team_review"].map((tool) => [
+      `brain/${tool}`,
+      `Tool 'mcp__brain__${tool}' ${TEAM_BRAIN_QUEUE_RETIRED}`,
+    ]),
+  ),
+  // Merged or renamed tools: the old name answers with the call that replaces it (agent/retiredTools.ts).
+  ...RETIRED_TOOL_ALIASES,
+};
 
 function refusedToolResult(tool: string, message?: string): CallToolResult {
   return {

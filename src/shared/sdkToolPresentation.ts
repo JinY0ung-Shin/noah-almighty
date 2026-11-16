@@ -134,7 +134,9 @@ export const MCP_TOOL_LABELS: Record<string, string> = {
   mcp__knowledge__resolve_request: "요청 처리 완료",
   mcp__system__notify_user: "사용자 알림",
   mcp__skills__read: "스킬 읽기",
+  mcp__system__plugin: "플러그인 관리",
   mcp__system__read_manual: "시스템 사용 매뉴얼 조회",
+  mcp__system__routine: "예약 작업 관리",
   mcp__todo__add_todos: "할 일 추가",
   mcp__todo__delete_todo: "할 일 삭제",
   mcp__todo__list_todos: "할 일 조회",
@@ -191,6 +193,10 @@ const TODO_LIST_FILTER_LABELS: Record<TodoStatus | "all", string> = {
   all: "전체",
 };
 
+/** The `action` of mcp__system__routine / mcp__system__plugin (a plain string the handler checks). */
+const ROUTINE_ACTION_LABELS: Record<string, string> = { list: "목록", create: "추가", update: "수정", delete: "삭제" };
+const PLUGIN_ACTION_LABELS: Record<string, string> = { list: "목록", add: "추가", set_enabled: "사용 설정 변경" };
+
 /** A label for a model-supplied key — own keys only, so "constructor" and friends never match. */
 function ownLabel(labels: Record<string, string>, key: unknown): string | undefined {
   return typeof key === "string" && Object.hasOwn(labels, key) ? labels[key] : undefined;
@@ -210,6 +216,8 @@ function ownLabel(labels: Record<string, string>, key: unknown): string | undefi
  *   retitle, a search query), the status an update sets ("완료로 표시",
  *   "드랍으로 표시", …) or the status a listing filters on ("진행 중", …), or a
  *   count.
+ * - `mcp__system__routine` / `mcp__system__plugin`: the `action` ("추가", "수정", …), never the raw
+ *   English word.
  */
 export function mcpToolInputSummary(name: string | undefined, input: unknown): string | undefined {
   const args = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {};
@@ -228,6 +236,10 @@ export function mcpToolInputSummary(name: string | undefined, input: unknown): s
       return "1개";
     case "mcp__todo__list_todos":
       return title(args.query) ?? ownLabel(TODO_LIST_FILTER_LABELS, args.status) ?? "열린 항목";
+    case "mcp__system__routine":
+      return ownLabel(ROUTINE_ACTION_LABELS, typeof args.action === "string" ? args.action.trim().toLowerCase() : undefined);
+    case "mcp__system__plugin":
+      return ownLabel(PLUGIN_ACTION_LABELS, typeof args.action === "string" ? args.action.trim().toLowerCase() : undefined);
   }
   if (name === "mcp__file_output__create_share_link") {
     const days =

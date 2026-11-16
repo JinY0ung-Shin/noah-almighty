@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServices } from "../src/server/app.js";
+import { z } from "zod";
+import { RETIRED_TOOL_MESSAGES } from "../src/server/mcpHttp/endpoint.js";
 import {
   buildKnowledgeTools,
   KNOWLEDGE_SERVER_NAME,
@@ -1720,8 +1722,8 @@ describe("system tools (avatar system management)", () => {
   it("exposes the documented server + tool names", () => {
     const s = setup("st0");
     expect(SYSTEM_SERVER_NAME).toBe("system");
-    expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__create_routine");
-    expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__add_plugin");
+    expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__routine");
+    expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__plugin");
     expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__notify_user");
     expect(SYSTEM_TOOL_NAMES).toContain("mcp__system__read_manual");
     expect(toolsFor(s).map((t) => t.name)).toEqual([
@@ -1731,13 +1733,8 @@ describe("system tools (avatar system management)", () => {
       "list_recent_conversations",
       "read_conversation",
       "turn_timings",
-      "list_routines",
-      "create_routine",
-      "update_routine",
-      "delete_routine",
-      "list_plugins",
-      "add_plugin",
-      "set_plugin_enabled",
+      "routine",
+      "plugin",
     ]);
   });
 
@@ -1791,7 +1788,7 @@ describe("system tools (avatar system management)", () => {
     expect(res.content[0].text).toContain("never rely on one routine's output being ready");
     expect(res.content[0].text).toContain('a manual "지금 실행" run is never refused and can add more');
     // The action trigger where routines are actually made carries the same warning.
-    const create = toolsFor(s).find((t) => t.name === "create_routine")!;
+    const create = toolsFor(s).find((t) => t.name === "routine")!;
     expect(create.description).toContain("never make one routine depend on another's output");
   });
 
@@ -2630,8 +2627,8 @@ describe("system tools (avatar system management)", () => {
   it("refuses routine and plugin mutations for non-owner viewers", async () => {
     const s = setup("st-deny");
     const nonOwner = toolsFor(s, false);
-    const routine = await callTool(nonOwner, "create_routine", { prompt: "p", time: "09:00" });
-    const plugin = await callTool(nonOwner, "add_plugin", { repo: "owner/repo" });
+    const routine = await callTool(nonOwner, "routine", { action: "create", prompt: "p", time: "09:00" });
+    const plugin = await callTool(nonOwner, "plugin", { action: "add", repo: "owner/repo" });
     const notification = await callTool(nonOwner, "notify_user", { message: "확인 필요" });
 
     expect(routine.isError).toBe(true);
@@ -2692,11 +2689,11 @@ describe("system tools (avatar system management)", () => {
     const s = setup("st-routine");
     const tools = toolsFor(s);
 
-    const bad = await callTool(tools, "create_routine", { prompt: "p", time: "25:00" });
+    const bad = await callTool(tools, "routine", { action: "create", prompt: "p", time: "25:00" });
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain("HH:MM");
 
-    const created = await callTool(tools, "create_routine", {
+    const created = await callTool(tools, "routine", { action: "create",
       prompt: "오늘 해야 할 일을 정리해줘",
       time: "09:30",
     });
@@ -2706,7 +2703,7 @@ describe("system tools (avatar system management)", () => {
     const job = s.store.listRoutineJobs(s.owner.id)[0];
     expect(job.prompt).toBe("오늘 해야 할 일을 정리해줘");
 
-    const updated = await callTool(tools, "update_routine", {
+    const updated = await callTool(tools, "routine", { action: "update",
       id: job.id,
       prompt: "오늘 일정과 미해결 작업을 정리해줘",
       time: "10:15",
@@ -2716,11 +2713,11 @@ describe("system tools (avatar system management)", () => {
     expect(updated.content[0].text).toContain("schedule=daily at 10:15 KST");
     expect(updated.content[0].text).toContain("enabled=false");
 
-    const listed = await callTool(tools, "list_routines", {});
+    const listed = await callTool(tools, "routine", { action: "list" });
     expect(listed.content[0].text).toContain(job.id);
     expect(listed.content[0].text).toContain("오늘 일정");
 
-    const deleted = await callTool(tools, "delete_routine", { id: job.id });
+    const deleted = await callTool(tools, "routine", { action: "delete", id: job.id });
     expect(deleted.isError).toBeFalsy();
     expect(s.store.listRoutineJobs(s.owner.id)).toHaveLength(0);
   });
@@ -2729,7 +2726,7 @@ describe("system tools (avatar system management)", () => {
     const s = setup("st-routine-flex");
     const tools = toolsFor(s);
 
-    const weekly = await callTool(tools, "create_routine", {
+    const weekly = await callTool(tools, "routine", { action: "create",
       name: "주간 리뷰",
       prompt: "주간 회고를 정리해줘",
       scheduleKind: "weekly",
@@ -2740,7 +2737,7 @@ describe("system tools (avatar system management)", () => {
     expect(weekly.content[0].text).toContain('name="주간 리뷰"');
     expect(weekly.content[0].text).toContain("schedule=weekly on Mon,Wed,Fri at 09:00 KST");
 
-    const interval = await callTool(tools, "create_routine", {
+    const interval = await callTool(tools, "routine", { action: "create",
       prompt: "30분마다 점검",
       scheduleKind: "interval",
       intervalMinutes: 30,
@@ -2749,7 +2746,7 @@ describe("system tools (avatar system management)", () => {
     expect(interval.content[0].text).toContain("name=(unnamed)");
     expect(interval.content[0].text).toContain("schedule=every 30m");
 
-    const hourly = await callTool(tools, "create_routine", {
+    const hourly = await callTool(tools, "routine", { action: "create",
       prompt: "매시간 점검",
       scheduleKind: "interval",
       intervalMinutes: 120,
@@ -2757,7 +2754,7 @@ describe("system tools (avatar system management)", () => {
     expect(hourly.isError).toBeFalsy();
     expect(hourly.content[0].text).toContain("schedule=every 2h");
 
-    const once = await callTool(tools, "create_routine", {
+    const once = await callTool(tools, "routine", { action: "create",
       name: "출시 점검",
       prompt: "출시 상태를 한 번 확인해줘",
       scheduleKind: "once",
@@ -2784,7 +2781,7 @@ describe("system tools (avatar system management)", () => {
   it("rejects missing or past dates for one-time routines", async () => {
     const s = setup("st-routine-once-invalid");
     const tools = toolsFor(s);
-    const missing = await callTool(tools, "create_routine", {
+    const missing = await callTool(tools, "routine", { action: "create",
       prompt: "p",
       scheduleKind: "once",
       time: "09:00",
@@ -2792,7 +2789,7 @@ describe("system tools (avatar system management)", () => {
     expect(missing.isError).toBe(true);
     expect(missing.content[0].text).toContain("date (YYYY-MM-DD, KST) is required");
 
-    const past = await callTool(tools, "create_routine", {
+    const past = await callTool(tools, "routine", { action: "create",
       prompt: "p",
       scheduleKind: "once",
       date: "2000-01-01",
@@ -2805,7 +2802,7 @@ describe("system tools (avatar system management)", () => {
   it("rejects a weekly routine without weekdays with the English error", async () => {
     const s = setup("st-routine-noweekday");
     const tools = toolsFor(s);
-    const res = await callTool(tools, "create_routine", {
+    const res = await callTool(tools, "routine", { action: "create",
       prompt: "p",
       scheduleKind: "weekly",
       time: "09:00",
@@ -2830,7 +2827,7 @@ describe("system tools (avatar system management)", () => {
     const s = setup("st-plugin");
     const tools = toolsFor(s);
 
-    const bad = await callTool(tools, "add_plugin", { repo: "not a repo!!" });
+    const bad = await callTool(tools, "plugin", { action: "add", repo: "not a repo!!" });
     expect(bad.isError).toBe(true);
     expect(bad.content[0].text).toContain("owner/repo");
 
@@ -2838,14 +2835,14 @@ describe("system tools (avatar system management)", () => {
     // its own server, so a loopback host or a path into Noah's own directories
     // is refused and nothing is added.
     for (const repo of ["http://127.0.0.1:9/x.git", "https://[::ffff:127.0.0.1]/x.git", `${s.config.dataDir}/someone/clone/.git`]) {
-      const refused = await callTool(tools, "add_plugin", { repo });
+      const refused = await callTool(tools, "plugin", { action: "add", repo });
       expect(refused.isError, repo).toBe(true);
       expect(refused.content[0].text, repo).toContain("Refused git source");
       expect(refused.content[0].text, repo).toContain("The plugin was NOT added.");
     }
     expect(s.store.listPlugins(s.owner.id)).toHaveLength(0);
 
-    const added = await callTool(tools, "add_plugin", {
+    const added = await callTool(tools, "plugin", { action: "add",
       repo: "owner/plugin",
       ref: "main",
       label: "Ops Plugin",
@@ -2857,11 +2854,11 @@ describe("system tools (avatar system management)", () => {
     expect(plugin.repo).toBe("owner/plugin");
     expect(plugin.enabled).toBe(true);
 
-    const listed = await callTool(tools, "list_plugins", {});
+    const listed = await callTool(tools, "plugin", { action: "list" });
     expect(listed.content[0].text).toContain("owner/plugin");
     expect(listed.content[0].text).toContain("Ops Plugin");
 
-    const disabled = await callTool(tools, "set_plugin_enabled", { id: plugin.id, enabled: false });
+    const disabled = await callTool(tools, "plugin", { action: "set_enabled", id: plugin.id, enabled: false });
     expect(disabled.isError).toBeFalsy();
     expect(disabled.content[0].text).toContain("enabled=false");
     expect(s.store.getPlugin(s.owner.id, plugin.id)?.enabled).toBe(false);
@@ -2881,11 +2878,11 @@ describe("system tools (avatar system management)", () => {
     const calls: [string, Record<string, unknown>][] = [
       ["list_recent_conversations", {}],
       ["read_conversation", { conversationId: "c-secret" }],
-      ["list_routines", {}],
-      ["update_routine", { id: "any" }],
-      ["delete_routine", { id: "any" }],
-      ["list_plugins", {}],
-      ["set_plugin_enabled", { id: "any", enabled: false }],
+      ["routine", { action: "list" }],
+      ["routine", { action: "update", id: "any" }],
+      ["routine", { action: "delete", id: "any" }],
+      ["plugin", { action: "list" }],
+      ["plugin", { action: "set_enabled", id: "any", enabled: false }],
     ];
     for (const [name, args] of calls) {
       const res = await callTool(nonOwner, name, args);
@@ -2901,11 +2898,11 @@ describe("system tools (avatar system management)", () => {
 
   it("reports empty routine and plugin lists distinctly from a refusal", async () => {
     const s = setup("st-empty-lists");
-    const routines = await callTool(toolsFor(s), "list_routines", {});
+    const routines = await callTool(toolsFor(s), "routine", { action: "list" });
     expect(routines.isError).toBeFalsy();
     expect(routines.content[0].text).toBe("There are no registered routines.");
 
-    const plugins = await callTool(toolsFor(s), "list_plugins", {});
+    const plugins = await callTool(toolsFor(s), "plugin", { action: "list" });
     expect(plugins.isError).toBeFalsy();
     expect(plugins.content[0].text).toBe("There are no registered plugins.");
   });
@@ -2913,35 +2910,87 @@ describe("system tools (avatar system management)", () => {
   it("reports a missing routine/plugin id instead of silently succeeding", async () => {
     const s = setup("st-missing-ids");
     const tools = toolsFor(s);
-    const deleted = await callTool(tools, "delete_routine", { id: "no-such-routine" });
+    const deleted = await callTool(tools, "routine", { action: "delete", id: "no-such-routine" });
     expect(deleted.isError).toBe(true);
     expect(deleted.content[0].text).toBe("Routine not found.");
 
-    const updated = await callTool(tools, "update_routine", { id: "no-such-routine", prompt: "새 지시" });
+    const updated = await callTool(tools, "routine", { action: "update", id: "no-such-routine", prompt: "새 지시" });
     expect(updated.isError).toBe(true);
     expect(updated.content[0].text).toBe("Routine not found.");
 
-    const toggled = await callTool(tools, "set_plugin_enabled", { id: "no-such-plugin", enabled: true });
+    const toggled = await callTool(tools, "plugin", { action: "set_enabled", id: "no-such-plugin", enabled: true });
     expect(toggled.isError).toBe(true);
     expect(toggled.content[0].text).toBe("Plugin not found.");
+  });
+
+  it("routine and plugin take a plain-string action, check each action's own arguments and redirect an unknown one", async () => {
+    const s = setup("st-actions");
+    const tools = toolsFor(s);
+    const routine = tools.find((t) => t.name === "routine")!;
+    const plugin = tools.find((t) => t.name === "plugin")!;
+    // A redirect never sits behind an enum: pi would refuse the value before the handler runs.
+    expect((routine.inputSchema as Record<string, unknown>).action).toBeInstanceOf(z.ZodString);
+    expect((plugin.inputSchema as Record<string, unknown>).action).toBeInstanceOf(z.ZodString);
+    expect(routine.description).toMatch(/^Lists, creates, updates or deletes the owner's routines/);
+    expect(plugin.description).toMatch(/^Lists, adds, or enables\/disables the plugins/);
+
+    const unknown = await callTool(tools, "routine", { action: "pause", id: "x" });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.content[0].text).toBe(
+      "Unknown action 'pause' for mcp__system__routine; nothing was run. Use one of: 'list', 'create', 'update', 'delete'.",
+    );
+    const none = await callTool(tools, "plugin", { action: " " });
+    expect(none.content[0].text).toContain("Unknown action no action for mcp__system__plugin");
+    expect(none.content[0].text).toContain("'list', 'add', 'set_enabled'");
+    // Case and surrounding space are forgiven.
+    expect((await callTool(tools, "routine", { action: " LIST " })).content[0].text).toBe("There are no registered routines.");
+
+    const noPrompt = await callTool(tools, "routine", { action: "create", time: "09:00" });
+    expect(noPrompt.isError).toBe(true);
+    expect(noPrompt.content[0].text).toContain("action 'create' needs `prompt`");
+    for (const action of ["update", "delete"]) {
+      const res = await callTool(tools, "routine", { action, prompt: "p" });
+      expect(res.isError, action).toBe(true);
+      expect(res.content[0].text, action).toContain(`action '${action}' needs \`id\``);
+    }
+    const noRepo = await callTool(tools, "plugin", { action: "add" });
+    expect(noRepo.isError).toBe(true);
+    expect(noRepo.content[0].text).toContain("action 'add' needs `repo`");
+    const noEnabled = await callTool(tools, "plugin", { action: "set_enabled", id: "p1" });
+    expect(noEnabled.isError).toBe(true);
+    expect(noEnabled.content[0].text).toContain("action 'set_enabled' needs `id`");
+    expect(s.store.listRoutineJobs(s.owner.id)).toHaveLength(0);
+    expect(s.store.listPlugins(s.owner.id)).toHaveLength(0);
+  });
+
+  it("keeps the merged routine/plugin names as unlisted redirects", () => {
+    const listed = toolsFor(setup("st-retired")).map((t) => t.name);
+    for (const old of ["list_routines", "create_routine", "update_routine", "delete_routine", "list_plugins", "add_plugin", "set_plugin_enabled"]) {
+      expect(listed, old).not.toContain(old);
+      expect(SYSTEM_TOOL_NAMES as readonly string[], old).not.toContain(`mcp__system__${old}`);
+      const message = RETIRED_TOOL_MESSAGES[`system/${old}`];
+      expect(message, old).toMatch(new RegExp(`^Tool 'mcp__system__${old}' was retired and is no longer listed; nothing was run\\. Call mcp__system__(routine|plugin) with `));
+    }
+    expect(RETIRED_TOOL_MESSAGES["system/create_routine"]).toContain('"action":"create"');
+    expect(RETIRED_TOOL_MESSAGES["system/set_plugin_enabled"]).toContain('"action":"set_enabled"');
   });
 
   it("rejects an all-whitespace prompt on create and on update", async () => {
     const s = setup("st-blank-prompt");
     const tools = toolsFor(s);
-    const created = await callTool(tools, "create_routine", { prompt: "   \n ", time: "09:00" });
+    const created = await callTool(tools, "routine", { action: "create", prompt: "   \n ", time: "09:00" });
     expect(created.isError).toBe(true);
     expect(created.content[0].text).toBe("Please enter a prompt.");
     expect(s.store.listRoutineJobs(s.owner.id)).toHaveLength(0);
 
     const job = s.store.createRoutineJob(s.owner.id, { prompt: "원래 지시", minuteOfDay: 9 * 60 });
-    const updated = await callTool(tools, "update_routine", { id: job.id, prompt: "  " });
+    const updated = await callTool(tools, "routine", { action: "update", id: job.id, prompt: "  " });
     expect(updated.isError).toBe(true);
     expect(updated.content[0].text).toBe("Please enter a prompt.");
     expect(s.store.getRoutineJob(s.owner.id, job.id)?.prompt).toBe("원래 지시");
   });
 
-  it("update_routine needs at least one field, and clears a name with an empty string", async () => {
+  it("routine update needs at least one field, and clears a name with an empty string", async () => {
     const s = setup("st-update-patch");
     const tools = toolsFor(s);
     const job = s.store.createRoutineJob(s.owner.id, {
@@ -2950,27 +2999,27 @@ describe("system tools (avatar system management)", () => {
       minuteOfDay: 9 * 60,
     });
 
-    const nothing = await callTool(tools, "update_routine", { id: job.id });
+    const nothing = await callTool(tools, "routine", { action: "update", id: job.id });
     expect(nothing.isError).toBe(true);
     expect(nothing.content[0].text).toContain("At least one of the values to update");
 
-    const cleared = await callTool(tools, "update_routine", { id: job.id, name: "   " });
+    const cleared = await callTool(tools, "routine", { action: "update", id: job.id, name: "   " });
     expect(cleared.isError).toBeFalsy();
     expect(cleared.content[0].text).toContain("name=(unnamed)");
     expect(s.store.getRoutineJob(s.owner.id, job.id)?.name).toBeNull();
 
-    const renamed = await callTool(tools, "update_routine", { id: job.id, name: "새 이름" });
+    const renamed = await callTool(tools, "routine", { action: "update", id: job.id, name: "새 이름" });
     expect(renamed.content[0].text).toContain('name="새 이름"');
   });
 
-  it("update_routine validates a replacement schedule and refuses re-enabling a past one-time job", async () => {
+  it("routine update validates a replacement schedule and refuses re-enabling a past one-time job", async () => {
     const s = setup("st-update-schedule");
     const tools = toolsFor(s);
     const job = s.store.createRoutineJob(s.owner.id, { prompt: "한 번만", minuteOfDay: 9 * 60 });
 
     // Any schedule field present replaces the whole schedule — so an invalid one
     // is rejected before the row is touched.
-    const badInterval = await callTool(tools, "update_routine", {
+    const badInterval = await callTool(tools, "routine", { action: "update",
       id: job.id,
       scheduleKind: "interval",
       intervalMinutes: 1,
@@ -2983,7 +3032,7 @@ describe("system tools (avatar system management)", () => {
 
     // Enabling is the moment a one-time schedule's date matters: a past date
     // would otherwise be enabled and never fire.
-    const past = await callTool(tools, "update_routine", {
+    const past = await callTool(tools, "routine", { action: "update",
       id: job.id,
       scheduleKind: "once",
       date: "2000-01-01",
@@ -2994,7 +3043,7 @@ describe("system tools (avatar system management)", () => {
     expect(past.content[0].text).toContain("later than the current KST");
 
     // The same enable with a future date goes through.
-    const future = await callTool(tools, "update_routine", {
+    const future = await callTool(tools, "routine", { action: "update",
       id: job.id,
       scheduleKind: "once",
       date: "2099-12-31",
@@ -3018,7 +3067,7 @@ describe("system tools (avatar system management)", () => {
       minuteOfDay: 9 * 60,
       enabled: false,
     });
-    const res = await callTool(toolsFor(s), "update_routine", { id: job.id, enabled: true });
+    const res = await callTool(toolsFor(s), "routine", { action: "update", id: job.id, enabled: true });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toBe(
       "A one-time schedule must be later than the current KST date and time.",
@@ -3035,7 +3084,7 @@ describe("system tools (avatar system management)", () => {
       minuteOfDay: 9 * 60,
       enabled: false,
     });
-    const res = await callTool(toolsFor(s), "update_routine", { id: job.id, enabled: true });
+    const res = await callTool(toolsFor(s), "routine", { action: "update", id: job.id, enabled: true });
     expect(res.isError).toBeFalsy();
     expect(res.content[0].text).toContain("enabled=true");
     expect(res.content[0].text).toContain("schedule=daily at 09:00 KST");
@@ -3133,7 +3182,7 @@ describe("system tools (avatar system management)", () => {
     });
     s.store.markRoutineRun(interval.id, { status: "error", error: "boom" });
 
-    const listed = await callTool(toolsFor(s), "list_routines", {});
+    const listed = await callTool(toolsFor(s), "routine", { action: "list" });
     const body = listed.content[0].text ?? "";
     expect(body).toContain("schedule=once on (missing date) at 09:00 KST");
     expect(body).toContain("schedule=weekly on  at 08:00 KST");
@@ -3143,21 +3192,21 @@ describe("system tools (avatar system management)", () => {
     expect(body).not.toContain("undefined");
   });
 
-  it("add_plugin drops blank ref/label, and list_plugins renders the null fields", async () => {
+  it("plugin add drops blank ref/label, and plugin list renders the null fields", async () => {
     const s = setup("st-plugin-nulls");
     const tools = toolsFor(s);
-    const added = await callTool(tools, "add_plugin", { repo: "https://example.com/x.git", ref: "  ", label: " " });
+    const added = await callTool(tools, "plugin", { action: "add", repo: "https://example.com/x.git", ref: "  ", label: " " });
     expect(added.isError).toBeFalsy();
     const plugin = s.store.listPlugins(s.owner.id)[0];
     expect(plugin.ref).toBeNull();
     expect(plugin.label).toBeNull();
 
-    const before = await callTool(tools, "list_plugins", {});
+    const before = await callTool(tools, "plugin", { action: "list" });
     expect(before.content[0].text).toContain("label=null | ref=null");
     expect(before.content[0].text).toContain("lastSyncedAt=null");
 
     s.store.markPluginSynced(s.owner.id, plugin.id);
-    const after = await callTool(tools, "list_plugins", {});
+    const after = await callTool(tools, "plugin", { action: "list" });
     expect(after.content[0].text).toMatch(/lastSyncedAt=\d{4}-/);
   });
 

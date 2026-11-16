@@ -385,13 +385,11 @@ export const SYSTEM_TOOL_NAMES = [
   "mcp__system__list_recent_conversations",
   "mcp__system__read_conversation",
   "mcp__system__turn_timings",
-  "mcp__system__list_routines",
-  "mcp__system__create_routine",
-  "mcp__system__update_routine",
-  "mcp__system__delete_routine",
-  "mcp__system__list_plugins",
-  "mcp__system__add_plugin",
-  "mcp__system__set_plugin_enabled",
+  // Retired 2026-11-16 (merged; their old names answer at /mcp with a redirect,
+  // agent/retiredTools.ts): list/create/update/delete_routine → routine,
+  // list_plugins/add_plugin/set_plugin_enabled → plugin.
+  "mcp__system__routine",
+  "mcp__system__plugin",
 ] as const;
 
 const OWNER_ONLY = "This tool can only be used in a conversation the avatar owner is participating in.";
@@ -959,6 +957,227 @@ function rewindLines(ctx: SystemToolsContext): string[] {
     : [];
 }
 
+/** `action` values of `mcp__system__routine` and `mcp__system__plugin` (a plain string, so a wrong one hears a redirect). */
+const ROUTINE_ACTIONS = ["list", "create", "update", "delete"] as const;
+const PLUGIN_ACTIONS = ["list", "add", "set_enabled"] as const;
+
+function normalizeAction(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+/** The refusal for an `action` the tool does not have (agent-facing). */
+function unknownAction(toolName: string, value: unknown, actions: readonly string[]): string {
+  const given = typeof value === "string" && value.trim() ? `'${value.trim()}'` : "no action";
+  return `Unknown action ${given} for mcp__system__${toolName}; nothing was run. Use one of: ${actions.map((a) => `'${a}'`).join(", ")}.`;
+}
+
+type RoutineScheduleArgs = {
+  name?: string;
+  scheduleKind?: "once" | "daily" | "weekly" | "interval";
+  date?: string;
+  time?: string;
+  daysOfWeek?: number[];
+  intervalMinutes?: number;
+  enabled?: boolean;
+};
+
+/**
+ * The routine and plugin operations behind `routine` / `plugin` (one per former
+ * tool: list/create/update/delete_routine, list/add_plugin, set_plugin_enabled).
+ * The caller has already passed the owner gate; results and audit actions are
+ * the former tools' own.
+ */
+function routineAndPluginOps(store: Store, ctx: SystemToolsContext) {
+  return {
+    listRoutines() {
+      const routines = store.listRoutineJobs(ctx.avatarUserId);
+      if (routines.length === 0) {
+        return text("There are no registered routines.");
+      }
+      return text(`${routines.length} registered routine(s):\n${routines.map(renderRoutine).join("\n")}`);
+    },
+
+    createRoutine(args: RoutineScheduleArgs & { prompt: string }) {
+      const prompt = args.prompt.trim();
+      if (!prompt) {
+        return text("Please enter a prompt.", true);
+      }
+      const parsed = parseRoutineSchedule({
+        scheduleKind: args.scheduleKind,
+        time: args.time,
+        daysOfWeek: args.daysOfWeek,
+        intervalMinutes: args.intervalMinutes,
+        date: args.date,
+      });
+      if (!parsed.ok) {
+        return text(ENGLISH_SCHEDULE_ERROR[parsed.error], true);
+      }
+      const routine = store.createRoutineJob(ctx.avatarUserId, {
+        name: args.name?.trim() || null,
+        prompt,
+        scheduleKind: parsed.value.kind,
+        minuteOfDay: parsed.value.minuteOfDay,
+        daysOfWeek: parsed.value.daysOfWeek,
+        intervalMinutes: parsed.value.intervalMinutes,
+        runDate: parsed.value.runDate,
+        enabled: args.enabled,
+      });
+      store.audit({
+        ...actor(ctx),
+        action: "system_tool_create_routine",
+        status: "success",
+        detail: `routine ${routine.id} (${formatScheduleEnglish(routine)})`,
+      });
+      return text(`Created the routine:\n${renderRoutine(routine)}`);
+    },
+
+    updateRoutine(args: RoutineScheduleArgs & { id: string; prompt?: string }) {
+      const patch: RoutineSchedulePatch & {
+        name?: string | null;
+        prompt?: string;
+        enabled?: boolean;
+      } = {};
+      if (args.prompt !== undefined) {
+        const prompt = args.prompt.trim();
+        if (!prompt) {
+          return text("Please enter a prompt.", true);
+        }
+        patch.prompt = prompt;
+      }
+      if (args.name !== undefined) {
+        patch.name = args.name.trim() || null;
+      }
+      const scheduleProvided =
+        args.scheduleKind !== undefined ||
+        args.date !== undefined ||
+        args.time !== undefined ||
+        args.daysOfWeek !== undefined ||
+        args.intervalMinutes !== undefined;
+      if (scheduleProvided) {
+        const parsed = parseRoutineSchedule({
+          scheduleKind: args.scheduleKind,
+          time: args.time,
+          daysOfWeek: args.daysOfWeek,
+          intervalMinutes: args.intervalMinutes,
+          date: args.date,
+        });
+        if (!parsed.ok) {
+          return text(ENGLISH_SCHEDULE_ERROR[parsed.error], true);
+        }
+        patch.scheduleKind = parsed.value.kind;
+        patch.minuteOfDay = parsed.value.minuteOfDay;
+        patch.daysOfWeek = parsed.value.daysOfWeek;
+        patch.intervalMinutes = parsed.value.intervalMinutes;
+        patch.runDate = parsed.value.runDate;
+      }
+      if (args.enabled !== undefined) {
+        patch.enabled = args.enabled;
+      }
+      if (Object.keys(patch).length === 0) {
+        return text("At least one of the values to update (name, prompt, schedule, enabled) is required.", true);
+      }
+      const current = store.getRoutineJob(ctx.avatarUserId, args.id);
+      if (!current) {
+        return text("Routine not found.", true);
+      }
+      if (patch.enabled === true) {
+        const candidate: RoutineSchedule = {
+          kind: patch.scheduleKind ?? current.scheduleKind,
+          minuteOfDay: patch.minuteOfDay ?? current.minuteOfDay,
+          daysOfWeek:
+            patch.daysOfWeek !== undefined ? patch.daysOfWeek : current.daysOfWeek,
+          intervalMinutes:
+            patch.intervalMinutes !== undefined
+              ? patch.intervalMinutes
+              : current.intervalMinutes,
+          runDate: patch.runDate !== undefined ? patch.runDate : current.runDate,
+        };
+        if (!isFutureOnceSchedule(candidate)) {
+          return text(ENGLISH_SCHEDULE_ERROR.DATE_IN_PAST, true);
+        }
+      }
+      const routine = store.updateRoutineJob(ctx.avatarUserId, args.id, patch);
+      if (!routine) {
+        return text("Routine not found.", true);
+      }
+      store.audit({
+        ...actor(ctx),
+        action: "system_tool_update_routine",
+        status: "success",
+        detail: `routine ${routine.id}`,
+      });
+      return text(`Updated the routine:\n${renderRoutine(routine)}`);
+    },
+
+    deleteRoutine(id: string) {
+      if (!store.deleteRoutineJob(ctx.avatarUserId, id)) {
+        return text("Routine not found.", true);
+      }
+      store.audit({
+        ...actor(ctx),
+        action: "system_tool_delete_routine",
+        status: "success",
+        detail: `routine ${id}`,
+      });
+      return text(`Deleted the routine: ${id}`);
+    },
+
+    listPlugins() {
+      const plugins = store.listPlugins(ctx.avatarUserId);
+      if (plugins.length === 0) {
+        return text("There are no registered plugins.");
+      }
+      return text(`${plugins.length} registered plugin(s):\n${plugins.map(renderPlugin).join("\n")}`);
+    },
+
+    async addPlugin(args: { repo: string; ref?: string; label?: string }) {
+      const repo = args.repo.trim();
+      if (!repo || !looksLikeRepo(repo)) {
+        return text("repo must be in owner/repo or git/https URL format.", true);
+      }
+      // Same source policy as the HTTP route (routes/plugins.ts): Noah clones a
+      // plugin inside its own server, so a path into Noah's directories or a
+      // loopback / internal-service host is refused BEFORE the row is stored.
+      try {
+        await assertAllowedGitSource(marketplaceCloneUrl(repo, ctx.config.githubHost), ctx.config, { resolve: true });
+      } catch (error) {
+        if (error instanceof GitSourceRefusedError) {
+          return text(`${error.message} The plugin was NOT added.`, true);
+        }
+        throw error;
+      }
+      const plugin = store.addPlugin(ctx.avatarUserId, {
+        repo,
+        ref: args.ref?.trim() || undefined,
+        label: args.label?.trim() || undefined,
+      });
+      store.audit({
+        ...actor(ctx),
+        action: "system_tool_add_plugin",
+        status: "success",
+        detail: plugin.repo,
+      });
+      return text(
+        `Added the plugin:\n${renderPlugin(plugin)}\n\nIt may not load immediately in the current conversation. It loads as an active plugin starting from the next conversation.`,
+      );
+    },
+
+    setPluginEnabled(id: string, enabled: boolean) {
+      const plugin = store.setPluginEnabled(ctx.avatarUserId, id, enabled);
+      if (!plugin) {
+        return text("Plugin not found.", true);
+      }
+      store.audit({
+        ...actor(ctx),
+        action: "system_tool_set_plugin_enabled",
+        status: "success",
+        detail: `${plugin.repo} enabled=${plugin.enabled}`,
+      });
+      return text(`Changed the plugin state:\n${renderPlugin(plugin)}`);
+    },
+  };
+}
+
 /**
  * Build system-management tool definitions bound to a single conversation.
  * Management handlers enforce owner/scope checks themselves. read_manual is
@@ -966,6 +1185,8 @@ function rewindLines(ctx: SystemToolsContext): string[] {
  * while restricting private state to its authorized owner scope.
  */
 export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
+  const { listRoutines, createRoutine, updateRoutine, deleteRoutine, listPlugins, addPlugin, setPluginEnabled } =
+    routineAndPluginOps(store, ctx);
   return [
     tool(
       "read_manual",
@@ -1197,7 +1418,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (state.reachableTeammateCount > 0 ? "available — you can ask a teammate's avatar one question on the owner's behalf (only active teammates whose avatar is not private answer); it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : "enabled, but no teammate avatar is reachable (there are no other approved teammates, or every teammate's avatar is private)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Experimental features: ${state.experimentalFeatures.length ? state.experimentalFeatures.join(", ") + " (beta — behavior may change)" : "(none enabled)"}`,
-          `- Plugins: ${plugins.length} (${plugins.filter((p) => p.enabled).length} enabled)`,
+          `- Plugins: ${plugins.length} (${plugins.filter((p) => p.enabled).length} enabled; list/add/enable with mcp__system__plugin)`,
           // External task API self-state (META-COGNITION): how many keys are
           // live and what an outside system can actually do with one, so the
           // avatar answers "can a system call you?" from state, not from guess.
@@ -1214,7 +1435,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           ...([
                 `- External task API: ${state.avatarApiKeyCount} active personal API keys. Manage them in 내 아바타 → 권한·연결 → 외부 작업 API. POST /api/v1/avatar/tasks accepts arbitrary {message, conversationId?} instructions with a personal Bearer key and runs the owner's main avatar asynchronously; GET /api/v1/avatar/tasks/:id reports results and pending questions, and POST .../:id/respond answers them. Each task may run for up to ${Math.round(ctx.config.avatarTaskRunTimeoutMs / 60_000)} minutes (the server operator sets this with AVATAR_TASK_TIMEOUT_MINUTES), including time spent waiting on questions, and a single pending question expires after ${Math.round(PROMPT_TTL_MS / 60_000)} minutes without an answer. This does not create or run scheduled routines. Never request the key in chat.`,
               ]),
-          `- Routines: ${routines.length} (${routines.filter((r) => r.enabled).length} enabled)`,
+          `- Routines: ${routines.length} (${routines.filter((r) => r.enabled).length} enabled; list/create/update/delete with mcp__system__routine)`,
           // Mirrors buildSystemPromptAppend's to-do section (the same runCapabilities
           // booleans); the live counts + KST date live HERE only, since the
           // prompt section stays static for prompt caching.
@@ -1381,30 +1602,20 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
       },
     ),
     tool(
-      "list_routines",
-      "Lists the owner's avatar routines. Routines run headlessly once at a specified KST date/time or recur daily, weekly, or at an interval, using the same tool permissions as the owner. (owner only)",
-      {},
-      async () => {
-        if (!ctx.viewerIsOwner) {
-          return text(OWNER_ONLY, true);
-        }
-        const routines = store.listRoutineJobs(ctx.avatarUserId);
-        if (routines.length === 0) {
-          return text("There are no registered routines.");
-        }
-        return text(`${routines.length} registered routine(s):\n${routines.map(renderRoutine).join("\n")}`);
-      },
-    ),
-    tool(
-      "create_routine",
-      "Creates a new routine task. Runs the prompt headlessly once at a specified KST date/time or on a recurring daily, weekly, or interval schedule, and leaves the result in the routines tab. Use it whenever the owner asks for something recurring. Routines due at the same time can run side by side and finish in any order, so never make one routine depend on another's output — put dependent steps in ONE routine. (owner only)",
+      "routine",
+      "Lists, creates, updates or deletes the owner's routines (scheduled tasks) — `action`: 'list' | 'create' | 'update' | 'delete'. " +
+        "A routine runs its prompt headlessly once at a KST date/time or recurring daily, weekly or at an interval, with the owner's tool permissions, and leaves the result in the routines tab. Use it whenever the owner asks for something recurring. " +
+        "create needs `prompt` (+ a schedule: scheduleKind defaults to daily); update needs `id` (from 'list') and any field to change — any schedule field replaces the schedule, enabled:false pauses it; delete needs `id`. " +
+        "Routines due at the same time can run side by side and finish in any order, so never make one routine depend on another's output — put dependent steps in ONE routine. Schedule examples: manual topic `routines`. (owner only)",
       {
-        prompt: z.string().describe("The task instruction to run on schedule"),
-        name: z.string().optional().describe("Short display name for the routine (optional)"),
+        action: z.string().describe("What to do: 'list', 'create', 'update' or 'delete'."),
+        id: z.string().optional().describe("update/delete: id of the routine (from action 'list')"),
+        prompt: z.string().optional().describe("create (required) / update: the task instruction to run on schedule"),
+        name: z.string().optional().describe("create/update: short display name; on update an empty string clears it"),
         scheduleKind: z
           .enum(["once", "daily", "weekly", "interval"])
           .optional()
-          .describe("Schedule type; defaults to daily"),
+          .describe("create/update: schedule type; create defaults to daily"),
         date: z.string().optional().describe("YYYY-MM-DD in KST for one-time schedules"),
         time: z.string().optional().describe("HH:MM in KST for once/daily/weekly, e.g.: 09:30"),
         daysOfWeek: z
@@ -1415,249 +1626,68 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           .number()
           .optional()
           .describe("Interval length in minutes for interval schedules; 5..10080"),
-        enabled: z.boolean().optional().describe("Whether to enable immediately after creation (default true)"),
+        enabled: z.boolean().optional().describe("create: enable at once (default true) / update: whether enabled"),
       },
       async (args) => {
         if (!ctx.viewerIsOwner) {
           return text(OWNER_ONLY, true);
         }
-        const prompt = args.prompt.trim();
-        if (!prompt) {
-          return text("Please enter a prompt.", true);
+        const action = normalizeAction(args.action);
+        if (action === "list") {
+          return listRoutines();
         }
-        const parsed = parseRoutineSchedule({
-          scheduleKind: args.scheduleKind,
-          time: args.time,
-          daysOfWeek: args.daysOfWeek,
-          intervalMinutes: args.intervalMinutes,
-          date: args.date,
-        });
-        if (!parsed.ok) {
-          return text(ENGLISH_SCHEDULE_ERROR[parsed.error], true);
+        if (action === "create") {
+          if (args.prompt === undefined) {
+            return text("action 'create' needs `prompt` (the task instruction to run on schedule).", true);
+          }
+          return createRoutine({ ...args, prompt: args.prompt });
         }
-        const routine = store.createRoutineJob(ctx.avatarUserId, {
-          name: args.name?.trim() || null,
-          prompt,
-          scheduleKind: parsed.value.kind,
-          minuteOfDay: parsed.value.minuteOfDay,
-          daysOfWeek: parsed.value.daysOfWeek,
-          intervalMinutes: parsed.value.intervalMinutes,
-          runDate: parsed.value.runDate,
-          enabled: args.enabled,
-        });
-        store.audit({
-          ...actor(ctx),
-          action: "system_tool_create_routine",
-          status: "success",
-          detail: `routine ${routine.id} (${formatScheduleEnglish(routine)})`,
-        });
-        return text(`Created the routine:\n${renderRoutine(routine)}`);
+        if (action === "update" || action === "delete") {
+          if (!args.id?.trim()) {
+            return text(`action '${action}' needs \`id\` — the routine's id from mcp__system__routine with action 'list'.`, true);
+          }
+          return action === "update" ? updateRoutine({ ...args, id: args.id }) : deleteRoutine(args.id);
+        }
+        return text(unknownAction("routine", args.action, ROUTINE_ACTIONS), true);
       },
     ),
     tool(
-      "update_routine",
-      "Updates an existing routine's name, prompt, schedule (once/daily/weekly/interval in KST), and enabled values. Provide any of scheduleKind/date/time/daysOfWeek/intervalMinutes to replace the schedule. (owner only)",
+      "plugin",
+      "Lists, adds, or enables/disables the plugins registered to the owner's avatar (git repositories that bundle skills and MCP servers) — `action`: 'list' | 'add' | 'set_enabled'. " +
+        "add needs `repo` (owner/repo, an https URL, a git@ URL or a .git URL; optional ref and label); set_enabled needs `id` (from 'list') and `enabled`. " +
+        "An added or toggled plugin loads starting from the NEXT conversation. (owner only)",
       {
-        id: z.string().describe("id of the routine to update"),
-        prompt: z.string().optional().describe("New task instruction"),
-        name: z.string().optional().describe("New display name; pass an empty string to clear it"),
-        scheduleKind: z
-          .enum(["once", "daily", "weekly", "interval"])
-          .optional()
-          .describe("New schedule type"),
-        date: z.string().optional().describe("YYYY-MM-DD in KST for one-time schedules"),
-        time: z.string().optional().describe("HH:MM in KST for once/daily/weekly"),
-        daysOfWeek: z
-          .array(z.number())
-          .optional()
-          .describe("Weekdays for weekly schedules: 0=Sun..6=Sat"),
-        intervalMinutes: z
-          .number()
-          .optional()
-          .describe("Interval length in minutes for interval schedules; 5..10080"),
-        enabled: z.boolean().optional().describe("Whether enabled"),
+        action: z.string().describe("What to do: 'list', 'add' or 'set_enabled'."),
+        repo: z.string().optional().describe("add (required): owner/repo or a git/https URL"),
+        ref: z.string().optional().describe("add: branch/tag/commit ref (optional)"),
+        label: z.string().optional().describe("add: display name (optional)"),
+        id: z.string().optional().describe("set_enabled (required): plugin id (from action 'list')"),
+        enabled: z.boolean().optional().describe("set_enabled (required): whether enabled"),
       },
       async (args) => {
         if (!ctx.viewerIsOwner) {
           return text(OWNER_ONLY, true);
         }
-        const patch: RoutineSchedulePatch & {
-          name?: string | null;
-          prompt?: string;
-          enabled?: boolean;
-        } = {};
-        if (args.prompt !== undefined) {
-          const prompt = args.prompt.trim();
-          if (!prompt) {
-            return text("Please enter a prompt.", true);
+        const action = normalizeAction(args.action);
+        if (action === "list") {
+          return listPlugins();
+        }
+        if (action === "add") {
+          if (args.repo === undefined) {
+            return text("action 'add' needs `repo` (owner/repo or a git/https URL).", true);
           }
-          patch.prompt = prompt;
+          return addPlugin({ repo: args.repo, ref: args.ref, label: args.label });
         }
-        if (args.name !== undefined) {
-          patch.name = args.name.trim() || null;
-        }
-        const scheduleProvided =
-          args.scheduleKind !== undefined ||
-          args.date !== undefined ||
-          args.time !== undefined ||
-          args.daysOfWeek !== undefined ||
-          args.intervalMinutes !== undefined;
-        if (scheduleProvided) {
-          const parsed = parseRoutineSchedule({
-            scheduleKind: args.scheduleKind,
-            time: args.time,
-            daysOfWeek: args.daysOfWeek,
-            intervalMinutes: args.intervalMinutes,
-            date: args.date,
-          });
-          if (!parsed.ok) {
-            return text(ENGLISH_SCHEDULE_ERROR[parsed.error], true);
+        if (action === "set_enabled") {
+          if (!args.id?.trim() || args.enabled === undefined) {
+            return text(
+              "action 'set_enabled' needs `id` (from mcp__system__plugin with action 'list') and `enabled` (true or false).",
+              true,
+            );
           }
-          patch.scheduleKind = parsed.value.kind;
-          patch.minuteOfDay = parsed.value.minuteOfDay;
-          patch.daysOfWeek = parsed.value.daysOfWeek;
-          patch.intervalMinutes = parsed.value.intervalMinutes;
-          patch.runDate = parsed.value.runDate;
+          return setPluginEnabled(args.id, args.enabled);
         }
-        if (args.enabled !== undefined) {
-          patch.enabled = args.enabled;
-        }
-        if (Object.keys(patch).length === 0) {
-          return text("At least one of the values to update (name, prompt, schedule, enabled) is required.", true);
-        }
-        const current = store.getRoutineJob(ctx.avatarUserId, args.id);
-        if (!current) {
-          return text("Routine not found.", true);
-        }
-        if (patch.enabled === true) {
-          const candidate: RoutineSchedule = {
-            kind: patch.scheduleKind ?? current.scheduleKind,
-            minuteOfDay: patch.minuteOfDay ?? current.minuteOfDay,
-            daysOfWeek:
-              patch.daysOfWeek !== undefined ? patch.daysOfWeek : current.daysOfWeek,
-            intervalMinutes:
-              patch.intervalMinutes !== undefined
-                ? patch.intervalMinutes
-                : current.intervalMinutes,
-            runDate: patch.runDate !== undefined ? patch.runDate : current.runDate,
-          };
-          if (!isFutureOnceSchedule(candidate)) {
-            return text(ENGLISH_SCHEDULE_ERROR.DATE_IN_PAST, true);
-          }
-        }
-        const routine = store.updateRoutineJob(ctx.avatarUserId, args.id, patch);
-        if (!routine) {
-          return text("Routine not found.", true);
-        }
-        store.audit({
-          ...actor(ctx),
-          action: "system_tool_update_routine",
-          status: "success",
-          detail: `routine ${routine.id}`,
-        });
-        return text(`Updated the routine:\n${renderRoutine(routine)}`);
-      },
-    ),
-    tool(
-      "delete_routine",
-      "Deletes an existing routine. (owner only)",
-      { id: z.string().describe("id of the routine to delete") },
-      async (args) => {
-        if (!ctx.viewerIsOwner) {
-          return text(OWNER_ONLY, true);
-        }
-        if (!store.deleteRoutineJob(ctx.avatarUserId, args.id)) {
-          return text("Routine not found.", true);
-        }
-        store.audit({
-          ...actor(ctx),
-          action: "system_tool_delete_routine",
-          status: "success",
-          detail: `routine ${args.id}`,
-        });
-        return text(`Deleted the routine: ${args.id}`);
-      },
-    ),
-    tool(
-      "list_plugins",
-      "Lists the plugins registered to the owner's avatar. (owner only)",
-      {},
-      async () => {
-        if (!ctx.viewerIsOwner) {
-          return text(OWNER_ONLY, true);
-        }
-        const plugins = store.listPlugins(ctx.avatarUserId);
-        if (plugins.length === 0) {
-          return text("There are no registered plugins.");
-        }
-        return text(`${plugins.length} registered plugin(s):\n${plugins.map(renderPlugin).join("\n")}`);
-      },
-    ),
-    tool(
-      "add_plugin",
-      "Adds a GitHub/git-repo plugin to the avatar. repo accepts owner/repo, an https URL, a git@ URL, or a .git URL. The added plugin loads starting from the next conversation. (owner only)",
-      {
-        repo: z.string().describe("owner/repo or a git/https URL"),
-        ref: z.string().optional().describe("branch/tag/commit ref (optional)"),
-        label: z.string().optional().describe("display name (optional)"),
-      },
-      async (args) => {
-        if (!ctx.viewerIsOwner) {
-          return text(OWNER_ONLY, true);
-        }
-        const repo = args.repo.trim();
-        if (!repo || !looksLikeRepo(repo)) {
-          return text("repo must be in owner/repo or git/https URL format.", true);
-        }
-        // Same source policy as the HTTP route (routes/plugins.ts): Noah clones a
-        // plugin inside its own server, so a path into Noah's directories or a
-        // loopback / internal-service host is refused BEFORE the row is stored.
-        try {
-          await assertAllowedGitSource(marketplaceCloneUrl(repo, ctx.config.githubHost), ctx.config, { resolve: true });
-        } catch (error) {
-          if (error instanceof GitSourceRefusedError) {
-            return text(`${error.message} The plugin was NOT added.`, true);
-          }
-          throw error;
-        }
-        const plugin = store.addPlugin(ctx.avatarUserId, {
-          repo,
-          ref: args.ref?.trim() || undefined,
-          label: args.label?.trim() || undefined,
-        });
-        store.audit({
-          ...actor(ctx),
-          action: "system_tool_add_plugin",
-          status: "success",
-          detail: plugin.repo,
-        });
-        return text(
-          `Added the plugin:\n${renderPlugin(plugin)}\n\nIt may not load immediately in the current conversation. It loads as an active plugin starting from the next conversation.`,
-        );
-      },
-    ),
-    tool(
-      "set_plugin_enabled",
-      "Enables or disables a registered plugin. The change is reflected in the load state starting from the next conversation. (owner only)",
-      {
-        id: z.string().describe("plugin id"),
-        enabled: z.boolean().describe("whether enabled"),
-      },
-      async (args) => {
-        if (!ctx.viewerIsOwner) {
-          return text(OWNER_ONLY, true);
-        }
-        const plugin = store.setPluginEnabled(ctx.avatarUserId, args.id, args.enabled);
-        if (!plugin) {
-          return text("Plugin not found.", true);
-        }
-        store.audit({
-          ...actor(ctx),
-          action: "system_tool_set_plugin_enabled",
-          status: "success",
-          detail: `${plugin.repo} enabled=${plugin.enabled}`,
-        });
-        return text(`Changed the plugin state:\n${renderPlugin(plugin)}`);
+        return text(unknownAction("plugin", args.action, PLUGIN_ACTIONS), true);
       },
     ),
   ];

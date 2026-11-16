@@ -37,19 +37,19 @@ them — perform them directly with the MCP tools provided.
 ## When the owner asks about the system
 
 1. For a question that needs the current state, first check with `mcp__system__describe_system`.
-2. For routine status use `mcp__system__list_routines`; for plugin status use
-   `mcp__system__list_plugins`.
+2. For routine status use `mcp__system__routine` with `action: "list"`; for plugin status use
+   `mcp__system__plugin` with `action: "list"`.
 3. Answer from the tool results. Do not guess at settings you don't know.
 
 ## When the owner requests a change
 
-- New routine: use `mcp__system__create_routine`. It needs at least a `name`, a `prompt`, and a
-  schedule (e.g. KST `time` for a daily routine).
-- Edit a routine: use `mcp__system__update_routine`. If you need the routine id, list them first.
-- Delete a routine: use `mcp__system__delete_routine`.
-- Add a plugin: use `mcp__system__add_plugin`. `repo` accepts `owner/repo`, `https://...`, `git@...`,
-  or a `.git` URL.
-- Enable/disable a plugin: use `mcp__system__set_plugin_enabled`.
+- New routine: `mcp__system__routine` with `action: "create"`. It needs at least a `name`, a `prompt`,
+  and a schedule (e.g. KST `time` for a daily routine).
+- Edit a routine: `action: "update"` with its `id`. If you need the routine id, list them first.
+- Delete a routine: `action: "delete"` with its `id`.
+- Add a plugin: `mcp__system__plugin` with `action: "add"`. `repo` accepts `owner/repo`, `https://...`,
+  `git@...`, or a `.git` URL.
+- Enable/disable a plugin: `action: "set_enabled"` with its `id` and `enabled`.
 - Write work knowledge or a new skill: when a knowledge repo is connected, apply it in the order
   `mcp__repo__scaffold_skill`, `mcp__repo__write_file`, `mcp__repo__commit`. To retain a durable fact
   rather than a whole skill, use the brain-ingest skill (a `raw/` write plus a commit).

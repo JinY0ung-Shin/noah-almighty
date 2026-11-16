@@ -235,6 +235,16 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   also `prepare_team_policy`; they only DRAFT a card (the user's own press commits), self-gate per call
   (`isActiveUser` / `isActiveAdmin`, live), and a call to one of the five review-queue tools removed
   2026-11-13 is answered at `/mcp` by `RETIRED_TOOL_MESSAGES` → [`team-brain.md`](team-brain.md).
+- **A merged or renamed tool keeps its old name as an UNLISTED redirect** (`agent/retiredTools.ts`,
+  `retiredToolAliases(server, [{ name, redirect }])` → `RETIRED_TOOL_ALIASES`, spread into the endpoint's
+  `RETIRED_TOOL_MESSAGES`): the old name is never registered, so tools/list never shows it and no
+  `*_TOOL_NAMES`/`mcpAllowedTools` names it, while a frozen session or an old skill that calls it gets, before
+  any gate, "nothing was run" plus the exact call that replaces it. The old name is reserved forever. First
+  use (2026-11-16): `system`'s `list_routines`/`create_routine`/`update_routine`/`delete_routine` → `routine`
+  and `list_plugins`/`add_plugin`/`set_plugin_enabled` → `plugin`, each with a plain-string `action`
+  (`list|create|update|delete`, `list|add|set_enabled` — never an enum, so a wrong value hears the redirect),
+  every action checking its own required arguments; handler logic, the owner gate, audit actions
+  (`system_tool_create_routine`, …) and result texts are the former tools'. Merge only tools on the SAME object.
 - **Web fetch is REMOVED (user, 2026-11-10).** The `mcp__web__fetch` tool (`webFetchTools.ts`, server `web`,
   tool-group id `web`) fetched URLs from Noah's own process: it was the one tool that let page-derived text
   drive requests from inside Noah's container (loopback guard bypassable through `[::ffff:127.0.0.1]`, no

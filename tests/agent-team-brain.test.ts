@@ -257,7 +257,8 @@ describe("team brain text the model reads", () => {
   });
 
   it("every retired tool name redirects to prepare_team_changes (the /mcp endpoint answers with it)", () => {
-    expect(Object.keys(RETIRED_TOOL_MESSAGES).sort()).toEqual(RETIRED_TOOLS.map((t) => `brain/${t}`).sort());
+    // Other servers' merged tools (agent/retiredTools.ts) share the table.
+    expect(Object.keys(RETIRED_TOOL_MESSAGES).filter((k) => k.startsWith("brain/")).sort()).toEqual(RETIRED_TOOLS.map((t) => `brain/${t}`).sort());
     for (const tool of RETIRED_TOOLS) {
       const message = RETIRED_TOOL_MESSAGES[`brain/${tool}`];
       expect(message.startsWith(`Tool 'mcp__brain__${tool}' was removed:`)).toBe(true);

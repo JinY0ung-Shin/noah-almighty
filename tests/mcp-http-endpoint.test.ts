@@ -269,7 +269,7 @@ describe("McpRunRegistry + /mcp/:server", () => {
     for (const token of [open, gated]) {
       const client = await connect("brain", token);
       expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["prepare_team_changes"]);
-      for (const key of Object.keys(RETIRED_TOOL_MESSAGES)) {
+      for (const key of Object.keys(RETIRED_TOOL_MESSAGES).filter((k) => k.startsWith("brain/"))) {
         const tool = key.slice("brain/".length);
         const refused = await client.callTool({ name: tool, arguments: { title: "t" } });
         expect(refused.isError).toBe(true);
@@ -281,13 +281,25 @@ describe("McpRunRegistry + /mcp/:server", () => {
       // The live tool is untouched, and an unknown name is not mistaken for a retired one.
       expect((await client.callTool({ name: "prepare_team_changes", arguments: {} })).content).toEqual([{ type: "text", text: "card shown" }]);
     }
-    expect(Object.keys(RETIRED_TOOL_MESSAGES).sort()).toEqual(
+    expect(Object.keys(RETIRED_TOOL_MESSAGES).filter((k) => k.startsWith("brain/")).sort()).toEqual(
       ["answer_team_questions", "get_team_proposal", "list_team_proposals", "prepare_team_review", "propose_team_note"].map((t) => `brain/${t}`),
     );
     // Only on the server that had them.
     const repo = await connect("repo", registry.register({ servers: { repo: buildServer({ aborted: false, started: false, authExtra: null }) } }));
     const elsewhere = await repo.callTool({ name: "propose_team_note", arguments: {} }).catch((error: unknown) => String(error));
     expect(JSON.stringify(elsewhere)).not.toContain("was removed");
+  });
+
+  it("a MERGED tool's old name (agent/retiredTools.ts) answers with the call that replaces it, before any gate", async () => {
+    const system = new McpServer({ name: "system", version: "1.0.0" });
+    system.registerTool("routine", { description: "Routines", inputSchema: {} }, async () => ({ content: [{ type: "text", text: "listed" }] }));
+    const client = await connect("system", registry.register({ servers: { system }, gates: { allowCall: (_s, tool) => tool === "routine" } }));
+    expect((await client.listTools()).tools.map((t) => t.name)).toEqual(["routine"]);
+    const refused = await client.callTool({ name: "create_routine", arguments: { prompt: "p" } });
+    expect(refused.isError).toBe(true);
+    const text = (refused.content as Array<{ text: string }>)[0].text;
+    expect(text).toBe(RETIRED_TOOL_MESSAGES["system/create_routine"]);
+    expect(text).toContain('Call mcp__system__routine with "action":"create"');
   });
 
   it("tokens are scoped to their own run's servers", async () => {

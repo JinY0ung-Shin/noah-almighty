@@ -83,7 +83,7 @@
        and skips). `/contents` and `/refresh` answer 400 for such a row; the row and its clone are not
        deleted (the owner's DELETE removes both). The bundled `defaultPluginsDir` is read in place, never
        through the clone path, so it is unaffected; there is no operator-configured local marketplace
-       path. `mcp__system__add_plugin` (`systemTools.ts`) still stores without the entry check — the sync
+       path. `mcp__system__plugin` action `add` (`systemTools.ts`) still stores without the entry check — the sync
        point refuses it, so nothing is cloned or loaded, but the row is created.
      - **Residual, by design or not closable here:** private-network hosts Noah does not know from its
        config (other compose services, anything else on RFC 1918) stay reachable as a blind
