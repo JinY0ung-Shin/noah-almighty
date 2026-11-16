@@ -65,7 +65,7 @@ import {
 import { effortForModel, isEffortLevel } from "../effortLevels.js";
 import { planSharedMcpRun } from "../sharedMcpServers.js";
 import { readTeamPolicySync } from "../teamBrain.js";
-import { inlineUiAllowed, summarizeOwnerState } from "./ownerState.js";
+import { inlineUiAllowed, liveChatRun, summarizeOwnerState } from "./ownerState.js";
 import { resolveConversationTodoSnapshot } from "./todoSnapshot.js";
 import {
   DEFAULT_MCP_TOOL_GROUPS,
@@ -894,6 +894,8 @@ export async function buildRunCapabilities(
     // fact its "why not" needs — the other two reasons are `headless` and
     // `externalTaskApi` below.
     inlineUiEnabled: inlineUiActive,
+    // notify_user is refused in a live chat (liveChatRun): the owner reads the answer.
+    liveChat: liveChatRun(request),
     avatarConsultation: consultationRun,
     deckRenderingAvailable,
     deckToolchain,

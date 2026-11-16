@@ -141,6 +141,13 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   attributable, visible, undoable). Both metacognition surfaces branch on `browserEnabled` when they describe
   that write route.
 
+- **`notify_user` is for UNATTENDED runs only** (2026-11-16, user decision). In a live chat (`liveChatRun`,
+  `ownerState.ts`: not headless, not a task-API turn, not a consultation — the run kind the server fixed when the
+  run started) the handler refuses with `NOTIFY_LIVE_CHAT_REFUSAL` ("say it in your answer"), via the
+  `liveChat` flag `runCapabilities` puts on the system tools' context. Both surfaces say so: the frozen owner
+  paragraph's notify sentence and `describe_system`'s `notifyCapabilityLine`. Only the run kind decides — not
+  whether someone is connected right now (the user's choice: one predictable rule).
+
 ## Admin skill on-off policy (`toolSkillPolicy.ts` + `agent/skillCatalog.ts`)
 - **What it is:** the admin panel (system tab → "스킬 정책") stores deployment-wide off-switches for individual
   SKILLS (bare name or `<plugin>:<name>`). Storage mirrors the hex-ssh policy: one JSON blob in `app_config`

@@ -276,6 +276,18 @@ export function inlineUiAllowed(run: InlineUiRun): boolean {
 }
 
 /**
+ * A LIVE chat run: a person sent this turn from the chat screen and reads the
+ * answer as it streams — never a routine, a task-API turn or a consultation.
+ * Decided by the server when the run starts (the model cannot claim it). In such
+ * a run `notify_user` is refused (2026-11-16, the user's call: the avatar left
+ * notifications while the owner was reading the very chat) — what the owner
+ * needs to know goes in the answer.
+ */
+export function liveChatRun(run: InlineUiRun): boolean {
+  return !run.headless && !run.externalTaskApi && !run.avatarConsultation;
+}
+
+/**
  * Why a run has no inline UI, by precedence consultation > external task >
  * unattended. ONE text for both metacognition surfaces (describe_system's
  * inline-UI line and the turn preamble's answer-format note).

@@ -54,6 +54,7 @@ import {
 import { gitRepoClonePath, gitRepoContextFromRecord } from "../src/server/gitRepos.js";
 import { getWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildCanvasTools, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES, MAX_CANVAS_CONTENT_CHARS } from "../src/server/agent/canvasTools.js";
+import { liveChatRun } from "../src/server/agent/ownerState.js";
 import { buildBrowserTools, readerProxyRefusal } from "../src/server/agent/browserTools.js";
 import type { BrowserRequest, CanvasRequest, CanvasResult } from "../src/server/agent/events.js";
 import {
@@ -2661,6 +2662,30 @@ describe("system tools (avatar system management)", () => {
       message: "배치 서버 상태를 확인하세요.",
       readAt: null,
     });
+  });
+
+  it("refuses notify_user in a live chat and says so on describe_system; unattended runs still send", async () => {
+    const s = setup("st-notify-live");
+    const live = buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, liveChat: true });
+    const refused = await callTool(live, "notify_user", { title: "완료", message: "작업이 끝났습니다." });
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain("this is a live chat");
+    expect(refused.content[0].text).toContain("Say it in your answer");
+    expect(s.store.listAvatarNotifications(s.owner.id)).toHaveLength(0);
+    const described = await callTool(live, "describe_system", {});
+    expect(described.content[0].text).toContain("- Owner notifications (notify_user): NOT available in this run");
+
+    const unattended = buildSystemTools(s.store, { ...s.baseCtx, viewerIsOwner: true, liveChat: false });
+    expect((await callTool(unattended, "notify_user", { message: "야간 점검 실패" })).isError).toBeFalsy();
+    expect(s.store.listAvatarNotifications(s.owner.id)).toHaveLength(1);
+    expect((await callTool(unattended, "describe_system", {})).content[0].text).toContain(
+      "- Owner notifications (notify_user): available in this run",
+    );
+    // The run kind decides it: only a turn a person sent from the chat screen is live.
+    expect(liveChatRun({})).toBe(true);
+    expect(liveChatRun({ headless: true })).toBe(false);
+    expect(liveChatRun({ externalTaskApi: true })).toBe(false);
+    expect(liveChatRun({ avatarConsultation: true })).toBe(false);
   });
 
   it("creates, updates, lists, and deletes owner routines", async () => {
