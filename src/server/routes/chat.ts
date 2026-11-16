@@ -1878,8 +1878,8 @@ export async function executeChatTurn(
           // per-conversation scratch dir an additional writable dir.
           cwd: piPrepared ? workspaceDir : (activeRepoCwd ?? workspaceDir),
           additionalDirs: activeRepoCwd && !piPrepared ? [workspaceDir] : undefined,
-          // Noah's own public origin, so copy_image can hand the agent an
-          // absolute clipboard-staging URL to open with new_tab. Derived
+          // Noah's own public origin, so clipboard "image" can hand the agent an
+          // absolute clipboard-staging URL to open with tabs "new". Derived
           // from THIS request to match the origin the user's browser is on.
           appOrigin: ctx.appOrigin,
           // The bridge drives THIS browser, so its UA is the only platform
@@ -4031,8 +4031,8 @@ export function createChatRouter({
           requestedModel,
           requestedEffort,
           requestedMcpToolGroups,
-          // Noah's own public origin, so copy_image can hand the agent an
-          // absolute clipboard-staging URL to open with new_tab. Derived
+          // Noah's own public origin, so clipboard "image" can hand the agent an
+          // absolute clipboard-staging URL to open with tabs "new". Derived
           // from THIS request to match the origin the user's browser is on.
           appOrigin: requestOrigin(req) ?? undefined,
           // The bridge drives THIS browser, so its UA is the only platform

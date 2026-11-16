@@ -212,7 +212,7 @@ export function stagePiAttachmentFiles(workspace: PiWorkspace, files: AgentImage
 }
 
 /**
- * A path a MODEL handed a Noah tool (show_file, share_file, copy_image) → the
+ * A path a MODEL handed a Noah tool (show_file, share_file, clipboard "image") → the
  * host path Noah reads. The model lives in the sandbox, so a path means what
  * pi's own tools make of it: absolute under `/workspace`, or relative to the
  * shell's start folder `/workspace`. Anything else (`/tmp/x`, a path out of

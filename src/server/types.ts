@@ -1712,8 +1712,8 @@ export interface AgentRequest {
    * The Noah app's OWN public origin (scheme + host) as the user's browser
    * reaches it, derived from the chat request (honouring the reverse proxy).
    * Lets browser-driving tools build an absolute URL to a Noah-served page — the
-   * clipboard-staging page `copy_image` returns — that the agent opens with
-   * `new_tab`. Owner/interactive turns only; undefined when it can't be derived.
+   * clipboard-staging page `clipboard "image"` returns — that the agent opens with
+   * `tabs` "new". Owner/interactive turns only; undefined when it can't be derived.
    */
   appOrigin?: string;
   /**

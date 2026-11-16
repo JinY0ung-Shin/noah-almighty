@@ -45,7 +45,7 @@ No `mcp__confluence__*` tool creates, edits, or deletes anything, and no shell o
 exists.
 
 When the user asks you to create or edit a page, use the BROWSER tools if you have them
-(`mcp__browser__*`): open the page or the Confluence editor with `navigate` / `new_tab`, then
+(`mcp__browser__*`): open the page or the Confluence editor with `navigate` / `tabs` (action `"new"`), then
 `snapshot` → `click` / `type` / `fill_form` like any other site. That runs in the user's own logged-in
 session, so the edit is attributed to them and they can watch and undo it. Say what you are about to
 change before you save. If the Confluence host is refused, it is outside the operator's browser

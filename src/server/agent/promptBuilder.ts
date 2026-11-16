@@ -1189,7 +1189,7 @@ export function buildSystemPromptAppend(
           // bridge is actually live this run; promising it otherwise sends the
           // model looking for tools it does not have.
           (request.browserEnabled
-            ? "To CREATE or EDIT a page, use the user's browser via `mcp__browser__navigate`/`mcp__browser__new_tab`. Tell them what will change before saving. Read manual topic `browser-operations` first for text/image paste and verify the editor committed the change. A blocked host is not retryable through another route."
+            ? "To CREATE or EDIT a page, use the user's browser via `mcp__browser__navigate`/`mcp__browser__tabs`. Tell them what will change before saving. Read manual topic `browser-operations` first for text/image paste and verify the editor committed the change. A blocked host is not retryable through another route."
             : "If the user asks you to write a page, say so plainly and offer what you can — draft the content in the chat, or hand it over as a file with `mcp__file_output__share_file`. Editing Confluence directly would need browser control (the `browser` tool group, in a chat with their own avatar, with the Noah extension installed)."),
       );
     } else {
@@ -1219,7 +1219,7 @@ export function buildSystemPromptAppend(
     lines.push(
       "Browser control: you can drive THIS user's own browser. BEFORE the first browser action, read `mcp__system__read_manual` topic `browser-operations` for the action/clipboard/recovery workflow. " +
         "Only tabs in the Noah tab group and tabs you open are reachable. Always `mcp__browser__snapshot` first, act, then verify the returned state; after navigation or document replacement take fresh uids. Use `read_text` for long text; actions accept small `maxChars`, while `wait_for` returns no page content. " +
-        "Use `type`/`fill_form` to enter text; long editor content and images use `copy_text`/`copy_image` via the manual's staging flow. Never paste on anything but COPIED; verify the saved editor content after pasting. " +
+        "Use `type`/`fill_form` to enter text; long editor content and images use `clipboard` via the manual's staging flow. Never paste on anything but COPIED; verify the saved editor content after pasting. " +
         (request.visionEnabled !== false
           ? "Screenshots are available, shared with the user and saved in the scratch workspace's `captures/`. For a PIXEL position click, CHECK the landed-on element AND the mapping line the result reports; if the coordinate space is off, correct once, or use uid mode. "
           : "Screenshots and pixel-mode clicks are unavailable. ") +
@@ -1656,7 +1656,7 @@ export function buildUserPrompt(
             "\nYou cannot see their pixels: never open them with `read`. " +
             (readOnly
               ? "This conversation is read-only (no write/edit/bash): show one to the user with mcp__file_output__show_file if they need to see it."
-              : "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__copy_image."),
+              : "Handle them as files: show one to the user with mcp__file_output__show_file, inspect or convert with `bash`, commit via the repo tools, or place one into a web page with mcp__browser__clipboard (action \"image\")."),
     );
   }
   return lines.join("\n\n");

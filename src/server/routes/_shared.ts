@@ -41,7 +41,7 @@ export interface AppServices {
  *
  * Both headers are CLIENT-CONTROLLED and a chained proxy APPENDS to them, so
  * neither may be emitted verbatim: a comma-joined `x-forwarded-host` yields a
- * malformed origin (new_tab then fails), and a forged one would hand the agent
+ * malformed origin (tabs "new" then fails), and a forged one would hand the agent
  * an attacker-chosen origin to open in the user's authenticated browser. So we
  * take the first entry of each, parse, and demand a sane http(s) URL — failing
  * CLOSED to null on anything else, exactly like `matchPatternForOrigin`
