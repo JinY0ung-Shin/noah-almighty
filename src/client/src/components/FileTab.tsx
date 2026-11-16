@@ -41,7 +41,9 @@ function slideSrc(conversationId: string, att: MessageAttachment): string {
 }
 
 function downloadHref(conversationId: string, att: MessageAttachment): string {
-  const base = `/api/conversations/${encodeURIComponent(conversationId)}/files/${encodeURIComponent(att.id)}`;
+  // An image opened from the transcript (openImageTab) is served from the images route, not the files one.
+  const route = att.kind === "image" ? "images" : "files";
+  const base = `/api/conversations/${encodeURIComponent(conversationId)}/${route}/${encodeURIComponent(att.id)}`;
   return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
 }
 

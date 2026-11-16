@@ -1,13 +1,13 @@
 // The side panel (SidePanel + CanvasTab + FileTab + CanvasHtmlFrame): the
 // "SidePanel canvas tab" and "SidePanel tabs" suites. Runs in the vitest
 // "react" project.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import DOMPurify from "dompurify";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel";
 import { confirmation, resolveConfirmation } from "../src/client/src/lib/confirm";
-import { readState, replaceState } from "../src/client/src/lib/state";
+import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import { get } from "../src/client/src/lib/store";
 
 /* ------------------------------------------------------------------ */
@@ -304,7 +304,6 @@ describe("SidePanel tabs", () => {
   });
 
   it("the collapsed strip says when the panel moved on while folded", async () => {
-    localStorage.setItem("canvasPanelCollapsed", "1");
     const pane = {
       ...canvasPane({ streaming: false }, { controls: [] }),
       canvases: [
@@ -314,19 +313,42 @@ describe("SidePanel tabs", () => {
       sideTab: { kind: "canvas", id: "cv1" },
     };
     const view = render(<SidePanel pane={pane} />);
+    fireEvent.click(screen.getByRole("button", { name: "패널 접기" }));
     expect(screen.getByRole("button", { name: "패널 펼치기" })).toBeTruthy();
     view.rerender(<SidePanel pane={{ ...pane, sideTab: { kind: "canvas", id: "cv2" } }} />);
     expect(screen.getByRole("button", { name: "패널 펼치기 (확인할 항목 있음)" })).toBeTruthy();
   });
 
-  it("leaves its collapsed strip when an ask for input or an opened file needs it", async () => {
+  it("every conversation starts unfolded: a fold holds only for the conversation it was made in", () => {
+    // What an older build left behind is dropped, not obeyed.
     localStorage.setItem("canvasPanelCollapsed", "1");
-    const pane = mixedPane({ sideExpand: true });
+    localStorage.setItem("capPanelCollapsed", "1");
+    const pane = mixedPane({});
+    const { container, rerender } = render(<SidePanel pane={pane} />);
+    const aside = () => container.querySelector("aside.canvas-panel");
+    expect(aside()?.classList.contains("collapsed")).toBe(false);
+    expect(localStorage.getItem("canvasPanelCollapsed")).toBeNull();
+    expect(localStorage.getItem("capPanelCollapsed")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "패널 접기" }));
+    expect(aside()?.classList.contains("collapsed")).toBe(true);
+    // Same conversation: stays folded. Nothing is written for the next one.
+    rerender(<SidePanel pane={{ ...pane }} />);
+    expect(aside()?.classList.contains("collapsed")).toBe(true);
+    expect(localStorage.getItem("canvasPanelCollapsed")).toBeNull();
+    // Another conversation (a new pane): unfolded again.
+    rerender(<SidePanel pane={{ ...pane, id: `${pane.id}-next` }} />);
+    expect(aside()?.classList.contains("collapsed")).toBe(false);
+  });
+
+  it("leaves its collapsed strip when an ask for input or an opened file needs it", async () => {
+    const pane = mixedPane({});
     replaceState({ chatPanes: [pane] });
-    const { container } = render(<SidePanel pane={pane} />);
+    const { container, rerender } = render(<SidePanel pane={pane} />);
+    fireEvent.click(screen.getByRole("button", { name: "패널 접기" }));
+    expect(container.querySelector("aside.canvas-panel")?.classList.contains("collapsed")).toBe(true);
+    act(() => updateState((s) => { s.chatPanes[0].sideExpand = true; }));
+    rerender(<SidePanel pane={readState().chatPanes[0]} />);
     await waitFor(() => expect(readState().chatPanes[0].sideExpand).toBe(false));
     expect(container.querySelector("aside.canvas-panel")?.classList.contains("collapsed")).toBe(false);
-    // Shown this once — the viewer's choice to keep it folded still stands.
-    expect(localStorage.getItem("canvasPanelCollapsed")).toBe("1");
   });
 });

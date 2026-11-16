@@ -3216,6 +3216,21 @@ export function openFileTab(
   });
 }
 
+/**
+ * An image in the transcript (one the avatar showed, or one the viewer
+ * attached), pressed: shown in the side panel as its own tab — the image is
+ * its one "slide" — instead of a new browser tab. A modified press (Ctrl/⌘,
+ * Shift, the middle button) still follows the link (the caller decides).
+ */
+export function openImageTab(paneId: string, attachment: MessageAttachment): void {
+  openFileTab(paneId, attachment, [attachment]);
+}
+
+/** A plain primary-button press — a modified one (new tab, new window, download) is left to the link. */
+export function isPlainClick(event: { button: number; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
+  return event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+}
+
 function putFileTab(pane: ChatPane, tab: PaneFileTab): void {
   const tabs = pane.fileTabs ?? [];
   pane.fileTabs = tabs.some((item) => item.attachment.id === tab.attachment.id)

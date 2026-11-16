@@ -15,9 +15,11 @@ import type { ChatPane, MessageAttachment, SideTabRef } from "../lib/types";
 // so a .drawio preview and a canvas never take turns in the slot as two
 // differently built panels. Every tab
 // stays MOUNTED while another shows: a half-typed canvas answer and a
-// rendered diagram survive a switch. Resizable via the left-edge handle,
-// collapse state persisted in localStorage, stacked below the chat on narrow
-// viewports. ChatView mounts it only while the pane has a tab.
+// rendered diagram survive a switch. Resizable via the left-edge handle (the
+// width persisted in localStorage), stacked below the chat on narrow viewports.
+// A fold holds for the conversation it was made in only: every conversation
+// starts unfolded (folded on a narrow window). ChatView mounts it only while
+// the pane has a tab.
 export interface SidePanelProps {
   pane: ChatPane;
   /** 공유 링크 on a deck tab → ChatView's single dialog (FileTab explains why). */
@@ -42,6 +44,13 @@ function setPref(key: string, value: string): void {
     /* private mode: prefs just won't persist */
   }
 }
+function clearPref(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* nothing stored */
+  }
+}
 // Bound the stored/dragged width to the panel's own min/max only. CSS owns the
 // actual fit (`.canvas-panel:not(.collapsed)` flex-shrink + the chat-col floor,
 // and stacking on narrow viewports — #40 responsive).
@@ -63,6 +72,18 @@ function domId(paneId: string, prefix: string, key: string): string {
   return `${prefix}-${paneId}-${key}`.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
+/**
+ * How a conversation's panel starts: unfolded, except on a narrow window
+ * (≤ 860 px), where the panel would sit on top of the chat. The fold is NOT
+ * remembered across conversations; the stored key an older build wrote
+ * (`canvasPanelCollapsed`, before it `capPanelCollapsed`) is dropped.
+ */
+function startsFolded(): boolean {
+  clearPref("canvasPanelCollapsed");
+  clearPref("capPanelCollapsed");
+  return typeof window !== "undefined" && (window.matchMedia?.("(max-width: 860px)").matches ?? false);
+}
+
 export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) {
   // Read before the first render, not after the mount: an expand request that
   // arrives with the panel's first tab must find the stored state already
@@ -71,8 +92,7 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
   const [stored] = useState(() => {
     const width =
       clampWidth(Number(pref("canvasPanelWidth", pref("filePanelWidth", String(WIDTH_DEFAULT)))) || WIDTH_DEFAULT);
-    const mobile = typeof window !== "undefined" && (window.matchMedia?.("(max-width: 860px)").matches ?? false);
-    const collapsed = pref("canvasPanelCollapsed", mobile ? "1" : "0") === "1";
+    const collapsed = startsFolded();
     return { width, collapsed, foldedOn: collapsed ? keyOf(resolveSideTab(pane)) : "" };
   });
   const [panelWidth, setPanelWidthState] = useState(stored.width);
@@ -95,8 +115,13 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
     : "캔버스 보기";
 
   if (pane.id !== foldedPane) {
+    // Another conversation (a new chat replaces the pane): it starts unfolded,
+    // whatever the last one was left at (2026-11-16, the user's call — a fold
+    // remembered across conversations hid the 파일 tab that opens by default).
+    const folded = startsFolded();
     setFoldedPane(pane.id);
-    setFoldedOn(currentKey);
+    setCollapsedState(folded);
+    setFoldedOn(folded ? currentKey : "");
   }
 
   function setPanelWidth(width: number): void {
@@ -148,7 +173,6 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
   function setCollapsed(value: boolean): void {
     setCollapsedState(value);
     if (value) setFoldedOn(currentKey);
-    setPref("canvasPanelCollapsed", value ? "1" : "0");
   }
 
   // One-shot: an ask for input or a file the viewer opened must not stay

@@ -424,6 +424,11 @@ Server half and the contract: [server-core.md](server-core.md) (#admin-notice).
   fetch); the run goes on server-side and is re-attached when its conversation opens again. Closing a split
   pane (`closePane`) cancels the run, so that one alone asks (danger confirm).
 
+- **A transcript image opens BESIDE the chat** (2026-11-16): a plain press on an image the avatar showed or the
+  viewer attached (stored ones; a still-sending local copy keeps its link) calls `openImageTab` — the image as a
+  side-panel file tab whose one slide is itself (`FileTab` downloads it from the images route). Ctrl/⌘/Shift/
+  middle-click still follow the `target=_blank` link (`isPlainClick`).
+
 ## Composer drafts (`lib/chatDrafts.ts`)
 - **A keystroke never publishes the app state.** `setPaneDraft`/`setPaneRewindDraft` write `pane.draft` /
   `pane.rewindEdit.draft` IN PLACE and bump `draftEdits`; only the composer and the rewind editor subscribe
@@ -589,8 +594,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   is the user's, not the conversation's; logout and session expiry reset it to undefined and leave the
   remembered choice. Default-open only JOINS the strip: it sets neither `sideTab`,
   `sideFollow` nor `sideExpand`, so a canvas still takes the panel, the panel keeps following the avatar, and
-  a panel the viewer folded stays folded (`canvasPanelCollapsed` — the stored way to keep it out of sight; on
-  a ≤ 860 px window the panel starts folded, so a phone shows only the 파일 보기 strip). Checked in Chromium
+  a fold holds for its conversation only: every conversation starts UNFOLDED (2026-11-16, user decision —
+  the remembered `canvasPanelCollapsed` hid the default-open 파일 tab behind its strip; `SidePanel` drops that key
+  and its older `capPanelCollapsed`), except on a ≤ 860 px window, where the panel starts folded so a phone
+  shows only the 파일 보기 strip. To keep the tab out of sight for good, the viewer closes it (remembered). Checked in Chromium
   against mocked routes (2026-11-14): open on entering a conversation, closed stays closed for a new chat
   and after a reload, opened again stays open after a reload, folded strip at 420 px. It is last in the strip and the default tab only when nothing else is open
   (`resolveSideTab`), and the avatar never opens, selects or dots it. The tree is the workspace ROOT with one

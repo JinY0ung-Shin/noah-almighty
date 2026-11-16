@@ -24,8 +24,10 @@ import {
   canRegenerate,
   consultationLabel,
   hasVisibleImages,
+  isPlainClick,
   isRewindAnchor,
   messageKey,
+  openImageTab,
   opensInWorkspaceTab,
   regenerate,
   setRewindEditDraft,
@@ -180,7 +182,18 @@ export function attachmentCards(
         const src = `/api/conversations/${encodeURIComponent(item.conversationId)}/images/${encodeURIComponent(att.id)}`;
         return (
           <figure key={att.id} className="msg-image-item">
-            <a className="msg-image-link" href={src} target="_blank" rel="noopener noreferrer">
+            <a
+              className="msg-image-link"
+              href={src}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="오른쪽 패널에서 보기 (Ctrl+클릭: 새 탭)"
+              onClick={(event) => {
+                if (!isPlainClick(event)) return;
+                event.preventDefault();
+                openImageTab(item.id, att);
+              }}
+            >
               <ReservedImage className="msg-image" src={src} alt={att.caption || att.name || "생성된 이미지"} loading="lazy" size={chatThumbSize(att)} />
             </a>{" "}
             {att.caption ? <figcaption className="msg-image-caption">{att.caption}</figcaption> : null}
@@ -471,7 +484,19 @@ function userBody(ctx: ChatController, item: ChatPane, message: StoredMessage, e
               uploadedDocumentCard(item, att, (item.unsentDocumentIds ?? []).includes(att.id))
             ) : (
               <figure key={att.id} className="msg-image-item">
-                <a className="msg-image-link" href={imageSrc(message, att, item)} target="_blank" rel="noopener noreferrer">
+                <a
+                  className="msg-image-link"
+                  href={imageSrc(message, att, item)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="오른쪽 패널에서 보기 (Ctrl+클릭: 새 탭)"
+                  onClick={(event) => {
+                    // Only a stored image: one still being sent is a local copy the panel cannot fetch.
+                    if (!isPlainClick(event) || !imageSrc(message, att, item).startsWith("/api/")) return;
+                    event.preventDefault();
+                    openImageTab(item.id, att);
+                  }}
+                >
                   <ReservedImage className="msg-image" src={imageSrc(message, att, item)} alt={att.caption || att.name || "첨부 이미지"} loading="lazy" size={chatThumbSize(att)} />
                 </a>{" "}
                 {att.caption ? <figcaption className="msg-image-caption">{att.caption}</figcaption> : null}

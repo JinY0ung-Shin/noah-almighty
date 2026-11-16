@@ -8,7 +8,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import FileTab from "../src/client/src/components/FileTab";
 import ReservedImage, { CHAT_THUMB_MAX_PX, chatThumbSize, fitImageSize, knownImageSize } from "../src/client/src/components/ReservedImage";
-import { replaceState } from "../src/client/src/lib/state";
+import { readState, replaceState } from "../src/client/src/lib/state";
 import type { ChatPane, MessageAttachment } from "../src/client/src/lib/types";
 import ChatView from "../src/client/src/views/ChatView";
 import type { AvatarDetail, StoredMessage } from "../src/server/types";
@@ -162,6 +162,35 @@ describe("the transcript's image attachments", () => {
 
     fireEvent.load(userImages[1]);
     expect(userImages[1].hasAttribute("data-pending")).toBe(false);
+  });
+});
+
+describe("pressing a transcript image", () => {
+  it("opens it in the side panel as its own tab; a modified press is left to the link", () => {
+    const shown = { id: "img-shown", kind: "image", mediaType: "image/jpeg", name: "chart.jpg", width: 300, height: 900 };
+    const answer = {
+      id: "m-1",
+      conversationId: "conv-1",
+      role: "assistant",
+      content: "결과입니다",
+      attachments: [shown],
+      createdAt: "2026-07-26T01:00:01.000Z",
+      response: { kind: "text", runtime: "claude", summary: "완료", text: "결과입니다" },
+    } as unknown as StoredMessage;
+    replaceState({ avatars: [], chatPanes: [pane([answer])], activePaneId: "pane-1" });
+    const { container } = render(<ChatView />);
+    const link = container.querySelector(".message.assistant a.msg-image-link")!;
+
+    // Ctrl+click: the browser's own new tab, nothing opened beside the chat.
+    fireEvent.click(link, { ctrlKey: true });
+    expect(readState().chatPanes[0].fileTabs ?? []).toEqual([]);
+
+    const plain = fireEvent.click(link);
+    expect(plain).toBe(false); // default prevented: no new browser tab
+    const opened = readState().chatPanes[0];
+    expect(opened.fileTabs?.map((tab) => tab.attachment.id)).toEqual(["img-shown"]);
+    expect(opened.fileTabs?.[0].slides?.map((slide) => slide.id)).toEqual(["img-shown"]);
+    expect(opened.sideTab).toEqual({ kind: "file", id: "img-shown" });
   });
 });
 
