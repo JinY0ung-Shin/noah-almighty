@@ -170,7 +170,7 @@
   while the DOM proxy it exposes windows a slice — a throw would report a landed write as failed. The
   mismatch note quotes sent-vs-read-back lengths, adds the hidden-proxy sentence only on
   `isHiddenProxyInput` evidence (a geometry claim, not a class-name guess), and names the recovery
-  that actually works: `mcp__browser__copy_text` + paste. A dialog raised mid-write stops the chunk
+  that actually works: `mcp__browser__clipboard` (action "text") + paste. A dialog raised mid-write stops the chunk
   loop AND skips the read-back (the field holds a PREFIX the editor was never given the rest of; the
   op tail reports the dialog). `inputPreflight` also flags known virtualized editors off the RAW class
   attribute (`VIRTUALIZED_EDITOR_CLASS_RE` — Monaco / CodeMirror 5+6 / Ace; raw because CodeMirror 5's
@@ -304,23 +304,23 @@
   existing translation turns into an update prompt — `BROWSER_EXTENSION_MIN_COMPATIBLE` stays put. The
   server sends the probe only when `accept` is omitted (promptText without accept is refused as a
   half-formed ANSWER, server-side, before the wire), so the answering contract is untouched.
-- **`copy_image` puts an image on the OS clipboard through a FIRST-PARTY Noah page — not the
-  extension.** A Chrome MV3 extension cannot write an image to the clipboard (the async Clipboard API
+- **`clipboard` action "image" (formerly `copy_image`) puts an image on the OS clipboard through a
+  FIRST-PARTY Noah page — not the extension.** A Chrome MV3 extension cannot write an image to the clipboard (the async Clipboard API
   needs a focused document + user activation, which an offscreen document can't get, and
   `execCommand('copy')` only lands HTML markup, not image bytes — spike-confirmed). A normal page CAN,
-  so `copy_image` stages the bytes server-side (`browserClipboard.ts`: unguessable token, ~2-min TTL,
+  so the tool stages the bytes server-side (`browserClipboard.ts`: unguessable token, ~2-min TTL,
   size-capped map + a 60s `unref`ed eviction sweep, both routes `requireAuth`-gated) and returns
   `appOrigin + /browser-clip/<token>`. The token is NOT the capability on its own — it is printed into
   the persisted tool-result text, and the bytes may come from a private repo clone — so each entry is
   bound to the STAGING USER (`stageClipboardImage(bytes, mime, userId)`, the run's `viewerUserId`: the
   staging page is opened by the viewer's browser) and a foreign token 404s with the SAME body as an
-  expired one, so existence never leaks. The agent then drives the ordinary ops: `new_tab` the staging
+  expired one, so existence never leaks. The agent then drives the ordinary ops: `tabs` "new" on the staging
   URL → `click` its `클립보드로 복사` button → **read the outcome off THAT click's own result** →
   `press_key` paste into the target editor → re-read the page. Checking the outcome is not optional:
   `clipboard.write` can be refused (it needs the window's activation), and without it the agent pastes
   whatever was already on the clipboard and reports success — so the staging script sets
   `document.title` to `COPIED` or `COPY_FAILED` as the machine-readable outcome, and the tool
-  text/prompt guidance forbid pasting on anything but `COPIED`. No separate `list_tabs` is needed to
+  text/prompt guidance forbid pasting on anything but `COPIED`. No separate `tabs` "list" is needed to
   see it: `browserTools.report()` has always printed the acted-on tab's title as its `Current page:`
   line, so the title contract is readable from the click that flipped it. The paste MODIFIER is
   platform-aware: Ctrl+V is not paste on macOS, so `AgentRequest.viewerPlatform` (from the chat
@@ -362,7 +362,8 @@
   page JS the extension runs is `read_storage`'s fixed Web-Storage expression, which cannot reach
   the clipboard, so nothing the paste pulled comes back to the model); the one side effect is that
   the user's prior clipboard contents are overwritten by the image.
-- **`copy_text` is copy_image's TEXT sibling, and the staging store is MIME-agnostic.** Issue #59's
+- **`clipboard` action "text" (formerly `copy_text`) is the image action's TEXT sibling, and the staging
+  store is MIME-agnostic.** Issue #59's
   root fix: a paste is ingested ATOMICALLY by the editor's own paste handler, which is the reliable
   route for multi-KB content into a virtualized editor where a long `type` gets dropped (the type
   path's chunking + verification above is the safety net; this is the cure). Same token/path/TTL
@@ -372,9 +373,9 @@
   Content-Type — `text/*` goes verbatim to `navigator.clipboard.writeText` (no ClipboardItem needed,
   so the text mode works even where the image mode cannot), anything else through the existing
   data:-URL → canvas → PNG pipeline. The tool result and both metacognition surfaces script the drive
-  flow: stage → new_tab → click → read `COPIED` off that click's result (a current extension has
-  already closed the staging tab and put you back on the target page; an older one needs `select_tab`
-  back + `close_tab`, next bullets) → focus → select-all when REPLACING (`selectAllInstruction`,
+  flow: stage → `tabs` "new" → click → read `COPIED` off that click's result (a current extension has
+  already closed the staging tab and put you back on the target page; an older one needs `tabs` "select"
+  back + "close", next bullets) → focus → select-all when REPLACING (`selectAllInstruction`,
   OS-branched exactly like `pasteInstruction`: Ctrl+A selects nothing on macOS, and a silently-failed
   select-all turns REPLACE into APPEND) → paste → re-read.
   Costs stated where they bind: it OVERWRITES the user's clipboard (tool text says so), text staging
@@ -437,7 +438,7 @@
   and both metacognition surfaces therefore name the signal every build produces — `COPIED` in the
   click result's `Current page:` line — and then split ONE sentence per generation: current, the bridge
   has already closed the staging tab and its note says which page the working tab is back on; older,
-  the tab stays open, so `select_tab` back to the target and `close_tab` the staging tab by hand. The
+  the tab stays open, so `tabs` "select" back to the target and "close" the staging tab by hand. The
   forbidden action is identical in both: never paste on anything but `COPIED`.
 - **`read_url` (0.29.0) GETs ONE URL through the browser's own navigation stack, in a throwaway tab — never a
   worker `fetch()`.** The lead design was "the extension fetches it"; that collides with "the extension
