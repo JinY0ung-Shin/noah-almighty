@@ -36,7 +36,7 @@ export function buildKnowledgeTools(store: Store, ctx: KnowledgeToolsContext) {
   return [
       tool(
         "request_info",
-        "Records, as a request to relay to the owner, information that only the owner would likely know — when another user asked something the avatar could not answer. This is not a box for the avatar's own questions to the owner.",
+        "Records an information request for the avatar's OWNER: a question a colleague asked that only the owner would likely know and the avatar could not answer, relayed so the owner can answer it later. This is not a box for the avatar's own questions to the owner, nor a note store (notes live in the knowledge repository and the second brain).",
         { question: z.string().describe("A one-sentence question with enough context for the owner to answer") },
         async (args) => {
           // INTENTIONALLY NOT self-gated (unlike the two sibling tools): a
@@ -53,7 +53,7 @@ export function buildKnowledgeTools(store: Store, ctx: KnowledgeToolsContext) {
       ),
       tool(
         "pending_requests",
-        "Retrieves the list of information requests relayed to the owner that have not yet been answered. (owner only)",
+        "Lists the information requests colleagues left for the owner (questions relayed to the owner) that have not been answered yet. (owner only)",
         {},
         async () => {
           if (!ctx.viewerIsOwner) {

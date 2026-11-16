@@ -56,7 +56,7 @@ export function buildSkillsTools(ctx: SkillsToolsContext) {
   return [
     tool(
       "read",
-      "Read a skill that your instructions list as 'read with mcp__skills__read' (the avatar owner's own skills, which are not copied into your sandbox). `skill` is its `<root>/<dir>` id from that list; `path` is a file inside the skill (default SKILL.md) — read SKILL.md first, then the files it names. Wherever a skill's text says `skill:<root>/<dir>/<file>`, read that file with this tool (skill `<root>/<dir>`, path `<file>`). A folder path lists its files. The skill's scripts are not in your sandbox: to run one, write a copy into your conversation folder first. Read-only.",
+      "Read one of the avatar owner's own skills (a SKILL.md procedure and its files) that your instructions list as 'read with mcp__skills__read' — those skills are not copied into your sandbox; Noah's product manual is mcp__system__read_manual. `skill` is its `<root>/<dir>` id from that list; `path` is a file inside the skill (default SKILL.md) — read SKILL.md first, then the files it names. Wherever a skill's text says `skill:<root>/<dir>/<file>`, read that file with this tool (skill `<root>/<dir>`, path `<file>`). A folder path lists its files. The skill's scripts are not in your sandbox: to run one, write a copy into your conversation folder first. Read-only.",
       {
         skill: z.string().describe("The skill id `<root>/<dir>` from your instructions' skill list"),
         path: z.string().optional().describe("A file or folder inside the skill (default SKILL.md)"),

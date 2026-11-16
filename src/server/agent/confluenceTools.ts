@@ -989,7 +989,7 @@ export function buildConfluenceTools(ctx: ConfluenceToolsContext) {
     ),
     tool(
       "search",
-      "Search Confluence pages with CQL. Provide cql directly, or combine space/title/text/label conditions; since_days narrows either to recently modified content. " +
+      "Search Confluence pages (the company wiki's spaces) with CQL — the owner's own notes are searched with mcp__brain__search. Provide cql directly, or combine space/title/text/label conditions; since_days narrows either to recently modified content. " +
         "A result list over the size cap is cut at an item boundary and says how many are shown and the start to continue from.",
       {
         cql: z.string().optional().describe("Raw CQL. If present, takes precedence over the other search conditions."),

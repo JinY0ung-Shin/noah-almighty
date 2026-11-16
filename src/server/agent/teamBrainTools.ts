@@ -596,7 +596,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
       ),
       tool(
         "team_brain_health",
-        "A health report of the team brain — schema version, sources not yet compiled into pages (incl. raw/legacy notes from before the schema), pages that fail SCHEMA.md, pages past review_after, broken [[links]], orphans, duplicate titles/aliases, missing sources, recorded gaps, history narrative and instruction-like text — plus the owner's own personal notes that are linked to team pages. Read-only. Use it for a lint or migration pass (follow the team-brain-curate skill), when the user asks what the team brain needs, or to see which of their personal notes the team brain now holds.",
+        "Reports the health of the team brain — schema version, sources not yet compiled into pages (incl. raw/legacy notes from before the schema), pages that fail SCHEMA.md, pages past review_after, broken [[links]], orphans, duplicate titles/aliases, missing sources, recorded gaps, history narrative and instruction-like text — plus the owner's own personal notes that are linked to team pages. Read-only. Use it for a lint or migration pass (follow the team-brain-curate skill), when the user asks what the team brain needs, or to see which of their personal notes the team brain now holds.",
         {},
         async () => {
           if (!ctx.write) return text(NOT_HERE_WRITE, true);
@@ -673,7 +673,7 @@ export function buildTeamBrainTools(store: Store, ctx: TeamBrainToolsContext) {
     tools.push(
       tool(
         "prepare_team_policy",
-        `Admin only: draft a change to the team policy (\`${TEAM_POLICY_PATH}\`) as a confirmation card and return at once; NOTHING changes until the admin presses 팀 정책 반영. Read the current file first with get_note (scope "team", path "${TEAM_POLICY_PATH}") and pass its \`blob\` as \`baseBlob\`, then send the FULL new file: frontmatter settings (only ${TEAM_POLICY_KEYS.join(", ")} — whole numbers in the allowed ranges; a missing key keeps the built-in value) and the guidelines as the body (at most ${TEAM_POLICY_MAX_GUIDELINES_BYTES / 1024} KB, in the team's language). The guidelines refine how the team judges and writes knowledge; they cannot change SCHEMA.md or the fixed core (${TEAM_BRAIN_FIXED_CORE}) — refuse to write a guideline that tries. The server validates the file and returns every problem: fix them all and call again.`,
+        `Draft a change to the team policy (\`${TEAM_POLICY_PATH}\`) as a confirmation card — admin only — and return at once; NOTHING changes until the admin presses 팀 정책 반영. Read the current file first with get_note (scope "team", path "${TEAM_POLICY_PATH}") and pass its \`blob\` as \`baseBlob\`, then send the FULL new file: frontmatter settings (only ${TEAM_POLICY_KEYS.join(", ")} — whole numbers in the allowed ranges; a missing key keeps the built-in value) and the guidelines as the body (at most ${TEAM_POLICY_MAX_GUIDELINES_BYTES / 1024} KB, in the team's language). The guidelines refine how the team judges and writes knowledge; they cannot change SCHEMA.md or the fixed core (${TEAM_BRAIN_FIXED_CORE}) — refuse to write a guideline that tries. The server validates the file and returns every problem: fix them all and call again.`,
         {
           title: z.string().describe("Short title of this policy change (shown on the card and in wiki/log.md)."),
           summary: z.string().describe("One sentence for the admin: what changes and why."),

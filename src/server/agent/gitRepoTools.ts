@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig } from "../types.js";
 import { decodeExecError, text } from "./mcpTools.js";
-import { PI_REPO_REPLACED_COPY_SENTENCE } from "./ownerState.js";
 import { setWorkspaceRepo } from "../repoWorkspace.js";
 import { commitIdentityFor } from "../knowledgeRepo.js";
 import type { PiWorkspace } from "./pi/piWorkspace.js";
@@ -285,7 +284,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
   const tools = [
     tool(
       "register_repo",
-      "Register a general git repository in this avatar owner's repo list and create a local working clone. repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. SOURCE POLICY: Noah clones it inside its own server, so a source is REFUSED (nothing is registered) when it is a local path inside Noah's own directories (another user's clone or working copy, the data directory, the team brain), or a URL whose host is — or resolves to — a loopback, link-local (169.254.0.0/16, fe80::/10) or 0.0.0.0/8 address; the configured git host and private-network hosts are fine, and a host other than the configured one must answer without an HTTP redirect. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. NEW-BRANCH NOTE: a branch that does NOT yet exist on origin cannot be cloned/checked out here, so this call ERRORS (e.g. \"'origin/<branch>' is not a commit\") — but creating a remote branch is the job of `mcp__git_repo__push`, not this tool. The branch you pass is still saved on an ALREADY-registered repo even when this checkout step errors (only a brand-new registration is rolled back on failure), so the normal flow to start a new branch is: set the new branch name here, ignore the checkout error, then commit your local HEAD and `mcp__git_repo__push` — push creates the branch on origin. (Alternatively, create the branch on the remote first, then register.) Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
+      "Register a code repository (a general git project, e.g. on GitHub) in the avatar owner's list of registered repositories and create Noah's working clone of it — not the personal knowledge repository (mcp__repo__*). repo accepts owner/repo, an https URL, a git URL, or a local bare repo path. SOURCE POLICY: Noah clones it inside its own server, so a source is REFUSED (nothing is registered) when it is a local path inside Noah's own directories (another user's clone or working copy, the data directory, the team brain), or a URL whose host is — or resolves to — a loopback, link-local (169.254.0.0/16, fe80::/10) or 0.0.0.0/8 address; the configured git host and private-network hosts are fine, and a host other than the configured one must answer without an HTTP redirect. If branch is specified, subsequent sync/commit/push target that branch; if left empty, the repository's default branch is used. A branch that does NOT exist on origin yet makes this call ERROR at checkout (e.g. \"'origin/<branch>' is not a commit\"), yet on an ALREADY-registered repo the name is still saved: commit, then `mcp__git_repo__push` creates the branch on origin (new-branch flow: manual topic `git-repositories`). Public repo clone/sync is attempted without a token, and a token is only used if one exists for the configured internal host or github.com. (owner only)",
       {
         repo: z.string().describe("The git repository to register. e.g. owner/repo, https://github.com/owner/repo.git, /path/to/repo.git"),
         name: z.string().optional().describe("A short name to use in the conversation. If empty, it is auto-generated from the repo name."),
@@ -330,7 +329,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "list_repos",
-      "List the general git repositories registered for this avatar owner. (owner / trusted user only)",
+      "List the code repositories (general git repositories) registered for this avatar owner. (owner / trusted user only)",
       {},
       async () => {
         const denied = elevatedGuard();
@@ -344,8 +343,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "sync_repo",
-      "Fetch a registered git repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. Git commits made INSIDE the sandbox copy are never imported (only its files are read), so a copy whose git HEAD moved ahead with a merge/commit there counts as changed even when `git status` is clean. " +
-        "FROM ANOTHER REPO: with `from` (another registered repo's name, e.g. an external origin registered next to an internal one), Noah then FAST-FORWARDS this repo's clone to the HEAD of `from`'s clone — Noah clone to Noah clone, so the commits keep their SHA, author and message (the ff-only bridge; never a merge commit or rebase; refused when this repo has commits `from` lacks) — then `mcp__git_repo__push` sends them to origin. Sync `from` first to bring its latest upstream. With `from`, a sandbox copy whose files already equal `from`'s HEAD (you merged those very commits in the sandbox) is accepted as is. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)",
+      "Fetch a registered code repository into Noah's clone, rebasing its commits onto the upstream, then refresh your sandbox copy to the result. Refused while your sandbox copy has changes that are not committed yet (commit them first with `mcp__git_repo__commit`), so nothing you wrote is overwritten. Git commits made INSIDE the sandbox copy are never imported (only its files are read), so a copy whose git HEAD moved ahead with a merge/commit there counts as changed even when `git status` is clean. " +
+        "FROM ANOTHER REPO: with `from` (another registered repo's name), Noah then FAST-FORWARDS this repo's clone to the HEAD of `from`'s clone, so the commits keep their SHA, author and message (never a merge commit or rebase; refused when this repo has commits `from` lacks), and `mcp__git_repo__push` sends them to origin — the ff-only bridge, step by step in manual topic `git-repositories`. A public repo attempts this without a token. If Noah's commits genuinely conflict with the remote the rebase is rolled back and this errors. (owner / trusted user only)",
       {
         name: z.string().describe("Registered repo name"),
         from: z
@@ -453,7 +452,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "remove_repo",
-      "Remove a registered general git repository from the list and delete its local working clone, together with your sandbox copy of it and every `<name>.prev-<UTC stamp>` folder moved aside next to it. Refused (nothing removed) while another conversation's run is working on that copy, or while another conversation that still has the repository open left uncommitted changes in it. Does not delete the remote repository. (owner only)",
+      "Remove a registered code repository from the list and delete its local working clone, together with your sandbox copy of it and every `<name>.prev-<UTC stamp>` folder moved aside next to it. Refused (nothing removed) while another conversation's run is working on that copy, or while another conversation that still has the repository open left uncommitted changes in it. Does not delete the remote repository. (owner only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = ownerGuard();
@@ -481,9 +480,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "open_repo",
-      "Open a registered git repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state (or whose git HEAD left that commit) is replaced. " +
-        PI_REPO_REPLACED_COPY_SENTENCE +
-        " The selection persists for this conversation (later turns are told the path) until close_repo. In a trusted colleague's conversation (not the owner's sandbox) NO copy is made: the repo is selected for reading through `mcp__git_repo__list_files`/`read_file`/`grep`. (owner / trusted user only)",
+      "Open a registered code repository for THIS conversation: Noah copies its current state — working tree AND .git, as plain files — into your sandbox at `/workspace/repos/<owner>/<name>/` and the result gives that absolute path; it is usable right away, in this same turn. Edit and test the files there with your built-in tools; `git status`/`diff`/`log` work in the copy (never checkout/switch/reset/rebase there — commit refuses a copy whose git HEAD left the commit Noah gave it), but anything you commit with git there stays in the sandbox — to SAVE your work call `mcp__git_repo__commit` (name + message), which reads the copy's files back into Noah's own clone and commits there, then `mcp__git_repo__push` to send it to origin; `mcp__git_repo__sync_repo` pulls upstream changes and refreshes the copy. Re-opening keeps an existing copy that is still current; a copy made from an older state (or whose git HEAD left that commit) is replaced — kept aside in a `<name>.prev-<UTC stamp>` folder when it may hold your work (manual topic `git-repositories`). The selection persists for this conversation (later turns are told the path) until close_repo. In a trusted colleague's conversation (not the owner's sandbox) NO copy is made: the repo is selected for reading through `mcp__git_repo__list_files`/`read_file`/`grep`. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
@@ -542,8 +539,8 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "push",
-      "On this runtime push sends Noah's clone — what `mcp__git_repo__commit` saved from your sandbox copy — NOT git commits you made inside the sandbox; call `mcp__git_repo__commit` first. " +
-        "Push the registered git repository's current HEAD to the target branch on origin. The target is the branch saved in register_repo; if branch is empty, it's the current/default branch. Not limited to main, AND if the target branch does not exist on origin yet, push CREATES it (this — not register_repo — is how a new remote branch is made). To push to a branch other than the one currently registered, set that name via register_repo's `branch` first (the setting persists even if register's checkout step errors on a not-yet-existing branch), then push. (owner / trusted user only)",
+      "Push a registered code repository's committed work (the HEAD of Noah's clone) to its target branch on origin, CREATING that branch when it does not exist there yet (this — not register_repo — is how a new remote branch is made). " +
+        "On this runtime push sends what `mcp__git_repo__commit` saved from your sandbox copy — NOT git commits you made inside the sandbox; call `mcp__git_repo__commit` first. The target is the branch saved in register_repo; if branch is empty, it's the current/default branch (not limited to main). To push to a branch other than the one currently registered, set that name via register_repo's `branch` first (the setting persists even if register's checkout step errors on a not-yet-existing branch), then push. (owner / trusted user only)",
       { name: z.string().describe("Registered repo name") },
       async (args) => {
         const denied = elevatedGuard();
@@ -578,7 +575,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ...tools,
       tool(
         "commit",
-        "Save your work on an opened repository: read the working tree of your sandbox copy (`/workspace/repos/<owner>/<name>/`, see open_repo) back into Noah's own clone and commit it there with this message, under the configured commit identity. Every changed, added and deleted file of the copy is included (ignored files, the copy's .git and symbolic links are not); git commits you made inside the sandbox are not used — only the files. Refused when Noah's clone moved since your copy was made (another conversation committed or a sync pulled): then open_repo again for a fresh copy (your current one is moved aside to a new `<name>.prev-<UTC stamp>` folder, kept until remove_repo, unless it provably holds nothing of yours) and redo the edits there. Also refused when the copy's own git HEAD left the commit Noah gave it: never checkout/switch/reset/rebase in the copy — its files would then be another state's, and committing them would undo other work. Then `mcp__git_repo__push` to send it to origin. (owner / trusted user only)",
+        "Save your work on an opened code repository (not the knowledge repository: mcp__repo__commit): read the working tree of your sandbox copy (`/workspace/repos/<owner>/<name>/`, see open_repo) back into Noah's own clone and commit it there with this message, under the configured commit identity. Every changed, added and deleted file of the copy is included (ignored files, the copy's .git and symbolic links are not); git commits you made inside the sandbox are not used — only the files. Refused when Noah's clone moved since your copy was made (another conversation committed or a sync pulled): then open_repo again for a fresh copy (your current one is moved aside, manual topic `git-repositories`) and redo the edits there. Also refused when the copy's own git HEAD left the commit Noah gave it: never checkout/switch/reset/rebase in the copy — its files would then be another state's, and committing them would undo other work. Then `mcp__git_repo__push` to send it to origin. (owner / trusted user only)",
         {
           name: z.string().describe("Registered repo name"),
           message: z.string().describe("The commit message"),
@@ -638,7 +635,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
       ),
     tool(
       "list_files",
-      "List the files of one of the avatar owner's registered repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. `path` narrows to a folder (default: the whole repo); links are shown but never followed, `.git` is not listed. Read-only. (trusted colleague only — the owner reads its own sandbox copy instead)",
+      "List the files of one of the avatar owner's registered code repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. `path` narrows to a folder (default: the whole repo); links are shown but never followed, `.git` is not listed. Read-only. (trusted colleague only — the owner reads its own sandbox copy instead)",
       {
         name: z.string().describe("Registered repo name"),
         path: z.string().optional().describe("A folder inside the repo (default: the root)"),
@@ -655,7 +652,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "read_file",
-      "Read a text file of one of the avatar owner's registered repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns lines `offset`..`offset+limit-1` (1-based; default the first 2000) and says how to continue; files over 1 MB, binary files, links and `.git` are refused. Read-only. (trusted colleague only)",
+      "Read a text file of one of the avatar owner's registered code repositories (the working tree of Noah's clone of it, read while no sync or commit is running — as its last sync or commit left it) when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns lines `offset`..`offset+limit-1` (1-based; default the first 2000) and says how to continue; files over 1 MB, binary files, links and `.git` are refused. Read-only. (trusted colleague only)",
       {
         name: z.string().describe("Registered repo name"),
         path: z.string().describe("The file's path inside the repo, e.g. src/index.ts"),
@@ -674,7 +671,7 @@ export function buildGitRepoTools(store: Store, ctx: GitRepoToolsContext) {
     ),
     tool(
       "grep",
-      "Search one of the avatar owner's registered repositories (the files in the git index of Noah's clone of it — its last commit or sync; a link is matched as its target text) for an extended regular expression when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns `path:line:text` matches (binary files skipped, output capped); `path` narrows to a file or folder. Read-only. (trusted colleague only)",
+      "Search one of the avatar owner's registered code repositories (the files in the git index of Noah's clone of it — its last commit or sync; a link is matched as its target text) for an extended regular expression when this conversation has NO sandbox copy of it — a trusted colleague's conversation with the owner's avatar. Returns `path:line:text` matches (binary files skipped, output capped); `path` narrows to a file or folder. Read-only. (trusted colleague only)",
       {
         name: z.string().describe("Registered repo name"),
         pattern: z.string().describe("An extended (POSIX ERE) regular expression"),

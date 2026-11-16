@@ -30,8 +30,8 @@
  * `mcp__<id>__<tool>` names equal the names Noah's prompts and skills use; the
  * last three ids are servers Noah RELAYS as an MCP client (`hex-ssh`, and the
  * `plugins` / `shared` aggregates). Each entry forwards the run token:
- * `Authorization: Bearer {{ctx.header:x-noah-run-token}}`, and a noun-only `description` (SERVER_DESCRIPTIONS)
- * that pi's mcp_search lists and matches.
+ * `Authorization: Bearer {{ctx.header:x-noah-run-token}}`, a noun-only `description` (SERVER_DESCRIPTIONS)
+ * and `displayName` (SERVER_DISPLAY_NAMES, else `Noah <id>`) that pi's mcp_search lists and matches.
  *
  * Timeouts: 120 s unless a server's own work takes longer (SERVER_TIMEOUT_SEC).
  * The two tools that used to hold a call for minutes no longer do on pi (design
@@ -82,24 +82,39 @@ export const RETIRED_MCP_SERVER_NAMES = ["group_brain", "group_repo", "web"];
  * Keep each under pi's 1000-character cap.
  */
 export const SERVER_DESCRIPTIONS = {
-  knowledge: "Questions relayed to the owner.",
-  repo: "Personal knowledge repository (git) of notes, skills and the second-brain wiki.",
-  system: "Noah itself: current capabilities and settings, the product manual, routines (scheduled tasks), notifications, plugins, conversations.",
+  knowledge: "Information requests: questions colleagues left for the avatar owner that the avatar could not answer.",
+  repo: "The owner's personal knowledge repository: the git repo of their own notes, skills and second-brain wiki files.",
+  system: "Noah itself: current capabilities and settings, the Noah product manual (how-to guides), routines (scheduled tasks), plugins, notifications, past conversations, turn timings.",
   todo: "Persistent to-do list (할 일) of tasks.",
-  confluence: "Confluence wiki pages and attachments.",
+  confluence: "Confluence: the company's Confluence spaces, pages and attachments.",
   avatars: "Colleagues' avatars.",
   skill_exchange: "Skill sharing between teammates' avatars.",
   ssh_identity: "The owner's SSH key pair.",
-  git_repo: "General git code repositories (GitHub projects) of the owner.",
-  brain: "Second brain: the owner's curated wiki notes, memory of past decisions, people and projects.",
+  git_repo: "Registered code repositories: the owner's GitHub and git software projects, their clones and sandbox working copies.",
+  brain: "Second brain: the owner's personal curated wiki notes and the team brain (the team's shared wiki) — memory of past decisions, people and projects.",
   canvas: "Visual canvas side panel: diagrams, mockups, charts, HTML previews.",
   browser: "The user's own web browser (Chrome extension): pages, tabs, forms.",
   file_output: "Files for the user: images in the chat, download cards, share links.",
   ssh_trust: "Trusted SSH host keys (known_hosts).",
-  skills: "The avatar owner's skills (SKILL.md instructions) for a colleague's run.",
+  skills: "The avatar owner's own skills (SKILL.md procedures) for a colleague's run.",
   "hex-ssh": "Remote servers over SSH: shell commands and remote files.",
   plugins: "MCP servers of the owner's installed plugins.",
   shared: "Admin-registered shared MCP servers (공용 MCP).",
+};
+
+/**
+ * The broker entry's `displayName` where `Noah <id>` alone would not tell confusable services apart (pi's
+ * `mcp_search` lists it next to the id and the description's first line, and matches it): the knowledge
+ * repository vs the registered code repositories, the second brain vs Confluence, information requests vs
+ * notes. Every other id is `Noah <id>`. Nouns only, like SERVER_DESCRIPTIONS.
+ */
+export const SERVER_DISPLAY_NAMES = {
+  knowledge: "Noah information requests",
+  repo: "Noah knowledge repository",
+  git_repo: "Noah code repositories",
+  brain: "Noah second brain",
+  skills: "Noah owner skills",
+  system: "Noah system and manual",
 };
 
 const DEFAULT_TIMEOUT_SEC = 120;
@@ -157,7 +172,7 @@ function parseArgs(argv) {
 export function brokerEntry(name, noahUrl, timeoutSec) {
   return {
     runIn: "broker",
-    displayName: `Noah ${name}`,
+    displayName: SERVER_DISPLAY_NAMES[name] ?? `Noah ${name}`,
     ...(SERVER_DESCRIPTIONS[name] ? { description: SERVER_DESCRIPTIONS[name] } : {}),
     transport: {
       type: "http",
@@ -174,6 +189,7 @@ function sameEntry(have, want) {
     have?.transport?.headers?.Authorization === want.transport.headers.Authorization &&
     have?.timeoutSec === want.timeoutSec &&
     (have?.description ?? "") === (want.description ?? "") &&
+    (have?.displayName ?? "") === want.displayName &&
     have?.enabled !== false
   );
 }

@@ -367,7 +367,8 @@ describe("scripts/pi-register-mcp.mjs descriptions", () => {
     const scriptPath = "../scripts/pi-register-mcp.mjs";
     const script = (await import(scriptPath)) as {
       SERVER_DESCRIPTIONS: Record<string, string>;
-      brokerEntry: (name: string, url: string, timeoutSec: number) => { description?: string };
+      SERVER_DISPLAY_NAMES: Record<string, string>;
+      brokerEntry: (name: string, url: string, timeoutSec: number) => { description?: string; displayName: string };
     };
     expect(Object.keys(script.SERVER_DESCRIPTIONS).sort()).toEqual([...PI_MCP_SERVER_NAMES].sort());
     for (const [name, description] of Object.entries(script.SERVER_DESCRIPTIONS)) {
@@ -375,5 +376,12 @@ describe("scripts/pi-register-mcp.mjs descriptions", () => {
       expect(description).not.toContain("\n");
       expect(script.brokerEntry(name, "http://n", 120).description).toBe(description);
     }
+    // Confusable services are told apart by their display name too (mcp_search lists id + display name + first line).
+    const displayNames = PI_MCP_SERVER_NAMES.map((name) => script.brokerEntry(name, "http://n", 120).displayName);
+    expect(new Set(displayNames).size).toBe(displayNames.length);
+    expect(script.brokerEntry("repo", "http://n", 120).displayName).toBe("Noah knowledge repository");
+    expect(script.brokerEntry("git_repo", "http://n", 120).displayName).toBe("Noah code repositories");
+    expect(script.brokerEntry("todo", "http://n", 120).displayName).toBe("Noah todo");
+    for (const name of Object.keys(script.SERVER_DISPLAY_NAMES)) expect(PI_MCP_SERVER_NAMES as readonly string[]).toContain(name);
   });
 });

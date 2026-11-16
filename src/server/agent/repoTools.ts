@@ -355,7 +355,7 @@ export function buildRepoTools(
   const manageTools = [
     tool(
       "list_files",
-      "Get the file list of my knowledge repository (personal repo). (owner or trusted teammates; read-only)",
+      "List the files of the owner's personal knowledge repository (notes, skills and the second-brain wiki) — not a registered code repository (mcp__git_repo__list_files). (owner or trusted teammates; read-only)",
       {},
       () =>
         runListFiles(resolveRead(), ensureClone, listTree, {
@@ -365,13 +365,13 @@ export function buildRepoTools(
     ),
     tool(
       "read_file",
-      "Read the content of a file in my knowledge repository. (owner or trusted teammates; read-only)",
+      "Read a file of the owner's personal knowledge repository (notes, skills and the second-brain wiki) — not a registered code repository (mcp__git_repo__read_file). (owner or trusted teammates; read-only)",
       { path: z.string().describe("Path relative to the repository root (e.g. skills/foo/SKILL.md)") },
       (args) => runReadFile(resolveRead(), ensureClone, readRepoFile, args.path),
     ),
     tool(
       "write_file",
-      `Create/modify a file in my knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
+      `Create/modify a file in the owner's personal knowledge repository (creates it if it doesn't exist). Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         content: z.string().describe("The full file content"),
@@ -392,7 +392,7 @@ export function buildRepoTools(
     ),
     tool(
       "edit_file",
-      `Modify an EXISTING file in my knowledge repository by replacing an exact text snippet. **Prefer this over mcp__repo__write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
+      `Modify an EXISTING file in the knowledge repository by replacing an exact text snippet. **Prefer this over mcp__repo__write_file when changing a file that already exists** — you only send the part that changes, not the whole file (cheaper and safer for large notes/skills). Read the file first if unsure of the exact text. \`old_string\` must match the file exactly (including whitespace/indentation) and be unique, unless you set \`replace_all\`. Changes apply only to the working tree, and **until you commit & push with mcp__repo__commit they are saved only temporarily** and may disappear on the next sync. ${writeGate}`,
       {
         path: z.string().describe("Path relative to the repository root"),
         old_string: z.string().describe("The exact text to replace (must be unique in the file unless replace_all is true)"),
@@ -419,7 +419,7 @@ export function buildRepoTools(
     ),
     tool(
       "delete_file",
-      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from my knowledge repository. The deletion applies only to the working tree, and **until you commit & push with mcp__repo__commit it is not removed from the remote** and may reappear on the next sync. ${writeGate}`,
+      `Delete a file OR a whole directory (e.g. an entire skill folder \`skills/<name>\`) from the knowledge repository. The deletion applies only to the working tree, and **until you commit & push with mcp__repo__commit it is not removed from the remote** and may reappear on the next sync. ${writeGate}`,
       { path: z.string().describe("Path relative to the repository root — a file (skills/foo/SKILL.md) or a directory (skills/foo)") },
       (args) =>
         runDeleteFile(
@@ -432,7 +432,7 @@ export function buildRepoTools(
     ),
     tool(
       "move_file",
-      `Rename or move a file/directory within my knowledge repository (e.g. rename a skill folder or relocate a note). Applies only to the working tree until you commit & push. ${writeGate}`,
+      `Rename or move a file/directory within the knowledge repository (e.g. rename a skill folder or relocate a note). Applies only to the working tree until you commit & push. ${writeGate}`,
       {
         from: z.string().describe("Current path relative to the repository root"),
         to: z.string().describe("New path relative to the repository root"),
@@ -448,7 +448,7 @@ export function buildRepoTools(
     ),
     tool(
       "scaffold_skill",
-      `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in my knowledge repository. After creating it, fill in the content with mcp__repo__write_file and push with mcp__repo__commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
+      `Create a new skill (skills/<name>/SKILL.md + marketplace registration) in the knowledge repository. After creating it, fill in the content with mcp__repo__write_file and push with mcp__repo__commit, and from the next conversation the avatar can use that skill. ${writeGate}`,
       {
         name: z.string().describe("Skill name (e.g. deploy-runbook)"),
         description: z.string().optional().describe("One-line description of the skill"),
@@ -457,7 +457,7 @@ export function buildRepoTools(
     ),
     tool(
       "commit",
-      `Commit all changes in my knowledge repository and push to the remote (branch). Call this when a unit of work is finished or when the user requests it. ${writeGate}`,
+      `Commit all changes in the owner's personal knowledge repository and push them to its remote branch — not a registered code repository (mcp__git_repo__commit). Call this when a unit of work is finished or when the user requests it. ${writeGate}`,
       { message: z.string().describe("Commit message") },
       async (args) => {
         if (!canWrite) {
@@ -541,7 +541,7 @@ export function buildRepoTools(
   }
   const createTool = tool(
     "create_repo",
-    `**Use this tool when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try mcp__repo__scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with mcp__repo__scaffold_skill → mcp__repo__write_file → mcp__repo__commit. (owner only)`,
+    `Create (or connect) the owner's personal knowledge repository — the git repo of their notes, skills and second-brain wiki. **Use it when the owner asks you to create or connect a knowledge repository** — do not walk through manual setup or try mcp__repo__scaffold_skill first. ${githubHostDescription(ctx.config.githubHost)} Using the configured internal Git token (GIT_TOKEN), it creates a new internal GitHub knowledge repository (private by default, initialized from the Claude plugin marketplace template) and connects it right away. By default the repo is created under the owner's personal account; pass \`org\` to create it under a GitHub organization instead. Use it when there is no knowledge repository yet; you only need the repository name. After creation, fill in the content with mcp__repo__scaffold_skill → mcp__repo__write_file → mcp__repo__commit. (owner only)`,
     {
       name: z.string().describe("New repository name (letters/digits and - _ . only, e.g. my-knowledge)"),
       org: z.string().optional().describe("GitHub organization to create the repo under (e.g. acme). Omit to create under the owner's personal account."),

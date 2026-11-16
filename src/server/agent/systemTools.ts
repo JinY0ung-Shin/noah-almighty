@@ -1190,7 +1190,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
   return [
     tool(
       "read_manual",
-      "Reads the official Noah product manual bundled with this server. When asked how to use, configure or integrate a Noah feature, read its guide before giving detailed instructions or API examples. Omit topic to list all guides; then use an exact topic id, e.g. external-tasks for submit/poll/respond/cancel curl examples. Public documentation only, available to every viewer of this tool; no account data or settings are read or changed. Verify current configuration separately with describe_system.",
+      "Reads the official Noah product manual bundled with this server: how-to guides for Noah's own features (not the owner's skills). When asked how to use, configure or integrate a Noah feature, read its guide before giving detailed instructions or API examples. Omit topic to list all guides; then use an exact topic id, e.g. external-tasks for submit/poll/respond/cancel curl examples. Public documentation only, available to every viewer of this tool; no account data or settings are read or changed. Verify current configuration separately with describe_system.",
       {
         topic: z.string().max(80).optional().describe("Exact manual topic id; omit or use index for the table of contents."),
       },

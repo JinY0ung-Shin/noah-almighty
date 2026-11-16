@@ -1685,8 +1685,8 @@ describe("scripts/pi-register-mcp.mjs", () => {
     expect(script.RETIRED_MCP_SERVER_NAMES).toEqual(expect.arrayContaining(["group_brain", "group_repo", "web"]));
     expect(script.brokerEntry("repo", "http://10.0.0.1:48787/", 600)).toEqual({
       runIn: "broker",
-      displayName: "Noah repo",
-      description: "Personal knowledge repository (git) of notes, skills and the second-brain wiki.",
+      displayName: "Noah knowledge repository",
+      description: "The owner's personal knowledge repository: the git repo of their own notes, skills and second-brain wiki files.",
       transport: {
         type: "http",
         url: "http://10.0.0.1:48787/mcp/repo",

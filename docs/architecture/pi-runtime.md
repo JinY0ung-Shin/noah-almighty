@@ -683,7 +683,7 @@ Measured without a model, then mitigated Noah-side:
 | Callable-now mirror | describe_system `piRunLines` ← `PiRuntimeFacts.callableNoahTools` (set after `mcpAllowedTools`) | live list of exact names |
 | Full sibling names | prompt, manual, skills, tool descriptions, errors | a bare `write_file`/`commit`/`get_note` is ambiguous in pi's `mcp_call` (repo vs git_repo) |
 | Compact descriptions + discovery sentences | `pi/catalogText.ts`, applied by `piCatalogTool` in the STATIC catalog only (the builders keep the full text) | a compact entry names the sha256 of the builder text it replaces; a changed builder text is served instead (warn) and the test fails until the entry is revisited. Sentences were kept because the held-out query set did not regress |
-| Noun-only broker descriptions | `SERVER_DESCRIPTIONS` in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall) |
+| Noun-only broker descriptions | `SERVER_DESCRIPTIONS` (+ `SERVER_DISPLAY_NAMES`) in `scripts/pi-register-mcp.mjs` | pi shows the first line in the always-visible service list AND appends it to every tool document of that server, so verbs there match every tool (measured: verbs cost held-out recall). Confusable services say what each is FOR in distinct nouns, never by naming the other (that name would match every tool of the wrong server): `repo` = the owner's personal knowledge repository vs `git_repo` = registered code repositories, `brain` = second brain vs `confluence`, `knowledge` = information requests, `skills` = the owner's own skills vs `system`'s product manual (2026-11-16). Tool descriptions open with WHAT the tool does (System One ranks by the first 500 characters) and may point at the sibling there |
 | Unknown argument names refused | `checkArguments` gate + `unknownArgumentProblem` (`mcpHttp/endpoint.ts`), wired by `runPiAgent` for Noah's own servers | the McpServer's zod objects STRIP unknown keys (MCP SDK 1.29 `z.object`), and the catalog schemas have no `additionalProperties:false`, so `list_todos {state}` used to list everything; now the call is refused with the valid names (nested objects/arrays of objects checked; `anyOf` branches and open objects not). Relayed servers are not judged |
 
 **What pi does to the arguments BEFORE Noah is called (pi-ai 1.5.2 since pin `92a69dd`; seen on the dind stack,
@@ -793,8 +793,8 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   --noah-url http://<host-as-seen-from-the-broker>:48787 --configure-instance   # idempotent; --dry-run / --remove
 ```
 
-- Each entry carries a noun-only `description` (`SERVER_DESCRIPTIONS`, see "Tool discovery"); re-running the script
-  converges it.
+- Each entry carries a noun-only `description` (`SERVER_DESCRIPTIONS`, see "Tool discovery") and a `displayName`
+  (`SERVER_DISPLAY_NAMES` for the confusable services, else `Noah <id>`); re-running the script converges both.
 - Registers one broker entry per `PI_MCP_SERVER_NAMES` name (ids = Noah server names, so pi's `mcp__<id>__<tool>`
   equals every `mcp__repo__commit`-style name in prompts/skills/manual, plus the relays `hex-ssh`/`plugins`/`shared`),
   header `Authorization: Bearer {{ctx.header:x-noah-run-token}}`. `timeoutSec` 120 by default; longer only where the
