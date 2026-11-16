@@ -240,7 +240,7 @@ user's WHOLE sandbox workspace (the model may build anywhere under `/workspace`,
 
 | Direction | Where | Rule |
 |---|---|---|
-| model → Noah (`show_file`, `share_file`, `copy_image`) | `runCapabilities` wrappers → `piToolPathToHost` | absolute under `/workspace`, or relative = relative to `/workspace` (pi's shell start); anything else (`/tmp/…`, a planted link out of the root) is refused with an English redirect BEFORE the sink; the publishers' own realpath containment runs on top |
+| model → Noah (`show_file`, `share_file`, `clipboard` "image") | `runCapabilities` wrappers → `piToolPathToHost` | absolute under `/workspace`, or relative = relative to `/workspace` (pi's shell start); anything else (`/tmp/…`, a planted link out of the root) is refused with an English redirect BEFORE the sink; the publishers' own realpath containment runs on top |
 | Noah → model (capture `savedPath`, Confluence `savedPath`) | `toSandboxPath` (`piSandboxPath`) | host path under the user's root → `/workspace/…` |
 | deck previews | `share_file` → `loadConverterPreviews(allowedRoots = [user root])` | the hash-bound `<stem>.preview/` sidecar is read through the host path, like today |
 
@@ -287,7 +287,7 @@ component by NAME:
 - **Entries go through the descriptor:** exclusive creates (`O_CREAT|O_EXCL|O_NOFOLLOW`, mode set by `fchmod`),
   no-follow reads, renames inside the pinned folder, and a recursive removal that pins every sub-folder the same
   way and unlinks every link (never `fs.rmSync` on an agent-owned tree).
-- **Reads by an already-checked path** (`share_file`/`show_file`/`copy_image` publishers, the deck sidecar
+- **Reads by an already-checked path** (`share_file`/`show_file`/`clipboard` "image" publishers, the deck sidecar
   manifest + renders, the working-copy read-back) verify the OPENED file's kernel path (`fdPathIs`,
   `readFileVerified`, `listDirVerified`) against the realpath they checked, so a folder swapped for a link
   between the check and the open is refused.
@@ -803,7 +803,7 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   `plugins`/`shared` 300 — remote/third-party). Browser ops fit easily (the bridge relay times out at 45 s).
   `--timeout-sec N` overrides every id. Every run also deletes this Noah's entries under a RETIRED id
   (`RETIRED_MCP_SERVER_NAMES`: `group_brain`, `group_repo` — retired 2026-10-30; `web` — the web fetch tool, removed 2026-11-10), and Noah's `/mcp` answers a
-  call that still reaches one with a "was removed" error (`RETIRED_SERVER_MESSAGES`, `mcpHttp/endpoint.ts`). A TOOL removed from a server that still exists is answered the same way, before the per-call gates (`RETIRED_TOOL_MESSAGES`, keyed `<server>/<tool>` — the five team-brain review-queue tools, 2026-11-13 → [`team-brain.md`](team-brain.md) "Tools"; and the old names of MERGED tools, `agent/retiredTools.ts`, whose message names the replacing call → [`agent-core.md`](agent-core.md)); tools/list never names one. Refuses to take over an id pointing elsewhere without `--force`. The admin
+  call that still reaches one with a "was removed" error (`RETIRED_SERVER_MESSAGES`, `mcpHttp/endpoint.ts`). A TOOL removed from a server that still exists is answered the same way, before the per-call gates (`RETIRED_TOOL_MESSAGES`, keyed `<server>/<tool>` — the five team-brain review-queue tools, 2026-11-13 → [`team-brain.md`](team-brain.md) "Tools"); tools/list never names one. A RENAMED or MERGED tool keeps its old name the same way as a hidden alias whose error names the new call exactly (`retiredToolAliases` in `agent/retiredTools.ts`, spread into that table — the six browser tab/clipboard tools → [`browser-bridge/contract.md`](browser-bridge/contract.md), and the seven routine/plugin tools → [`agent-core.md`](agent-core.md), 2026-11-16). pi's `mcp_call` forwards only a name in the session's LISTED tools, so such a redirect reaches sessions whose frozen list predates the change; a newer session gets pi's own "Unknown tool … mcp_search" answer. Refuses to take over an id pointing elsewhere without `--force`. The admin
   key is read from the environment only and never stored by Noah.
 - `--configure-instance` also disables pi's `request_admin` and `present_file` built-ins (Noah has its own) and deploys
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;

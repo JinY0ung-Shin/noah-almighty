@@ -11,7 +11,7 @@ import type { Store } from "./store.js";
 // bridge later clicks on the user's behalf. Entries are short-lived and the map
 // is size-capped so a burst of stages can't grow it without bound.
 //
-// The store is MIME-agnostic: an IMAGE (copy_image) and plain TEXT (copy_text)
+// The store is MIME-agnostic: an IMAGE (clipboard "image") and plain TEXT (clipboard "text")
 // ride the exact same token/path/TTL contract, and the staging page picks its
 // mode from the Content-Type it gets back — so a new payload kind needs no new
 // route and no extension change.
@@ -78,7 +78,7 @@ function stageBytes(bytes: Buffer, mime: string, userId: string): { token: strin
   return { token, path: "/browser-clip/" + token };
 }
 
-/** Stage image `bytes` (already read + format-checked by the caller) for copy_image. */
+/** Stage image `bytes` (already read + format-checked by the caller) for clipboard "image". */
 export function stageClipboardImage(
   bytes: Buffer,
   mime: string,
@@ -88,14 +88,14 @@ export function stageClipboardImage(
 }
 
 /**
- * The staged-text byte ceiling. copy_text's schema already caps the CHARACTER
+ * The staged-text byte ceiling. clipboard "text"'s schema already caps the CHARACTER
  * count, so this is defense in depth for any other caller: a multi-megabyte
  * string must not sit in the process for the TTL just because it type-checked.
  */
 const MAX_STAGED_TEXT_BYTES = 1_000_000;
 
 /**
- * Stage plain `text` for copy_text — the same token/path/TTL contract as
+ * Stage plain `text` for clipboard "text" — the same token/path/TTL contract as
  * stageClipboardImage, differing only in the mime the `/img` route serves back
  * (which is what puts the staging page into its text branch).
  */
@@ -274,7 +274,7 @@ const BROWSER_CLIP_SCRIPT = `"use strict";
         return;
       }
       // The document TITLE is the machine-readable outcome: the agent reads it
-      // back with list_tabs and must not paste unless it says COPIED. Both
+      // back from its click result and must not paste unless it says COPIED. Both
       // modes share that contract. The status line stays Korean prose for a
       // human glancing at the page.
       try {
@@ -322,7 +322,7 @@ export function createBrowserClipboardRouter(deps: { store: Store }): Router {
   });
 
   // The raw staged bytes, loaded by the client script. "/img" is a HISTORICAL
-  // name — the payload may be TEXT (copy_text), and the entry's own mime is
+  // name — the payload may be TEXT (clipboard "text"), and the entry's own mime is
   // what the script branches on. The path shape is pinned by fielded
   // extensions, so it stays as it is rather than being renamed.
   router.get("/browser-clip/:token/img", requireAuth(store), (req: AuthenticatedRequest, res) => {

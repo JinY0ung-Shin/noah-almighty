@@ -10,6 +10,12 @@
  * server, so `tools/list` (the static pi catalog) never lists it, and it is not
  * in any `*_TOOL_NAMES` / `mcpAllowedTools` list.
  *
+ * Reach: pi's `mcp_call` forwards only a name that is IN the session's listed
+ * tools (pi itself answers an unknown name: "Unknown tool … find the exact name
+ * with mcp_search"). So the redirect reaches the model from sessions whose frozen
+ * list still has the old name; a session built after the rename gets pi's own
+ * search hint instead. Both end at the new name.
+ *
  * A retired name is RESERVED FOREVER (root CLAUDE.md): never register a new
  * tool under it, and never drop its entry here — an entry is cheap and a
  * frozen session may live for months.
@@ -68,7 +74,18 @@ export const SYSTEM_RETIRED_TOOLS = retiredToolAliases("system", [
   },
 ]);
 
+/** browser: the four tab tools became `tabs`, the two clipboard tools `clipboard` (2026-11-16; same ops, same guards). */
+export const BROWSER_RETIRED_TOOLS = retiredToolAliases("browser", [
+  { name: "list_tabs", redirect: 'It is now mcp__browser__tabs with action "list" — call that.' },
+  { name: "new_tab", redirect: 'It is now mcp__browser__tabs with action "new" — call that with the same `url` (and `maxChars`).' },
+  { name: "select_tab", redirect: 'It is now mcp__browser__tabs with action "select" — call that with the same `tabId`.' },
+  { name: "close_tab", redirect: 'It is now mcp__browser__tabs with action "close" — call that with the same `tabId`.' },
+  { name: "copy_image", redirect: 'It is now mcp__browser__clipboard with action "image" — call that with the same `path`.' },
+  { name: "copy_text", redirect: 'It is now mcp__browser__clipboard with action "text" — call that with the same `text`.' },
+]);
+
 /** Every server's retired tool names (merged into `RETIRED_TOOL_MESSAGES`, `mcpHttp/endpoint.ts`). */
 export const RETIRED_TOOL_ALIASES: Readonly<Record<string, string>> = {
   ...SYSTEM_RETIRED_TOOLS,
+  ...BROWSER_RETIRED_TOOLS,
 };

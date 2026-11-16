@@ -277,7 +277,7 @@ export interface RunCapabilityOptions {
   /**
    * pi runs: the viewer's sandbox workspace (host + sandbox views). Every
    * path the model hands a Noah tool is a sandbox path and is mapped to the
-   * host here (show_file, share_file, copy_image); every path Noah hands back
+   * host here (show_file, share_file, clipboard "image"); every path Noah hands back
    * (browser captures, Confluence saves) is mapped to the sandbox.
    */
   piWorkspace?: PiWorkspace;
@@ -1056,7 +1056,7 @@ export async function buildRunCapabilities(
   // registration is not the only gate (pi's catalog is static), and a
   // colleague must never drive their own logged-in session through someone
   // else's avatar prompt.
-  // copy_image staging binds the held bytes to a user, and the staging page is
+  // clipboard "image" staging binds the held bytes to a user, and the staging page is
   // opened by the VIEWER's browser (the bridge relays into the browser of the
   // person chatting) — so the viewer, not the avatar owner, is who may read
   // them back. Captured for narrowing: the callback below is deferred.
@@ -1086,8 +1086,8 @@ export async function buildRunCapabilities(
         allowed: browserViewerAllowed,
         // Screenshot gate: image blocks must never reach a text-only model.
         vision: runVisionEnabled,
-        // Noah's own origin, so copy_image can hand the agent an absolute
-        // clipboard-staging URL to open with new_tab.
+        // Noah's own origin, so clipboard "image" can hand the agent an absolute
+        // clipboard-staging URL to open with tabs "new".
         appOrigin: request.appOrigin,
         // The paste shortcut differs by OS; the wording follows the browser
         // that is actually being driven.
@@ -1103,7 +1103,7 @@ export async function buildRunCapabilities(
                 value: (name: string) => injectableSecretEnv[name],
               }
             : undefined,
-        // copy_image: resolve the path in the SAME working roots show_file uses
+        // clipboard "image": resolve the path in the SAME working roots show_file uses
         // (shared readWorkspaceImage — one copy of the containment discipline),
         // then hold the bytes for the Noah-served staging page. Wired only when
         // the request carried an origin to build that page's URL from AND a
@@ -1136,8 +1136,8 @@ export async function buildRunCapabilities(
                 return stageClipboardImageBytes(read.buffer, read.mediaType, stagingUserId);
               }
             : undefined,
-        // copy_text: the same staging store and the same origin+viewer gate as
-        // copy_image, minus the workspace resolution — the payload is a string
+        // clipboard "text": the same staging store and the same origin+viewer gate as
+        // clipboard "image", minus the workspace resolution — the payload is a string
         // the model authored, so the only bound is the store's byte cap.
         stageClipboardText:
           request.appOrigin && stagingUserId

@@ -3203,7 +3203,7 @@ describe("buildPrompt", () => {
     const manual = readSystemManual("browser-operations").text;
     expect(manual).toContain("read the outcome from THAT click's own result");
     expect(manual).toContain("CLOSES the staging tab for you");
-    expect(manual).toContain("`close_tab` the staging tab yourself");
+    expect(manual).toContain("`tabs` \"select\" back to the target page and \"close\" the staging tab yourself");
     expect(prompt).toContain("Never paste on anything but COPIED");
     // list_tabs is no longer the verification step: it cost a round trip for a
     // title the click already returned, and after the auto-close there is no

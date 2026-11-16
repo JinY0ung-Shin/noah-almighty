@@ -57,7 +57,8 @@ import { gitRepoClonePath, gitRepoContextFromRecord } from "../src/server/gitRep
 import { getWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { buildCanvasTools, CANVAS_SERVER_NAME, CANVAS_TOOL_NAMES, MAX_CANVAS_CONTENT_CHARS } from "../src/server/agent/canvasTools.js";
 import { liveChatRun } from "../src/server/agent/ownerState.js";
-import { buildBrowserTools, readerProxyRefusal } from "../src/server/agent/browserTools.js";
+import { BROWSER_TOOL_NAMES, buildBrowserTools, readerProxyRefusal, withLiveToolNames } from "../src/server/agent/browserTools.js";
+import { BROWSER_RETIRED_TOOLS } from "../src/server/agent/retiredTools.js";
 import type { BrowserRequest, CanvasRequest, CanvasResult } from "../src/server/agent/events.js";
 import {
   buildFileOutputTools,
@@ -4717,8 +4718,16 @@ describe("browser bridge tools", () => {
     // only, and the read tools carry their own budgets — offering a snapshot
     // budget there would describe a snapshot that never arrives.
     const tools = buildBrowserTools({ execute: ok(), allowed: true });
-    for (const name of ["wait_for", "read_text", "screenshot", "list_tabs", "select_tab", "close_tab"]) {
+    for (const name of ["wait_for", "read_text", "screenshot", "clipboard"]) {
       expect(browserSchema(tools, name).maxChars, name).toBeUndefined();
+    }
+    // `tabs` lists maxChars for its "new" action (a new tab returns a snapshot);
+    // list/select/close return none, so the budget never rides their request.
+    const tabsExecute = vi.fn(async (_request: unknown) => ({ behavior: "ok" as const, url: "https://intra.example/x", title: "T" }));
+    const tabTools = buildBrowserTools({ execute: tabsExecute, allowed: true });
+    for (const action of ["list", "select", "close"]) {
+      await callTool(tabTools, "tabs", { action, tabId: "7", maxChars: 900 });
+      expect(Object.keys((tabsExecute.mock.calls.at(-1)?.[0] ?? {}) as Record<string, unknown>), action).not.toContain("maxChars");
     }
 
     const execute = vi.fn(async (_request: unknown) => ({
@@ -5159,7 +5168,7 @@ describe("browser bridge interaction ops", () => {
     expect(res.content[0].text).toContain("Dragged from (100, 200) to (300, 250).");
   });
 
-  it("refuses third-party reader/proxy services on navigate and new_tab, before the extension is asked", async () => {
+  it("refuses third-party reader/proxy services on navigate and tabs \"new\", before the extension is asked", async () => {
     const execute = ok({ snapshot: "page" });
     const tools = buildBrowserTools({ execute, allowed: true });
     for (const url of [
@@ -5170,8 +5179,8 @@ describe("browser bridge interaction ops", () => {
       "https://translate.google.com/translate?u=https://wiki.corp/x",
       "https://web.archive.org/save/https://wiki.corp/x",
     ]) {
-      for (const name of ["navigate", "new_tab"]) {
-        const res = await callTool(tools, name, { url });
+      for (const [name, args] of [["navigate", { url }], ["tabs", { action: "new", url }]] as const) {
+        const res = await callTool(tools, name, args);
         expect(res.isError, `${name} ${url}`).toBe(true);
         expect(res.content[0].text).toContain("third-party service that fetches pages on your behalf");
       }
@@ -5233,11 +5242,11 @@ describe("browser bridge interaction ops", () => {
   });
 });
 
-describe("browser copy_text tool", () => {
+describe("browser clipboard tool, action \"text\"", () => {
   const execute = () =>
     vi.fn(async () => ({ behavior: "ok" as const, url: "https://intra.example/x", title: "T" }));
 
-  it("stages the text and drives the paste off the COPIED click result, not a list_tabs verify", async () => {
+  it("stages the text and drives the paste off the COPIED click result, not a tab-list verify", async () => {
     const stageClipboardText = vi.fn(async () => ({ path: "/browser-clip/abc123" }));
     const tools = buildBrowserTools({
       execute: execute(),
@@ -5246,7 +5255,7 @@ describe("browser copy_text tool", () => {
       stageClipboardText,
       viewerPlatform: "windows",
     });
-    const res = await callTool(tools, "copy_text", { text: "const a = 1;\n".repeat(200) });
+    const res = await callTool(tools, "clipboard", { action: "text", text: "const a = 1;\n".repeat(200) });
     expect(res.isError).toBeFalsy();
     expect(stageClipboardText).toHaveBeenCalledWith("const a = 1;\n".repeat(200));
 
@@ -5265,7 +5274,7 @@ describe("browser copy_text tool", () => {
     // the agent to select back and close it. Getting either half wrong strands
     // a staging tab open forever or sends the agent to a tab that is gone.
     expect(body).toContain("CLOSES the staging tab itself");
-    expect(body).toContain("mcp__browser__close_tab the staging tab");
+    expect(body).toContain('mcp__browser__tabs action "select" back to your target page and action "close" on the staging tab');
     expect(body).toContain('key "a"');
     expect(body).toContain('key "v"');
     expect(body).toContain('["Control"]');
@@ -5275,8 +5284,8 @@ describe("browser copy_text tool", () => {
   it("refuses when the run has no stager or no app origin, and redirects to handing the text over", async () => {
     const noStager = await callTool(
       buildBrowserTools({ execute: execute(), allowed: true, appOrigin: "https://noah.example" }),
-      "copy_text",
-      { text: "hello" },
+      "clipboard",
+      { action: "text", text: "hello" },
     );
     expect(noStager.isError).toBe(true);
     expect(noStager.content[0].text).toContain("not available in this run");
@@ -5290,8 +5299,8 @@ describe("browser copy_text tool", () => {
         allowed: true,
         stageClipboardText: vi.fn(async () => ({ path: "/browser-clip/abc123" })),
       }),
-      "copy_text",
-      { text: "hello" },
+      "clipboard",
+      { action: "text", text: "hello" },
     );
     expect(noOrigin.isError).toBe(true);
     expect(noOrigin.content[0].text).toContain("not available in this run");
@@ -5306,8 +5315,8 @@ describe("browser copy_text tool", () => {
         appOrigin: "https://noah.example",
         stageClipboardText,
       }),
-      "copy_text",
-      { text: "hello" },
+      "clipboard",
+      { action: "text", text: "hello" },
     );
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("talking to their OWN avatar");
@@ -5324,8 +5333,8 @@ describe("browser copy_text tool", () => {
           throw new Error("The text is 2000000 bytes, over the 1000000-byte clipboard staging limit.");
         }),
       }),
-      "copy_text",
-      { text: "x" },
+      "clipboard",
+      { action: "text", text: "x" },
     );
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("clipboard staging limit");
@@ -5640,25 +5649,79 @@ describe("browser bridge tab management", () => {
       ...extra,
     }));
 
-  it("passes tab operations through with the tabId the model supplied", async () => {
+  it("passes tab operations through with the tabId the model supplied — the wire ops are unchanged", async () => {
     const execute = withTabs();
     const tools = buildBrowserTools({ execute, allowed: true });
 
-    await callTool(tools, "list_tabs", {});
+    await callTool(tools, "tabs", { action: "list" });
     expect(execute).toHaveBeenLastCalledWith({ op: "list_tabs" });
 
-    await callTool(tools, "new_tab", { url: "https://intra.example/c" });
+    await callTool(tools, "tabs", { action: "new", url: "https://intra.example/c" });
     expect(execute).toHaveBeenLastCalledWith({ op: "new_tab", url: "https://intra.example/c" });
 
-    await callTool(tools, "select_tab", { tabId: "22" });
+    await callTool(tools, "tabs", { action: "new", url: "https://intra.example/d", maxChars: 900 });
+    expect(execute).toHaveBeenLastCalledWith({ op: "new_tab", url: "https://intra.example/d", maxChars: 900 });
+
+    await callTool(tools, "tabs", { action: "select", tabId: "22" });
     expect(execute).toHaveBeenLastCalledWith({ op: "select_tab", tabId: "22" });
 
-    await callTool(tools, "close_tab", { tabId: "22" });
+    // The action is read case- and space-insensitively.
+    await callTool(tools, "tabs", { action: " Close ", tabId: "22" });
     expect(execute).toHaveBeenLastCalledWith({ op: "close_tab", tabId: "22" });
   });
 
-  it("renders a select_tab reply that carries no snapshot as the tab's identity alone", async () => {
-    // select_tab no longer returns page content — the agent snapshots after
+  it("redirects an unknown action or a missing argument instead of relaying anything", async () => {
+    // `action` is a plain string, not an enum: pi validates against the LISTED
+    // schema, so only a string lets a wrong value reach this redirect.
+    const execute = withTabs();
+    const tools = buildBrowserTools({ execute, allowed: true });
+    const schema = tools.find((t) => t.name === "tabs")!.inputSchema as Record<string, { safeParse: (v: unknown) => { success: boolean } }>;
+    expect(schema.action.safeParse("open").success).toBe(true);
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ action: "open", url: "https://intra.example" }, 'Unknown action "open" for mcp__browser__tabs. Use "list", "new" (with `url`), "select" or "close" (with `tabId`).'],
+      [{ action: "new" }, 'mcp__browser__tabs action "new" needs `url`'],
+      [{ action: "select" }, 'mcp__browser__tabs action "select" needs `tabId`: a tabId from mcp__browser__tabs action "list".'],
+      [{ action: "close" }, 'mcp__browser__tabs action "close" needs `tabId`'],
+    ];
+    for (const [args, message] of cases) {
+      const res = await callTool(tools, "tabs", args);
+      expect(res.isError, JSON.stringify(args)).toBe(true);
+      expect(res.content[0].text).toContain(message);
+    }
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("points the bridge's own text at the live tool names (the extension still names the retired ones)", async () => {
+    // No extension change rode the merge, so an installed bridge's refusals and
+    // notes say mcp__browser__new_tab etc. — names a new pi session cannot call.
+    const busy = vi.fn(async () => ({
+      behavior: "error" as const,
+      message:
+        "Tab 11 is being driven by another conversation. Open your own tab with mcp__browser__new_tab, or call " +
+        "mcp__browser__list_tabs and mcp__browser__select_tab; prefer mcp__browser__copy_text for long text.",
+    }));
+    const err = (await callTool(buildBrowserTools({ execute: busy, allowed: true }), "click", { uid: "e1" })).content[0].text ?? "";
+    expect(err).toContain('Open your own tab with mcp__browser__tabs (action "new"), or call mcp__browser__tabs (action "list") and mcp__browser__tabs (action "select")');
+    expect(err).toContain('prefer mcp__browser__clipboard (action "text") for long text');
+    expect(err).not.toMatch(/mcp__browser__(list_tabs|new_tab|select_tab|close_tab|copy_text|copy_image)\b/);
+
+    const copied = vi.fn(async () => ({
+      behavior: "ok" as const,
+      url: "https://intra.example/a",
+      title: "A",
+      note:
+        "Copied to the clipboard: the staging tab reported COPIED, so it was closed. No previous working tab was " +
+        "remembered — call list_tabs and select_tab your target page, then focus the editor and paste.",
+    }));
+    const note = (await callTool(buildBrowserTools({ execute: copied, allowed: true }), "click", { uid: "e1" })).content[0].text ?? "";
+    expect(note).toContain('call mcp__browser__tabs (action "list", then "select") for your target page, then focus the editor');
+    expect(withLiveToolNames("navigate and tabs stay as they are; op new_tab is an op name")).toBe(
+      "navigate and tabs stay as they are; op new_tab is an op name",
+    );
+  });
+
+  it("renders a tabs \"select\" reply that carries no snapshot as the tab's identity alone", async () => {
+    // select no longer returns page content — the agent snapshots after
     // switching — so the report has to read as a complete result without one:
     // where it landed and which tabs exist, and no hole where a snapshot was.
     const execute = withTabs({
@@ -5669,7 +5732,8 @@ describe("browser bridge tab management", () => {
         { tabId: "22", title: "B", url: "https://intra.example/b", current: true },
       ],
     });
-    const res = await callTool(buildBrowserTools({ execute, allowed: true }), "select_tab", {
+    const res = await callTool(buildBrowserTools({ execute, allowed: true }), "tabs", {
+      action: "select",
       tabId: "22",
     });
     const out = res.content[0].text ?? "";
@@ -5692,7 +5756,7 @@ describe("browser bridge tab management", () => {
         { tabId: "22", title: "B", url: "https://intra.example/b", current: false },
       ],
     });
-    const out = (await callTool(buildBrowserTools({ execute, allowed: true }), "list_tabs", {}))
+    const out = (await callTool(buildBrowserTools({ execute, allowed: true }), "tabs", { action: "list" }))
       .content[0].text ?? "";
 
     expect(out).toContain("* [11]");
@@ -5705,16 +5769,30 @@ describe("browser bridge tab management", () => {
   it("refuses tab operations for a viewer who is not cleared", async () => {
     const execute = withTabs();
     const tools = buildBrowserTools({ execute, allowed: false });
-    for (const [name, args] of [
-      ["list_tabs", {}],
-      ["new_tab", { url: "https://intra.example" }],
-      ["select_tab", { tabId: "11" }],
-      ["close_tab", { tabId: "11" }],
-    ] as const) {
-      const res = await callTool(tools, name, args);
-      expect(res.isError, name).toBe(true);
+    for (const args of [
+      { action: "list" },
+      { action: "new", url: "https://intra.example" },
+      { action: "select", tabId: "11" },
+      { action: "close", tabId: "11" },
+      { action: "bogus" },
+    ]) {
+      const res = await callTool(tools, "tabs", args);
+      expect(res.isError, args.action).toBe(true);
+      expect(res.content[0].text).toContain("talking to their OWN avatar");
     }
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("lists tabs and clipboard and none of the six retired names (they are hidden aliases at /mcp)", () => {
+    const names = buildBrowserTools({ execute: withTabs(), allowed: true }).map((t) => t.name);
+    expect(names).toContain("tabs");
+    expect(names).toContain("clipboard");
+    for (const key of Object.keys(BROWSER_RETIRED_TOOLS)) {
+      const name = key.slice("browser/".length);
+      expect(names, name).not.toContain(name);
+      expect(BROWSER_TOOL_NAMES as readonly string[], name).not.toContain(`mcp__browser__${name}`);
+    }
+    expect([...BROWSER_TOOL_NAMES].sort()).toEqual(names.map((name) => `mcp__browser__${name}`).sort());
   });
 });
 

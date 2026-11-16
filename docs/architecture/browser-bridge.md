@@ -15,7 +15,7 @@ guide is [`../../extension/README.md`](../../extension/README.md) (Korean).
 
 | Page | Open it when |
 |---|---|
-| [contract.md](browser-bridge/contract.md) | Adding or changing ANY op — the five hand-synced layers, extension version compatibility, the composer's four badge rungs, and how `screenshot` rides the run's resolved vision. |
+| [contract.md](browser-bridge/contract.md) | Adding or changing ANY op or tool name — the five hand-synced layers, the tool ≠ op mapping (`tabs`/`clipboard`), extension version compatibility, the composer's four badge rungs, and how `screenshot` rides the run's resolved vision. |
 | [addressing.md](browser-bridge/addressing.md) | You need to reach a specific element: `click_at`'s two unrelated modes, how long a uid stays valid, the pinned working tab, the settle tail, and the three ways frames are walked. |
 | [actions.md](browser-bridge/actions.md) | You are changing what an op *does*: verified writes and their four end states, `type` routing by control kind, selects, navigation and the destination-based origin gate, click guards, audit rows, and the no-JS constraint. |
 | [snapshots.md](browser-bridge/snapshots.md) | You are changing what the model *sees*: atom budgeting, `maxChars`, state flags, table rows, respacing, links/images, and the nine `axtree.js` rules that each exist because something real went missing. |
@@ -26,7 +26,7 @@ a new file under `extension/` must be added to `BUNDLE_FILES` (and a BINARY file
 `BINARY_BUNDLE_FILES`), and `BROWSER_EXTENSION_MIN_COMPATIBLE` must never exceed the bundled manifest
 version. Details in [extension.md](browser-bridge/extension.md).
 - **Reader/proxy services are refused SERVER-side, whatever the user's allowlist says** (2026-11-16).
-  `navigate`/`new_tab` check `readerProxyRefusal` (`agent/browserTools.ts`: r.jina.ai, 12ft.io, archive.ph &
+  `navigate` and `tabs` (action "new") check `readerProxyRefusal` (`agent/browserTools.ts`: r.jina.ai, 12ft.io, archive.ph &
   co., Google cache, `*.translate.goog`, Translate's `/translate` page mode, Wayback `/save`) before the op is
   relayed: such a service fetches the URL on the avatar's behalf, so an internal URL would be handed to a third
   party, and its copy is not what the user's login sees. `describe_system` and the manual topic

@@ -150,7 +150,7 @@
   stays 0.6.0.** `dialog_status` (the `handle_dialog` no-`accept` probe — actions.md) is a new wire OP
   with NO new fields, so the five layers only had to learn the op name (the chat relay forwards `op`
   generically); an old build answers "Unsupported operation" and the relay's existing translation
-  turns that into an update prompt. `copy_text` is a server tool over existing ops — no wire change at
+  turns that into an update prompt. `clipboard` (action "text", formerly `copy_text`) is a server tool over existing ops — no wire change at
   all (actions.md). `maxChars`' floor dropped to 500 on BOTH sides in lockstep (snapshots.md; an old
   build re-clamps to 2000 — a degrade). The AX-invisible clickable grouping is extension-render-only
   (snapshots.md). The chat route's audit skip list grew to snapshot / wait_for / dialog_status.
@@ -237,3 +237,25 @@
     refuses `secretName` in a step first; the extension refuses a step carrying a secret too — three layers
     for one rule), so a batch frame never carries a plaintext and is always replayable. The relay keeps ≤ 11
     step results and slices each field (snapshot and page text 60k per step, message 2k, note 500 …).
+
+## Model-facing tools are not wire ops (2026-11-16)
+
+- **Six tools became two, behind an `action` string; the wire did not change.** `mcp__browser__tabs`
+  (`action` "list" | "new" | "select" | "close"; `url` + `maxChars` for "new", `tabId` for select/close) relays
+  the SAME ops `list_tabs` / `new_tab` / `select_tab` / `close_tab`, and `mcp__browser__clipboard` (`action`
+  "image" + `path` | "text" + `text`) is the old `copy_image` / `copy_text` server-side staging, verbatim. So
+  `events.ts` op names, the chat relay + audit rows, the client's Korean labels (`BROWSER_OP_LABELS`, keyed
+  on the OP), the per-conversation driver/lease handling, the reader-proxy refusal and the extension are all
+  untouched — no version bump. `action` is a plain string with its values in the description (pi judges a
+  call against the LISTED schema, so an enum would stop a wrong value before the handler's redirect); an
+  unknown action or a missing argument is refused with the exact call to make, before anything is relayed.
+- **The six old names are RETIRED and reserved forever** (`BROWSER_RETIRED_TOOLS`, `agent/retiredTools.ts`):
+  never listed, answered at `/mcp` through `RETIRED_TOOL_MESSAGES` with the new call. pi forwards only a name
+  in the session's listed tools, so that redirect reaches sessions built before the merge; a newer one gets
+  pi's own "Unknown tool … mcp_search" answer.
+- **The installed extension still SAYS the old names** in its own refusals and notes (`tabLeases.js`,
+  `background.js`, axtree.js's `clipboardCopiedNote`), and `extension/README.md` (a bundle file) still names
+  them as the avatar's commands — none of it is changed by a tool rename. `withLiveToolNames`
+  (`browserTools.ts`) rewrites exactly those names in BRIDGE-authored text (error messages, notes, batch step
+  messages — never page content) to the live call; a note is capped BEFORE the rewrite so the extension's
+  480-char note budget still holds. A new extension string naming a tool should name the LIVE call.
