@@ -70,6 +70,7 @@ import {
   touchesVault,
   validateRepoCreateNames,
   vaultNotePathOf,
+  vaultHoldPushRefusal,
 } from "./repoToolKit.js";
 
 const execFileAsync = promisify(execFile);
@@ -383,10 +384,12 @@ async function commitWithVaultMirror(
 /**
  * What a refused commit adds for an owner whose vault lives in the memory
  * service when the rebase conflict is on VAULT notes ("" otherwise). Such a
- * conflict stops the commit only while the copy was not written from the
- * service in this commit — on hold, or the pass failed — and then the general
- * "reconcile it manually" is the wrong advice: what ends it is the owner's
- * confirmation, the end of the check, or the service answering again.
+ * conflict reaches the rebase when this commit's mirror pass did not write the
+ * copy: it FAILED, or — rarely — the copy is on hold and the look before the
+ * push saw no vault path (local commits that changed a note and changed it
+ * back). A pass that ran settles the conflict itself. In both cases the
+ * general "reconcile it manually" is the wrong advice: the vault's text
+ * settles it once the pass can run again.
  */
 function vaultConflictNote(error: unknown, hold: "checking" | "confirm" | null): string {
   const conflict = /^REBASE_CONFLICT:([\s\S]*)$/.exec(scrubGitError(error));
@@ -394,11 +397,8 @@ function vaultConflictNote(error: unknown, hold: "checking" | "confirm" | null):
   const files = conflict[1].split(",").map((file) => file.trim()).filter(Boolean);
   if (!files.some((file) => isPersonalVaultPath(file))) return "";
   const lead = "\nFor the vault note(s) among those files this is NOT something to reconcile by hand: ";
-  if (hold === "confirm") {
-    return `${lead}the repository's copy of the vault notes is ON HOLD — the connected repository (or branch) holds vault notes of its own, and nothing there is replaced until the owner confirms. Tell the owner to confirm in 설정 → 지식·플러그인 → 지식 저장소 (or to connect another repository); after that the same commit goes through. The notes themselves are saved in the vault.`;
-  }
-  if (hold === "checking") {
-    return `${lead}the repository's copy of the vault notes is ON HOLD while Noah looks at the newly connected repository (or branch). Commit again once that check has ended (\`mcp__system__describe_system\` shows the state). The notes themselves are saved in the vault.`;
+  if (hold) {
+    return `${lead}the repository's copy of the vault notes is ON HOLD (\`mcp__system__describe_system\` shows why and what ends it). Commit again once the hold has ended — the vault's text then settles the conflict. The notes themselves are saved in the vault.`;
   }
   return `${lead}the copy of the vault notes could not be refreshed from the memory service in this commit (\`mcp__system__describe_system\` shows why). Commit again once it can — the vault's text then settles the conflict. The notes themselves are saved in the vault.`;
 }
@@ -791,6 +791,8 @@ export function buildRepoTools(
           );
           return text(`Committed and pushed the changes: ${c.repo}${shares}${mirrorNote}`);
         } catch (error) {
+          const held = vaultHoldPushRefusal(error);
+          if (held) return text(held, true);
           const note = vault() ? vaultConflictNote(error, store.getPersonalVault(c.userId)?.mirrorHold ?? null) : "";
           return text(`${commitFailureMessage(error)}${note}`, true);
         }

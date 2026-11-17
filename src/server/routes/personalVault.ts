@@ -4,7 +4,9 @@ import logger from "../logger.js";
 import { memoryClientFor } from "../memory/memoryClient.js";
 import type { PersonalVaultRow, VaultMirrorHold } from "../store/personalVault.js";
 import {
+  VAULT_CONFIRM_REFUSAL,
   VAULT_ROLLBACK_REFUSAL,
+  confirmVaultMirrorHold,
   isVaultMigrationRunning,
   lastVaultMigrationReport,
   planVaultMigration,
@@ -235,40 +237,46 @@ export function createPersonalVaultRouter(deps: RouterDeps): Router {
   // notes of the connected repository. Only in the `confirm` state (the check
   // found repository vault notes the copy would replace), and only for the
   // repository and branch the owner's screen showed — the body carries them.
-  // It lifts the hold, arms the one-shot "make the repository equal to the
-  // service" for the next mirror pass, and marks the mirror behind.
-  router.post("/api/me/personal-vault/mirror-confirm", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const userId = req.user!.id;
-    const row = store.getPersonalVault(userId);
-    if (!row) {
-      apiError(res, 409, "개인 브레인이 저장소에 있어 확인할 사본이 없습니다.");
-      return;
+  // The press covers the repository as it is NOW: `confirmVaultMirrorHold`
+  // reads it now and writes the vault notes only it holds into the deletion
+  // ledger, then lifts the hold and marks the mirror behind. A note that
+  // reaches the repository by git after the press is not covered and is kept.
+  // An unreadable repository or service changes nothing (503, press again).
+  router.post("/api/me/personal-vault/mirror-confirm", requireAuth(store), async (req: AuthenticatedRequest, res, next) => {
+    try {
+      const userId = req.user!.id;
+      const repo = typeof req.body?.repo === "string" ? req.body.repo.trim() : "";
+      const branch = typeof req.body?.branch === "string" ? req.body.branch.trim() || null : null;
+      const result = await confirmVaultMirrorHold(store, config, userId, { repo, branch });
+      if (!result.ok) {
+        switch (result.reason) {
+          case VAULT_CONFIRM_REFUSAL.notMemory:
+            apiError(res, 409, "개인 브레인이 저장소에 있어 확인할 사본이 없습니다.");
+            return;
+          case VAULT_CONFIRM_REFUSAL.checking:
+            apiError(res, 409, "새로 연결한 저장소를 아직 확인하는 중입니다. 확인이 끝난 뒤, 필요할 때만 다시 물어봅니다.");
+            return;
+          case VAULT_CONFIRM_REFUSAL.noHold:
+            apiError(res, 409, "지금은 확인할 것이 없습니다. 화면을 새로 고쳐 주세요.");
+            return;
+          case VAULT_CONFIRM_REFUSAL.repoChanged:
+            apiError(res, 409, "연결된 저장소나 브랜치가 화면에 보이던 것과 다릅니다. 아무것도 바꾸지 않았습니다. 화면을 새로 고친 뒤 다시 확인해 주세요.");
+            return;
+          default:
+            logger.warn({ userId, repo, branch, detail: result.detail ?? null }, "vault mirror confirmation not applied: the repository or the memory service could not be read");
+            apiError(res, 503, "지금 저장소나 메모리 서비스를 읽지 못해 확인을 적용하지 못했습니다. 아무것도 바꾸지 않았습니다. 잠시 후 다시 눌러 주세요.");
+            return;
+        }
+      }
+      auditAs(
+        req,
+        "personal_vault_mirror_confirm",
+        `confirmed: the memory service's vault replaces the vault notes of ${repo}${branch ? ` (${branch})` : ""} (${result.removes} repository-only notes will be removed)`,
+      );
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
     }
-    if (row.mirrorHold === "checking") {
-      apiError(res, 409, "새로 연결한 저장소를 아직 확인하는 중입니다. 확인이 끝난 뒤, 필요할 때만 다시 물어봅니다.");
-      return;
-    }
-    if (row.mirrorHold !== "confirm") {
-      apiError(res, 409, "지금은 확인할 것이 없습니다. 화면을 새로 고쳐 주세요.");
-      return;
-    }
-    const connected = store.getKnowledgeRepo(userId);
-    const repo = typeof req.body?.repo === "string" ? req.body.repo.trim() : "";
-    const branch = typeof req.body?.branch === "string" ? req.body.branch.trim() || null : null;
-    if (!connected.repo || repo !== connected.repo || branch !== (connected.branch ?? null)) {
-      apiError(res, 409, "연결된 저장소나 브랜치가 화면에 보이던 것과 다릅니다. 아무것도 바꾸지 않았습니다. 화면을 새로 고친 뒤 다시 확인해 주세요.");
-      return;
-    }
-    store.setVaultMirrorHold(userId, null);
-    store.setVaultMirrorReplaceAll(userId, true);
-    store.markVaultMirrorDirty(userId);
-    auditAs(
-      req,
-      "personal_vault_mirror_confirm",
-      `confirmed: the memory service's vault replaces the vault notes of ${connected.repo}${connected.branch ? ` (${connected.branch})` : ""}`,
-    );
-    logger.info({ userId, repo: connected.repo, branch: connected.branch }, "vault mirror hold cleared by the owner (the repository's vault notes will be made equal to the service)");
-    res.json({ ok: true });
   });
 
   return router;

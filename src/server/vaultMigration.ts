@@ -56,7 +56,7 @@ import { QUARANTINE_DIR, isPlainSegment, openRetirementSweep, quarantineRetired 
 import { runningRoutineCountForOwner } from "./routineRunRegistry.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
-import { syncVaultMirror } from "./vaultMirror.js";
+import { CloneVaultFiles, discardVaultCopyChanges, syncVaultMirror } from "./vaultMirror.js";
 
 const migrationLogger = logger.child({ module: "vaultMigration" });
 
@@ -451,6 +451,26 @@ function cloneTarget(ctx: KnowledgeRepoContext): { repoRoot: string; url: string
  * caller holds the clone's repo lock). A repository that cannot be synced is a
  * blocker, never an exception.
  */
+/**
+ * {@link syncCloneLocked} for an owner whose vault lives in the memory
+ * service, when the clone must follow a (possibly changed) repository or
+ * branch: first the mirror's own leftovers — uncommitted changes at vault
+ * paths, from a pass or a commit that was stopped by the hold — are dropped,
+ * so they cannot keep git from switching the clone to the branch that is to
+ * be looked at (`discardVaultCopyChanges`).
+ */
+async function syncMemoryHomeCloneLocked(ctx: KnowledgeRepoContext, repoRoot: string): Promise<string | null> {
+  try {
+    const dropped = await discardVaultCopyChanges(repoRoot);
+    if (dropped > 0) {
+      migrationLogger.info({ userId: ctx.userId, repo: ctx.repo, dropped }, "vault migration: uncommitted copies of vault notes left in the clone by a stopped mirror were dropped before the sync");
+    }
+  } catch (error) {
+    migrationLogger.warn({ userId: ctx.userId, repo: ctx.repo, error: scrubGitError(error) }, "vault migration: leftover copies of vault notes in the clone could not be dropped");
+  }
+  return syncCloneLocked(ctx, repoRoot);
+}
+
 async function syncCloneLocked(ctx: KnowledgeRepoContext, repoRoot: string): Promise<string | null> {
   try {
     await ensureCloneLocked(ctx, repoRoot);
@@ -1239,7 +1259,7 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
         return why !== null;
       };
       if (outdated()) return;
-      const unsynced = await syncCloneLocked(ctx, repoRoot);
+      const unsynced = await syncMemoryHomeCloneLocked(ctx, repoRoot);
       if (unsynced) {
         unseen(unsynced);
         return;
@@ -1405,6 +1425,97 @@ function settleAfterRepoChange(store: Store, config: AppConfig, userId: string, 
   });
 }
 
+/** Why the owner's confirmation was not applied (`confirmVaultMirrorHold`). */
+export const VAULT_CONFIRM_REFUSAL = {
+  /** The vault lives in the repository: there is no copy to confirm. */
+  notMemory: "not_memory",
+  /** The repository has not been looked at yet. */
+  checking: "checking",
+  /** Nothing is waiting for a confirmation. */
+  noHold: "no_hold",
+  /** The connected repository or branch is not the one the owner's screen showed (or changed meanwhile). */
+  repoChanged: "repo_changed",
+  /** The repository or the memory service could not be read now (`detail` = the blocker): nothing was changed. */
+  unreadable: "unreadable",
+} as const;
+
+export type VaultConfirmResult = { ok: true; removes: number } | { ok: false; reason: string; detail?: string };
+
+/**
+ * The owner's press on a mirror held as `confirm`: the memory service's vault
+ * may replace the vault notes of the connected repository.
+ *
+ * The press covers the repository AS IT IS NOW, so it is read now — inside the
+ * owner's vault write queue and the repo lock, on a clone synced to the
+ * connected branch's tip — and every vault file it holds that the service does
+ * not is written into the deletion ledger. The mirror then removes exactly
+ * those (and overwrites the notes both hold, as it always does); a vault note
+ * that reaches the repository by git AFTER the press is not in the ledger and
+ * is kept, with a notice. Then the hold is lifted and the mirror marked behind.
+ *
+ * Nothing is changed unless all of it could be read: an unreadable repository
+ * or service leaves the hold at `confirm` for another press.
+ */
+export async function confirmVaultMirrorHold(
+  store: Store,
+  config: AppConfig,
+  userId: string,
+  shown: { repo: string; branch: string | null },
+): Promise<VaultConfirmResult> {
+  const refuse = (reason: string, detail?: string): VaultConfirmResult => ({ ok: false, reason, ...(detail ? { detail } : {}) });
+  /** Why the press cannot go on, as things are this instant (null = it can). */
+  const stopped = (): VaultConfirmResult | null => {
+    const row = store.getPersonalVault(userId);
+    if (!row) return refuse(VAULT_CONFIRM_REFUSAL.notMemory);
+    if (row.mirrorHold === "checking") return refuse(VAULT_CONFIRM_REFUSAL.checking);
+    if (row.mirrorHold !== "confirm") return refuse(VAULT_CONFIRM_REFUSAL.noHold);
+    const now = store.getKnowledgeRepo(userId);
+    if (!now.repo || now.repo !== shown.repo || (now.branch ?? null) !== shown.branch) return refuse(VAULT_CONFIRM_REFUSAL.repoChanged);
+    return null;
+  };
+  return withVaultWriteLock(store, userId, async () => {
+    const early = stopped();
+    if (early) return early;
+    const ctx = knowledgeRepoContextFor(store, userId, config);
+    const client = memoryClientFor(store, config);
+    if (!ctx) return refuse(VAULT_CONFIRM_REFUSAL.repoChanged);
+    if (!client) return refuse(VAULT_CONFIRM_REFUSAL.unreadable, blocker(VAULT_BLOCKER.unavailable, "this server has no memory service configured"));
+    const target = cloneTarget(ctx);
+    if ("blocker" in target) return refuse(VAULT_CONFIRM_REFUSAL.unreadable, target.blocker);
+    const { repoRoot, url } = target;
+    return withRepoLock(repoRoot, async () => {
+      const unsynced = await syncMemoryHomeCloneLocked(ctx, repoRoot);
+      if (unsynced) return refuse(VAULT_CONFIRM_REFUSAL.unreadable, unsynced);
+      const clone = await inspectCloneState(ctx, repoRoot, url);
+      const elsewhere = await cloneNotAtConnectedTip(ctx, repoRoot, clone);
+      if (elsewhere) return refuse(VAULT_CONFIRM_REFUSAL.unreadable, elsewhere);
+      let repoOnly: string[];
+      try {
+        const inService = new Set((await serviceVaultNotes(client, userId)).map((entry) => entry.path));
+        repoOnly = (await new CloneVaultFiles(repoRoot).list()).filter((rel) => !inService.has(rel));
+      } catch (error) {
+        if (error instanceof MemoryUnavailableError || error instanceof MemoryRefusedError) {
+          return refuse(VAULT_CONFIRM_REFUSAL.unreadable, serviceBlocker(error));
+        }
+        throw error;
+      }
+      // The last look, in the same tick as the ledger, the hold and the dirty mark.
+      const late = stopped();
+      if (late) return late;
+      store.recordVaultDeletes(userId, repoOnly);
+      store.setVaultMirrorHold(userId, null);
+      store.markVaultMirrorDirty(userId);
+      const reports = stateOf(store).reports;
+      if ((reports.get(userId)?.blockers.length ?? 0) > 0) reports.delete(userId);
+      migrationLogger.info(
+        { userId, repo: ctx.repo, branch: ctx.branch ?? null, removes: repoOnly.length },
+        "vault mirror hold cleared by the owner (the repository's vault notes will be made equal to the service as it was at the press)",
+      );
+      return { ok: true, removes: repoOnly.length };
+    });
+  });
+}
+
 /**
  * Boot: every hold left at `checking` gets its look (and its retries) again —
  * the retry timers of the process that set the hold are gone. Returns how many.
@@ -1441,10 +1552,9 @@ export function recheckVaultMirrorHold(store: Store, config: AppConfig, userId: 
  * - Home `repo`, mode `memory`: the owner is cut over (queued behind any
  *   running job; retried while a run of theirs is in progress).
  * - Home `memory`: the mirror is put on hold AT ONCE as `checking` — before
- *   anything could write into the new repository — and an armed "make the
- *   repository equal to the service" (the owner's confirmation of the PREVIOUS
- *   repository) is disarmed. The queued check then lifts the hold or turns it
- *   into `confirm` (see `settleRepoChange`). Nothing in the repository is
+ *   anything could write into the new repository — and the deletion ledger is
+ *   emptied (it named paths of the PREVIOUS repository). The queued check then
+ *   lifts the hold or turns it into `confirm` (see `settleRepoChange`). Nothing in the repository is
  *   replaced without the owner's press.
  */
 export function onKnowledgeRepoChanged(store: Store, config: AppConfig, userId: string, previousRepo: string | null): void {
@@ -1454,7 +1564,10 @@ export function onKnowledgeRepoChanged(store: Store, config: AppConfig, userId: 
     if (!repo) return; // Disconnected: nothing to import, nowhere to mirror.
     if (store.getPersonalVault(userId)) {
       store.setVaultMirrorHold(userId, "checking");
-      store.setVaultMirrorReplaceAll(userId, false);
+      // The ledger is about the repository that WAS connected (deletions not yet copied there, a confirmation
+      // of its own notes). The new one is judged afresh by the look: whatever it holds that the service does
+      // not is the owner's to confirm — never removed because an old entry happens to name the same path.
+      store.clearVaultDeletes(userId, store.listVaultDeletes(userId));
       migrationLogger.info({ userId, repo, previousRepo }, "knowledge repo changed for a vault in the memory service; mirror on hold (checking) until the new repository is looked at");
       settleAfterRepoChange(store, config, userId, 0);
       return;

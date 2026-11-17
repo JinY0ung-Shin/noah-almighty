@@ -713,13 +713,12 @@ export class StoreBase {
       -- it ran), mirror_notice = what the last successful pass has to tell the
       -- owner (repository notes the service does not hold), mirror_hold_state =
       -- 'checking' | 'confirm' | NULL (the mirror must not write into the
-      -- connected repo: nobody looked at it yet / the owner must confirm),
-      -- mirror_replace_all = the owner's one-shot "make the repository equal to
-      -- the service". No FKs (todo_items precedent); deleteUser removes the row.
+      -- connected repo: nobody looked at it yet / the owner must confirm). No
+      -- FKs (todo_items precedent); deleteUser removes the row.
       -- A brand-new table: CREATE TABLE IF NOT EXISTS IS the existing-deployment
       -- migration; a database made by an earlier build of this table (boolean
-      -- mirror_hold, no notice/replace-all) is brought up by
-      -- migratePersonalVaultColumns.
+      -- mirror_hold, no notice) is brought up by migratePersonalVaultColumns.
+      -- (An earlier build also had mirror_replace_all; nothing reads it now.)
       CREATE TABLE IF NOT EXISTS personal_vaults (
         user_id TEXT PRIMARY KEY,
         migrated_at TEXT NOT NULL,
@@ -730,8 +729,7 @@ export class StoreBase {
         mirror_synced_at TEXT,
         mirror_error TEXT,
         mirror_notice TEXT,
-        mirror_hold_state TEXT,
-        mirror_replace_all INTEGER NOT NULL DEFAULT 0
+        mirror_hold_state TEXT
       );
       -- The deletion ledger of a memory-home owner (store/personalVault.ts): the
       -- vault paths NOAH deleted from the service and the mirror has not yet
@@ -1422,7 +1420,6 @@ export class StoreBase {
   private migratePersonalVaultColumns(): void {
     this.addColumnIfMissing("personal_vaults", "mirror_notice", "TEXT");
     this.addColumnIfMissing("personal_vaults", "mirror_hold_state", "TEXT");
-    this.addColumnIfMissing("personal_vaults", "mirror_replace_all", "INTEGER NOT NULL DEFAULT 0");
     const columns = this.db.prepare("PRAGMA table_info(personal_vaults)").all() as { name: string }[];
     if (columns.some((column) => column.name === "mirror_hold")) {
       this.db

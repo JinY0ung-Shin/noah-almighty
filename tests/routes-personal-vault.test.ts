@@ -5,7 +5,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import { MemoryUnavailableError, memoryClientFor, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
-import { memoryVaultFor } from "../src/server/personalVault.js";
+import { memoryVaultFor, withVaultWriteLock } from "../src/server/personalVault.js";
 import { cutoverVault, onKnowledgeRepoChanged, whenVaultMigrationIdle } from "../src/server/vaultMigration.js";
 import { syncVaultMirror } from "../src/server/vaultMirror.js";
 import { createFakeMemoryClient, type FakeMemoryClient } from "./helpers/fakeMemory.js";
@@ -17,7 +17,9 @@ import { makeBareRemote, signup, withTempDir } from "./helpers.js";
 // fake of the memory service. The git mirror is stubbed (tests/vault-migration
 // covers the migration itself, also against the real mirror).
 
-vi.mock("../src/server/vaultMirror.js", () => ({
+vi.mock("../src/server/vaultMirror.js", async (importOriginal) => ({
+  // Everything else of the module is the real thing (the owner's confirmation lists the clone with its helper).
+  ...(await importOriginal<typeof import("../src/server/vaultMirror.js")>()),
   syncVaultMirror: vi.fn(),
   startVaultMirrorLoop: vi.fn(() => ({ stop() {} })),
 }));
@@ -424,50 +426,138 @@ describe("the owner's own view and the mirror confirmation", () => {
     expect(noRepo.body).toMatchObject({ home: "memory", mirror: { hold: null } });
   });
 
-  it("mirror-confirm: only in the `confirm` state, and only for the repository and branch the screen showed", async () => {
-    const { app, store, config } = boot();
-    await mkUser(app, store, "admin");
-    const owner = await mkUser(app, store, "owner");
-    const remote = connect(store, owner.id, "brain", VAULT);
-    const confirm = (body?: Record<string, unknown>) => owner.agent.post("/api/me/personal-vault/mirror-confirm").send(body);
-    const unchanged = (hold: "checking" | "confirm" | null) =>
-      expect(store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: hold, mirrorReplaceAll: false, mirrorDirty: false });
-
-    // Home `repo`: nothing to confirm.
-    expect((await confirm({ repo: remote, branch: "main" }).expect(409)).body.error).toContain("저장소에 있어");
-
-    await cutoverVault(store, config, owner.id);
-    // No hold.
-    expect((await confirm({ repo: remote, branch: "main" }).expect(409)).body.error).toContain("확인할 것이 없습니다");
-    unchanged(null);
-    // `checking`: nobody has looked at the repository yet — there is nothing the owner could be confirming.
-    store.setVaultMirrorHold(owner.id, "checking");
-    expect((await confirm({ repo: remote, branch: "main" }).expect(409)).body.error).toContain("아직 확인하는 중");
-    unchanged("checking");
-
-    store.setVaultMirrorHold(owner.id, "confirm");
-    // The screen showed another repository, another branch, or sent nothing.
-    for (const body of [{ repo: `${remote}-other`, branch: "main" }, { repo: remote, branch: "dev" }, { repo: remote }, {}, undefined]) {
-      expect((await confirm(body).expect(409)).body.error).toContain("화면에 보이던 것과 다릅니다");
-      unchanged("confirm");
+  describe("POST /api/me/personal-vault/mirror-confirm", () => {
+    /** An owner in `memory` who connected a repository with two vault notes of its own; the look ended in `confirm`. */
+    async function asked() {
+      const b = boot();
+      await mkUser(b.app, b.store, "admin");
+      const owner = await mkUser(b.app, b.store, "owner");
+      const first = connect(b.store, owner.id, "brain", VAULT);
+      await cutoverVault(b.store, b.config, owner.id);
+      const repo = connect(b.store, owner.id, "second", {
+        "CLAUDE.md": "another memory\n",
+        "wiki/theirs.md": "theirs\n",
+        "raw/theirs-too.md": "theirs too\n",
+        "skills/x/SKILL.md": "---\nname: x\n---\n",
+      });
+      onKnowledgeRepoChanged(b.store, b.config, owner.id, first);
+      await whenVaultMigrationIdle(b.store);
+      expect(b.store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: "confirm", mirrorDirty: false });
+      const confirm = (body?: Record<string, unknown>) => owner.agent.post("/api/me/personal-vault/mirror-confirm").send(body);
+      const unchanged = (hold: "checking" | "confirm" | null) => {
+        expect(b.store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: hold, mirrorDirty: false });
+        expect(b.store.listVaultDeletes(owner.id)).toEqual([]);
+        expect(auditOf(b.store, owner.id, "personal_vault_mirror_confirm")).toEqual([]);
+      };
+      return { ...b, owner, first, repo, confirm, unchanged };
     }
-    expect(auditOf(store, owner.id, "personal_vault_mirror_confirm")).toEqual([]);
 
-    const confirmed = await confirm({ repo: remote, branch: "main" }).expect(200);
-    expect(confirmed.body).toEqual({ ok: true });
-    // The hold is lifted, the one-shot "make the repository equal to the service" is armed, the mirror is behind.
-    expect(store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: null, mirrorReplaceAll: true, mirrorDirty: true });
-    expect(auditOf(store, owner.id, "personal_vault_mirror_confirm")).toEqual([
-      expect.objectContaining({ actorUserId: owner.id, actorName: "owner", status: "success", detail: expect.stringContaining(remote) }),
-    ]);
-    // Pressed twice: the second one has nothing to confirm.
-    await confirm({ repo: remote, branch: "main" }).expect(409);
+    it("200: the repository-only notes go into the deletion ledger, the hold is lifted, and the audit row carries the count", async () => {
+      const s = await asked();
+      const confirmed = await s.confirm({ repo: s.repo, branch: "main" }).expect(200);
+      expect(confirmed.body).toEqual({ ok: true });
+      expect(s.store.getPersonalVault(s.owner.id)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+      expect(s.store.listVaultDeletes(s.owner.id)).toEqual(["raw/theirs-too.md", "wiki/theirs.md"]);
+      expect(auditOf(s.store, s.owner.id, "personal_vault_mirror_confirm")).toEqual([
+        expect.objectContaining({
+          actorUserId: s.owner.id,
+          actorName: "owner",
+          status: "success",
+          detail: `confirmed: the memory service's vault replaces the vault notes of ${s.repo} (main) (2 repository-only notes will be removed)`,
+        }),
+      ]);
+      expect((await s.owner.agent.get("/api/me/personal-vault").expect(200)).body).toMatchObject({ home: "memory", mirror: { hold: null, dirty: true } });
 
-    // A repository connected without a branch is confirmed with a null (or empty) branch.
-    store.setKnowledgeRepo(owner.id, remote, null);
-    store.setVaultMirrorHold(owner.id, "confirm");
-    await confirm({ repo: remote, branch: "main" }).expect(409);
-    await confirm({ repo: remote, branch: null }).expect(200);
+      // Pressed twice: the second one has nothing to confirm, and records nothing more.
+      expect((await s.confirm({ repo: s.repo, branch: "main" }).expect(409)).body.error).toContain("확인할 것이 없습니다");
+      expect(auditOf(s.store, s.owner.id, "personal_vault_mirror_confirm")).toHaveLength(1);
+    });
+
+    it("a repository connected without a branch is confirmed with a null branch", async () => {
+      const s = await asked();
+      s.store.setKnowledgeRepo(s.owner.id, s.repo, null);
+      await s.confirm({ repo: s.repo, branch: "main" }).expect(409);
+      s.unchanged("confirm");
+      await s.confirm({ repo: s.repo, branch: null }).expect(200);
+      expect(auditOf(s.store, s.owner.id, "personal_vault_mirror_confirm")[0].detail).toBe(
+        `confirmed: the memory service's vault replaces the vault notes of ${s.repo} (2 repository-only notes will be removed)`,
+      );
+    });
+
+    it("409: home `repo`, `checking`, no hold, and a repository or branch that is not the one the screen showed", async () => {
+      // Home `repo`: nothing to confirm.
+      const bare = boot();
+      await mkUser(bare.app, bare.store, "admin");
+      const onRepo = await mkUser(bare.app, bare.store, "owner");
+      const remote = connect(bare.store, onRepo.id, "brain", VAULT);
+      const refused = await onRepo.agent.post("/api/me/personal-vault/mirror-confirm").send({ repo: remote, branch: "main" }).expect(409);
+      expect(refused.body.error).toBe("개인 브레인이 저장소에 있어 확인할 사본이 없습니다.");
+    });
+
+    it("409 (continued): the three refusals of an owner in `memory` change nothing", async () => {
+      const s = await asked();
+      // The screen showed another repository, another branch, or sent nothing.
+      for (const body of [{ repo: `${s.repo}-other`, branch: "main" }, { repo: s.repo, branch: "dev" }, { repo: s.repo }, {}, undefined]) {
+        expect((await s.confirm(body).expect(409)).body.error).toBe(
+          "연결된 저장소나 브랜치가 화면에 보이던 것과 다릅니다. 아무것도 바꾸지 않았습니다. 화면을 새로 고친 뒤 다시 확인해 주세요.",
+        );
+        s.unchanged("confirm");
+      }
+      // `checking`: nobody has looked at the repository yet — there is nothing the owner could be confirming.
+      s.store.setVaultMirrorHold(s.owner.id, "checking");
+      expect((await s.confirm({ repo: s.repo, branch: "main" }).expect(409)).body.error).toBe(
+        "새로 연결한 저장소를 아직 확인하는 중입니다. 확인이 끝난 뒤, 필요할 때만 다시 물어봅니다.",
+      );
+      s.unchanged("checking");
+      // No hold.
+      s.store.setVaultMirrorHold(s.owner.id, null);
+      expect((await s.confirm({ repo: s.repo, branch: "main" }).expect(409)).body.error).toBe("지금은 확인할 것이 없습니다. 화면을 새로 고쳐 주세요.");
+      s.unchanged(null);
+    });
+
+    it("503: the repository or the memory service cannot be read now — nothing is changed, and the same press works later", async () => {
+      const s = await asked();
+      const sentence = "지금 저장소나 메모리 서비스를 읽지 못해 확인을 적용하지 못했습니다. 아무것도 바꾸지 않았습니다. 잠시 후 다시 눌러 주세요.";
+
+      // The memory service does not answer.
+      s.fake.failNext(new MemoryUnavailableError("down", "network"), { op: "list" });
+      const down = await s.confirm({ repo: s.repo, branch: "main" }).expect(503);
+      expect(down.body.error).toBe(sentence);
+      expect(down.body.error).not.toMatch(/pi-gateway/i);
+      s.unchanged("confirm");
+
+      // No git token: the repository cannot be synced.
+      s.store.setGitToken(s.owner.id, null);
+      expect((await s.confirm({ repo: s.repo, branch: "main" }).expect(503)).body.error).toBe(sentence);
+      s.unchanged("confirm");
+
+      s.store.setGitToken(s.owner.id, "test-token");
+      await s.confirm({ repo: s.repo, branch: "main" }).expect(200);
+      expect(s.store.listVaultDeletes(s.owner.id)).toEqual(["raw/theirs-too.md", "wiki/theirs.md"]);
+    });
+
+    it("a press while something else holds the owner's write queue waits, then applies", async () => {
+      const s = await asked();
+      let open!: () => void;
+      const gate = new Promise<void>((resolve) => (open = resolve));
+      const busy = withVaultWriteLock(s.store, s.owner.id, () => gate); // a tool call, a cutover, a rollback
+      let status: number | null = null;
+      const pressed = s.confirm({ repo: s.repo, branch: "main" }).then((res) => {
+        status = res.status;
+        return res;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(status).toBeNull();
+      s.unchanged("confirm");
+
+      open();
+      await busy;
+      const res = await pressed;
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(s.store.getPersonalVault(s.owner.id)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+      expect(s.store.listVaultDeletes(s.owner.id)).toEqual(["raw/theirs-too.md", "wiki/theirs.md"]);
+    });
   });
 });
 
@@ -537,7 +627,7 @@ describe("POST /api/me/personal-vault/mirror-recheck", () => {
     store.setGitToken(owner.id, "test-token");
     expect((await owner.agent.post("/api/me/personal-vault/mirror-recheck").expect(202)).body).toEqual({ started: true });
     await whenVaultMigrationIdle(store);
-    expect(store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: "confirm", mirrorReplaceAll: false });
+    expect(store.getPersonalVault(owner.id)).toMatchObject({ mirrorHold: "confirm" });
 
     // `confirm` is the owner's decision, not something to look at again.
     expect((await owner.agent.post("/api/me/personal-vault/mirror-recheck").expect(202)).body).toEqual({ started: false });

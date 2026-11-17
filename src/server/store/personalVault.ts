@@ -41,18 +41,15 @@ export interface PersonalVaultRow {
   mirrorNotice: string | null;
   /** The mirror must not write into the connected repo while this is set (null = it may). */
   mirrorHold: VaultMirrorHold | null;
-  /** The owner's one-shot "make the repository equal to the service": the next pass also deletes repository vault notes the ledger does not name. */
-  mirrorReplaceAll: boolean;
 }
 
 /**
  * What a mirror pass reports. On `ok`:
  * - `seq` = the row's `mirrorSeq` the pass started from (omit: dirty is cleared unconditionally);
- * - `notice` = this pass's notice — omitted or null clears the stored one;
- * - `replacedAll: true` = the pass carried out `mirrorReplaceAll`, which is cleared with the record.
+ * - `notice` = this pass's notice — omitted or null clears the stored one.
  */
 export type VaultMirrorResult =
-  | { ok: true; seq?: number; notice?: string | null; replacedAll?: boolean }
+  | { ok: true; seq?: number; notice?: string | null }
   | { ok: false; error: string };
 
 /** A stored mirror error or notice is a short code or sentence, never a transcript. */
@@ -69,11 +66,10 @@ interface PersonalVaultDbRow {
   mirror_error: string | null;
   mirror_notice: string | null;
   mirror_hold_state: string | null;
-  mirror_replace_all: number;
 }
 
 const SELECT =
-  "SELECT user_id, migrated_at, source_repo, source_commit, mirror_dirty, mirror_seq, mirror_synced_at, mirror_error, mirror_notice, mirror_hold_state, mirror_replace_all FROM personal_vaults";
+  "SELECT user_id, migrated_at, source_repo, source_commit, mirror_dirty, mirror_seq, mirror_synced_at, mirror_error, mirror_notice, mirror_hold_state FROM personal_vaults";
 
 function toRow(row: PersonalVaultDbRow): PersonalVaultRow {
   return {
@@ -88,7 +84,6 @@ function toRow(row: PersonalVaultDbRow): PersonalVaultRow {
     mirrorNotice: row.mirror_notice,
     // Anything unknown reads as the state that asks the owner — never as "no hold".
     mirrorHold: row.mirror_hold_state === null ? null : row.mirror_hold_state === "checking" ? "checking" : "confirm",
-    mirrorReplaceAll: row.mirror_replace_all === 1,
   };
 }
 
@@ -143,9 +138,8 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
      * The outcome of a mirror pass. `ok` stamps `mirrorSyncedAt`, clears the
      * error, stores the pass's notice (none = cleared) and clears dirty —
      * unless the pass says which `seq` it started from and a write was marked
-     * since (then the row stays dirty for the next pass); `replacedAll` also
-     * clears the one-shot `mirrorReplaceAll`. A failure stores the error and
-     * leaves everything else (dirty, notice, replace-all) as it is.
+     * since (then the row stays dirty for the next pass). A failure stores the
+     * error and leaves everything else (dirty, notice) as it is.
      */
     recordVaultMirror(userId: string, result: VaultMirrorResult): void {
       if (result.ok) {
@@ -154,11 +148,10 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
           .prepare(
             `UPDATE personal_vaults
              SET mirror_synced_at = ?, mirror_error = NULL, mirror_notice = ?,
-                 mirror_dirty = CASE WHEN ? IS NULL OR mirror_seq = ? THEN 0 ELSE mirror_dirty END,
-                 mirror_replace_all = CASE WHEN ? = 1 THEN 0 ELSE mirror_replace_all END
+                 mirror_dirty = CASE WHEN ? IS NULL OR mirror_seq = ? THEN 0 ELSE mirror_dirty END
              WHERE user_id = ?`,
           )
-          .run(now(), notice, result.seq ?? null, result.seq ?? null, result.replacedAll === true ? 1 : 0, userId);
+          .run(now(), notice, result.seq ?? null, result.seq ?? null, userId);
         return;
       }
       this.db
@@ -175,11 +168,6 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
     setVaultMirrorHold(userId: string, state: VaultMirrorHold | null): void {
       const stored = !state ? null : state === "checking" ? "checking" : "confirm";
       this.db.prepare("UPDATE personal_vaults SET mirror_hold_state = ? WHERE user_id = ?").run(stored, userId);
-    }
-
-    /** Arm (or disarm) the one-shot "make the repository equal to the service". No-op for an owner without a row. */
-    setVaultMirrorReplaceAll(userId: string, replaceAll: boolean): void {
-      this.db.prepare("UPDATE personal_vaults SET mirror_replace_all = ? WHERE user_id = ?").run(replaceAll ? 1 : 0, userId);
     }
 
     /** Every owner whose vault home is `memory`, by user id. */
@@ -204,6 +192,18 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
            ON CONFLICT(user_id, path) DO NOTHING`,
         )
         .run(userId, path, now(), userId);
+    }
+
+    /**
+     * {@link recordVaultDelete} for many paths in one transaction: the owner's
+     * confirmation that the repository's own vault notes — the ones the service
+     * does not hold, as they were when they pressed — may be removed from it.
+     */
+    recordVaultDeletes(userId: string, paths: string[]): void {
+      if (paths.length === 0) return;
+      this.db.transaction(() => {
+        for (const path of paths) this.recordVaultDelete(userId, path);
+      })();
     }
 
     /** The owner's ledger: the paths Noah deleted and the mirror has not settled yet, in path order. */

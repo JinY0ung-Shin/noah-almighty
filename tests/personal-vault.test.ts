@@ -182,8 +182,11 @@ describe("personal vault store", () => {
       mirrorError: null,
       mirrorNotice: null,
       mirrorHold: null,
-      mirrorReplaceAll: false,
     });
+    // The row is exactly these fields: the one-shot "replace all" flag is gone.
+    expect(Object.keys(row!).sort()).toEqual(
+      ["migratedAt", "mirrorDirty", "mirrorError", "mirrorHold", "mirrorNotice", "mirrorSeq", "mirrorSyncedAt", "sourceCommit", "sourceRepo", "userId"],
+    );
     expect(Number.isNaN(Date.parse(row!.migratedAt))).toBe(false);
     expect(vaultHomeOf(store, ownerId)).toBe("memory");
     expect(vaultHomeOf(store, otherId)).toBe("repo");
@@ -205,8 +208,8 @@ describe("personal vault store", () => {
     store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: "abc123" });
     store.markVaultMirrorDirty(ownerId);
     store.setVaultMirrorHold(ownerId, "confirm");
-    store.setVaultMirrorReplaceAll(ownerId, true);
     store.recordVaultDelete(ownerId, "wiki/gone.md");
+    store.recordVaultDeletes(ownerId, ["raw/confirmed.md", "wiki/confirmed.md"]);
     store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain2", sourceCommit: null });
     expect(store.getPersonalVault(ownerId)).toMatchObject({
       sourceRepo: "owner/brain2",
@@ -214,9 +217,8 @@ describe("personal vault store", () => {
       mirrorDirty: true,
       mirrorSeq: 1,
       mirrorHold: "confirm",
-      mirrorReplaceAll: true,
     });
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/gone.md"]);
+    expect(store.listVaultDeletes(ownerId)).toEqual(["raw/confirmed.md", "wiki/confirmed.md", "wiki/gone.md"]);
     expect(store.listPersonalVaults()).toHaveLength(1);
   });
 
@@ -296,24 +298,6 @@ describe("personal vault store", () => {
     expect(store.getPersonalVault(ownerId)?.mirrorNotice).toHaveLength(300);
   });
 
-  it("replace-all is one shot: armed by its setter, cleared only by the pass that carried it out", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    expect(store.getPersonalVault(ownerId)?.mirrorReplaceAll).toBe(false);
-    store.setVaultMirrorReplaceAll(ownerId, true);
-    expect(store.getPersonalVault(ownerId)?.mirrorReplaceAll).toBe(true);
-    // A pass that started before the owner pressed, and a failed one, leave it armed.
-    store.recordVaultMirror(ownerId, { ok: true });
-    store.recordVaultMirror(ownerId, { ok: true, replacedAll: false });
-    store.recordVaultMirror(ownerId, { ok: false, error: "x" });
-    expect(store.getPersonalVault(ownerId)?.mirrorReplaceAll).toBe(true);
-    store.recordVaultMirror(ownerId, { ok: true, replacedAll: true });
-    expect(store.getPersonalVault(ownerId)?.mirrorReplaceAll).toBe(false);
-    store.setVaultMirrorReplaceAll(ownerId, true);
-    store.setVaultMirrorReplaceAll(ownerId, false);
-    expect(store.getPersonalVault(ownerId)?.mirrorReplaceAll).toBe(false);
-  });
-
   it("keeps a deletion ledger per owner: one entry per path, in path order, cleared by path", () => {
     const { store, ownerId, otherId } = setup();
     store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
@@ -334,6 +318,58 @@ describe("personal vault store", () => {
     // A mirror pass leaves the ledger alone: the mirror clears what it settled, by path.
     store.recordVaultMirror(ownerId, { ok: true });
     expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "wiki/b.md"]);
+  });
+
+  it("records many deletions at once (the owner's confirmation): one entry per path, whatever was there before", () => {
+    const { store, ownerId, otherId } = setup();
+    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
+    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
+    store.recordVaultDelete(ownerId, "wiki/b.md");
+    store.recordVaultDelete(otherId, "wiki/theirs.md");
+
+    // The repository-only vault paths as they were at the press — one already in the ledger, one named twice.
+    store.recordVaultDeletes(ownerId, ["wiki/z.md", "wiki/b.md", "CLAUDE.md", "raw/2026/src.md", "wiki/z.md"]);
+    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "raw/2026/src.md", "wiki/b.md", "wiki/z.md"]);
+    // Pressing again with the same list changes nothing, and nothing leaks to another owner.
+    store.recordVaultDeletes(ownerId, ["wiki/z.md", "wiki/b.md", "CLAUDE.md", "raw/2026/src.md", "wiki/z.md"]);
+    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "raw/2026/src.md", "wiki/b.md", "wiki/z.md"]);
+    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
+
+    // An empty list is nothing to record.
+    store.recordVaultDeletes(ownerId, []);
+    expect(store.listVaultDeletes(ownerId)).toHaveLength(4);
+
+    // They are ordinary ledger entries: the mirror settles them by path, and they die with the row.
+    store.clearVaultDeletes(ownerId, ["CLAUDE.md", "wiki/z.md"]);
+    expect(store.listVaultDeletes(ownerId)).toEqual(["raw/2026/src.md", "wiki/b.md"]);
+    store.clearPersonalVault(ownerId);
+    expect(store.listVaultDeletes(ownerId)).toEqual([]);
+    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
+  });
+
+  it("many deletions are recorded together or not at all", () => {
+    const { store, ownerId } = setup();
+    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
+    store.recordVaultDelete(ownerId, "wiki/before.md");
+    // The third path cannot be stored (not a string): the two before it must not stay behind.
+    const paths = ["wiki/a.md", "wiki/b.md", {} as unknown as string, "wiki/c.md"];
+    expect(() => store.recordVaultDeletes(ownerId, paths)).toThrow();
+    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/before.md"]);
+    // The ledger is still usable after the failed press.
+    store.recordVaultDeletes(ownerId, ["wiki/a.md", "wiki/b.md", "wiki/c.md"]);
+    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/a.md", "wiki/b.md", "wiki/before.md", "wiki/c.md"]);
+  });
+
+  it("many deletions for an owner without a row record nothing — not even for a later cutover", () => {
+    const { store, ownerId, otherId } = setup();
+    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
+    store.recordVaultDeletes(ownerId, ["wiki/a.md", "wiki/b.md", "CLAUDE.md"]);
+    store.recordVaultDeletes(ownerId, []);
+    expect(store.listVaultDeletes(ownerId)).toEqual([]);
+    expect(store.listVaultDeletes(otherId)).toEqual([]);
+    expect(store.getPersonalVault(ownerId)).toBeNull();
+    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
+    expect(store.listVaultDeletes(ownerId)).toEqual([]);
   });
 
   it("the ledger exists only with the row: nothing is recorded for home repo, and going back to repo empties it", () => {
@@ -359,8 +395,8 @@ describe("personal vault store", () => {
     store.recordVaultMirror(ownerId, { ok: true });
     store.recordVaultMirror(ownerId, { ok: false, error: "x" });
     store.setVaultMirrorHold(ownerId, "confirm");
-    store.setVaultMirrorReplaceAll(ownerId, true);
     store.recordVaultDelete(ownerId, "wiki/a.md");
+    store.recordVaultDeletes(ownerId, ["wiki/b.md", "wiki/c.md"]);
     store.clearVaultDeletes(ownerId, ["wiki/a.md"]);
     expect(store.getPersonalVault(ownerId)).toBeNull();
     expect(store.listPersonalVaults()).toEqual([]);
@@ -428,13 +464,12 @@ describe("personal vault store", () => {
       mirrorError: "repo has uncommitted changes",
       mirrorNotice: null,
       mirrorHold: "confirm",
-      mirrorReplaceAll: false,
     });
-    expect(second.store.getPersonalVault(free)).toMatchObject({ mirrorHold: null, mirrorNotice: null, mirrorReplaceAll: false });
+    expect(second.store.getPersonalVault(free)).toMatchObject({ mirrorHold: null, mirrorNotice: null });
     // Everything new works on the migrated table, including an insert that never names the old column.
     second.store.recordVaultDelete(held, "wiki/a.md");
     expect(second.store.listVaultDeletes(held)).toEqual(["wiki/a.md"]);
-    second.store.recordVaultMirror(held, { ok: true, notice: "n", replacedAll: true });
+    second.store.recordVaultMirror(held, { ok: true, notice: "n" });
     const later = second.store.createUser({ username: "later", displayName: "Later", password: "password123" }).id;
     second.store.setPersonalVaultMemory(later, { sourceRepo: "later/brain", sourceCommit: null });
     expect(second.store.getPersonalVault(later)?.mirrorHold).toBeNull();
@@ -464,6 +499,98 @@ describe("personal vault store", () => {
     expect(last.store.getPersonalVault(free)?.mirrorHold).toBe("checking");
     expect(last.store.getPersonalVault(held)?.mirrorHold).toBeNull();
     last.store.close();
+  });
+
+  it("a database that still has the retired mirror_replace_all column opens, reads and writes as any other", () => {
+    const dataDir = path.join(getTempDir(), "replace-all-build");
+    const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    const columns = (db: Database.Database) => (db.prepare("PRAGMA table_info(personal_vaults)").all() as { name: string }[]).map((c) => c.name);
+
+    // A database of this build has no such column.
+    const first = boot();
+    const dbPath = first.config.dbPath;
+    const armed = first.store.createUser({ username: "armed", displayName: "Armed", password: "password123" }).id;
+    const plain = first.store.createUser({ username: "plain", displayName: "Plain", password: "password123" }).id;
+    first.store.close();
+    let db = new Database(dbPath);
+    expect(columns(db)).not.toContain("mirror_replace_all");
+
+    // The table as the earlier build of this branch created it: the one-shot flag, armed for one owner.
+    db.exec(`
+      DROP TABLE personal_vaults;
+      CREATE TABLE personal_vaults (
+        user_id TEXT PRIMARY KEY,
+        migrated_at TEXT NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_commit TEXT,
+        mirror_dirty INTEGER NOT NULL DEFAULT 0,
+        mirror_seq INTEGER NOT NULL DEFAULT 0,
+        mirror_synced_at TEXT,
+        mirror_error TEXT,
+        mirror_notice TEXT,
+        mirror_hold_state TEXT,
+        mirror_replace_all INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const insert = db.prepare(
+      "INSERT INTO personal_vaults (user_id, migrated_at, source_repo, source_commit, mirror_dirty, mirror_seq, mirror_synced_at, mirror_notice, mirror_hold_state, mirror_replace_all) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    insert.run(armed, "2026-11-17T00:00:00.000Z", "armed/brain", "abc123", 1, 7, "2026-11-17T01:00:00.000Z", "2 repository notes are not in the memory service", null, 1);
+    insert.run(plain, "2026-11-17T00:00:00.000Z", "plain/brain", null, 0, 0, null, null, "checking", 0);
+    db.close();
+
+    // It opens (twice: migrate() runs on every boot) and every row reads as a row of this build.
+    for (let i = 0; i < 2; i += 1) {
+      const { store } = boot();
+      expect(store.getPersonalVault(armed)).toEqual({
+        userId: armed,
+        migratedAt: "2026-11-17T00:00:00.000Z",
+        sourceRepo: "armed/brain",
+        sourceCommit: "abc123",
+        mirrorDirty: true,
+        mirrorSeq: 7,
+        mirrorSyncedAt: "2026-11-17T01:00:00.000Z",
+        mirrorError: null,
+        mirrorNotice: "2 repository notes are not in the memory service",
+        mirrorHold: null,
+      });
+      expect(store.listPersonalVaults().map((row) => [row.userId, row.mirrorHold]).sort()).toEqual(
+        [
+          [armed, null],
+          [plain, "checking"],
+        ].sort(),
+      );
+      store.close();
+    }
+
+    // Every write works on it — also a cutover of a NEW owner, whose insert never names the old column.
+    const { store } = boot();
+    const later = store.createUser({ username: "later", displayName: "Later", password: "password123" }).id;
+    store.setPersonalVaultMemory(later, { sourceRepo: "later/brain", sourceCommit: null });
+    expect(store.getPersonalVault(later)).toMatchObject({ sourceRepo: "later/brain", mirrorDirty: false, mirrorHold: null });
+    store.setPersonalVaultMemory(armed, { sourceRepo: "armed/brain2", sourceCommit: null });
+    store.markVaultMirrorDirty(armed);
+    store.setVaultMirrorHold(armed, "confirm");
+    store.recordVaultDeletes(armed, ["wiki/a.md", "wiki/b.md"]);
+    store.recordVaultMirror(armed, { ok: true, seq: 8 });
+    expect(store.getPersonalVault(armed)).toMatchObject({
+      sourceRepo: "armed/brain2",
+      mirrorDirty: false,
+      mirrorSeq: 8,
+      mirrorNotice: null,
+      mirrorHold: "confirm",
+    });
+    expect(store.listVaultDeletes(armed)).toEqual(["wiki/a.md", "wiki/b.md"]);
+    // The flag the earlier build armed is neither read nor acted on: a pass recorded ok deleted nothing by it.
+    store.clearPersonalVault(plain);
+    expect(store.deleteUser(later)).toBe(true);
+    expect(store.listPersonalVaults().map((row) => row.userId)).toEqual([armed]);
+    store.close();
+
+    // Nothing wrote the retired column either: it is as the earlier build left it.
+    db = new Database(dbPath);
+    expect(db.prepare("SELECT mirror_replace_all AS flag FROM personal_vaults WHERE user_id = ?").get(armed)).toEqual({ flag: 1 });
+    db.close();
   });
 
   it("personalVaultMode defaults to repo and stores only repo | memory", () => {

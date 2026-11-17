@@ -17,6 +17,7 @@ import {
 import fsSync from "node:fs";
 import type { AppConfig, KnowledgeRepoTreeEntry } from "./types.js";
 import type { Store } from "./store.js";
+import { isPersonalVaultPath } from "./personalVault.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +47,11 @@ export interface KnowledgeRepoContext {
   // that build this context don't break.
   externalToken?: string | null;
   config: AppConfig;
+  // The hold on the copy of this owner's vault notes (`personal_vaults.mirrorHold`), read when asked;
+  // absent / null = none (also: the vault lives in the repository). While it is set NO push of this clone
+  // may change a vault path — `commitAndPushLocked` stops it (`VAULT_ON_HOLD_PUSH`). `knowledgeRepoContextFor`
+  // sets it, so every caller that pushes this clone is covered without knowing about holds.
+  vaultHold?: () => "checking" | "confirm" | null;
   // Subset of plugin names to load when the repo is a marketplace of many;
   // null means "load all". Mirrors a plugin's `selected`.
   selected: string[] | null;
@@ -666,12 +672,49 @@ export const VAULT_MIRROR_COMMIT_MESSAGE = `Mirror vault notes from Noah
 
 A copy of the notes Noah keeps for this avatar. Change them through the avatar: an edit made here is overwritten by the next mirror.`;
 
+/**
+ * The message of the error that stops a push of a knowledge clone because it
+ * would change vault paths while the copy of the owner's vault notes is on
+ * hold: `VAULT_ON_HOLD_PUSH:<checking|confirm>:<up to five paths[, and N more]>`.
+ * Nothing was committed, rebased or pushed: the clone is as it was before the
+ * call, the pending changes still uncommitted in its working tree.
+ */
+export const VAULT_ON_HOLD_PUSH = "VAULT_ON_HOLD_PUSH:";
+const VAULT_ON_HOLD_NAMED = 5;
+
+/** The parts of a {@link VAULT_ON_HOLD_PUSH} error, or null for any other failure. */
+export function vaultHoldPushStop(error: unknown): { hold: "checking" | "confirm"; files: string } | null {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const stopped = /^VAULT_ON_HOLD_PUSH:(checking|confirm):([\s\S]*)$/.exec(message);
+  return stopped ? { hold: stopped[1] as "checking" | "confirm", files: stopped[2].trim() } : null;
+}
+
+/**
+ * While the copy of the owner's vault notes is on hold, nothing a push of this
+ * clone carries may change a vault path of the repository — with or without a
+ * conflict. A clone that could not follow a branch change still holds the
+ * previous branch's mirror commits; pushing them would put those notes onto a
+ * branch whose own notes the owner has not been asked about. Looked at before
+ * the commit (`commitAndPushClone`'s `beforePush`), so a stopped push leaves
+ * the clone exactly as it was — no commit that a later branch switch would
+ * strand on the previous local branch.
+ */
+function stopVaultPushOnHold(ctx: KnowledgeRepoContext, changed: string[] | null): void {
+  const hold = ctx.vaultHold?.();
+  if (!hold) return;
+  const held = (changed ?? []).filter((file) => isPersonalVaultPath(file));
+  if (held.length === 0) return;
+  const more = held.length > VAULT_ON_HOLD_NAMED ? `, and ${held.length - VAULT_ON_HOLD_NAMED} more` : "";
+  throw new Error(`${VAULT_ON_HOLD_PUSH}${hold}:${held.slice(0, VAULT_ON_HOLD_NAMED).join(", ")}${more}`);
+}
+
 /** What `commitAndPushClone` lets a caller add to a knowledge-repo commit (see its options). */
 interface KnowledgeCommitExtras {
   checkStaged?: (staged: string[]) => void | Promise<void>;
   vaultPaths?: (path: string) => boolean;
   afterRebase?: () => Promise<void>;
   followUpMessage?: string;
+  beforePush?: (changed: string[] | null) => void | Promise<void>;
 }
 
 /**
@@ -703,6 +746,13 @@ export async function commitAndPush(
      * edit of a vault note never blocks it. Absent = every conflict fails.
      */
     vaultPaths?: (path: string) => boolean;
+    /**
+     * A look at what the push would carry, before anything is committed: the
+     * paths the unpushed commits and the staged changes change against the
+     * remote branch (null = the branch is new there). A throw stops there; the
+     * clone is left as it was, the pending changes uncommitted.
+     */
+    beforePush?: (changed: string[] | null) => void | Promise<void>;
   } = {},
 ): Promise<boolean> {
   const repoRoot = knowledgeClonePath(ctx.userId, ctx.config);
@@ -710,7 +760,7 @@ export async function commitAndPush(
   // commit on the same working tree (git-02). Keyed by clone path, same as
   // ensureClone, and never nested under that lock (commitAndPush doesn't clone).
   return withRepoLock(repoRoot, async () => {
-    const { beforeCommit, vaultPaths } = options;
+    const { beforeCommit, vaultPaths, beforePush } = options;
     if (beforeCommit) {
       if (!(await pathExists(path.join(repoRoot, ".git")))) {
         throw new Error("NOT_CLONED");
@@ -719,6 +769,7 @@ export async function commitAndPush(
     }
     return commitAndPushLocked(ctx, message, identity, {
       ...(vaultPaths ? { vaultPaths } : {}),
+      ...(beforePush ? { beforePush } : {}),
       ...(beforeCommit ? { afterRebase: () => beforeCommit(repoRoot), followUpMessage: VAULT_MIRROR_COMMIT_MESSAGE } : {}),
     });
   });
@@ -748,6 +799,11 @@ export function commitAndPushLocked(
     log: { userId: ctx.userId, repo: ctx.repo },
     pushedMessage: "knowledge repo pushed",
     ...options,
+    // Every push of a knowledge clone passes here (the tools, skill learning, the vault mirror's own commit).
+    beforePush: async (changed) => {
+      stopVaultPushOnHold(ctx, changed);
+      await options.beforePush?.(changed);
+    },
   });
 }
 
@@ -777,6 +833,7 @@ export function knowledgeRepoContextFor(
     token: tokens.internal ?? null,
     externalToken: tokens.external ?? null,
     config,
+    vaultHold: () => store.getPersonalVault(userId)?.mirrorHold ?? null,
   };
 }
 

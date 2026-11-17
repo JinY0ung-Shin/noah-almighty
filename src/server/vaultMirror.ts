@@ -21,9 +21,9 @@
  * - A clone vault file the service lacks and the ledger does not name is NEVER
  *   deleted (a note that only exists in git, a wiped service volume): the pass
  *   still ends `synced` and leaves a NOTICE on the row with their count.
- * - The one exception is the owner's own press: with the row's one-shot
- *   `mirrorReplaceAll` set, that pass makes the repository equal to the service
- *   (unledgered vault files are deleted too) and clears the flag.
+ * - The owner's confirmation of a repository that held vault notes of its own
+ *   (`confirmVaultMirrorHold`, vaultMigration.ts) is no exception: it writes
+ *   the paths it covers INTO the ledger, as they were at the press.
  *
  * Never through a link: every file operation goes through `CloneVaultFiles`,
  * which refuses a linked or non-folder ancestor. A link sitting at a note's own
@@ -55,25 +55,25 @@ import {
   ensureCloneLocked,
   knowledgeClonePath,
   knowledgeRepoContextFor,
+  vaultHoldPushStop,
   type KnowledgeRepoContext,
 } from "./knowledgeRepo.js";
 import { marketplaceCloneUrl, pathExists, scrubGitError } from "./marketplace.js";
 import { MemoryRefusedError, MemoryUnavailableError, memoryClientFor, type MemoryClient } from "./memory/memoryClient.js";
 import { isPersonalVaultPath, normalizeVaultPath } from "./personalVault.js";
-import { originUrl, statusEntries } from "./repoGitCore.js";
+import { git, originUrl, statusEntries } from "./repoGitCore.js";
 import type { Store } from "./store.js";
 import type { AppConfig } from "./types.js";
 
 /**
  * What finalizes a pass on the row and the ledger once its commit is pushed
  * ({@link finishVaultMirror}): the `mirrorSeq` it started from, its notice,
- * the ledger entries it settled, and whether it carried out `mirrorReplaceAll`.
+ * and the ledger entries it settled.
  */
 export interface VaultMirrorPending {
   seq: number;
   notice: string | null;
   settledDeletes: string[];
-  replacedAll: boolean;
 }
 
 export type VaultMirrorOutcome =
@@ -216,7 +216,7 @@ async function lstatOrNull(target: string): Promise<Stats | null> {
  * a folder should be) is never crossed. So nothing here can read, write or
  * delete outside the clone, whatever the repository has committed.
  */
-class CloneVaultFiles {
+export class CloneVaultFiles {
   /** Folders (clone-relative) already seen to be plain during this use. */
   private readonly plain = new Set<string>();
 
@@ -364,8 +364,6 @@ interface ApplyPlan {
   wanted: string[];
   /** The owner's deletion ledger, read AFTER that listing (an entry is written before the service is asked to delete). */
   ledger: Set<string>;
-  /** The owner's one-shot "make the repository equal to the service". */
-  replaceAll: boolean;
 }
 
 interface Applied {
@@ -378,8 +376,8 @@ interface Applied {
 /**
  * Bring the clone's vault files up to the service: write every note whose
  * file differs, and delete a clone vault file the service no longer holds —
- * but only one the ledger names (Noah deleted it), or any such file under
- * `replaceAll`. The others are counted and left exactly as they are.
+ * but only one the ledger names (Noah deleted it, or the owner confirmed its
+ * removal). The others are counted and left exactly as they are.
  */
 async function applyVault(
   client: MemoryClient,
@@ -393,7 +391,7 @@ async function applyVault(
   const wantedSet = new Set(plan.wanted);
   /** A clone vault file whose note the service does not hold. */
   const settleAbsent = async (rel: string, ledger: Set<string>): Promise<void> => {
-    if (plan.replaceAll || ledger.has(rel)) {
+    if (ledger.has(rel)) {
       if (await files.remove(rel)) applied.changed += 1;
     } else if (await files.holds(rel)) {
       applied.repoOnly += 1;
@@ -439,8 +437,7 @@ const noticeOf = (applied: Applied): string | null =>
  * the ONE call that settles the row and the ledger for it. `{ ok: true }`: the
  * push went through (also when there was nothing to commit) — the row is
  * recorded synced with the pass's notice (clean unless a write arrived since),
- * the ledger entries the pass settled are cleared, and a carried-out
- * `mirrorReplaceAll` is cleared. `{ ok: false, error }`: what the commit or the
+ * and the ledger entries the pass settled are cleared. `{ ok: false, error }`: what the commit or the
  * push threw — recorded as the failure; the row stays dirty and the ledger
  * untouched, so the next pass does it again. Pass the outcome of the LAST pass
  * the commit ran (the hook runs again after a rebase). An outcome that is not
@@ -455,10 +452,57 @@ export function finishVaultMirror(
 ): void {
   if (outcome?.kind !== "synced" || !outcome.pending) return;
   if (!result.ok) {
+    // A push stopped because the copy went on hold meanwhile is not a failure of the mirror: nothing is
+    // recorded, as for a pass that finds the hold at its start. The row stays dirty for the pass after the hold.
+    if (vaultHoldPushStop(result.error)) return;
     store.recordVaultMirror(userId, { ok: false, error: vaultMirrorCommitError(result.error, knowledgeClonePath(userId, config)) });
     return;
   }
   settlePass(store, userId, outcome.pending);
+}
+
+/** How many paths one `git checkout` / `git rm` of {@link discardVaultCopyChanges} names. */
+const DISCARD_CHUNK = 200;
+
+/**
+ * Drop every uncommitted change at a vault path of the clone: back to what
+ * HEAD holds. For an owner whose vault lives in the memory service such a
+ * change is only ever the mirror's own writing (the tools never write there),
+ * left in the working tree by a pass or a commit that was stopped before its
+ * commit (`VAULT_ON_HOLD_PUSH`) — and the next pass writes it again.
+ *
+ * It has to go before the clone follows a branch change: a leftover that
+ * differs from the new branch's file makes git refuse the checkout, the look
+ * at the new branch could then never happen, and the hold that the look must
+ * end is what keeps the leftover from being committed. The caller holds the
+ * clone's repo lock. Returns how many paths were restored; a clone without a
+ * commit is left alone. Files that HEAD does not hold are removed through
+ * `CloneVaultFiles` (never through a link).
+ */
+export async function discardVaultCopyChanges(repoRoot: string): Promise<number> {
+  if (!(await pathExists(path.join(repoRoot, ".git")))) return 0;
+  try {
+    await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  } catch {
+    return 0;
+  }
+  const changed = [...new Set((await statusEntries(repoRoot)).map((entry) => entry.path))].filter((rel) => isPersonalVaultPath(rel));
+  if (changed.length === 0) return 0;
+  const { stdout } = await git(repoRoot, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]);
+  const inHead = new Set(stdout.split("\0").filter(Boolean));
+  const tracked = changed.filter((rel) => inHead.has(rel));
+  const added = changed.filter((rel) => !inHead.has(rel));
+  for (let i = 0; i < tracked.length; i += DISCARD_CHUNK) {
+    await git(repoRoot, ["--literal-pathspecs", "checkout", "HEAD", "--", ...tracked.slice(i, i + DISCARD_CHUNK)]);
+  }
+  for (let i = 0; i < added.length; i += DISCARD_CHUNK) {
+    // `-f` with `--cached` only skips git's "the staged content differs from the file and from HEAD" refusal (a
+    // new note staged by a stopped pass and written again by a later one); the working tree is not touched here.
+    await git(repoRoot, ["--literal-pathspecs", "rm", "--cached", "-f", "--quiet", "--ignore-unmatch", "--", ...added.slice(i, i + DISCARD_CHUNK)]);
+  }
+  const files = new CloneVaultFiles(repoRoot);
+  for (const rel of added) await files.remove(rel);
+  return changed.length;
 }
 
 /** Record a pushed pass: the row first, then the ledger entries it settled. */
@@ -467,7 +511,6 @@ function settlePass(store: Store, userId: string, pending: VaultMirrorPending): 
     ok: true,
     seq: pending.seq,
     notice: pending.notice,
-    ...(pending.replacedAll ? { replacedAll: true } : {}),
   });
   store.clearVaultDeletes(userId, pending.settledDeletes);
 }
@@ -507,7 +550,6 @@ async function passHoldingLock(
   if (row.mirrorHold) return done({ kind: "skipped", reason: "hold" });
   // Before the service is read: a write marked after this point keeps the row dirty.
   const seq = row.mirrorSeq;
-  const replaceAll = row.mirrorReplaceAll;
   try {
     const client = memoryClientFor(store, config);
     if (!client) {
@@ -530,7 +572,7 @@ async function passHoldingLock(
     // is written before the service is asked, so every note the listing lacks because Noah deleted it is named.
     const wanted = await listVault(client, userId);
     const ledger = store.listVaultDeletes(userId);
-    const plan: ApplyPlan = { wanted, ledger: new Set(ledger), replaceAll };
+    const plan: ApplyPlan = { wanted, ledger: new Set(ledger) };
     if (!options.locked) {
       try {
         await ensureCloneLocked(ctx, repoRoot);
@@ -546,7 +588,6 @@ async function passHoldingLock(
       notice: noticeOf(applied),
       // Settled = the entries whose note the listing did not hold. One it still held stays in the ledger.
       settledDeletes: ledger.filter((deleted) => !wantedSet.has(deleted)),
-      replacedAll: replaceAll,
     });
     if (!options.push || !owner) {
       return done({ kind: "synced", changed, seq, notice: noticeOf(applied), pending: pending() });
@@ -569,6 +610,10 @@ async function passHoldingLock(
       if (error instanceof RepoDirty || error instanceof MemoryUnavailableError || error instanceof MemoryRefusedError || error instanceof MirrorFailure) {
         throw error;
       }
+      // The copy went on hold while this pass ran (a repository change is stored outside the repo lock) and
+      // the push was stopped for it, before anything was committed: the same outcome as a pass that finds the
+      // hold at its start — nothing recorded, nothing settled. What the pass wrote stays in the working tree.
+      if (vaultHoldPushStop(error)) return done({ kind: "skipped", reason: "hold" });
       throw new MirrorFailure(vaultMirrorCommitError(error, repoRoot));
     }
     const settled = pending();

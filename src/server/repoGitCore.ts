@@ -383,6 +383,21 @@ export async function commitAndPushClone(
      */
     afterRebase?: () => Promise<void>;
     followUpMessage?: string;
+    /**
+     * A look at what this push would carry, BEFORE anything is committed,
+     * rebased or pushed: the paths that the unpushed local commits AND the
+     * staged changes change against the remote branch (the diff from their
+     * merge base to the index, after the fetch; null = the remote has no such
+     * branch yet, or HEAD is detached). A throw stops here: the clone is left
+     * exactly as it was before the call — its commits untouched, the pending
+     * changes still uncommitted (staged) in the working tree — so nothing is
+     * stranded on a local branch and a refused push can still be redirected
+     * (the branch set back). It looks once: NOT at a follow-up commit
+     * `afterRebase` makes. Histories with no common commit are compared tree
+     * to tree (then paths only the remote has are listed too). Absent =
+     * today's behaviour (and no fetch before the commit).
+     */
+    beforePush?: (changed: string[] | null) => void | Promise<void>;
   },
 ): Promise<boolean> {
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
@@ -402,27 +417,39 @@ export async function commitAndPushClone(
   // commitMsg is the value of `-m` (a discrete argv element), so it's never
   // parsed as a flag even if it starts with `-`.
   const commitMsg = options.message.trim() || options.defaultMessage;
-  if (hasChanges) {
-    if (options.checkStaged) {
-      await options.checkStaged(await stagedPaths(repoRoot));
-    }
-    await git(repoRoot, ["commit", "-m", commitMsg]);
-  } else if (branch === "HEAD" || !(await aheadOfRemote(repoRoot, branch))) {
+  if (!hasChanges && (branch === "HEAD" || !(await aheadOfRemote(repoRoot, branch)))) {
     // Clean tree and nothing stacked locally → genuinely nothing to do. (With
     // unpushed commits we fall through and push them instead of reporting "no
     // changes" until the next edit.)
     return false;
   }
+  if (hasChanges && options.checkStaged) {
+    await options.checkStaged(await stagedPaths(repoRoot));
+  }
 
   const auth = gitAuthConfig(options.url, tokenForGitUrl(options.url, options.config, options.tokens));
   // Absorb remote commits pushed since the last sync BEFORE pushing. Fetch is
   // best-effort: offline, the push below reports the real network error.
-  if (branch !== "HEAD") {
+  const fetchRemote = async (): Promise<void> => {
+    if (branch === "HEAD") return;
     try {
       await git(repoRoot, ["fetch", "origin", branch], undefined, auth);
     } catch {
       /* fall through to push */
     }
+  };
+  if (options.beforePush) {
+    // The look needs the remote as it is now, and comes before the commit: a refusal leaves no commit behind.
+    await fetchRemote();
+    await options.beforePush(branch === "HEAD" ? null : await pathsCarriedByPush(repoRoot, branch));
+  }
+  if (hasChanges) {
+    await git(repoRoot, ["commit", "-m", commitMsg]);
+  }
+  if (!options.beforePush) {
+    await fetchRemote();
+  }
+  if (branch !== "HEAD") {
     if ((await behindRemote(repoRoot, branch)) > 0) {
       await rebaseOntoRemote(repoRoot, branch, options.vaultPaths);
       if (options.afterRebase) {
@@ -442,4 +469,28 @@ export async function commitAndPushClone(
   await git(repoRoot, ["push", "origin", `HEAD:${branch}`], undefined, auth);
   logger.info({ ...options.log, branch }, options.pushedMessage);
   return true;
+}
+
+/**
+ * The paths a push would bring to `origin/<branch>`: what the unpushed local
+ * commits and the staged changes change — the diff from the merge base of the
+ * remote branch and HEAD to the INDEX (everything is staged by then) — or null
+ * when the remote has no such branch. A rename counts as both of its paths.
+ * Histories with no common commit (and a clone without a commit) are compared
+ * against the remote branch's tree.
+ */
+async function pathsCarriedByPush(repoRoot: string, branch: string): Promise<string[] | null> {
+  try {
+    await git(repoRoot, ["rev-parse", "--verify", "--quiet", `origin/${branch}`]);
+  } catch {
+    return null;
+  }
+  let base = `origin/${branch}`;
+  try {
+    base = (await git(repoRoot, ["merge-base", `origin/${branch}`, "HEAD"])).stdout.trim() || base;
+  } catch {
+    /* no common commit: the remote branch's tree */
+  }
+  const { stdout } = await git(repoRoot, ["diff", "--name-only", "-z", "--no-renames", "--cached", base]);
+  return stdout.split("\0").filter(Boolean);
 }

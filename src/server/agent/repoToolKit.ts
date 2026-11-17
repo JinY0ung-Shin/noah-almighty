@@ -12,6 +12,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { vaultHoldPushStop } from "../knowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { MemoryRefusedError, MemoryUnavailableError } from "../memory/memoryClient.js";
 import { VAULT_HOME_CHANGED, isPersonalVaultPath, normalizeVaultPath, type MemoryVault } from "../personalVault.js";
@@ -99,6 +100,33 @@ export function commitFailureMessage(error: unknown): string {
     );
   }
   return `Commit/push failed: ${detail}\nCheck the write permission of the token (GIT_TOKEN) and the remote branch protection settings. Do not work around this with Bash \`git push\` — the shell has no git credentials.`;
+}
+
+/**
+ * The refusal for a push of the knowledge clone that was stopped because it
+ * would change vault notes while their copy is on hold (`VAULT_ON_HOLD_PUSH`,
+ * knowledgeRepo.ts) — null for any other failure. The general message's
+ * token/branch-protection hint would name the wrong cause. `after` = what
+ * gets the kept changes out once the hold has ended: for `commit` the same
+ * call again; for a tool that wrote files first (learning or unlinking a
+ * skill) a commit of the repository — repeating THAT call would find its own
+ * leftover ("already exists", "nothing to unlink").
+ */
+export function vaultHoldPushRefusal(error: unknown, after: "again" | "commit" = "again"): string | null {
+  const stopped = vaultHoldPushStop(error);
+  if (!stopped) return null;
+  const wait =
+    stopped.hold === "confirm"
+      ? "the connected repository (or branch) holds vault notes of its own, and nothing there is changed until the owner confirms in 설정 → 지식·플러그인 → 지식 저장소 (or connects another repository)"
+      : "Noah has not finished looking at the newly connected repository (or branch) — `mcp__system__describe_system` shows the state";
+  return (
+    `Nothing was committed or pushed: this push would change vault notes in the repository (${stopped.files}) while the repository's copy of the vault notes is ON HOLD — ${wait}. ` +
+    (after === "commit"
+      ? "What this call changed is kept, uncommitted, in the server's copy of the repository: once the hold has ended, call `mcp__repo__commit` to push it — do NOT repeat this call (it would find its own files there); tell the user that. "
+      : "The changes are kept, uncommitted, in the server's copy of the repository: do the same again once the hold has ended; tell the user that, and do not retry in a loop. ") +
+    "If the server's copy of the repository is still on a previous branch (the branch was changed while there were uncommitted changes), the look at the new branch cannot finish until that is resolved: the owner sets the branch back, has these changes committed there, and switches again. " +
+    "The notes themselves are saved in the vault. Do not work around this with Bash `git` — the shell has no git credentials."
+  );
 }
 
 /** read_file's shared error decode. */

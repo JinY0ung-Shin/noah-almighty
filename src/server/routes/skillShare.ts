@@ -9,6 +9,7 @@ import {
   commitIdentityFor,
   readFile,
   SKILL_DIR,
+  vaultHoldPushStop,
 } from "../knowledgeRepo.js";
 import {
   assertSkillShareable,
@@ -42,6 +43,14 @@ import type { SharedSkill, SharedSkillListing, User } from "../types.js";
  * The sharer's `skills/` exists but is not a plain folder (a link, even one into
  * their repo): its skills cannot be read — and must not be pruned as deleted.
  */
+/**
+ * A push of the user's knowledge repository was stopped because it would change
+ * brain notes there while their copy is on hold (`VAULT_ON_HOLD_PUSH`). Nothing
+ * was committed: the change stays, uncommitted, in the server's clone.
+ */
+const VAULT_ON_HOLD_PUSH_KO =
+  "저장소의 브레인 노트 사본이 보류 중이라 저장소에 올리지 않았습니다. 설정 → 지식·플러그인 → 지식 저장소에서 보류를 확인해 주세요. 변경은 서버 쪽 저장소 사본에 커밋되지 않은 채 남아 있으며, 보류가 끝난 뒤 아바타가 저장소를 커밋하면 함께 올라갑니다.";
+
 const SKILLS_DIR_UNREADABLE_KO =
   "공유한 아바타의 저장소에서 지금은 이 스킬을 읽을 수 없습니다(skills 폴더가 일반 폴더가 아닙니다). 공유는 그대로 유지되니, 저장소가 고쳐진 뒤 다시 시도해 주세요.";
 
@@ -341,6 +350,10 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
           apiError(res, 404, "전수받은 스킬이 아니거나 이미 연결이 끊긴 스킬입니다.");
           return;
         }
+        if (vaultHoldPushStop(error)) {
+          apiError(res, 409, VAULT_ON_HOLD_PUSH_KO);
+          return;
+        }
         apiError(res, 502, `연결을 끊지 못했습니다: ${scrubGitError(error)}`);
       }
     },
@@ -598,6 +611,10 @@ export function createSkillShareRouter({ config, store, auditAs }: RouterDeps): 
           return;
         }
         auditAs(req, "skill_learn", `@${listing.owner.username}의 ${listing.skillName} 전수 실패`, "error");
+        if (vaultHoldPushStop(error)) {
+          apiError(res, 409, VAULT_ON_HOLD_PUSH_KO);
+          return;
+        }
         apiError(res, 502, `스킬을 가져오지 못했습니다: ${scrubGitError(error)}`);
       }
     },

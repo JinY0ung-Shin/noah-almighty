@@ -338,9 +338,10 @@ part of this: it stays Noah's own local vault ([`team-brain.md`](team-brain.md))
   delete/move works per note); `exists()` reads the whole note.
 - **The row** (`personal_vaults`): provenance (`migratedAt`, `sourceRepo`, `sourceCommit`) and the mirror's
   state — `mirrorDirty` + `mirrorSeq`, `mirrorSyncedAt`, `mirrorError`, `mirrorNotice`, `mirrorHold`
-  (`"checking" | "confirm" | null`), `mirrorReplaceAll`. **The deletion ledger** (`personal_vault_deletes`:
-  `recordVaultDelete` / `listVaultDeletes` / `clearVaultDeletes`) lists the paths Noah deleted and the mirror
-  has not settled yet. `clearPersonalVault` and `deleteUser` remove both.
+  (`"checking" | "confirm" | null`). **The deletion ledger** (`personal_vault_deletes`:
+  `recordVaultDelete(s)` / `listVaultDeletes` / `clearVaultDeletes`) lists the paths Noah deleted — or the
+  owner confirmed for removal from a repository that held vault notes of its own — and the mirror has not
+  settled yet. `clearPersonalVault` and `deleteUser` remove both.
 - **The mirror is marked dirty for every change that was SENT** (`markVaultMirrorDirty`, bumping
   `mirrorSeq`), also when the answer was lost — and a lost answer marks it ONCE MORE 60 s later
   (`VAULT_LOST_ANSWER_REMARK_MS`): the service may carry the change out after a pass already read the old
@@ -455,9 +456,8 @@ The repository keeps a COPY that Noah's server writes and never reads back to de
     `repository notes not in the memory service: <count>` (`VAULT_MIRROR_NOTICE`). There is no
     empty-service guard and no error for it any more: deleting the last note reaches the repository (it is in
     the ledger), and a wiped service deletes nothing.
-  - **The one exception is the owner's own press:** with the row's one-shot `mirrorReplaceAll` set (by
-    `mirror-confirm`, below) that pass makes the repository's vault paths EQUAL to the service — unledgered
-    vault files are deleted too — and the flag is cleared with the record.
+  - **The owner's own press is no exception:** `mirror-confirm` (below) writes the repository-only vault
+    paths INTO the ledger, as they were at the press — there is no "replace everything" mode in the mirror.
 - **Never through a link:** every clone file operation of the mirror (list, write, unlink, rmdir) goes through
   one helper (`CloneVaultFiles`) whose one gate (`locate`) walks down from the clone root and crosses plain
   folders only. A WRITE below a linked folder (or a file where a folder should be) fails the pass (`path
@@ -475,10 +475,35 @@ The repository keeps a COPY that Noah's server writes and never reads back to de
   its deletion where it deleted a file both knew) and the rebase goes on; the edit stays in git history. A
   path only the REMOTE added (a rename done in git, say) is kept, not deleted, and is counted in the notice.
   **Only when the copy was just written from the service:** the `commit` tool passes `vaultPaths` as "a vault
-  path AND this commit's mirror pass ended `synced`". While the copy is on hold (`checking` / `confirm`) or
-  the pass failed, the clone's vault files are not the owner's confirmed vault, so a conflict on them stops
-  the commit like any other — otherwise the repository's notes would be replaced without the owner's press
-  while the tool says the copy was not updated. (The background pass never runs on hold.)
+  path AND this commit's mirror pass ended `synced`". When the pass FAILED (the service down), the clone's
+  vault files are not the vault's current text, so a conflict on them stops the commit like any other, with
+  a line that says to commit again once the service answers. A copy on HOLD never gets that far — see the
+  next rule. (The background pass never runs on hold.)
+  **While the copy is on hold no push changes a vault path** — also without a conflict, and for EVERY
+  pusher of the clone: the guard sits in `commitAndPushLocked` (`stopVaultPushOnHold`), which the `commit`
+  tool, skill learning / unlinking (`skillTransfer.ts`) and the mirror's own commit all go through. It reads
+  the hold through the context (`KnowledgeRepoContext.vaultHold`, set by `knowledgeRepoContextFor`) and is
+  given, by `commitAndPushClone`'s `beforePush`, the paths the unpushed commits AND the staged changes
+  change against `origin/<branch>` — merge base to the index, after the fetch and BEFORE the commit. With
+  the hold set and a vault path among them it throws `VAULT_ON_HOLD_PUSH:<hold>:<files>`. Nothing was
+  committed, rebased or pushed: the clone is as it was before the call, the pending changes uncommitted —
+  so no commit is left on a local branch that a later branch switch would strand, and the advice in the
+  refusal (set the branch back) still works after it. Surfaces: the tools answer with
+  `vaultHoldPushRefusal` (repoToolKit.ts), the skill routes with 409 and a Korean sentence; a mirror pass
+  stopped this way ends `skipped: hold` and records nothing. The hook looks once — not at a follow-up
+  commit made after a rebase (the mirror's re-apply, which does not run on hold).
+  **What a stopped pass or commit wrote stays in the working tree — and is dropped before the clone has to
+  follow a branch change** (`discardVaultCopyChanges`, called by the look at a newly connected repository
+  and by the owner's confirmation before they sync the clone): uncommitted changes at vault paths go back
+  to HEAD. For a memory-home owner those are only ever the mirror's writing (the tools never write there)
+  and the next pass writes them again. Without this a leftover that differs from the new branch's file made
+  git refuse the checkout, the look could never happen, and the hold it must end kept the leftover from
+  being committed. That is the clone a branch change could not switch (uncommitted
+  changes in the way): it still carries the previous branch's mirror commits, and its push would put those
+  notes onto a branch whose own notes the owner was not asked about. The local commits stay and go out
+  once the hold has ended; the refusal says so, and that setting the branch back lets the changes be
+  committed where they were made. A branch the remote does not have yet is not checked (nothing there to
+  change).
   **A conflict that touches any other path aborts** as before (local commits preserved,
   `REBASE_CONFLICT:<files>`), as does a rebase that cannot start. After the rebase and before the push the
   mirror hook runs AGAIN (`afterRebase`, only when a rebase actually happened) — the remote's commits may
@@ -605,8 +630,9 @@ repository change, never at boot. Until an owner is cut over they work on the re
     `run_in_progress` is retried here (a repository the avatar created with `create_repo` is connected in the
     middle of a run); every other blocker waits for the next pass.
   - Home `memory`: **the hold is set to `checking` the moment the change is stored** — before anything could
-    write into the new repository — and an armed `mirrorReplaceAll` is disarmed (it confirmed the PREVIOUS
-    repository). The queued check (`settleRepoChange`, inside the write queue and the repo lock, re-reading
+    write into the new repository — and the deletion ledger is emptied: its entries (deletions not copied
+    yet, a confirmation of the previous repository's own notes) are about the repository that WAS connected,
+    and the new one is judged afresh. The queued check (`settleRepoChange`, inside the write queue and the repo lock, re-reading
     the connected repository and branch before every change of state) then settles it:
     - **lift** (and mark dirty — the mirror continues into it): the repository holds no vault file, or every
       vault note it holds is already in the service with the same content (a repository reconnected);
@@ -631,8 +657,14 @@ repository change, never at boot. Until an owner is cut over they work on the re
     the hold is `checking`, and never changes the hold by itself.
   - **The owner's press** (`POST /api/me/personal-vault/mirror-confirm`, body `{ repo, branch }`): accepted
     only in the `confirm` state and only when the connected repository and branch are the ones the body names
-    (a stale screen confirms nothing) — every other case is 409. It lifts the hold, arms `mirrorReplaceAll`
-    and marks the mirror dirty: the next pass makes the repository's vault paths equal to the service.
+    (a stale screen confirms nothing) — every other case is 409. **The press covers the repository as it is
+    at the press** (`confirmVaultMirrorHold`): inside the write queue and the repo lock the clone is synced
+    and must be at the connected branch's tip, the service is listed, and every vault file the clone holds
+    that the service does not goes into the deletion ledger; then the hold is lifted and the mirror marked
+    dirty. The next pass removes exactly those and overwrites what both hold. A vault note that reaches the
+    repository by git AFTER the press is not in the ledger: it is kept and counted in the notice, however
+    long the pushes fail. A repository or service that cannot be read at the press changes nothing (503, the
+    hold stays `confirm`).
   - A disconnected repository changes nothing: there is nothing to import and nowhere to mirror.
 - **Deleting a user:** `deleteWiki(owner)` runs INSIDE that owner's vault write queue (`routes/admin.ts`,
   best effort, logged) — after any queued write or cutover in progress, so the wiki cannot come back; a
@@ -726,11 +758,6 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
   BEFORE the service is asked; when the deletion was then refused or failed, the entry stays (harmless while
   the service holds the note). If the service later loses the note for another reason, the next pass reads
   "Noah deleted it, the service no longer has it" and removes the repository file — git history keeps it.
-- **An armed "make the repository equal to the service" stays armed until a pass succeeds.** The owner's
-  press confirms the repository as the screen showed it; when the pushes then fail for days (an expired
-  token, uncommitted changes in the clone), a vault note added to the repository by git in the meantime is
-  deleted by the first pass that succeeds, without a notice. Git history keeps it. (Binding the press to
-  the tree it confirmed is not built.)
 - **A rebase conflict OUTSIDE the vault paths stays until someone settles it.** The local commit that
   conflicts remains in Noah's clone; every pass then fails `rebase conflict: <files>`, a rollback is refused
   (`mirror_failed`), and the avatar has no tool that settles it (its `commit` answers the same conflict with
@@ -738,9 +765,9 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
   revert the conflicting change in the repository, or fix the clone on the server. Notes stay safe in the
   service.
 - **A commit on a clone that could not switch branches pushes that clone's commits to the connected
-  branch** (older than the vault work, `alignBranch` keeps a clone it cannot switch): vault notes of the
-  previous branch that do not conflict arrive on the new branch with them, also while the copy is on hold.
-  Nothing there is replaced (a conflict stops the commit), but notes are added.
+  branch** (older than the vault work, `alignBranch` keeps a clone it cannot switch) — for every file that
+  is NOT a vault note of a held copy. The vault part is closed: see "While the copy is on hold no push
+  changes a vault path" above.
 - **Rename conflicts other than rename/rename are untested** in the vault-conflict resolution.
 - **One guard has no deterministic test:** the `O_NOFOLLOW` on opening a note file in the mirror is a second
   guard behind an `lstat` check (removing it alone fails no test, by design).
