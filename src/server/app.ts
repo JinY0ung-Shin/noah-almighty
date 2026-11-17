@@ -29,6 +29,7 @@ import { createBrowserClipboardRouter } from "./browserClipboard.js";
 import { createPiAdminProxyRouter } from "./routes/piAdminProxy.js";
 import { createMcpHttpRouter } from "./mcpHttp/endpoint.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
+import { applyTrustedProxies } from "./trustedProxies.js";
 import { piServicesFor } from "./agent/pi/piRuntime.js";
 
 export type { AppServices };
@@ -83,6 +84,12 @@ export function createApp(services = createServices()) {
   };
 
   const app = express();
+  // Forwarded headers count only from the operator's reverse proxy
+  // (NOAH_TRUSTED_PROXY_CIDRS, trustedProxies.ts); none is trusted by default.
+  applyTrustedProxies(app, config.trustedProxyCidrs);
+  if (config.trustedProxyCidrs?.length) {
+    logger.info({ trustedProxyCidrs: config.trustedProxyCidrs }, "forwarded client addresses are believed from these proxies only");
+  }
   // Noah's HTTP MCP endpoint for pi-gateway's broker (docs/architecture/pi-runtime.md).
   // Its ONLY auth is the per-run bearer token, and only under /mcp/: no session
   // cookie is read there (a cookie alone gets the same 401 as no token), and no

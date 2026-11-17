@@ -262,6 +262,11 @@ These are the invariants the project is built around. New work should reinforce 
   compose file are never edited). What `pi-setup` applies is re-applied on every `up`, so the repo stays
   its source. A pi bump moves the submodule to a PUSHED commit and re-runs the dind boot test (the `pi-bump` skill). Every upgrade
   re-runs `docker/pi/setup-host.sh` before `docker compose up`. → `pi-runtime.md`, `build-run-verify.md`.
+- **A domain name + HTTPS is the OPTIONAL nginx overlay (`docker-compose.nginx.yml`), or native TLS — never
+  both.** The overlay never touches pi's wiring (the broker still reaches Noah directly), and Noah believes
+  forwarded headers only from addresses in `NOAH_TRUSTED_PROXY_CIDRS` (default: none) — never `trust proxy:
+  true`, and never for `/mcp`'s source check. **What a proxy must do for Noah lives in ONE template**
+  (`docker/nginx/noah.conf.template`). → `build-run-verify.md` ("nginx overlay"), `server-core.md`.
 - **Project name diverges by layer:** "Noah Almighty" / `noah-almighty` / working dir `avatar-chat` — grep
   both slugs when auditing names.
 - **The user fleet is Windows/Linux only — no macOS.** Keep mac handling defensive-only and never

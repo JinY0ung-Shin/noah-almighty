@@ -1,0 +1,98 @@
+# Optional: serve Noah under ONE domain name over HTTPS, with nginx in front (README "Domain name and
+# HTTPS"). Use together with docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d --build
+#
+# nginx listens on the host's 80 and 443: 443 ends TLS and forwards to Noah, 80 (and any other host
+# name on 443) redirects to https://<NOAH_SERVER_NAME>. Noah's own port is published on the host's
+# loopback only. nginx does NOT create the name: the DNS record <NOAH_SERVER_NAME> → this host is the
+# network team's.
+#
+# Nothing about pi changes: pi's broker still reaches Noah directly over `noah-mcp`
+# (http://noah-almighty:<PORT>), so NOAH_MCP_PUBLIC_URL / NOAH_MCP_HOST_ALIAS stay UNSET — they are
+# for native TLS only. Use this overlay OR native TLS (TLS_CERT_FILE), never both.
+
+services:
+  noah-almighty:
+    # Replaces the base file's `${PORT}:${PORT}` (every interface): browsers come in through nginx.
+    ports: !override
+      - "127.0.0.1:${PORT:-48787}:${PORT:-48787}"
+    # environment wins over the .env env_file: these are fixed by this overlay's layout.
+    environment:
+      # The browser's hop is HTTPS, so the session cookie is Secure.
+      SECURE_COOKIES: "true"
+      # TLS ends in nginx; Noah's own listener stays plain HTTP on the compose networks.
+      TLS_CERT_FILE: ""
+      TLS_KEY_FILE: ""
+      # Believe X-Forwarded-For from nginx's pinned address only (src/server/trustedProxies.ts), so
+      # login/signup limits stay per person instead of one bucket for everybody behind nginx.
+      NOAH_TRUSTED_PROXY_CIDRS: ${NOAH_TRUSTED_PROXY_CIDRS:-${NOAH_NGINX_IP:-172.16.249.10}/32}
+    networks:
+      noah-front: {}
+
+  # Not `nginx`/`proxy`: a name of our own can never merge into a service pi's compose adds later.
+  noah-nginx:
+    # On a closed network set the corporate registry's copy (any official nginx image >= 1.25.1).
+    image: ${NOAH_NGINX_IMAGE:-nginx:stable-alpine}
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NOAH_SERVER_NAME: ${NOAH_SERVER_NAME:?NOAH_SERVER_NAME is required in .env (the domain name users open, e.g. noah.corp.example)}
+      NOAH_UPSTREAM: noah-almighty:${PORT:-48787}
+      # File names inside ./docker/tls on the deploy host (the certificate must carry NOAH_SERVER_NAME;
+      # a full chain: leaf first, then the intermediates).
+      NOAH_TLS_CERT: /etc/nginx/tls/${NOAH_NGINX_TLS_CERT:-fullchain.pem}
+      NOAH_TLS_KEY: /etc/nginx/tls/${NOAH_NGINX_TLS_KEY:-privkey.pem}
+      # Longer than the longest request Noah holds open (ROUTINE_RUN_TIMEOUT_MINUTES, default 30).
+      NOAH_PROXY_READ_TIMEOUT: ${NOAH_NGINX_READ_TIMEOUT:-3600s}
+      # The image's entrypoint renders the template with these variables only, and exports the
+      # container's DNS servers as NGINX_LOCAL_RESOLVERS.
+      NGINX_ENVSUBST_FILTER: "^(NOAH_|NGINX_LOCAL_RESOLVERS$$)"
+      NGINX_ENTRYPOINT_LOCAL_RESOLVERS: "1"
+    volumes:
+      - ./docker/nginx/noah.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./docker/tls:/etc/nginx/tls:ro
+    networks:
+      noah-front:
+        ipv4_address: ${NOAH_NGINX_IP:-172.16.249.10}
+    depends_on:
+      - noah-almighty
+    # The whole path, as a browser takes it: TLS under the domain name → nginx → Noah's health probe.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsk -o /dev/null --resolve "$$NOAH_SERVER_NAME:443:127.0.0.1" "https://$$NOAH_SERVER_NAME/api/bootstrap"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    # The image's files are never written: the rendered config, nginx's temp dirs and its pid file
+    # live in memory.
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d
+      - /var/cache/nginx
+      - /run
+    # The master process stays root to bind 80/443 and read the key; workers drop to `nginx`.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+      # Read a key file that another uid owns (a 0600 key left over from native TLS, owned by uid 1000).
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  # nginx ↔ Noah only. Pinned like `noah-mcp` (docker/pi/compose.override.yml), outside Docker's default
+  # address pools: Noah trusts forwarded headers from exactly nginx's address on it. NOT internal — a
+  # container on internal networks alone cannot publish 80/443.
+  noah-front:
+    ipam:
+      config:
+        - subnet: ${NOAH_NGINX_SUBNET:-172.16.249.0/24}

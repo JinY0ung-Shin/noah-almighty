@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AgentRuntime, AppConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
+import { parseTrustedProxyCidrs, TRUSTED_PROXY_CIDRS_ENV } from "./trustedProxies.js";
 import { assertProcFdPinning } from "./pinnedFs.js";
 
 function env(name: string, fallback = ""): string {
@@ -253,6 +254,8 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     egressControlUrl: env("NOAH_EGRESS_CONTROL_URL") || undefined,
     tlsCertFile: env("TLS_CERT_FILE") || undefined,
     tlsKeyFile: env("TLS_KEY_FILE") || undefined,
+    // Validated here so a typo fails the boot instead of silently trusting nobody.
+    trustedProxyCidrs: parseTrustedProxyCidrs(env(TRUSTED_PROXY_CIDRS_ENV)),
     dataDir,
     dbPath: path.join(dataDir, "noah-almighty.db"),
     sessionSecret,

@@ -259,7 +259,8 @@ docker-compose.yml FIXES `AGENT_RUNTIME=pi`, `PI_GATEWAY_URL`, `PI_GATEWAY_API_K
 `PI_DECK_SANDBOX` and the default `NOAH_MCP_PUBLIC_URL` / `NOAH_MCP_ALLOWED_CIDRS` for the container; `.env`
 cannot override the fixed ones.
 
-**Native TLS** (`TLS_CERT_FILE`/`TLS_KEY_FILE`): the broker must reach Noah by the name its certificate
+**Native TLS** (`TLS_CERT_FILE`/`TLS_KEY_FILE`; for a domain name use the nginx overlay instead —
+[Domain name and HTTPS](#domain-name-and-https)): the broker must reach Noah by the name its certificate
 carries. Set `NOAH_MCP_PUBLIC_URL=https://<that name>:<PORT>` and `NOAH_MCP_HOST_ALIAS=<that name>` (a network
 alias on `noah-mcp`), and make sure pi's broker trusts the issuing CA (`NODE_EXTRA_CA_CERTS`).
 
@@ -268,6 +269,70 @@ sentry's own threads count against the sandbox's pids cgroup, and a deck build a
 sandbox (`WaitPID ... failed: EOF`). Peaks of 340–550 were measured for one build
 ([docker/pi-sandbox/README.md](docker/pi-sandbox/README.md)), so use at least 1024; pi-gateway's
 `docs/OPERATIONS.md` §7 recommends starting at 4096. Install and register runsc as that section describes.
+
+### Domain name and HTTPS
+
+Two ways to serve Noah over HTTPS; use **one**, never both.
+
+- **nginx in front (this section):** users open `https://<domain name>` on the standard ports, plain
+  `http://` and every other address (the host's IP, an old alias) redirect there, and pi's wiring does not
+  change. This is the one to pick for a domain name.
+- **Native TLS** (`TLS_CERT_FILE`/`TLS_KEY_FILE`, [What the stack wires up](#what-the-stack-wires-up)): Noah's
+  own port speaks HTTPS, with no proxy and no redirect.
+
+`docker-compose.nginx.yml` is an overlay on the normal stack. It adds one container, `noah-nginx`, on the host's
+**80 and 443**, and republishes Noah's own port on the host's loopback only.
+
+1. **The name.** nginx does not create it: ask for the DNS record `<domain name>` → this host, and open 80 and
+   443 on the host firewall (Noah's own port no longer needs to be reachable).
+2. **The certificate.** Put the full chain (leaf first, then the intermediates) and its key into `./docker/tls`
+   on the deploy host as `fullchain.pem` and `privkey.pem` (other names: `NOAH_NGINX_TLS_CERT` /
+   `NOAH_NGINX_TLS_KEY`). The certificate must carry the domain name. The folder is git-ignored and never enters
+   an image.
+3. **`.env`:** set `NOAH_SERVER_NAME=<domain name>`. Leave `TLS_CERT_FILE`, `TLS_KEY_FILE`, `NOAH_MCP_PUBLIC_URL`
+   and `NOAH_MCP_HOST_ALIAS` **unset** (remove them when moving from native TLS): pi's broker keeps reaching
+   Noah directly at `http://noah-almighty:<PORT>`. On a closed network set `NOAH_NGINX_IMAGE` to the corporate
+   registry's copy of an official nginx image (1.25.1 or newer).
+4. **Start with both files** — on every compose command from now on, or once and for all with
+   `COMPOSE_FILE=docker-compose.yml:docker-compose.nginx.yml` in `.env`:
+   ```bash
+   docker compose -f docker-compose.yml -f docker-compose.nginx.yml up -d --build
+   docker compose -f docker-compose.yml -f docker-compose.nginx.yml ps   # noah-nginx healthy
+   ```
+   `noah-nginx`'s health check takes the whole path a browser takes (TLS under the domain name → nginx →
+   Noah), so `healthy` means the name, the certificate and the forwarding work on the host.
+5. **Renewing the certificate:** replace the two files, then
+   `docker compose -f docker-compose.yml -f docker-compose.nginx.yml exec noah-nginx nginx -s reload` (running
+   answers are not cut).
+
+What the overlay fixes by itself (`.env` cannot override them): `SECURE_COOKIES=true`, native TLS off, and
+`NOAH_TRUSTED_PROXY_CIDRS` = nginx's pinned address, so login and signup attempt limits stay **per person**
+(Noah believes `X-Forwarded-For` from that one address only; nginx overwrites the header with the address it
+saw). nginx streams answers unbuffered, adds no upload limit of its own (Noah's are the only ones), waits
+`NOAH_NGINX_READ_TIMEOUT` (default one hour) on a silent request, and answers `/mcp` with 404 — that path is for
+pi's broker, which never comes through nginx. A recreated Noah container needs no nginx restart.
+
+**Moving an existing deployment to the domain name** changes the address, so in the browser everything starts
+fresh under it; nothing on the server changes.
+
+- Everyone signs in again, and what the browser itself remembered per address (unsent drafts, panel choices)
+  starts empty.
+- **Browser bridge:** an installed extension answers only the address it was installed for. Users download the
+  zip again from Noah under the new address (it is stamped with it) or add the address by hand; for the policy
+  install channel put `https://<domain name>` into `BROWSER_BRIDGE_ORIGINS` and ship an extension release. A
+  redirect from the old address does not help the extension.
+- **External task API clients** (`/api/v1/avatar/tasks`) should move to `https://<domain name>`. The redirect
+  keeps a POST a POST (308), but a client that does not follow redirects, or does not trust the certificate's
+  issuer, fails.
+- The subnet `172.16.249.0/24` (nginx ↔ Noah) must not collide with a network the host routes to; change
+  `NOAH_NGINX_SUBNET` and `NOAH_NGINX_IP` together if it does.
+
+**A proxy of your own instead of this overlay** needs the same things from it: pass `Host` through (or send
+`X-Forwarded-Host`) and `X-Forwarded-Proto`, do not buffer responses, keep the read timeout above
+`ROUTINE_RUN_TIMEOUT_MINUTES`, allow request bodies of 50 MB, and set `SECURE_COOKIES=true` plus
+`NOAH_TRUSTED_PROXY_CIDRS=<that proxy's address>` in `.env` — and have the proxy overwrite `X-Forwarded-For`
+rather than append to what a client sent. [`docker/nginx/noah.conf.template`](docker/nginx/noah.conf.template)
+is the reference.
 
 ### Sizing pi-gateway
 
@@ -574,6 +639,8 @@ backup and quarantine).
 | --- | --- |
 | `SESSION_SECRET` | Session token hashing secret (required in production). |
 | `TRUSTED_ORIGINS` | Optional comma-separated origins (`scheme://host[:port]`, e.g. `https://noah.corp.example,http://10.1.2.3:8080`) that Noah accepts as ITS OWN address for state-changing requests. Needed only when, after an upgrade, saving and **logging in** answer 403 `다른 사이트에서 보낸 요청은 처리할 수 없습니다`: a reverse proxy in front rewrites `Host` without sending `X-Forwarded-Host`, so Noah cannot tell the browser's `Origin` is itself. The server log then has a warning `refused a state-changing request from another origin` whose `origin` field is the value to put here (compare it with `ownOrigin`, what Noah computed) — set it and restart. List only addresses that serve this Noah: a listed origin may change state with a signed-in user's session. Entries that are not a plain http(s) origin (a wildcard, a path) are ignored with a boot warning. Fixing the proxy (`X-Forwarded-Host`, or passing `Host` through) makes it unnecessary. |
+| `NOAH_TRUSTED_PROXY_CIDRS` | Optional comma-separated addresses/CIDRs of the reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` Noah believes. Unset = none: a request counts as coming from its TCP peer, so behind a proxy the whole team shares one login/signup attempt limit. `docker-compose.nginx.yml` sets it to its nginx's pinned address by itself; set it by hand only for a proxy of your own, and list only that proxy — a listed address can claim to be any client. An invalid entry stops the boot. `/mcp`'s source check never uses forwarded headers. (Not `TRUST_PROXY`: that key is pi-gateway's.) |
+| `NOAH_SERVER_NAME` / `NOAH_NGINX_TLS_CERT` / `NOAH_NGINX_TLS_KEY` / `NOAH_NGINX_IMAGE` / `NOAH_NGINX_READ_TIMEOUT` / `NOAH_NGINX_SUBNET` / `NOAH_NGINX_IP` | `docker-compose.nginx.yml` only ([Domain name and HTTPS](#domain-name-and-https)): the domain name users open (required), the certificate and key file names inside `./docker/tls` (`fullchain.pem` / `privkey.pem`), the nginx image (`nginx:stable-alpine`), how long nginx waits on a silent request (`3600s`), and the nginx↔Noah network with nginx's pinned address on it (`172.16.249.0/24`, `172.16.249.10`). |
 | `SECURE_COOKIES` | `true` to mark the session cookie `Secure` (HTTPS-only). Leave unset for plain-HTTP deployments (e.g. local docker-compose) or the cookie is never sent back and login fails. |
 | `AGENT_RUNTIME` | `pi` (default; every turn runs on pi-gateway — see `docs/architecture/pi-runtime.md`) or `local` (deterministic offline stub for tests). `claude` is retired and stops the boot. **Fixed to `pi` by docker-compose.yml.** |
 | `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` / `PI_GATEWAY_API_KEY_FILE` | The pi-gateway origin and its service key — inline, or a file holding only the key (trimmed). Set ONE: both, or an unreadable/empty file, stops the boot. The key is server-only (it can run turns as any user): an inline key is scrubbed from the process env after boot, a file's key never enters it. **Fixed by docker-compose.yml** (`http://gateway:8080`, the compose secret `/run/secrets/pi_gateway_api_key`; a `PI_GATEWAY_API_KEY` in `.env` would stop the boot); set them yourself only for a native run. |

@@ -21,7 +21,7 @@ Companion docs: [`DESIGN.md`](DESIGN.md) (design language), [`REFACTORING-BACKLO
 
 | Page | Read it when |
 |---|---|
-| [build-run-verify.md](architecture/build-run-verify.md) | Running or verifying anything: dev servers and ports, the lint/test/build gate and the rtk caveat, single-test-file runs, Docker + native HTTPS + per-stage CA trust, the release procedure (including the two browser-extension assets every release must attach), and the deck converter's dev venv, opt-in e2e suites and Docker smoke. |
+| [build-run-verify.md](architecture/build-run-verify.md) | Running or verifying anything: dev servers and ports, the lint/test/build gate and the rtk caveat, single-test-file runs, Docker + native HTTPS + the nginx domain-name/HTTPS overlay + per-stage CA trust, the release procedure (including the two browser-extension assets every release must attach), and the deck converter's dev venv, opt-in e2e suites and Docker smoke. |
 
 ## Server (`src/server/`)
 

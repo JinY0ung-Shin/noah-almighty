@@ -1,0 +1,68 @@
+# nginx in front of Noah: one domain name, HTTPS (docker-compose.nginx.yml, README "Domain name and
+# HTTPS"). The nginx image's entrypoint renders this file into /etc/nginx/conf.d/ at start, replacing
+# ONLY ${NOAH_*} and ${NGINX_LOCAL_RESOLVERS} (NGINX_ENVSUBST_FILTER) — nginx's own $variables stay.
+#
+# What Noah needs from a proxy, and why each line below is here:
+#   - the browser's own Host and scheme (Host, X-Forwarded-Host, X-Forwarded-Proto): Noah's same-origin
+#     gate compares them with the browser's Origin; without them every save and every login is a 403.
+#   - the client's address (X-Forwarded-For), OVERWRITTEN with the TCP peer nginx saw, never appended to
+#     what the client sent: Noah's login/signup limiters count per address (NOAH_TRUSTED_PROXY_CIDRS).
+#   - no buffering: an answer is a server-sent event stream and must reach the browser as it is written.
+#   - a long read timeout: a routine's 지금 실행 holds its request open for the whole run.
+#   - no body limit of its own: Noah's limits are the only ones (one home for them).
+
+server_tokens off;
+
+# The container's own DNS (Docker's embedded resolver), asked again every 10 s: Noah's address changes
+# when its container is recreated, and a name resolved once at start would keep pointing at the old one.
+resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+
+ssl_certificate     ${NOAH_TLS_CERT};
+ssl_certificate_key ${NOAH_TLS_KEY};
+ssl_protocols       TLSv1.2 TLSv1.3;
+ssl_session_cache   shared:noah_tls:10m;
+ssl_session_timeout 1h;
+
+# http:// → https://. 308, not 301: a redirected POST stays a POST with its body.
+server {
+    listen 80 default_server;
+    server_name _;
+    return 308 https://${NOAH_SERVER_NAME}$request_uri;
+}
+
+# https:// under any OTHER name (the host's IP address, an old alias) → the one domain name.
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name _;
+    return 308 https://${NOAH_SERVER_NAME}$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${NOAH_SERVER_NAME};
+
+    # /mcp is for pi's broker alone, and the broker reaches Noah on its own internal network — never
+    # through here. Noah's own source check refuses it too; this keeps the path off the front door.
+    location = /mcp { return 404; }
+    location ^~ /mcp/ { return 404; }
+
+    location / {
+        # A variable makes nginx resolve the name per request (through `resolver` above).
+        set $noah_upstream http://${NOAH_UPSTREAM};
+        proxy_pass $noah_upstream;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+
+        proxy_buffering         off;
+        proxy_request_buffering off;
+        proxy_read_timeout      ${NOAH_PROXY_READ_TIMEOUT};
+        proxy_send_timeout      ${NOAH_PROXY_READ_TIMEOUT};
+        client_max_body_size    0;
+    }
+}
