@@ -2,6 +2,8 @@
 // New in pi 7e8e3d6: System One "recent calls" (GET /admin/api/systemone/calls), the test button's request/answer,
 // and the "compare with BM25" switch — all through Noah's /admin proxy, with the fake LLM container answering
 // POST /v1/systemone as the decision server and a scripted owner turn calling mcp_search.
+// pi 60f4b59 turned that switch (`compare: true|false`) into `use: "always" | "half" | "never"`; `never` keeps the
+// connection stored and searches by BM25 only (section 4b).
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { FAKE, NOAH, W, check, client, fake, finish, loadState, textOf, turn } from "./e2e-common.mjs";
@@ -12,7 +14,7 @@ const member = client(state.second.cookie);
 const anon = client();
 const PANEL = { origin: NOAH, referer: `${NOAH}/admin/`, "sec-fetch-site": "same-origin", "x-admin-request": "1" };
 const QUERY = "할 일 목록에 항목 추가 todo";
-const MODEL = { baseUrl: `${FAKE}/v1`, apiKey: "", headers: {}, id: "fake-decision", compare: false };
+const MODEL = { baseUrl: `${FAKE}/v1`, apiKey: "", headers: {}, id: "fake-decision", use: "always" };
 
 // Only mcp_search's own decision requests (the admin "test" button also posts to …/systemone, with another state).
 const decisions = async () => (await (await fetch(`${FAKE}/_fake/decisions`)).json()).decisions.filter((d) => d.body?.state?.query === QUERY);
@@ -64,7 +66,7 @@ writeFileSync(`${W}/evidence/S1-mcp-search-result-bm25.txt`, base.first);
 // ---- 2. configure System One against the fake decision server ------------------------------------------
 let res = await admin.put("/admin/api/systemone", { model: MODEL }, PANEL);
 let text = await res.text();
-check("PUT /admin/api/systemone (fake decision server) → 200", res.status === 200 && JSON.parse(text).model?.id === "fake-decision" && JSON.parse(text).model?.compare === false, `${res.status} ${text}`);
+check("PUT /admin/api/systemone (fake decision server) → 200", res.status === 200 && JSON.parse(text).model?.id === "fake-decision" && JSON.parse(text).model?.use === "always", `${res.status} ${text}`);
 
 // The decision server is DOWN (500): the search falls back to BM25 and the failure is listed.
 await setDecision({ mode: "error" });
@@ -106,22 +108,37 @@ check("POST /systemone/test returns the request sent and the answer received", r
 c = await calls();
 check("…and is not added to the recent calls", c.json?.items?.length === startLength + 2, `${c.json?.items?.length} items`);
 
-// ---- 4. "compare with BM25": about half of the searches skip the decision model -------------------------
-res = await admin.put("/admin/api/systemone", { model: { ...MODEL, compare: true } }, PANEL);
+// ---- 4. use "half" (was "compare with BM25"): about half of the searches skip the decision model --------
+res = await admin.put("/admin/api/systemone", { model: { ...MODEL, use: "half" } }, PANEL);
 text = await res.text();
-check("PUT compare:true → 200, stored", res.status === 200 && JSON.parse(text).model?.compare === true, text);
+check("PUT use:\"half\" → 200, stored", res.status === 200 && JSON.parse(text).model?.use === "half", text);
 const beforeCompare = (await decisions()).length;
 const compared = await searchTurn("비교", { times: 12 });
 const askedInCompare = (await decisions()).length - beforeCompare;
 const results = compared.toolTexts(1).map((result) => result.match(/^## .+$/gm)?.[0]?.slice(3));
 const byModel = results.filter((h) => h === prefer[0]).length;
 const byBm25 = results.filter((h) => h === base.headings[0]).length;
-check("12 searches with compare on: some asked System One, some went to BM25 (random halves; all-or-nothing has p≈0.0005)", compared.ok && results.length === 12 && askedInCompare > 0 && askedInCompare < 12 && byModel === askedInCompare && byBm25 === 12 - askedInCompare, `decision requests ${askedInCompare}/12; top result = model's pick ${byModel}×, BM25's pick ${byBm25}×`);
+check("12 searches with use \"half\": some asked System One, some went to BM25 (random halves; all-or-nothing has p≈0.0005)", compared.ok && results.length === 12 && askedInCompare > 0 && askedInCompare < 12 && byModel === askedInCompare && byBm25 === 12 - askedInCompare, `decision requests ${askedInCompare}/12; top result = model's pick ${byModel}×, BM25's pick ${byBm25}×`);
 c = await calls();
 check("the recent-calls list keeps at most 20", c.json?.items?.length === Math.min(20, startLength + 2 + askedInCompare), `${c.json?.items?.length} items`);
 res = await admin.get("/admin/api/status");
 const status = await res.json();
 console.log("  status page MCP-search statistic:", JSON.stringify(status.searches ?? null));
+
+// ---- 4b. use "never" (pi 60f4b59): the connection stays stored, every search is BM25 --------------------
+res = await admin.put("/admin/api/systemone", { model: { ...MODEL, use: "never" } }, PANEL);
+text = await res.text();
+check("PUT use:\"never\" → 200, stored", res.status === 200 && JSON.parse(text).model?.use === "never", text);
+const beforeNever = (await decisions()).length;
+const never = await searchTurn("BM25만", { times: 4 });
+const neverTop = never.toolTexts(1).map((result) => result.match(/^## .+$/gm)?.[0]?.slice(3));
+check("4 searches with use \"never\": all BM25 (the baseline's top result), the decision server is not asked", never.ok && neverTop.length === 4 && neverTop.every((h) => h === base.headings[0]) && (await decisions()).length === beforeNever, `top results: ${neverTop.join(", ")}`);
+res = await admin.get("/admin/api/systemone");
+text = await res.text();
+check("…the connection is still stored (GET shows the model), and the recent calls did not grow", res.status === 200 && JSON.parse(text).model?.id === "fake-decision" && JSON.parse(text).model?.use === "never" && (await calls()).json?.items?.length === c.json?.items?.length, text.slice(0, 200));
+res = await admin.put("/admin/api/systemone", { model: { ...MODEL, compare: true } }, PANEL);
+text = await res.text();
+console.log(`  (recorded, not judged) PUT with the old field compare:true → ${res.status} ${text.slice(0, 160)}`);
 
 // ---- 5. System One removed again → BM25, the list stops growing -----------------------------------------
 const lengthBefore = c.json?.items?.length;

@@ -44,8 +44,9 @@ services:
     build: *pi-node-builder
 
   # pi's memory service keeps one markdown wiki per owner. Noah's server is its only caller in this stack:
-  # it joins a network only the two are on, so Noah gains no route to sandboxd or the broker and no
-  # sandbox (they have no network at all) can reach the service. It is NOT registered in pi's broker.
+  # it joins a network only the two are on, so Noah gains no route into pi's internal network (sandboxd
+  # stays out of reach; the broker it already shares noah-mcp with) and no sandbox (they have no network
+  # at all) can reach the service. It is NOT registered in pi's broker.
   memory:
     networks:
       noah-memory: {}
