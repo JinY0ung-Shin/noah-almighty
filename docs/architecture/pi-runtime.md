@@ -779,7 +779,8 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
 - **Memory service** — pi's `memory` service (the home of personal vaults that were moved out of their
-  repositories) joins `noah-memory`, an INTERNAL network only it and Noah are on; Noah reads it through the
+  repositories) joins `noah-memory`, an INTERNAL network only it and Noah are on (it stays on pi's own
+  internal `control` too, as pi's compose puts it; sandboxes have no network at all); Noah reads it through the
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
