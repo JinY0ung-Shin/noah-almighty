@@ -215,10 +215,12 @@ export function createPersonalVaultRouter(deps: RouterDeps): Router {
   );
 
   // What the settings tab shows an owner. `mirror` is null only while the
-  // vault lives in the repository (there is no mirror then).
+  // vault lives in the repository (there is no mirror then). `serviceConfigured`
+  // false = this server has no memory service: for an owner in `memory` nothing
+  // of the brain works and the copy loop does not run, whatever `mirror` says.
   router.get("/api/me/personal-vault", requireAuth(store), (req: AuthenticatedRequest, res) => {
     const row = store.getPersonalVault(req.user!.id);
-    res.json({ home: row ? "memory" : "repo", mirror: mirrorOf(row) });
+    res.json({ home: row ? "memory" : "repo", mirror: mirrorOf(row), serviceConfigured: serviceConfigured() });
   });
 
   // The owner asks for the look at their newly connected repository to run

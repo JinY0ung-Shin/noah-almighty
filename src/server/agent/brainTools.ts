@@ -71,6 +71,14 @@ const NO_REPO =
 const NO_VAULT =
   "Your knowledge repository has no `wiki/` vault yet (it predates the second-brain layout). Run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing files), then capture notes with the `brain-ingest` skill and retry. Do not use Bash — use the repo tools.";
 
+/**
+ * `NO_VAULT` for an owner whose vault lives in the memory service. An empty
+ * wiki there is either a vault nobody wrote yet or a service that lost its
+ * data — and only the second must not be answered by starting over.
+ */
+const NO_VAULT_IN_SERVICE =
+  "Your second brain holds no `wiki/` note (it lives in the memory service, not in the repository). If nothing was ever captured, run the `brain-migrate` skill ONCE to create the vault skeleton, then capture notes with the `brain-ingest` skill and retry. If notes existed before, do NOT recreate them: the memory service may have lost its data — tell the owner to report it to an admin (the knowledge repository still holds the last copy of the notes). Do not use Bash — use the repo tools.";
+
 /** What a `get_note` of a vault note that is not there answers (the clone words a missing file as an invalid path). */
 const NO_SUCH_NOTE =
   "No such note in your second brain. Check the path with mcp__brain__search or mcp__repo__list_files.";
@@ -237,7 +245,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   const searchPersonalVault = async (vault: MemoryVault, args: { query: string; limit?: number }) => {
     try {
       const result = await vault.search(args.query, args.limit);
-      if (result.kind === "no_vault") return text(NO_VAULT, true);
+      if (result.kind === "no_vault") return text(NO_VAULT_IN_SERVICE, true);
       const partial = unscannedNote(result.unscanned, "personal");
       if (result.hits.length === 0) {
         return text(

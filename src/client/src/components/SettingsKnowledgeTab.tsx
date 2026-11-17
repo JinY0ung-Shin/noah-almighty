@@ -273,13 +273,9 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
     const { user: u } = await api<{ user: User }>("/api/me/knowledge-repo/selected", { method: "PUT", body: JSON.stringify({ selected: next }) });
     replaceState({ user: u });
   }
-  async function requestRepoHelp(request: "commit" | "conflict"): Promise<void> {
+  async function requestRepoHelp(): Promise<void> {
     try {
-      await openSeededChat(
-        request === "commit"
-          ? "지식 저장소에 아직 커밋하지 않은 변경이 있어. 무엇이 바뀌었는지 확인하고 커밋·푸시해줘."
-          : "지식 저장소를 푸시하다가 충돌이 났어. 원격 저장소와 무엇이 겹치는지 확인하고 정리해서 푸시해줘.",
-      );
+      await openSeededChat("지식 저장소에 아직 커밋하지 않은 변경이 있어. 무엇이 바뀌었는지 확인하고 커밋·푸시해줘.");
     } catch (err) {
       notify(`요청 대화를 열지 못했습니다: ${(err as Error).message}`, "warn");
     }
@@ -467,7 +463,7 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
       repo={user.knowledgeRepo || ""}
       branch={user.knowledgeBranch || null}
       onOpenAccess={() => updateState((s) => (s.settingsTab = "access"))}
-      onAskAvatar={(request) => void requestRepoHelp(request)}
+      onAskAvatar={() => void requestRepoHelp()}
     />
   );
 

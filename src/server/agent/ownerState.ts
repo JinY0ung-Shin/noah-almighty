@@ -557,7 +557,7 @@ export function vaultMirrorStateText(mirror: OwnerVaultMirrorState, repoConnecte
     return (
       "CHECKING — a repository (or branch) was just connected or changed, and Noah has not looked at it yet: it writes nothing into it until it has. " +
       "There is nothing to confirm and nothing for you or the owner to do — the check runs by itself, and the copy starts once the repository is known to hold no vault notes the copy would replace. " +
-      "If it stays in this state, the check could not finish — the repository could not be read (no usable `GIT_TOKEN`, unreachable) or the memory service did not answer. Noah retries on its own about once a minute, and once what was in the way is fixed the owner can start it at once with 지금 다시 확인 in 설정 → 지식·플러그인 → 지식 저장소 (브레인 노트 보관) — so report it instead of waiting; you have no tool for it. " +
+      "If it stays in this state, the check could not finish — the repository could not be read (no usable `GIT_TOKEN`, unreachable) or the memory service did not answer. Noah keeps retrying on its own (about once a minute for the first half hour, then every ten minutes), an admin sees what is in the way in the admin's 개인 브레인 이전 table, and once it is fixed the owner can start it at once with 지금 다시 확인 in 설정 → 지식·플러그인 → 지식 저장소 (브레인 노트 보관) — so report it instead of waiting; you have no tool for it. " +
       "Meanwhile notes keep being saved in the memory service, and `mcp__repo__commit` still pushes the other repository files." +
       oneWay
     );

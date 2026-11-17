@@ -4,7 +4,7 @@ import path from "node:path";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
-import { MemoryUnavailableError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { MemoryUnavailableError, memoryClientFor, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { memoryVaultFor } from "../src/server/personalVault.js";
 import { cutoverVault, onKnowledgeRepoChanged, whenVaultMigrationIdle } from "../src/server/vaultMigration.js";
 import { syncVaultMirror } from "../src/server/vaultMirror.js";
@@ -39,9 +39,16 @@ beforeEach(() => {
 
 type App = ReturnType<typeof createApp>;
 
+/** A server with the memory service configured (the in-process fake stands in for it), or — `fake: null` — without one. */
 function boot(options: { fake?: FakeMemoryClient | null } = {}) {
-  const services = createServices({ dataDir: path.join(getTempDir(), "data"), agentRuntime: "local", sessionSecret: "test" });
   const fake = options.fake === undefined ? createFakeMemoryClient() : options.fake;
+  const services = createServices({
+    dataDir: path.join(getTempDir(), "data"),
+    agentRuntime: "local",
+    sessionSecret: "test",
+    // What PI_MEMORY_URL + PI_MEMORY_API_KEY_FILE give a real server. Never dialled: the installed fake wins.
+    ...(fake ? { memory: { url: "http://memory.invalid:7090", apiKey: "test-key" } } : {}),
+  });
   if (fake) setMemoryClientForTests(services.store, fake);
   return { app: createApp(services), store: services.store, config: services.config, fake: fake as FakeMemoryClient };
 }
@@ -114,7 +121,7 @@ describe("personal-vault routes — who may call them", () => {
     expect(store.getPersonalVaultMode()).toBe("repo");
 
     const mine = await member.agent.get("/api/me/personal-vault").expect(200);
-    expect(mine.body).toEqual({ home: "repo", mirror: null });
+    expect(mine.body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
   });
 });
 
@@ -302,7 +309,7 @@ describe("POST /api/admin/personal-vaults/:userId/rollback", () => {
       ["success", `personal vault of ${owner.id} moved back to the repository`],
       ["error", `rollback of ${owner.id} refused: home_mismatch`],
     ]);
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
 
     // … and the reverse: a stale "되돌리기" for an owner who is on the repository (a leftover copy is there).
     fake.seed(owner.id, "wiki/left.md", "left\n");
@@ -389,7 +396,7 @@ describe("the owner's own view and the mirror confirmation", () => {
     connect(store, owner.id, "brain", VAULT);
 
     // Home `repo`: no mirror.
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
 
     await cutoverVault(store, config, owner.id);
     store.recordVaultMirror(owner.id, { ok: true, notice: "2 repository notes are not in the memory service" });
@@ -398,6 +405,7 @@ describe("the owner's own view and the mirror confirmation", () => {
     const row = store.getPersonalVault(owner.id)!;
     expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({
       home: "memory",
+      serviceConfigured: true,
       mirror: {
         dirty: false,
         syncedAt: row.mirrorSyncedAt,
@@ -460,6 +468,48 @@ describe("the owner's own view and the mirror confirmation", () => {
     store.setVaultMirrorHold(owner.id, "confirm");
     await confirm({ repo: remote, branch: "main" }).expect(409);
     await confirm({ repo: remote, branch: null }).expect(200);
+  });
+});
+
+describe("GET /api/me/personal-vault says whether this server has a memory service at all", () => {
+  it("serviceConfigured: true with a memory config, false without — whatever the owner's home is", async () => {
+    const configured = boot();
+    expect(configured.config.memory).toBeDefined();
+    await mkUser(configured.app, configured.store, "admin");
+    const owner = await mkUser(configured.app, configured.store, "owner");
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    connect(configured.store, owner.id, "brain", VAULT);
+    await cutoverVault(configured.store, configured.config, owner.id);
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toMatchObject({ home: "memory", serviceConfigured: true });
+    // The same answer as the admin view's.
+    const admin = request.agent(configured.app);
+    await admin.post("/api/auth/login").send({ username: "admin", password: "password123" }).expect(200);
+    expect((await admin.get("/api/admin/personal-vaults").expect(200)).body.serviceConfigured).toBe(true);
+  });
+
+  it("the criterion is the admin view's — a memory client for this server — not the config block by itself", async () => {
+    // A client is installed (as a test double is), but the config carries no `memory` block.
+    const services = createServices({ dataDir: path.join(getTempDir(), "data"), agentRuntime: "local", sessionSecret: "test" });
+    expect(services.config.memory).toBeUndefined();
+    setMemoryClientForTests(services.store, createFakeMemoryClient());
+    const app = createApp(services);
+    const admin = await mkUser(app, services.store, "admin");
+    expect((await admin.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect((await admin.agent.get("/api/admin/personal-vaults").expect(200)).body.serviceConfigured).toBe(true);
+  });
+
+  it("false on a server without one — also for an owner whose row still says `memory`", async () => {
+    const bare = boot({ fake: null });
+    expect(bare.config.memory).toBeUndefined();
+    expect(memoryClientFor(bare.store, bare.config)).toBeNull(); // really no client: neither configured nor installed
+    const admin = await mkUser(bare.app, bare.store, "admin");
+    const owner = await mkUser(bare.app, bare.store, "owner");
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: false });
+    // Moved while the service was configured; this server was then started without it.
+    bare.store.setPersonalVaultMemory(owner.id, { sourceRepo: "x", sourceCommit: null });
+    const mine = await owner.agent.get("/api/me/personal-vault").expect(200);
+    expect(mine.body).toMatchObject({ home: "memory", serviceConfigured: false, mirror: { hold: null } });
+    expect((await admin.agent.get("/api/admin/personal-vaults").expect(200)).body.serviceConfigured).toBe(false);
   });
 });
 

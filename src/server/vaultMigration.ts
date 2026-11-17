@@ -514,6 +514,33 @@ async function inspectCloneState(ctx: KnowledgeRepoContext, repoRoot: string, ur
   return { head, blockers };
 }
 
+/**
+ * Why the clone's tree is NOT the tree of the connected branch's remote tip
+ * (plus, at most, local commits on top of it) — null when it is. A branch the
+ * remote does not have yet has nothing a copy could replace, so it passes; so
+ * do uncommitted changes by themselves (they do not move HEAD).
+ */
+async function cloneNotAtConnectedTip(
+  ctx: KnowledgeRepoContext,
+  repoRoot: string,
+  clone: { head: string | null; blockers: string[] },
+): Promise<string | null> {
+  if (!clone.head) {
+    // No commit at all, or (the only blocker `inspectCloneState` returns without a head) another repository's clone.
+    return clone.blockers.find((entry) => !entry.startsWith(`${VAULT_BLOCKER.uncommitted}:`)) ?? null;
+  }
+  const branch = ctx.branch || (await currentBranch(repoRoot));
+  if (!branch) return blocker(VAULT_BLOCKER.syncFailed, "the clone is not on a branch");
+  if ((await aheadOfRemote(repoRoot, branch)) === null) return null;
+  if ((await behindRemote(repoRoot, branch)) > 0) {
+    return blocker(
+      VAULT_BLOCKER.syncFailed,
+      `the server's copy of the repository does not hold the newest commits of ${branch} — it could not be switched to that branch or fast-forwarded (uncommitted changes there can be in the way: have the avatar commit them)`,
+    );
+  }
+  return null;
+}
+
 // ---- The service ----------------------------------------------------------------
 
 /** A service failure as a blocker — an outage is said as an outage, a refusal with its code. */
@@ -1184,8 +1211,20 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
     const ctx = knowledgeRepoContextFor(store, userId, config);
     const client = memoryClientFor(store, config);
     if (!ctx || !client) return;
-    const unseen = (why: string) =>
+    /**
+     * The look could not happen: logged, and kept as this owner's report so the
+     * admin table names what is in the way (`keep: false` for a look that is
+     * merely outdated — the newer change has its own check and report).
+     */
+    const unseen = (why: string, keep = true) => {
       migrationLogger.warn({ userId, repo: ctx.repo, blocker: why }, "vault mirror stays on hold (checking): the newly connected repository could not be looked at");
+      if (keep) remember(store, { userId, repo: ctx.repo, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [why], state: "memory" });
+    };
+    /** The look happened: a report that only said why an earlier one could not is dropped. */
+    const seen = () => {
+      const reports = stateOf(store).reports;
+      if ((reports.get(userId)?.blockers.length ?? 0) > 0) reports.delete(userId);
+    };
     const target = cloneTarget(ctx);
     if ("blocker" in target) {
       unseen(target.blocker);
@@ -1196,7 +1235,7 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
       /** True (and logged) when this check is about a repository that is no longer the connected one. */
       const outdated = () => {
         const why = contextBlocker(store, userId, ctx);
-        if (why) unseen(why);
+        if (why) unseen(why, false);
         return why !== null;
       };
       if (outdated()) return;
@@ -1206,11 +1245,20 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
         return;
       }
       const clone = await inspectCloneState(ctx, repoRoot, url);
+      // The tree about to be judged must be the connected branch's: a clone that could not be switched or
+      // fast-forwarded (uncommitted changes in the way) still shows the PREVIOUS branch, and judging that
+      // would lift the hold — or ask about the wrong notes — for a branch nobody looked at.
+      const elsewhere = await cloneNotAtConnectedTip(ctx, repoRoot, clone);
+      if (elsewhere) {
+        unseen(elsewhere);
+        return;
+      }
       const scan = await scanCloneVault(repoRoot);
       const lift = () => {
         if (outdated()) return;
         store.setVaultMirrorHold(userId, null);
         store.markVaultMirrorDirty(userId);
+        seen();
       };
       if (scan.notes.length === 0 && scan.blockers.length === 0) {
         lift();
@@ -1223,6 +1271,7 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
           lift();
         } else if (!outdated()) {
           store.setVaultMirrorHold(userId, "confirm");
+          seen();
           migrationLogger.info({ userId, repo: ctx.repo }, "vault mirror on hold (confirm): the connected repository holds vault notes of its own; the owner must confirm");
         }
         return;
@@ -1268,13 +1317,21 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
   });
 }
 
-/** How the follow-up of a repository change is retried while it cannot finish (a run in progress, a repository that cannot be looked at). */
-const repoChangeRetry = { delayMs: 60_000, attempts: 30 };
+/**
+ * How the follow-up of a repository change is retried while it cannot finish (a
+ * run in progress, a repository that cannot be looked at): `attempts` times
+ * every `delayMs`. A cutover then waits for the next pass; the look at a
+ * repository on hold (`checking`) never gives up — it goes on every
+ * `slowDelayMs`, because nothing else would end that hold while the mode is
+ * `repo` and no admin runs a pass.
+ */
+const repoChangeRetry = { delayMs: 60_000, attempts: 30, slowDelayMs: 10 * 60_000 };
 
 /** Tests: shorten (or restore, with no argument) the retry of a repository change's follow-up. */
-export function setVaultCutoverRetryForTests(options: { delayMs?: number; attempts?: number } = {}): void {
+export function setVaultCutoverRetryForTests(options: { delayMs?: number; attempts?: number; slowDelayMs?: number } = {}): void {
   repoChangeRetry.delayMs = options.delayMs ?? 60_000;
   repoChangeRetry.attempts = options.attempts ?? 30;
+  repoChangeRetry.slowDelayMs = options.slowDelayMs ?? 10 * 60_000;
 }
 
 function cancelRepoChangeRetry(store: Store, userId: string): void {
@@ -1284,12 +1341,12 @@ function cancelRepoChangeRetry(store: Store, userId: string): void {
 }
 
 /** Run `again` for this owner after the retry delay (one pending retry per owner; never keeps the process alive). */
-function retryRepoChange(store: Store, userId: string, again: () => void): void {
+function retryRepoChange(store: Store, userId: string, again: () => void, delayMs = repoChangeRetry.delayMs): void {
   cancelRepoChangeRetry(store, userId);
   const timer = setTimeout(() => {
     stateOf(store).retries.delete(userId);
     again();
-  }, repoChangeRetry.delayMs);
+  }, delayMs);
   timer.unref?.();
   stateOf(store).retries.set(userId, timer);
 }
@@ -1319,8 +1376,10 @@ function cutoverAfterRepoChange(store: Store, config: AppConfig, userId: string,
 /**
  * Check the newly connected repository of an owner in `memory`
  * (`settleRepoChange`). A check that could not finish leaves the hold at
- * `checking`; it is retried here a bounded number of times (and by every
- * pass), so a passing obstacle does not leave the owner waiting for an admin.
+ * `checking`; it is retried here for as long as the hold is `checking` — about
+ * once a minute at first, then every ten minutes — and by every pass, so the
+ * owner never waits for an admin. The timers live in this process: after a
+ * restart `resumeVaultMirrorChecks` starts them again.
  */
 function settleAfterRepoChange(store: Store, config: AppConfig, userId: string, attempt: number): void {
   void enqueue(store, async () => {
@@ -1328,13 +1387,36 @@ function settleAfterRepoChange(store: Store, config: AppConfig, userId: string, 
       await settleRepoChange(store, config, userId);
     } catch (error) {
       migrationLogger.warn({ userId, err: error }, "vault mirror stays on hold (checking): the newly connected repository could not be checked");
+      // The memory service not answering in the middle of the look is named in the admin table like the
+      // obstacles the look itself reports; anything else is in the log only.
+      if (error instanceof MemoryUnavailableError || error instanceof MemoryRefusedError) {
+        const repo = store.getKnowledgeRepo(userId).repo;
+        if (repo && store.getPersonalVault(userId)?.mirrorHold === "checking") {
+          remember(store, { userId, repo, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [serviceBlocker(error)], state: "memory" });
+        }
+      }
     }
-    if (store.getPersonalVault(userId)?.mirrorHold === "checking" && attempt + 1 < repoChangeRetry.attempts) {
-      retryRepoChange(store, userId, () => settleAfterRepoChange(store, config, userId, attempt + 1));
+    if (store.getPersonalVault(userId)?.mirrorHold === "checking") {
+      const delayMs = attempt + 1 < repoChangeRetry.attempts ? repoChangeRetry.delayMs : repoChangeRetry.slowDelayMs;
+      retryRepoChange(store, userId, () => settleAfterRepoChange(store, config, userId, attempt + 1), delayMs);
     }
   }).catch((error: unknown) => {
     migrationLogger.warn({ userId, err: error }, "vault migration: the check after a repository change could not run");
   });
+}
+
+/**
+ * Boot: every hold left at `checking` gets its look (and its retries) again —
+ * the retry timers of the process that set the hold are gone. Returns how many.
+ */
+export function resumeVaultMirrorChecks(store: Store, config: AppConfig): number {
+  let resumed = 0;
+  for (const row of store.listPersonalVaults()) {
+    if (row.mirrorHold !== "checking" || stateOf(store).retries.has(row.userId)) continue;
+    settleAfterRepoChange(store, config, row.userId, 0);
+    resumed += 1;
+  }
+  return resumed;
 }
 
 /**

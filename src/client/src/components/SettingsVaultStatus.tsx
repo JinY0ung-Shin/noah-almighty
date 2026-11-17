@@ -186,8 +186,8 @@ export interface SettingsVaultStatusProps {
   branch: string | null;
   /** Opens 권한·연결 (where the Git token is set). */
   onOpenAccess: () => void;
-  /** Opens a chat with the avatar, seeded with a request to commit the repository or to settle its conflict. */
-  onAskAvatar: (request: "commit" | "conflict") => void;
+  /** Opens a chat with the avatar, seeded with a request to commit the repository. (A push conflict is not offered: the avatar has no tool that settles one.) */
+  onAskAvatar: (request: "commit") => void;
 }
 
 const stateHeadingId = "vault-status-heading";
@@ -226,6 +226,13 @@ export default function SettingsVaultStatus({ status, repo, branch, onOpenAccess
           {loading ? "확인 중…" : "상태 새로 고침"}
         </button>
       </div>
+      {!vault.serviceConfigured ? (
+        // The server has no memory service: whatever the copy's last state says below, nothing of the brain works now.
+        <p className="error-note" role="alert">
+          이 서버에 메모리 서비스가 연결되어 있지 않습니다. 브레인 노트를 읽거나 쓸 수 없고 저장소 사본도 올라가지 않습니다. 관리자에게 알려
+          주세요. 노트는 메모리 서비스에 그대로 있습니다.
+        </p>
+      ) : null}
       {repoConnected ? (
         <p>
           브레인 노트는 메모리 서비스에 보관되고, 연결한 저장소에는 그 사본이 올라갑니다. 대상은 저장소 맨 위의 CLAUDE.md와 wiki/, raw/ 안의
@@ -244,8 +251,8 @@ export default function SettingsVaultStatus({ status, repo, branch, onOpenAccess
           </span>
           <span className="muted">
             이 상태가 계속되면 서버가 저장소를 읽지 못하고 있는 것입니다. Git 토큰이 유효한지, 저장소 주소에 접근할 수 있는지 확인한 뒤 ‘지금
-            다시 확인’을 눌러 주세요. 누르지 않아도 서버가 약 1분마다 다시 확인합니다. 그래도 풀리지 않으면 관리자에게 알려 주세요(막힌
-            이유가 관리자 화면에 나옵니다).
+            다시 확인’을 눌러 주세요. 누르지 않아도 서버가 계속 다시 확인합니다(처음 30분은 약 1분마다, 그 뒤로는 10분마다). 그래도 풀리지
+            않으면 관리자에게 알려 주세요(막힌 이유가 관리자 화면에 나옵니다).
           </span>
           <span className="vault-status-actions">
             <button className="ghost-sm" type="button" disabled={recheckBusy} onClick={() => void status.recheck()}>
@@ -288,10 +295,6 @@ export default function SettingsVaultStatus({ status, repo, branch, onOpenAccess
           ) : failure === "repo_dirty" ? (
             <button className="linkish small" type="button" onClick={() => onAskAvatar("commit")}>
               아바타에게 커밋 요청
-            </button>
-          ) : failure === "conflict" ? (
-            <button className="linkish small" type="button" onClick={() => onAskAvatar("conflict")}>
-              아바타에게 충돌 정리 요청
             </button>
           ) : failure === "rejected" ? (
             <span className="muted">위의 ‘새로고침’으로 저장소를 다시 가져오면 다음 시도에 올라갑니다.</span>

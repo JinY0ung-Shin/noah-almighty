@@ -474,6 +474,11 @@ The repository keeps a COPY that Noah's server writes and never reads back to de
   paths, the local side — the service's content — is kept (`keepLocalSide`: its text where it has the file,
   its deletion where it deleted a file both knew) and the rebase goes on; the edit stays in git history. A
   path only the REMOTE added (a rename done in git, say) is kept, not deleted, and is counted in the notice.
+  **Only when the copy was just written from the service:** the `commit` tool passes `vaultPaths` as "a vault
+  path AND this commit's mirror pass ended `synced`". While the copy is on hold (`checking` / `confirm`) or
+  the pass failed, the clone's vault files are not the owner's confirmed vault, so a conflict on them stops
+  the commit like any other — otherwise the repository's notes would be replaced without the owner's press
+  while the tool says the copy was not updated. (The background pass never runs on hold.)
   **A conflict that touches any other path aborts** as before (local commits preserved,
   `REBASE_CONFLICT:<files>`), as does a rebase that cannot start. After the rebase and before the push the
   mirror hook runs AGAIN (`afterRebase`, only when a rebase actually happened) — the remote's commits may
@@ -611,9 +616,17 @@ repository change, never at boot. Until an owner is cut over they work on the re
       cutover (same blockers) and the hold is lifted;
     - **stays `checking`**: the repository could not be looked at or the import was blocked (no token,
       unreachable, the service down, a blocker) — or the owner connected yet another repository meanwhile,
-      which has its own check queued.
-  - **Retries:** both follow-ups are retried every 60 s, at most 30 times (`repoChangeRetry`), and every
-    migration pass re-checks every mirror still `checking`. The owner can ask for the look again NOW
+      which has its own check queued. **A clone that is not at the connected branch's remote tip counts as
+      "could not be looked at"** (`cloneNotAtConnectedTip`: behind `origin/<branch>` after the sync — a
+      branch change whose `git checkout` was refused by uncommitted changes leaves the clone on the PREVIOUS
+      branch, and judging that tree would lift the hold for a branch nobody saw). A branch the remote does
+      not have yet passes; uncommitted changes alone pass. What was in the way is kept as the owner's report
+      (state `memory`, the blocker), so the admin table names it; a later look that settles drops it.
+  - **Retries:** the cutover follow-up is retried every 60 s, at most 30 times (`repoChangeRetry`). The look
+    at a repository on hold never gives up while the hold is `checking`: every 60 s for those 30 attempts,
+    then every 10 minutes (`slowDelayMs`) — with the mode on `repo` no pass would ever end the hold. The
+    timers are in process; `resumeVaultMirrorChecks` (boot, `index.ts`) starts the look again for every row
+    left `checking`. Every migration pass re-checks them too. The owner can ask for the look again NOW
     (`POST /api/me/personal-vault/mirror-recheck`, the settings card's 지금 다시 확인): it does nothing unless
     the hold is `checking`, and never changes the hold by itself.
   - **The owner's press** (`POST /api/me/personal-vault/mirror-confirm`, body `{ repo, branch }`): accepted
@@ -633,7 +646,7 @@ repository change, never at boot. Until an owner is cut over they work on the re
   | `POST /api/admin/personal-vaults/mode` | admin | `{ mode }` → `{ mode, started }`; `memory` starts a pass, refused 409 with no service configured | `set_personal_vault_mode` |
   | `POST /api/admin/personal-vaults/run` | admin | 202 `{ started }` (false when one is running; audited only when it started); 409 while the mode is `repo` or no service is configured | `personal_vault_run` |
   | `POST /api/admin/personal-vaults/:userId/rollback` | admin | body `{ expect: "memory" \| "repo" }` (400 without it) → `{ ok: true }`; 409 with the Korean reason when refused, also for a home that is not the expected one. The audit row says which of the two happened, with the quarantine counts | `personal_vault_rollback` |
-  | `GET /api/me/personal-vault` | owner | `{ home, mirror }` (`mirror` null for home `repo`) | — |
+  | `GET /api/me/personal-vault` | owner | `{ home, mirror, serviceConfigured }` (`mirror` null for home `repo`; `serviceConfigured` false = no memory service on this server — the settings card says so above whatever the copy's last state was) | — |
   | `POST /api/me/personal-vault/mirror-recheck` | owner | 202 `{ started }` (false unless the hold is `checking`) | — |
   | `POST /api/me/personal-vault/mirror-confirm` | owner | body `{ repo, branch }` → `{ ok: true }`; 409 otherwise | `personal_vault_mirror_confirm` |
 
@@ -713,6 +726,21 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
   BEFORE the service is asked; when the deletion was then refused or failed, the entry stays (harmless while
   the service holds the note). If the service later loses the note for another reason, the next pass reads
   "Noah deleted it, the service no longer has it" and removes the repository file — git history keeps it.
+- **An armed "make the repository equal to the service" stays armed until a pass succeeds.** The owner's
+  press confirms the repository as the screen showed it; when the pushes then fail for days (an expired
+  token, uncommitted changes in the clone), a vault note added to the repository by git in the meantime is
+  deleted by the first pass that succeeds, without a notice. Git history keeps it. (Binding the press to
+  the tree it confirmed is not built.)
+- **A rebase conflict OUTSIDE the vault paths stays until someone settles it.** The local commit that
+  conflicts remains in Noah's clone; every pass then fails `rebase conflict: <files>`, a rollback is refused
+  (`mirror_failed`), and the avatar has no tool that settles it (its `commit` answers the same conflict with
+  "reconcile it manually"). The settings card says so and no longer offers to ask the avatar. Ways out:
+  revert the conflicting change in the repository, or fix the clone on the server. Notes stay safe in the
+  service.
+- **A commit on a clone that could not switch branches pushes that clone's commits to the connected
+  branch** (older than the vault work, `alignBranch` keeps a clone it cannot switch): vault notes of the
+  previous branch that do not conflict arrive on the new branch with them, also while the copy is on hold.
+  Nothing there is replaced (a conflict stops the commit), but notes are added.
 - **Rename conflicts other than rename/rename are untested** in the vault-conflict resolution.
 - **One guard has no deterministic test:** the `O_NOFOLLOW` on opening a note file in the mirror is a second
   guard behind an `lstat` check (removing it alone fails no test, by design).

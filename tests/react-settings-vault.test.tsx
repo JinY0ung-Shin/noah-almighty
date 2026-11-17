@@ -238,14 +238,27 @@ describe("vault home `memory`: the block and the copy's state", () => {
     expect(screen.getByRole("button", { name: "권한·연결 탭에서 Git 토큰 설정" })).toBeTruthy();
   });
 
-  it("failed: a conflict in the repository, with a way to ask the avatar", async () => {
+  it("failed: a conflict in the repository — it names who can settle it and does NOT send the user to the avatar", async () => {
     vault = memory({ dirty: true, error: "rebase conflict: skills/a/SKILL.md" });
     await open();
 
     expect(line()).toBe(
-      "사본을 올리지 못했습니다 — 저장소에 새로 올라온 커밋과 이 서버가 아직 올리지 못한 커밋이 같은 파일을 고쳐서 사본을 올리지 못했습니다. 아바타에게 저장소 충돌 정리를 요청해 주세요. (상세: skills/a/SKILL.md)",
+      "사본을 올리지 못했습니다 — 저장소에 새로 올라온 커밋과 이 서버가 아직 올리지 못한 커밋이 같은 파일을 고쳐서 사본을 올리지 못했습니다. 브레인 노트가 아닌 파일의 충돌이라 자동으로 정리되지 않고, 아바타도 풀 수 없습니다. 저장소에서 겹친 파일의 변경을 되돌려 올리거나, 관리자에게 서버 쪽 저장소 사본 정리를 요청해 주세요. (상세: skills/a/SKILL.md)",
     );
-    expect(screen.getByRole("button", { name: "아바타에게 충돌 정리 요청" })).toBeTruthy();
+    // The avatar's commit tool answers the same conflict with "reconcile it manually": no button leads there.
+    expect(screen.queryByRole("button", { name: /아바타에게/ })).toBeNull();
+  });
+
+  it("a server without a memory service says so, whatever the copy's last state was", async () => {
+    vault = { ...memory({ dirty: false, syncedAt: "2026-11-17T01:00:00.000Z" }), serviceConfigured: false };
+    await open();
+    expect(block()!.querySelector('[role="alert"]')!.textContent).toContain("이 서버에 메모리 서비스가 연결되어 있지 않습니다.");
+  });
+
+  it("an answer that does not say whether the service is configured (an older server) shows no such warning", async () => {
+    vault = memory({ dirty: false, syncedAt: "2026-11-17T01:00:00.000Z" });
+    await open();
+    expect(block()!.textContent).not.toContain("메모리 서비스가 연결되어 있지 않습니다");
   });
 
   it("failed: the memory service could not be used", async () => {
@@ -340,7 +353,7 @@ describe("a newly connected repository that the server has not looked at yet (`c
     const state = block()!.querySelector(".vault-status-state")!;
     expect(state.textContent).toContain(`${CHECKING} · 이 저장소에 이미 브레인 노트가 있는지 살펴보고 있습니다. 확인이 끝날 때까지 저장소에는 아무것도 올리지 않습니다.`);
     expect(state.textContent).toContain(
-      "이 상태가 계속되면 서버가 저장소를 읽지 못하고 있는 것입니다. Git 토큰이 유효한지, 저장소 주소에 접근할 수 있는지 확인한 뒤 ‘지금 다시 확인’을 눌러 주세요. 누르지 않아도 서버가 약 1분마다 다시 확인합니다. 그래도 풀리지 않으면 관리자에게 알려 주세요(막힌 이유가 관리자 화면에 나옵니다).",
+      "이 상태가 계속되면 서버가 저장소를 읽지 못하고 있는 것입니다. Git 토큰이 유효한지, 저장소 주소에 접근할 수 있는지 확인한 뒤 ‘지금 다시 확인’을 눌러 주세요. 누르지 않아도 서버가 계속 다시 확인합니다(처음 30분은 약 1분마다, 그 뒤로는 10분마다). 그래도 풀리지 않으면 관리자에게 알려 주세요(막힌 이유가 관리자 화면에 나옵니다).",
     );
     // Nothing was found yet, so nothing can be confirmed: no warning, no destructive button.
     expect(block()!.querySelector(".vault-status-hold")).toBeNull();

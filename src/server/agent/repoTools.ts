@@ -366,7 +366,11 @@ async function commitWithVaultMirror(
         }
         if (pass.last.kind === "synced") pass.changed += pass.last.changed;
       },
-      vaultPaths: isPersonalVaultPath,
+      // A conflict on a vault note is settled for the vault's text ONLY when the copy was just written from
+      // the service. While the copy is on hold (or the pass failed) the clone's vault files are NOT the
+      // owner's confirmed vault — settling for them would replace the repository's notes without their
+      // press — so such a conflict stops the commit like any other.
+      vaultPaths: (file) => pass.last?.kind === "synced" && isPersonalVaultPath(file),
     });
     finishVaultMirror(store, c.config, c.userId, pass.last, { ok: true });
     return { committed, mirror: pass.last, changed: pass.changed };
@@ -374,6 +378,29 @@ async function commitWithVaultMirror(
     finishVaultMirror(store, c.config, c.userId, pass.last, { ok: false, error });
     throw error;
   }
+}
+
+/**
+ * What a refused commit adds for an owner whose vault lives in the memory
+ * service when the rebase conflict is on VAULT notes ("" otherwise). Such a
+ * conflict stops the commit only while the copy was not written from the
+ * service in this commit — on hold, or the pass failed — and then the general
+ * "reconcile it manually" is the wrong advice: what ends it is the owner's
+ * confirmation, the end of the check, or the service answering again.
+ */
+function vaultConflictNote(error: unknown, hold: "checking" | "confirm" | null): string {
+  const conflict = /^REBASE_CONFLICT:([\s\S]*)$/.exec(scrubGitError(error));
+  if (!conflict) return "";
+  const files = conflict[1].split(",").map((file) => file.trim()).filter(Boolean);
+  if (!files.some((file) => isPersonalVaultPath(file))) return "";
+  const lead = "\nFor the vault note(s) among those files this is NOT something to reconcile by hand: ";
+  if (hold === "confirm") {
+    return `${lead}the repository's copy of the vault notes is ON HOLD — the connected repository (or branch) holds vault notes of its own, and nothing there is replaced until the owner confirms. Tell the owner to confirm in 설정 → 지식·플러그인 → 지식 저장소 (or to connect another repository); after that the same commit goes through. The notes themselves are saved in the vault.`;
+  }
+  if (hold === "checking") {
+    return `${lead}the repository's copy of the vault notes is ON HOLD while Noah looks at the newly connected repository (or branch). Commit again once that check has ended (\`mcp__system__describe_system\` shows the state). The notes themselves are saved in the vault.`;
+  }
+  return `${lead}the copy of the vault notes could not be refreshed from the memory service in this commit (\`mcp__system__describe_system\` shows why). Commit again once it can — the vault's text then settles the conflict. The notes themselves are saved in the vault.`;
 }
 
 /**
@@ -764,7 +791,8 @@ export function buildRepoTools(
           );
           return text(`Committed and pushed the changes: ${c.repo}${shares}${mirrorNote}`);
         } catch (error) {
-          return text(commitFailureMessage(error), true);
+          const note = vault() ? vaultConflictNote(error, store.getPersonalVault(c.userId)?.mirrorHold ?? null) : "";
+          return text(`${commitFailureMessage(error)}${note}`, true);
         }
       },
     ),

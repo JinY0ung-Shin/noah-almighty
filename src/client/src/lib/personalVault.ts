@@ -65,6 +65,8 @@ export function normalizeVaultMirror(raw: unknown): VaultMirrorState | null {
 export interface MyPersonalVault {
   home: VaultHome;
   mirror: VaultMirrorState | null;
+  /** False = this server has no memory service configured (an older server that does not say counts as configured). */
+  serviceConfigured: boolean;
 }
 
 export type VaultOwnerState = "repo" | "memory" | "no_repo";
@@ -106,7 +108,7 @@ export interface AdminPersonalVaults {
 /** The answers as the screens use them: every mirror normalized (`normalizeVaultMirror`). */
 export function readMyPersonalVault(value: unknown): MyPersonalVault | null {
   if (!isMyPersonalVault(value)) return null;
-  return { home: value.home, mirror: normalizeVaultMirror(value.mirror) };
+  return { home: value.home, mirror: normalizeVaultMirror(value.mirror), serviceConfigured: (value as { serviceConfigured?: unknown }).serviceConfigured !== false };
 }
 
 export function readAdminPersonalVaults(value: unknown): AdminPersonalVaults | null {
@@ -184,7 +186,7 @@ export function vaultMirrorFailureText(raw: string): string {
     case "denied":
       return "Git 토큰으로 저장소에 올릴 권한이 없습니다. 토큰의 쓰기 권한을 확인해 주세요.";
     case "conflict":
-      return `저장소에 새로 올라온 커밋과 이 서버가 아직 올리지 못한 커밋이 같은 파일을 고쳐서 사본을 올리지 못했습니다. 아바타에게 저장소 충돌 정리를 요청해 주세요.${more}`;
+      return `저장소에 새로 올라온 커밋과 이 서버가 아직 올리지 못한 커밋이 같은 파일을 고쳐서 사본을 올리지 못했습니다. 브레인 노트가 아닌 파일의 충돌이라 자동으로 정리되지 않고, 아바타도 풀 수 없습니다. 저장소에서 겹친 파일의 변경을 되돌려 올리거나, 관리자에게 서버 쪽 저장소 사본 정리를 요청해 주세요.${more}`;
     case "sync":
       return `저장소를 가져오지 못했습니다. 저장소 주소와 Git 토큰 권한을 확인해 주세요.${more}`;
     case "not_cloned":

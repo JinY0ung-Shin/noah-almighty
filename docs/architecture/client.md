@@ -721,15 +721,20 @@ screens show what it says and ask before each step that changes where notes live
   - **`checking`** (the server has not looked at the newly connected repository yet): "연결한 저장소를
     확인하는 중입니다", NO confirm button — there is nothing to confirm. If it stays, the block says the
     server cannot read the repository and offers 지금 다시 확인 (`POST …/mirror-recheck`) and 권한·연결
-    탭에서 Git 토큰 확인; the server retries by itself about once a minute.
+    탭에서 Git 토큰 확인; the server keeps retrying by itself (about once a minute for half an hour, then every
+    ten minutes — `repoChangeRetry`).
   - **`confirm`** (the repository holds brain notes the copy would replace): the warning and 저장소의 노트를
     바꾸고 사본 올리기 → a danger `confirmAction` → `POST …/mirror-confirm` with `{ repo, branch }` — the
     repository and branch THIS screen showed, so a stale screen confirms nothing. After a refusal the block
     re-reads and shows the state as it is now.
   - **The way out sits next to the failure the SERVER reported** (nothing is predicted client-side): no
     token / no permission → 권한·연결 탭에서 Git 토큰 설정; uncommitted work in the repository → 아바타에게
-    커밋 요청 and a conflict → 아바타에게 충돌 정리 요청 (both open a seeded chat, `openSeededChat`); a
-    rejected push → the hint to use 새로고침.
+    커밋 요청 (opens a seeded chat, `openSeededChat`); a rejected push → the hint to use 새로고침. A conflict
+    (always outside the vault paths) offers NO button to the avatar — its `commit` answers the same conflict
+    with "reconcile it manually" — the text names the two ways out: revert the change in the repository, or
+    ask an admin to fix the server's clone.
+  - **`serviceConfigured: false`** (this server has no memory service): an alert above everything else in
+    the block — nothing of the brain works and no copy is made, whatever the copy's last state says.
   - **The notice** (`vaultMirrorNoticeText`): the repository copy holds N notes the memory service does not,
     nothing was deleted, they are not in the brain; a notice this file does not know is shown as it came.
 - **관리자 ▸ 시스템: `AdminPersonalVaultPanel.tsx` (개인 브레인 이전)** — the LAST card of the 시스템 tab,

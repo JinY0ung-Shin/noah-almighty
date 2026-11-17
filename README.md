@@ -411,8 +411,9 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
        empty the repository.
      - **A newly connected repository (or branch) is looked at before anything is written into it.** If it
        holds brain notes of its own, the user is asked in 설정 → 지식·플러그인 and nothing there is replaced
-       until they confirm; if Noah cannot read it (no git token, wrong address) the card says so, retries
-       about once a minute, and offers 지금 다시 확인.
+       until they confirm; if Noah cannot read it (no git token, wrong address) the card says so, keeps
+       retrying (about once a minute for half an hour, then every ten minutes; again after a restart),
+       offers 지금 다시 확인, and the admin table above names what is in the way.
      - A `.gitignore` in the repository that ignores `CLAUDE.md`, `wiki/` or `raw/` keeps the copy out of
        git without any error — do not ignore those paths.
   5. **Moving one user back** (되돌리기 in the same table): Noah first pushes the copy; only when the

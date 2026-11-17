@@ -7,6 +7,7 @@ import logger from "./logger.js";
 import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
 import { startVaultMirrorLoop } from "./vaultMirror.js";
+import { resumeVaultMirrorChecks } from "./vaultMigration.js";
 import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { retireExternalAvatars } from "./retireExternalAvatars.js";
 import { retireGroupAgents } from "./retireGroupAgents.js";
@@ -138,6 +139,9 @@ const stopAvatarTaskDispatcher = startAvatarTaskDispatcher(services);
 // vault is mirrored once now, then whichever changed. Only with a memory
 // service configured — without one no vault can live there.
 const vaultMirrorLoop = services.config.memory ? startVaultMirrorLoop(services.store, services.config) : null;
+// A mirror left on hold as `checking` (its repository was not looked at yet) is looked at again: the
+// retries of the process that set the hold ended with it.
+if (services.config.memory) resumeVaultMirrorChecks(services.store, services.config);
 
 // A rejected promise from an async Express 4 route handler is NOT routed to the
 // error middleware — it surfaces here. Log and CONTINUE: a single bad request
