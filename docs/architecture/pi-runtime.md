@@ -859,8 +859,10 @@ Noah needs from the STACK.
   like pi's other Node services (`*pi-node-builder`).
 - **`noah-memory`** (declared in the override) is `internal: true` and holds exactly two services — Noah and
   `memory`; no subnet or address is pinned (Docker picks it; nothing checks a source address here, the key
-  does). **Noah is NOT on pi's `control` network**, so it gains no route to sandboxd or the broker. It is
-  Noah's fourth network (`default`, `edge`, `noah-mcp`, `noah-memory`).
+  does). **Noah is NOT on pi's `control` network**, so the memory network gives it no route into pi's
+  internal services: sandboxd has no name on any of Noah's networks. (The broker is reachable from Noah as
+  before, over `noah-mcp`; its admin plane answers 401 without its token.) It is Noah's fourth network
+  (`default`, `edge`, `noah-mcp`, `noah-memory`).
 - **Noah's env is FIXED by `docker-compose.yml`:** `PI_MEMORY_URL: http://memory:7090` (pi's `MEMORY_PORT`)
   and `PI_MEMORY_API_KEY_FILE: /run/secrets/pi_memory_api_key_noah` — literals in `environment`, never read
   from `.env`, and no inline `PI_MEMORY_API_KEY` anywhere in the file.
@@ -874,11 +876,14 @@ Noah needs from the STACK.
   that brings the service in, as on every upgrade.
 - **No `depends_on`:** Noah does not wait for the memory service. An outage degrades the brain of moved
   owners (reported as an outage on every surface — `repo-knowledge.md`); it does not stop the app.
-- **Pin:** the service arrives with pi-gateway `e0e5b8c` (the memory service and its JSON API).
-- **NOT verified in a real stack yet:** the dind boot test has not run with this wiring. Until it does,
-  Noah → memory over `noah-memory` with the copied key (a write, a read, a search, deleting a wiki) is
-  covered only by the compose test's text pins and by unit tests against a hand-written double of the
-  service (`tests/helpers/fakeMemory.ts`).
+- **Pin:** the service arrived with pi-gateway `e0e5b8c` (the memory service and its JSON API).
+- **Seen on a real stack** (boot test at pi `60f4b59`, `96-memory.mjs`; → `build-run-verify.md`): the service
+  healthy under pi's hardening, the two-member `noah-memory` network, Noah's 0400 key copy, and — from inside
+  Noah's container with that key — every answer the client depends on (an owner without a wiki lists as
+  empty with 200, `not_found` vs `no_route`, `exists`, `stale`, `invalid_path`, search, deleting a wiki), and
+  no `memory` server in pi's broker. **Not seen there:** an owner actually moved (cutover, tools, mirror,
+  rollback) — the boot stack has no git host with a knowledge repository; that path rests on the tests
+  against the hand-written double (`tests/helpers/fakeMemory.ts`).
 - **Not sized:** the service's volume, its backup and its limits (10,000 notes / 256 MiB per wiki) are pi's
   and the operator's. Noah backs up nothing of it: the only other copy of a moved vault is its repository
   mirror.

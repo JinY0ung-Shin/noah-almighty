@@ -729,8 +729,10 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
 - **Exclusion across processes.** The per-owner write queue and the one-job-at-a-time migration are in
   process (one Noah process per instance).
 - **More than reachability in `describe_system`:** its check is one listing, not a write.
-- **A real stack.** The client is tested against a scripted `fetch` and the hand-written double; the bundled
-  stack with the real service has NOT been run yet (the pi bump's boot test is pending).
+- **A moved owner on a real stack.** The boot test (`96-memory.mjs`, `build-run-verify.md`) saw the real
+  service give the answers the client depends on, from inside Noah's container — but nobody is moved there
+  (no git host with a knowledge repository), so the cutover, the tools of a moved owner, the mirror's push
+  and a rollback are tested only against a scripted `fetch` and the hand-written double.
 
 Tests (all in the tree): `tests/memory-client.test.ts`, `tests/personal-vault.test.ts` (paths, vault, store,
 queue, ledger), `tests/vault-tools.test.ts`, `tests/vault-readers.test.ts` (tools, routes, standing memory),

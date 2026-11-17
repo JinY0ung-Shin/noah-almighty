@@ -516,6 +516,63 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   the 7-day expiry, a report over several turns or with a subagent, a session restarted by a self-heal, any turn
   with a real model (the fake's calls take milliseconds, so the model share is not a real one). After the run
   (before the new check): gateway 287 MiB, broker 312 MiB.
+  **pi `60f4b59` (2026-11-17, nine commits since `680f300`: the memory service `apps/memory` with its JSON API
+  `/wiki/<owner>/…` — `9964217`, `c813954`, `31f8166`, `93498a6`, `e0e5b8c`; the broker no longer skips its token
+  check on a %-encoded path — `6551a29`; System One's `compare` switch becomes `use: always | half | never` —
+  `60f4b59`; a cleanup — `d0a6d74`; a doc — `32a38f9`. pi's commits ran the memory service in its own tests and
+  as a single container, never in a compose stack next to a BFF that calls it; Noah's side (#84) was tested
+  against a hand-written double):** `~/.noah-work/boot-test-2026-11-17b/` on Noah `2bf962a` (the branch
+  `feat/memory-vault`: the vault feature `e0cc91d` and this pin). A first run, `…-17a` on Noah `e0cc91d` with pi
+  `e0e5b8c`, passed every step too; pi's `60f4b59` was pushed while it ran, so it was run again and only the
+  second run is named here. Every step passed: `10-accounts` 6/6, `21-admin-proxy` 11/11,
+  `24-llm-no-falcon-tier` 3/3, `23-admin-ui-assets` 3/3, `30-documents` 30/30, `31-documents-extra` 21/21,
+  `32-second-user-own` 3/3, `50-subagent` 9/9, `55-systemone` 25/25 (was 22: see below),
+  `65-shell-step-verdicts` 33/33, `71-tracing-turn` 25/25, `75-trace-stats` 37/37, `25-admin-ui-real` 48/48,
+  `85-workspace-files` 26/26, `86-mcp-files` 20/20, `87-mcp-file-args` 19/19, `88-plugin-refresh` 23/23,
+  `90-pi-validation` 22/22, `92-grep-glob` 10/10, `93-tool-call-limit` 23/23, `94-turn-timings` 13/13,
+  `80-context-usage` 19/19, `95-final-state` 1/1 (no error-level line in any service's log; it now reads the
+  memory service's log and weight too). The stack builds and starts with the new service: `memory running
+  (healthy)`, image `pi-gateway/memory:latest` built from Noah's CA-trusting Node base. The new check,
+  `96-memory.mjs` 29/29, is the service seen from where Noah stands. **The container:** `healthy
+  user=10002:10002 readonly=true capdrop=[ALL] ports=map[]`; it is on `noah-almighty_control` and
+  `noah-almighty_noah-memory` only, Noah on `default`, `edge`, `noah-mcp`, `noah-memory` (not `control`), and
+  `noah-memory` holds exactly the two containers; the broker is not on it. **Noah's side:**
+  `url=http://memory:7090 file=/run/secrets/pi_memory_api_key_noah inline=unset`, the key file `1000 400`, 44
+  bytes. **Reach from Noah's container:** `memory:7090/healthz` and `gateway:8080/healthz` answer 200,
+  `sandboxd:7070` is `ENOTFOUND`, the broker's admin plane answers 401 without its token. The broker's data
+  plane `/healthz` answers 200 — Noah and the broker have shared `noah-mcp` since the broker began calling
+  Noah's `/mcp`, so the memory network adds no route there (the override's comment said "no route to the
+  broker"; it now says what is true). **The service's answers to the requests Noah's client makes**, sent with
+  `fetch` from inside Noah's container with Noah's env and key file, for a throwaway owner id: no key → 401
+  `unauthorized`; an owner that has no wiki lists as `{"notes":[]}` with 200, also under `?prefix=raw` (a
+  folder that does not exist is not a 404 — the case the migration's "the service must be empty" check rests
+  on), and its search answers `{"hits":[],"unscanned":0}`; a missing note → 404 `not_found`, an unknown route
+  → 404 `no_route` (the two the client must tell apart); a first `PUT` of `wiki/개념/배포.md` → `created:true`
+  and a 64-hex hash, a second without a hash → 409 `exists`; the read returns the same text and hash; the
+  list is in path order (`CLAUDE.md`, then `wiki/개념/배포.md`) and `?prefix=wiki` narrows it; a search for
+  `배포` finds the note with `title`, `tags` and a snippet; a replace with the current hash → `created:false`,
+  with the old one → 409 `stale`; `wiki/.obsidian/x.md` → 400 `invalid_path`; a delete with the old hash → 409
+  `stale`, with the current one → 200, again → 404 `not_found`; `DELETE /wiki/<owner>` → `{"deleted":true}` and
+  the list is empty after it. **Noah's routes:** `GET /api/admin/personal-vaults` as the admin →
+  `serviceConfigured:true`, `mode:"repo"`, both accounts `no_repo`; a member gets 403 there and
+  `{"home":"repo","mirror":null}` for its own view; a dry run reports both accounts `no_repo` with 0 notes.
+  **Not one of pi's MCP servers:** pi's broker lists Noah's 19 servers through the `/admin` proxy and no
+  `memory`. Noah's log holds no line about the memory service; the service's own log is its four start lines.
+  **`55-systemone.mjs` follows pi's new field** (it asserted `compare`, which pi no longer stores): `use:
+  "always"` and `use: "half"` are stored and answered back (12 searches under `half`: 4 asked the decision
+  server, 8 went to BM25), and three checks are new for `use: "never"` — the PUT is stored, 4 searches all
+  return the BM25 result with the decision server not asked, and `GET /admin/api/systemone` still shows the
+  connection. A PUT that still sends `compare:true` answers 200 and stores `use:"always"` (the old field is
+  dropped without a word — pi's own page sends the new one; nothing in Noah sends either).
+  **NOT seen:** any owner MOVED to the service — the stack has no git host with a knowledge repository, so a
+  cutover, a tool write or search of a moved owner, the mirror's commit and push, a hold, a rollback and the
+  standing memory read rest on Noah's tests against the double; the service's limits (512 KiB a note, 10,000
+  notes, 256 MiB, the 507) and its behaviour with the volume lost or the service stopped — pi's tests, and
+  Noah's handling of an outage — Noah's tests; the service's MCP surface (`/mcp/<owner>`, which Noah does not
+  use); pi's migration of a stored `compare` row to `use` (this stack starts with no System One row); the
+  broker's %-encoded-path fix (`6551a29`) asked directly — pi's tests; an upgrade of an EXISTING deployment
+  (`setup-host.sh` making Noah's key copy on a host that already has secrets — this run starts from nothing).
+  After the run: Noah 264 MiB, gateway 194 MiB, broker 151 MiB, memory 77 MiB (37 MiB in the first run).
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`
