@@ -53,7 +53,18 @@ import {
   sharedMcpServerLines,
   summarizeOwnerState,
   inlineUiUnavailableReason,
+  VAULT_MEMORY_NO_REPO_SENTENCE,
+  VAULT_NOTES_PHRASE,
+  vaultMirrorStateText,
+  vaultOutageRule,
+  type OwnerState,
 } from "./ownerState.js";
+import {
+  MemoryRefusedError,
+  MemoryUnavailableError,
+  memoryClientFor,
+  type MemoryUnavailableReason,
+} from "../memory/memoryClient.js";
 import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_STATE_TITLE } from "../../shared/widget/guide.js";
 import { MCP_TOOL_GROUPS, effectiveMcpToolGroups, type McpToolGroupId } from "../../shared/mcpToolGroups.js";
 import { CHAT_DOCUMENT_SANDBOX_DIR } from "../../shared/chatDocuments.js";
@@ -146,6 +157,91 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
     ? "; the owner is also an ADMIN: policy changes go through mcp__brain__prepare_team_policy, and the migration pass that compiles raw/legacy/ notes is theirs"
     : "; changing POLICY.md, the backup and the raw/legacy/ migration pass stay with the admins (the server refuses them for anyone else)";
   return `${head}; every teammate writes it — after the user agrees and the intake, draft the page changes with mcp__brain__prepare_team_changes; nothing changes until the user presses the card, and nobody reviews it${adminLine}${pressLine}${health}${policyLine}${promotedLine}`;
+}
+
+/** describe_system waits at most this long for the memory service to answer its check. */
+const MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS = 3000;
+
+/** Why the memory service could not be used, in words the avatar can repeat (the server log has the detail). */
+const MEMORY_UNAVAILABLE_WORDS: Record<MemoryUnavailableReason, string> = {
+  not_configured: "this server has no memory service configured",
+  network: "Noah could not connect to it",
+  timeout: "it did not answer in time",
+  unauthorized: "it did not accept Noah's key",
+  no_route: "the configured address answers, but not as the memory service",
+  server_error: "it answered with a server error",
+  bad_answer: "its answer was not in the expected form",
+};
+
+/**
+ * Whether the memory service answers RIGHT NOW, for the owner whose vault
+ * lives there: ONE cheap call (the listing of this vault's `raw/` folder),
+ * bounded so a hanging service cannot hold the report. A failure is stated as
+ * unreachable — never as an empty vault, which is what an empty listing from
+ * a service that did answer would mean.
+ */
+async function memoryServiceStateText(store: Store, ctx: SystemToolsContext): Promise<string> {
+  const unreachable = (why: string) =>
+    `UNREACHABLE right now (${why}) — vault notes cannot be read, searched or written until it answers; ${vaultOutageRule(true)}. ` +
+    "Notes saved before are not lost. This needs an administrator (the server log names the cause); you have no tool that fixes it";
+  const client = memoryClientFor(store, ctx.config);
+  if (!client) {
+    return unreachable(`${MEMORY_UNAVAILABLE_WORDS.not_configured} — an operator sets PI_MEMORY_URL and PI_MEMORY_API_KEY_FILE`);
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  // Settles either way, so a check that loses the race never becomes an unhandled rejection.
+  const check = client.list(ctx.avatarUserId, "raw").then(
+    () => ({ kind: "ok" as const }),
+    (error: unknown) => ({ kind: "failed" as const, error }),
+  );
+  const outcome = await Promise.race([check, timedOut]);
+  if (timer) clearTimeout(timer);
+  if (outcome.kind === "ok") return "reachable right now (it answered a listing of this vault)";
+  if (outcome.kind === "timeout") {
+    return unreachable(`no answer within ${Math.round(MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS / 1000)} seconds`);
+  }
+  if (outcome.error instanceof MemoryRefusedError) {
+    // It answered, so it is up — but it would not serve this vault.
+    return `answering, but it REFUSED Noah's check of this vault (\`${outcome.error.code}\`) — vault notes may not be usable; ${vaultOutageRule(true)}. This needs an administrator`;
+  }
+  const reason = outcome.error instanceof MemoryUnavailableError ? outcome.error.reason : "network";
+  return unreachable(MEMORY_UNAVAILABLE_WORDS[reason]);
+}
+
+/**
+ * describe_system's lines about where the owner's personal vault lives.
+ * - Home `repo` with a repository connected: ONE line — it is the knowledge
+ *   repository, and a note is saved only by `mcp__repo__commit`. (The manual,
+ *   the repository template and this tool's description all say
+ *   describe_system reports the home, so it does for both homes.)
+ * - Home `repo` without a repository: nothing — there is no vault.
+ * - Home `memory`: the LIVE facts the frozen prompt cannot carry — where it
+ *   is, whether the service answers now, and the state of the copy Noah pushes
+ *   to the repository. Without a connected repository the tools refuse, so
+ *   the lines say the notes are there but unreachable and name no tool to call.
+ */
+async function personalVaultLines(store: Store, ctx: SystemToolsContext, state: OwnerState): Promise<string[]> {
+  const { vault } = state;
+  const repoConnected = state.knowledgeRepoConfigured;
+  if (vault.home !== "memory" || !vault.mirror) {
+    return repoConnected
+      ? [
+          `- Personal vault: in the knowledge repository — ${VAULT_NOTES_PHRASE} are files of that repository. A note you write, edit, move or delete is changed only in Noah's working copy and is saved for good only when \`mcp__repo__commit\` pushes it (a tool result that says "Not committed yet" is not saved yet)`,
+        ]
+      : [];
+  }
+  const since = vault.migratedAt ? ` (since ${vault.migratedAt})` : "";
+  return [
+    repoConnected
+      ? `- Personal vault: in Noah's memory service${since} — ${VAULT_NOTES_PHRASE} are stored there, not in the git repository. The same tools and paths apply (\`mcp__repo__*\` reads and writes them, \`mcp__brain__*\` recalls them), and a vault note is SAVED the moment its write, edit, move or delete succeeds — it needs no commit to exist. Everything else in the repository (skills, plugins, non-markdown files) lives in git and is pushed only by \`mcp__repo__commit\`, which also pushes the repository's copy of the vault — so commit after writing as before`
+      : `- Personal vault: in Noah's memory service${since}, with NO knowledge repository connected — ${VAULT_MEMORY_NO_REPO_SENTENCE}`,
+    `- Memory service: ${await memoryServiceStateText(store, ctx)}`,
+    `- Vault copy in the repository: ${vaultMirrorStateText(vault.mirror, repoConnected)}`,
+  ];
 }
 
 /** Admin-only: the push-only backup mirror's state. */
@@ -1204,7 +1300,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
     ),
     tool(
       "describe_system",
-      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; general git repos; team size; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
+      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; where the personal vault (CLAUDE.md, wiki/, raw/ notes) lives and — when that is the memory service — whether it answers right now and whether the repository copy is behind or on hold; general git repos; team size; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
       {},
       async () => {
         const user = store.getUserById(ctx.avatarUserId);
@@ -1367,6 +1463,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           // and the prompt's matching `brainSection` gating — so the report and
           // the run's real tool roster can't drift.
           `- Second brain (personal): ${!enabledMcpToolGroups.includes("personal_knowledge") ? "OFF for this conversation (personal knowledge tool group deselected — no brain recall or capture tools are registered this turn)" : state.knowledgeRepoConfigured ? "active — `mcp__brain__search` recall over wiki/, plus the brain-search/brain-ingest/brain-reflect/brain-lint skills (run brain-migrate once if the wiki/ vault is missing)" : "inactive (connect a knowledge repository to enable brain recall/ingest/reflect)"}`,
+          ...(await personalVaultLines(store, ctx, state)),
           await teamBrainStatusLine(store, ctx),
           ...(ctx.teamBrain?.admin ? [teamBrainBackupLine(store)] : []),
           `- Old group repositories / group brain: removed — ${GROUP_REPOS_RETIRED_SENTENCE}`,

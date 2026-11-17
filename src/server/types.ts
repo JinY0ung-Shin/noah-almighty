@@ -28,6 +28,18 @@ export interface UploadRelayConfig {
   secret: string;
 }
 
+/**
+ * The memory service of the bundled stack, as this server reaches it
+ * (`loadMemoryConfig`, `memory/memoryClient.ts`): where the personal vault of
+ * an owner whose vault home is `memory` lives.
+ */
+export interface MemoryServiceConfig {
+  /** Absolute http(s) base URL, no trailing slash (e.g. `http://memory:7090`). */
+  url: string;
+  /** Sent as `Authorization: Bearer`. Read from a file only; server-only, never logged. */
+  apiKey: string;
+}
+
 export interface AppConfig {
   /** Operator-configured policy controller, never a user-selected URL. */
   egressControlUrl?: string;
@@ -156,6 +168,12 @@ export interface AppConfig {
    * the user it runs AS (`piRunPrincipal`).
    */
   pi?: PiRuntimeConfig;
+  /**
+   * The memory service (env `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`, set
+   * together or not at all). Undefined = the feature is off: no owner can be
+   * moved to vault home `memory` (`personalVault.ts`).
+   */
+  memory?: MemoryServiceConfig;
 }
 
 /**
@@ -1578,6 +1596,14 @@ export interface AgentRequest {
    * direct unit calls.
    */
   knowledgeRepoConfigured?: boolean;
+  /**
+   * Where the avatar owner's personal vault lived when the prompt was built
+   * (`OwnerState.vault.home`). Stamped ONLY as `"memory"` — an owner whose
+   * vault is in the repository leaves it unset, so their prompt is exactly
+   * what it always was. The prompt is frozen per conversation, so this is the
+   * home at the conversation's first turn; describe_system reports the live one.
+   */
+  vaultHome?: "memory";
   /**
    * Whether the avatar owner has stored the internal GIT_TOKEN. Lets the
    * prompt guide direct knowledge-repo creation (via the repo tool) vs. asking

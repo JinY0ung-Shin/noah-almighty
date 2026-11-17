@@ -75,16 +75,16 @@ Nothing in the skill folder is ever run directly — only the copy in `$RUN/scri
 The build is half of a run's wall time and needs nothing from you: write the bump's check (step 5) while it
 runs, not after. Each step prints one line, `<step> exit=<rc>  <n>/<m> passed`, with its `FAIL` lines under it; the last line
 is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit status says the same. The same
-text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `680f300`:
+text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `60f4b59`:
 
 ```
 10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 3/3
-30-documents 30/30 · 31-documents-extra 21/21 · 32-second-user-own 3/3 · 50-subagent 9/9 · 55-systemone 22/22
+30-documents 30/30 · 31-documents-extra 21/21 · 32-second-user-own 3/3 · 50-subagent 9/9 · 55-systemone 25/25
 65-shell-step-verdicts 33/33   (judges the steps that only print: 05, 20, 04, 22, 40, 60)
 71-tracing-turn 25/25 · 75-trace-stats 37/37 · 25-admin-ui-real 48/48 · 85-workspace-files 26/26
 86-mcp-files 20/20 · 87-mcp-file-args 19/19 · 88-plugin-refresh 23/23
 90-pi-validation 22/22 · 92-grep-glob 10/10 · 93-tool-call-limit 23/23 · 94-turn-timings 13/13
-80-context-usage 19/19
+80-context-usage 19/19 · 96-memory 29/29
 95-final-state 1/1             (no error-level line in any service's log; prints memory)
 ```
 
@@ -123,7 +123,7 @@ not look at. Minutes of work, seconds of run time.
   file into `.claude/skills/pi-bump/boot-test/scripts/` and add its `extra` line to `drive.sh` THERE too — a
   check that lives only in a run directory is lost. It is a regression guard from then on.
 - Name: `NN-<what>.mjs`; the number only groups files (drive.sh's order is explicit). Bump guards are `90`–`94`,
-  `96`–`98`, then `100`+ (`94` is taken; the next free one is `96`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
+  `96`–`98`, then `100`+ (`94` and `96` are taken; the next free one is `97`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
 - Helpers, all in `scripts/e2e-common.mjs`: `loadState()` (the `owner` — a Noah admin — and `second`, a member:
   `{id, username, cookie}`), `client(cookie)` (`.get/.post/.put`), `turn(client, {avatarId, conversationId,
   message})` → `{status, frames, of(event)}`, `fake.enqueue(key, turns)` / `fake.requests(key)` /

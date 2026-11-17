@@ -43,7 +43,8 @@ describe("a committed link in the knowledge repo is never followed (review #2/#3
     const base = dir();
     const cfg = config(base);
     const v = victim(base);
-    const store = { getKnowledgeRepo: () => ({ repo: "me/knowledge" }) } as unknown as Store;
+    // No personal_vaults row: this owner's vault home is the repo (the clone is what gets read).
+    const store = { getKnowledgeRepo: () => ({ repo: "me/knowledge" }), getPersonalVault: () => null } as unknown as Store;
     const clone = knowledgeClonePath("attacker", cfg);
     fs.mkdirSync(clone, { recursive: true });
     for (const target of [v.secret, path.join(v.root, "CLAUDE.md")]) {

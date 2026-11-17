@@ -74,8 +74,77 @@ export async function buildKnowledgeGraph(
   repoRoot: string,
   opts: { sectionOf?: (relPath: string) => string } = {},
 ): Promise<KnowledgeGraph> {
-  const sectionOf = opts.sectionOf ?? vaultSectionOf;
-  const entries = await listTree(repoRoot);
+  return graphOf(
+    await listTree(repoRoot),
+    // FILE_TOO_LARGE / unreadable — skip this note, never abort the build.
+    (relPath) => readFile(repoRoot, relPath).catch(() => null),
+    opts.sectionOf ?? vaultSectionOf,
+  );
+}
+
+/**
+ * Notes that are not files of a directory — the personal vault of an owner
+ * whose vault lives in the memory service.
+ */
+export interface KnowledgeNoteSource {
+  /** Every note of the vault (any order). */
+  list(): Promise<Array<{ path: string }>>;
+  /**
+   * One note's text. Resolve with null to leave a note out of the graph (it is
+   * gone, unreadable); REJECT to abort the build — a source that cannot be
+   * used must not come back as a graph with notes missing.
+   */
+  read(relPath: string): Promise<string | null>;
+}
+
+/** Notes read at a time from a {@link KnowledgeNoteSource} (each read is a request). */
+const SOURCE_READ_CONCURRENCY = 8;
+
+/**
+ * {@link buildKnowledgeGraph} over a note source instead of a cloned working
+ * tree: same notes, same order (path order, as `listTree` gives it), same
+ * nodes and edges. `{noVault:true}` when the source holds no note under
+ * `wiki/` or `raw/` (a source has no empty folders to tell the two apart).
+ */
+export async function buildKnowledgeGraphFromNotes(
+  source: KnowledgeNoteSource,
+  opts: { sectionOf?: (relPath: string) => string } = {},
+): Promise<KnowledgeGraph> {
+  const entries = (await source.list())
+    .map((note) => ({ path: note.path, type: "file" }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  // Read the notes the graph will use a few at a time, up front; the graph is then built from them in order.
+  const wanted = entries.filter(isGraphNote).slice(0, SCAN_CAP);
+  const contents = new Map<string, string | null>();
+  for (let at = 0; at < wanted.length; at += SOURCE_READ_CONCURRENCY) {
+    const batch = wanted.slice(at, at + SOURCE_READ_CONCURRENCY);
+    const read = await Promise.all(batch.map((note) => source.read(note.path)));
+    for (const [i, note] of batch.entries()) contents.set(note.path, read[i]);
+  }
+  return graphOf(entries, async (relPath) => contents.get(relPath) ?? null, opts.sectionOf ?? vaultSectionOf);
+}
+
+/** A tree entry the graph reads as a note: vault markdown, minus templates and the structural index/log. */
+function isGraphNote(e: { path: string; type: string }): boolean {
+  return (
+    e.type === "file" &&
+    e.path.endsWith(".md") &&
+    !e.path.endsWith("_template.md") &&
+    e.path !== "wiki/index.md" &&
+    e.path !== "wiki/log.md" &&
+    (e.path.startsWith("wiki/") || e.path.startsWith("raw/"))
+  );
+}
+
+/**
+ * The graph of a vault given as its entries (`listTree`'s shape and order) and
+ * a way to read one note (null = skip it).
+ */
+async function graphOf(
+  entries: Array<{ path: string; type: string }>,
+  readNote: (relPath: string) => Promise<string | null>,
+  sectionOf: (relPath: string) => string,
+): Promise<KnowledgeGraph> {
   const hasVault = entries.some(
     (e) => e.path === "wiki" || e.path.startsWith("wiki/") || e.path === "raw" || e.path.startsWith("raw/"),
   );
@@ -87,17 +156,7 @@ export async function buildKnowledgeGraph(
   // append-only pass log) are STRUCTURAL, not knowledge notes — excluded here exactly
   // as `rankBrainNotes` excludes them from search, so a freshly seeded vault renders
   // the client's empty state and the TOC never becomes a hub wired to every note.
-  const noteFiles = entries
-    .filter(
-      (e) =>
-        e.type === "file" &&
-        e.path.endsWith(".md") &&
-        !e.path.endsWith("_template.md") &&
-        e.path !== "wiki/index.md" &&
-        e.path !== "wiki/log.md" &&
-        (e.path.startsWith("wiki/") || e.path.startsWith("raw/")),
-    )
-    .slice(0, SCAN_CAP);
+  const noteFiles = entries.filter(isGraphNote).slice(0, SCAN_CAP);
 
   // First pass: read every note, build nodes + a resolution index
   // (stem / title / aliases / path-without-ext → node id).
@@ -106,13 +165,8 @@ export async function buildKnowledgeGraph(
   const bodies = new Map<string, string>();
 
   for (const f of noteFiles) {
-    let content: string;
-    try {
-      content = await readFile(repoRoot, f.path);
-    } catch {
-      // FILE_TOO_LARGE / unreadable — skip this note, never abort the build.
-      continue;
-    }
+    const content = await readNote(f.path);
+    if (content === null) continue;
     const { fm, body } = parseNoteFrontmatter(content);
     const stem = stemOf(f.path);
     const label = fm.title || stem;

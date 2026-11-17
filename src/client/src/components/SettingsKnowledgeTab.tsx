@@ -3,6 +3,7 @@ import Icon from "./Icon";
 import Toggle from "./Toggle";
 import SettingsPluginSelect from "./SettingsPluginSelect";
 import GraphViewModal from "./GraphViewModal";
+import SettingsVaultStatus, { usePersonalVaultStatus } from "./SettingsVaultStatus";
 import { api } from "../lib/api";
 import { confirmAction } from "../lib/confirm";
 import { openSeededChat } from "../lib/chat";
@@ -135,6 +136,8 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
   const [refSaveError, setRefSaveError] = useState("");
 
   const user = state.user;
+  // Where the brain notes are kept (memory service + a copy in the repository): read when the tab opens.
+  const vaultStatus = usePersonalVaultStatus(active, user?.id || "");
   const githubHost = state.bootstrap?.githubHost || "github.com";
   const plugins = state.plugins;
   const savedKnowledgeRepo = user?.knowledgeRepo || "";
@@ -203,6 +206,8 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
       setKrContents(null);
       setKrContentsErr("");
       notify(`지식 저장소 "${repo}"을 연결했습니다.`, "ok");
+      // A new repository can move the brain notes or put their copy on hold.
+      vaultStatus.reloadSoon();
     } catch (err) {
       const message = (err as Error).message;
       setKnowledgeError(message);
@@ -219,6 +224,7 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
       setKrRefreshed(true);
       setTimeout(() => setKrRefreshed(false), 1200);
       notify("지식 저장소를 최신 상태로 새로고침했습니다.", "ok");
+      vaultStatus.reloadSoon();
     } catch (err) {
       notify(`새로고침 실패: ${(err as Error).message}`, "warn");
     } finally {
@@ -236,6 +242,7 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
       setKrPickOpen(false);
       setKrContents(null);
       notify("지식 저장소 연결을 해제했습니다.", "ok");
+      vaultStatus.reloadSoon();
     } catch (err) {
       notify(`연결 해제 실패: ${(err as Error).message}`, "warn");
     } finally {
@@ -265,6 +272,13 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
   async function saveKrSelection(next: string[] | null): Promise<void> {
     const { user: u } = await api<{ user: User }>("/api/me/knowledge-repo/selected", { method: "PUT", body: JSON.stringify({ selected: next }) });
     replaceState({ user: u });
+  }
+  async function requestRepoHelp(): Promise<void> {
+    try {
+      await openSeededChat("지식 저장소에 아직 커밋하지 않은 변경이 있어. 무엇이 바뀌었는지 확인하고 커밋·푸시해줘.");
+    } catch (err) {
+      notify(`요청 대화를 열지 못했습니다: ${(err as Error).message}`, "warn");
+    }
   }
   async function requestKnowledgeRepo(): Promise<void> {
     if (requestRepoBusyRef.current) return;
@@ -443,6 +457,15 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
   const linkText = user.knowledgeRepo + (user.knowledgeBranch ? ` @ ${user.knowledgeBranch}` : "");
   const clearKnowledgeError = (): void => setKnowledgeError("");
   const clearPluginAddError = (): void => setPluginAddError("");
+  const vaultStatusBlock = (
+    <SettingsVaultStatus
+      status={vaultStatus}
+      repo={user.knowledgeRepo || ""}
+      branch={user.knowledgeBranch || null}
+      onOpenAccess={() => updateState((s) => (s.settingsTab = "access"))}
+      onAskAvatar={() => void requestRepoHelp()}
+    />
+  );
 
   return (
     <>
@@ -532,6 +555,9 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
               {requestRepoBusy ? "대화 여는 중…" : "아바타에게 저장소 만들기 요청"}
             </button>
           </div>
+        ) : null}
+        {!user.knowledgeRepo ? (
+          vaultStatusBlock
         ) : (
           <>
             <div className="kr-link">
@@ -557,6 +583,7 @@ export default function SettingsKnowledgeTab({ active = false }: SettingsKnowled
                 </span>
               )}
             </div>
+            {vaultStatusBlock}
             <div className="kr-plugins">
               <span className="muted">{!user.knowledgeSelected ? "저장소의 모든 플러그인을 사용 중" : `${user.knowledgeSelected.length}개 플러그인만 사용 중`}</span>
               <button className="linkish small" type="button" aria-expanded={krPickOpen} aria-controls={krContentsId} onClick={() => void toggleKrPick()}>

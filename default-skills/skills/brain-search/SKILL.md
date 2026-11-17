@@ -41,6 +41,8 @@ recurring topic. Prefer recalling what is already written down over re-asking th
 ## Edge cases
 - **`NO_VAULT`** — the repo predates the vault layout; run the **brain-migrate** skill ONCE (it never
   overwrites existing files), then retry.
+- **Memory service unavailable** — an outage, not an empty brain: the notes exist but cannot be read
+  right now. Say so; never answer as if nothing were known, and do not retry in a loop.
 - **No matches** — it may simply not be captured yet. Answer from the live conversation, and (owner
   only) offer to capture it with **brain-ingest** if it is durable.
 - **No repo connected** — there is nothing to search; if you are the owner, create one with

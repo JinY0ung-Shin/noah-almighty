@@ -196,8 +196,28 @@ These are the invariants the project is built around. New work should reinforce 
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen
   per conversation, never refreshed. → `todos.md`.
-- **Knowledge repo = one per user, agent-managed. Second brain = a CONVENTION (`wiki/`+`raw/`) over that
-  SAME repo, NOT a new store**; uncommitted = not persisted. → `repo-knowledge.md`.
+- **Knowledge repo = one per user, agent-managed. Second brain = a CONVENTION (`wiki/`+`raw/` paths) behind
+  the SAME tools — and its notes have ONE home per owner.** The personal vault (root `CLAUDE.md` + the `.md`
+  notes under `wiki/`/`raw/`) lives either in the repo (`repo`: uncommitted = not persisted) or in the bundled
+  memory service (`memory`: saved when written); everything else in the repo stays in git. Ask
+  `isPersonalVaultPath` / `vaultHomeOf` / `vaultNotePathOf`, never re-derive them. → `repo-knowledge.md`.
+- **ONE writer per owner, and the home is decided INSIDE the owner's vault write queue.** Every vault write,
+  in both homes, runs in that queue (`withVaultWrite`); the cutover and the rollback hold the same queue, so
+  no write straddles a flip. With home `memory` no tool touches a clone file at a vault path. **A new tool
+  path that changes a vault note goes through `withVaultWrite`; a new reader through `memoryVaultFor`** (null
+  = the clone code). → `repo-knowledge.md` ("Personal vault: two homes").
+- **With home `memory` the repository is a push-only COPY, and the mirror deletes there ONLY what Noah
+  deleted** (the deletion ledger; a repository note the service lacks is left, with a notice — the one
+  exception is the owner's own confirm press). Never forced; a failed push leaves the note saved; a commit
+  never fights a direct git edit of a vault note; a newly connected repository is looked at first and nothing
+  in it is replaced before the owner's press. **A service failure is an ERROR on every surface, never "no
+  notes".** → `repo-knowledge.md`.
+- **Noah is the memory service's only caller — an OPERATOR rule the code does not enforce.** Noah calls it
+  directly with the owner Noah decided (never a model argument), so every gate stays Noah's; the service must
+  NOT be registered on pi's MCP page (ungated memory tools in every session — nothing prevents or detects
+  it). Moving a vault takes NO backup: no source file is deleted, the home flips only after every note is
+  read back and hash-compared, and it moves back only from a copy that is in sync (`retirementGate()` only
+  REFUSES a move after a failed boot backup). → `repo-knowledge.md`, `pi-runtime.md` ("Memory service").
 - **One fact, one home — and ONE home for the rules about it.** Team knowledge's canonical home is the team
   brain, personal context the personal brain; every personal-vs-team rule lives ONLY in
   `agent/brainPolicy.ts` (skills and templates refer to it, never restate it). An applied team-brain card
@@ -261,7 +281,11 @@ These are the invariants the project is built around. New work should reinforce 
 - **Noah ships WITH its pi-gateway as ONE compose stack** (`vendor/pi-gateway` submodule; pi's code and
   compose file are never edited). What `pi-setup` applies is re-applied on every `up`, so the repo stays
   its source. A pi bump moves the submodule to a PUSHED commit and re-runs the dind boot test (the `pi-bump` skill). Every upgrade
-  re-runs `docker/pi/setup-host.sh` before `docker compose up`. → `pi-runtime.md`, `build-run-verify.md`.
+  re-runs `docker/pi/setup-host.sh` before `docker compose up` — Compose mounts Noah's key copies as secrets,
+  so a missing one (the memory service's is the newest) stops the stack. The memory service (home of moved
+  personal vaults) sits on its own internal network with Noah alone; `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`
+  are fixed by compose (the key from a FILE only; natively both unset = off, half-set stops the boot).
+  → `pi-runtime.md`, `build-run-verify.md`.
 - **A domain name + HTTPS is the OPTIONAL nginx overlay (`docker-compose.nginx.yml`), or native TLS — never
   both.** The overlay never touches pi's wiring (the broker still reaches Noah directly), and Noah believes
   forwarded headers only from addresses in `NOAH_TRUSTED_PROXY_CIDRS` (default: none) — never `trust proxy:

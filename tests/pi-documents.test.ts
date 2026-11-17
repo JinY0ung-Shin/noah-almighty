@@ -546,7 +546,8 @@ describe("the avatar is told about document attachments", () => {
     for (const lib of ["pypdf", "python-docx", "python-pptx", "openpyxl", "pandas", "numpy", "matplotlib"]) expect(dockerfile).toContain(lib);
     const subagents = fs.readFileSync(path.join(__dirname, "../vendor/pi-gateway/apps/gateway/src/agent/subagents.ts"), "utf8");
     expect(subagents).toContain('name: "general-purpose"');
-    expect(subagents).toContain('export const AGENT_TOOL = "Agent"');
+    // pi d0a6d74 stopped exporting the constant (it is used in that file only); the tool's name is what matters.
+    expect(subagents).toMatch(/^(export )?const AGENT_TOOL = "Agent";$/m);
   });
 
   it("the manual's chat topic documents both", () => {

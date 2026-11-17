@@ -42,6 +42,8 @@ admin's job with the `team-brain-curate` skill (its migration pass), never this 
      <!-- /brain:philosophy -->
      ```
 4. **Commit once** (e.g. `chore(brain): migrate repo to vault layout`). Only commit if something changed.
+   (When the owner's vault lives in Noah's memory service, the `.md` files above are saved there as
+   you write them and the `.gitkeep` files go to the repository; the steps and the commit are the same.)
 5. **Report** what you CREATED vs SKIPPED.
 
 ## Safety

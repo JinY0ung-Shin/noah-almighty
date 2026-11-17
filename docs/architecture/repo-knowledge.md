@@ -1,7 +1,8 @@
 # Repo plumbing and knowledge capture
 
 > Detail page of [Architecture & Operational Notes](../ARCHITECTURE-NOTES.md).
-> Clone/commit plumbing shared by the repo families, plus backfill / request_info / second-brain mechanics.
+> Clone/commit plumbing shared by the repo families, plus backfill / request_info / second-brain mechanics,
+> and the personal vault's two homes (the repository, or the bundled memory service with a git mirror).
 
 ## Repo plumbing (`knowledgeRepo.ts` / `gitRepos.ts` / `repoGitCore.ts` / `repoGitGuards.ts`)
 - **Low-level git is shared in `repoGitCore.ts`** (exec wrapper, `currentBranch`, dirty-status) and arg
@@ -119,7 +120,9 @@
   (`knowledge_selected` column, `get/setKnowledgeSelected`, `PUT /api/me/knowledge-repo/selected`,
   inspected via `GET /api/me/knowledge-repo/contents`); `selected: null` = load all. `write_file`/
   `scaffold_skill` only touch the local clone — must be followed by `commit` to persist. (`ensureClone`
-  re-syncs with `git checkout -B <branch> origin/<branch>`, not a hard reset.)
+  re-syncs with `git checkout -B <branch> origin/<branch>`, not a hard reset.) **The one exception is a
+  vault note of an owner whose vault home is `memory`**: it never touches the clone and is saved when
+  written → "Personal vault: two homes" below.
 - **General git repos (`mcp__git_repo__*`) ≠ the knowledge repo.** Arbitrary work/code repos:
   `git_repositories` table (`get/list/upsert/delete/markGitRepoSynced`), plumbing in `gitRepos.ts`, MCP
   server in `agent/gitRepoTools.ts`. **Single working-surface model (NOT MCP file CRUD):** owner-only
@@ -162,14 +165,18 @@
   that toasts on new gaps (`refreshKnowledgeStatus`/`startKnowledgeWatch` in `lib/loaders.ts`).
 - **Knowledge-repo `CLAUDE.md` is injected as standing memory.** The repo-root `CLAUDE.md` of the
   personal repo is read DIRECTLY from the clone (NOT via
-  any loader), size-capped, and rendered into the prompt via `AgentRequest.knowledgeMemory` (`loadKnowledgeRepoMemory` in plugins.ts → `knowledgeMemorySection` in
+  any loader; for an owner whose vault home is `memory`, from the memory service instead — same cap,
+  "Personal vault: two homes" below), size-capped, and rendered into the prompt via `AgentRequest.knowledgeMemory` (`loadKnowledgeRepoMemory` in plugins.ts → `knowledgeMemorySection` in
   promptBuilder.ts) — distinct from on-demand skills, with an injection guard. The prompt is frozen per
   conversation (D2, `conversations.pi_instructions`), so the memory is the one read at the conversation's first
   turn; an edit mid-conversation applies from the next conversation. Wired in chat + scheduler;
   intro/hashtag gen leaves it unset. (Group repo CLAUDE.md files were injected too until group knowledge
   repos were retired, 2026-10-30.) `writeRepoTemplate` seeds a
   starter root `CLAUDE.md`.
-- **Second brain (#53) = a CONVENTION over the SAME knowledge repo, NOT a new store — PERSONAL.** (The
+- **Second brain (#53) = a CONVENTION (`wiki/` + `raw/` paths) behind the SAME repo tools — PERSONAL.** It
+  is not a tool family of its own, and for an owner whose vault home is `repo` it is not a store of its own
+  either: the notes are files of the knowledge repo. For home `memory` the same paths, tools and gates reach
+  the memory service ("Personal vault: two homes" below); this bullet describes what both share. (The
   ONE instance-wide team brain, back 2026-11-06, is a separate Noah-owned local vault that every teammate
   writes through cards they press themselves (no review queue since 2026-11-13) →
   [`team-brain.md`](team-brain.md); it shares the `brain` server, but its vault is a
@@ -186,7 +193,9 @@
   `mcp__group_repo__*` tools). **Capture/consolidate** is the
   `brain-ingest`/`brain-reflect` default-skills, which WRITE through `mcp__repo__write_file` + `commit` —
   there is NO separate "brain write" tool, so a
-  capture is a repo write plus a commit (uncommitted = not persisted). It composes with the backfill
+  capture is a repo write plus a commit (home `repo`: uncommitted = not persisted; home `memory`: the note
+  is saved by the write and the commit pushes its copy — the skills say "commit after writing" for both,
+  state no home of their own, and tell saved from not saved by the tool result's words). It composes with the backfill
   loop: `request_info` ESCALATES a true unknown to the owner, `brain-ingest` RETAINS the answer.
 - **The Brain policy (user, 2026-11-10, SSOT) — ONE module, `agent/brainPolicy.ts`.** Every rule about
   what goes into the personal brain vs the team brain lives there and nowhere else: `PERSONAL_KNOWLEDGE_DEFINITION`
@@ -276,4 +285,514 @@
   disclosure's `<summary>` (live + completed cards), so the capture is visible while COLLAPSED —
   the whole point, since the tool list is folded by default. `raw/` writes stay silent BY DESIGN
   (a brain-ingest capture writes raw + wiki — one notice per capture, not two). Fires on write, not
-  commit: the capture skills commit immediately after, and per-write is what maps 1:1 to notes.
+  commit: the capture skills commit immediately after, and per-write is what maps 1:1 to notes. The same
+  for both vault homes.
+
+## Personal vault: two homes (#84, 2026-11-17)
+
+An owner's **personal vault** is the repo-root `CLAUDE.md` plus every `.md` note under `wiki/` and `raw/` of
+their knowledge repository. Where it is stored — its **home** — is per owner: `repo` (the clone on disk IS the
+vault, as it always was) or `memory` (the bundled stack's memory service is the vault, and the repository
+receives a copy). Everything else in the knowledge repo (skills, plugins, `.gitkeep`, images, any non-markdown
+file, also under `wiki/`/`raw/`) is a **repo path** and lives in git whatever the home. The team brain is not
+part of this: it stays Noah's own local vault ([`team-brain.md`](team-brain.md)).
+
+### The rule and its questions (`personalVault.ts`)
+- **ONE writer per owner.** Home `repo`: the clone code, unchanged. Home `memory`: a vault note is read and
+  written ONLY through the service; the clone's files at vault paths are the mirror's copies (or, while the
+  mirror is on hold, the connected repository's own notes) — written by the mirror alone, read by nobody.
+  There is no fallback from one to the other: a second writer is what the design removes.
+- **Every vault WRITE of an owner, in BOTH homes, runs in the owner's vault write queue and decides the home
+  INSIDE it** (`withVaultWrite(store, config, userId, fn)`: `fn` gets `{ home: "repo" }` — run the clone code
+  here, inside the queue — or `{ home: "memory", vault }`, a writer whose `write`/`edit`/`remove` do not take
+  the queue again and that is closed when `fn` returns, `VAULT_WRITER_CLOSED`). The cutover and the rollback
+  hold the SAME queue (`withVaultWriteLock`), so a tool call can never pick a home, wait, and write into the
+  one that is no longer the vault — whatever run it comes from (owner chat, routine, task API, a
+  shared-account teammate). That, not run tracking, is what makes a flip safe. A write queued behind a
+  cutover or rollback simply runs after it, against the new home. **A new tool path that changes a vault
+  path goes through `withVaultWrite`**; `VAULT_HOME_CHANGED` stays as a defensive error it should not reach.
+- **Lock order is always vault write queue → clone repo lock** (`withRepoLock`). Take the repo lock INSIDE
+  the queue's callback, never around it; nothing holding the repo lock asks for the queue. The queue is in
+  process and NOT reentrant: inside it use the queue's writer or the `MemoryClient`, never a
+  `memoryVaultFor` write, `withVaultWrite` or `withVaultWriteLock` for the same owner.
+- **"Is this path a vault note?" → `isPersonalVaultPath(rel)`**, never a regex of your own. It is NARROWER than
+  "`CLAUDE.md` or `(wiki|raw)/**.md`": a markdown file the service cannot hold stays a repo path (a folder or
+  name starting with a dot such as `wiki/.obsidian/x.md`, a backslash or control character, more than 16
+  segments, a path over 512 bytes or a segment over 255). `normalizeVaultPath` strips leading `./` and `/`,
+  posix-normalizes and NFC-normalizes (the form the service stores). **A tool's path ARGUMENT is classified
+  by ONE function, `vaultNotePathOf` (`repoToolKit.ts`, used by the repo tools and `brainTools.ts`)**, which
+  reads it the way the clone file ops would resolve it — so no spelling of a note (`./wiki/a.md`,
+  `wiki//a.md`, `wiki/x/../a.md`, `wiki/a.md/`) reaches the clone's copy.
+- **"Where does this owner's vault live?" → `vaultHomeOf(store, userId)`**: a `personal_vaults` row = `memory`
+  (`store/personalVault.ts`). The instance setting `personalVaultMode` (fails to `repo`) is only the TARGET
+  the migration works towards — never read it to decide where to read or write.
+- **`memoryVaultFor(store, config, userId)`** — for READS (and for a write that is not a tool's vault change):
+  the owner's `MemoryVault` when the home is `memory`, else `null` (= the clone code). It never throws and
+  never falls back: a row on a server with no memory service configured yields a vault whose every method
+  rejects with `MemoryUnavailableError` (`reason: "not_configured"`).
+- **`MemoryVault`** (`list` / `read` / `exists` / `write` / `edit` / `remove` / `search`) throws the SAME
+  sentinels as `knowledgeRepo` so tool wording is shared (`NOT_FOUND`, `INVALID_PATH` — also for a non-vault
+  path or a folder —, `FILE_TOO_LARGE`, the `editFile` ones), `MemoryRefusedError` as it is (`wiki_full`,
+  `invalid_content`, a `stale` that survived the one retry) and `MemoryUnavailableError` as it is. `list()` is
+  in code-unit path order (`CLAUDE.md` < `raw/…` < `wiki/…`); there are no folder operations (a folder
+  delete/move works per note); `exists()` reads the whole note.
+- **The row** (`personal_vaults`): provenance (`migratedAt`, `sourceRepo`, `sourceCommit`) and the mirror's
+  state — `mirrorDirty` + `mirrorSeq`, `mirrorSyncedAt`, `mirrorError`, `mirrorNotice`, `mirrorHold`
+  (`"checking" | "confirm" | null`). **The deletion ledger** (`personal_vault_deletes`:
+  `recordVaultDelete(s)` / `listVaultDeletes` / `clearVaultDeletes`) lists the paths Noah deleted — or the
+  owner confirmed for removal from a repository that held vault notes of its own — and the mirror has not
+  settled yet. `clearPersonalVault` and `deleteUser` remove both.
+- **The mirror is marked dirty for every change that was SENT** (`markVaultMirrorDirty`, bumping
+  `mirrorSeq`), also when the answer was lost — and a lost answer marks it ONCE MORE 60 s later
+  (`VAULT_LOST_ANSWER_REMARK_MS`): the service may carry the change out after a pass already read the old
+  content and recorded itself clean. `MemoryVault.remove` writes the ledger entry BEFORE it asks the service.
+- **The brain still requires a connected knowledge repo** (`knowledgeRepoConfigured` gates are unchanged), and
+  no tool name, argument, run-class gate or path changed: what changed is where a vault note is stored.
+
+### What reads and writes the service for home `memory` (`agent/repoTools.ts`, `repoToolKit.ts`, `brainTools.ts`)
+- **The tools never touch a clone file at a vault path** — not to read, write, move or delete it. Those files
+  are the mirror's. A folder that holds nothing but such files "does not exist" for the tools.
+- `mcp__repo__list_files` → `mergeVaultTree`: the clone tree with its vault-note entries dropped and every
+  service note listed. Under `wiki/` and `raw/` a folder is shown only when it holds a repo file or a
+  service note (the service has no empty folders).
+- `read_file` / `write_file` / `edit_file` / `delete_file` on a vault path → the service. A vault note's
+  success text says it "is saved now" and that `mcp__repo__commit` pushes its copy (`VAULT_NOTE_SAVED`; a
+  deletion / a move "is saved now" likewise); a repo path keeps "(Not committed yet — push it with
+  mcp__repo__commit.)". The standing guidance keys on exactly these two phrases (skills, tour, manual).
+- **A folder delete** removes the folder's notes in the service (first — a failure there leaves the clone
+  untouched) and, in the clone, ONLY the repo files under it; a failure half-way says how many notes went.
+- **`move_file`** is carried out file by file, each on the side it belongs to (note → note in the service;
+  note → repo path; repo file → note; repo file → repo path). **A folder move MERGES into an existing
+  destination**: it refuses, before anything moves, only a destination file that exists with DIFFERENT text
+  (a folder move never overwrites; a single file's move does, as a rename always did), a folder onto a note
+  path, and a file/folder mismatch. **It is RESUMABLE**: a destination that already holds exactly the
+  source's text counts as copied — only the source is then removed — so the same call finishes a move that
+  failed half-way, and a failure names the files that exist at BOTH paths at that moment.
+- **Two refusals that close what the spelling cannot see** (both only for home `memory`):
+  `assertNoVaultAlias` — a path that is not a vault path as spelled but RESOLVES, through a link committed in
+  the repository, into the clone's vault folders (`notes -> wiki`: `notes/a.md`) is `INVALID_PATH` (a delete
+  of the link itself is allowed); `noteTreeCollision` — creating a repo file at `wiki/topic` while notes live
+  under `wiki/topic/`, or a path under a note (`wiki/a.md/x.txt`), is refused: the mirror could no longer
+  write that folder.
+- **`mcp__repo__commit`** (`commitWithVaultMirror`): mirror → commit → fetch and rebase onto what the remote
+  got meanwhile → mirror AGAIN on the rebased tree → commit that if it changed anything → push → record.
+  Detail under "The git mirror". The tool itself holds no lock: `commitAndPush` takes the clone's repo lock
+  and runs the tool's `beforeCommit` hook inside it (twice when it rebased). The result reports the LAST
+  pass, so "up to date" is said only when the pass on the rebased tree succeeded; a copy that was not updated
+  is worded as "the notes themselves are saved; only their copy is behind", with the hold state named
+  (`checking`: follows by itself; `confirm`: tell the owner) and a notice quoted.
+- `mcp__brain__search` (personal) → `MemoryVault.search`; `get_note` and `personalNotes` → `MemoryVault.read`
+  (paths through `vaultNotePathOf`). Team marks and `personalNoteBlobId` are computed from the returned
+  content exactly as before (a git blob id is a hash of the content). **In a search of BOTH brains a
+  personal side that could not be searched — unavailable OR refused — is an error next to the team hits**,
+  never a silent "no personal match".
+- The graph and note routes (`routes/knowledgeRepo.ts`, `knowledgeGraph.ts`) and a consultation's recall.
+- **The standing memory** (`loadKnowledgeRepoMemory` → `readVaultClaudeMd`, same 6,000-character cap and
+  truncation mark) is read with a **3 s deadline** (`STANDING_MEMORY_VAULT_DEADLINE_MS`) so a hanging service
+  cannot hold a turn. When the service is down or too slow, the slot carries
+  `STANDING_MEMORY_UNAVAILABLE_NOTICE` instead of the text (Noah's notice, not the owner's words — the
+  guidance could not be loaded, it is not empty, and how to read it later): the prompt is frozen per
+  conversation, and a missing memory must never look like "the owner has no standing guidance". A missing or
+  empty `CLAUDE.md` is still simply nothing.
+- `create_repo` / the repository template: inside the write queue; repo paths go to the clone, the template's
+  vault notes (`CLAUDE.md`, `wiki/index.md`, `wiki/log.md`, `wiki/_template.md`) to the service unless the
+  vault already holds a note at that path.
+- The 기억 chip (`onMemory`) fires as before, on the write.
+- **A service failure is reported AS a failure**: tools answer with an error that says the memory service is
+  unavailable and that this is not an empty result (`memoryUnavailableMessage` — for a write: the change may
+  or may not have landed, read again before repeating it); routes answer 503 with a Korean `apiError`
+  (`메모리 서비스` — text a teammate reads never names pi-gateway). Never "not found", "no match" or an
+  empty graph.
+
+### The service contract Noah relies on (`memory/memoryClient.ts`)
+The service is pi-gateway's `apps/memory`: one markdown wiki per owner. Noah uses its PROGRAM API only, with
+`Authorization: Bearer <key>` and the owner in the URL — the Noah user id the CALLER decided on, never a
+model argument (`OWNER_PATTERN` is checked before the id becomes a URL).
+
+| Request | Answer |
+|---|---|
+| `GET /wiki/<owner>/notes?prefix=<folder>` | `{notes:[{path,bytes}]}`, path order; `prefix` is a FOLDER |
+| `GET /wiki/<owner>/note?path=` | `{path,content,hash}` — the whole note |
+| `PUT /wiki/<owner>/note` `{path,content,hash?}` | `{path,hash,created}`; no hash = create (409 `exists`), hash = replace (409 `stale` when changed or gone) |
+| `DELETE /wiki/<owner>/note?path=&hash=` | `{path}`; a missing note is 404 `not_found` (the client resolves) |
+| `GET /wiki/<owner>/search?q=&limit=&prefix=` | `{hits:[{path,title,tags,snippet,score}],unscanned}`, limit 1..20 |
+| `DELETE /wiki/<owner>` | `{deleted:true}` |
+
+- **Its rules:** relative `.md` paths stored NFC, no segment starting with a dot, no `..`, at most 16 segments;
+  a note is at most 512 KiB of UTF-8 text without NUL (`VAULT_NOTE_MAX_BYTES` = `knowledgeRepo`'s
+  `MAX_FILE_BYTES`); `hash` = sha256 hex of the bytes; a wiki holds at most 10,000 notes / 256 MiB.
+- **Two failures, kept apart on purpose.** `MemoryRefusedError` (`code`, `status`): the service answered and
+  said no — a coded 4xx other than 401 / `no_route`, and 507 `wiki_full` (a refusal the owner can fix, not an
+  outage). `MemoryUnavailableError` (`reason`: `not_configured` | `network` | `timeout` | `unauthorized` |
+  `no_route` | `server_error` | `bad_answer`): it could not be used at all. A caller reports the second as an
+  outage — never as "no such note".
+- **The client:** 15 s per request, redirects refused (the key goes to the configured address only), answers
+  capped at 32 MiB, the key scrubbed from every error and log line, only a system error CODE passed on from a
+  transport failure. `memoryClientFor(store, config)` is the one client of an app instance (null when
+  `config.memory` is unset); tests install a double with `setMemoryClientForTests`
+  (`tests/helpers/fakeMemory.ts` — the same rules by hand, never imported by `src/`).
+- **Config** (`parseMemoryConfig`, `config.ts`): `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`, both or neither
+  (neither = `config.memory` undefined: the feature is off and nobody can be moved). The key is read from a
+  FILE only — an inline `PI_MEMORY_API_KEY`, half a configuration, or an unreadable/empty file stops the boot
+  — so it never enters `process.env` and no child inherits it. The URL joins `internalServices`
+  (`gitSourcePolicy.ts`): it cannot be registered as a git source.
+- **Not one of pi's MCP servers** (decided 2026-11-17): pi has no per-request server filter, so a registered
+  memory server would show every Noah session a second, UNGATED set of memory tools, and a broker registration
+  can only name the requesting user, never an avatar owner. Noah's own `repo` / `brain` tools are the only
+  way in, so every run-class gate stays where it was. **This is an OPERATOR rule, not an enforced one:**
+  nothing in Noah's code prevents or detects a registration made on pi's MCP page — the rule and what breaks
+  are in [`pi-runtime.md`](pi-runtime.md) ("Memory service").
+
+### The git mirror (`vaultMirror.ts`, `repoGitCore.ts`)
+The repository keeps a COPY that Noah's server writes and never reads back to decide content.
+- **What one pass does to the clone** (`syncVaultMirror`), for paths where `isPersonalVaultPath` is true and
+  for no other file:
+  - ADD / REPLACE every note the service holds (a file is compared only to skip an identical write).
+  - **DELETE only what Noah deleted:** a clone vault file is removed when its path is in the owner's deletion
+    ledger AND the service no longer holds it. The entries a pass settled are cleared when that pass is
+    recorded ok; an entry whose note the pass still saw stays.
+  - **A clone vault file the service lacks and the ledger does not name is NEVER deleted** — a note that only
+    exists in git, a wiped service volume. The pass still ends `synced` and leaves a NOTICE on the row:
+    `repository notes not in the memory service: <count>` (`VAULT_MIRROR_NOTICE`). There is no
+    empty-service guard and no error for it any more: deleting the last note reaches the repository (it is in
+    the ledger), and a wiped service deletes nothing.
+  - **The owner's own press is no exception:** `mirror-confirm` (below) writes the repository-only vault
+    paths INTO the ledger, as they were at the press — there is no "replace everything" mode in the mirror.
+- **Never through a link:** every clone file operation of the mirror (list, write, unlink, rmdir) goes through
+  one helper (`CloneVaultFiles`) whose one gate (`locate`) walks down from the clone root and crosses plain
+  folders only. A WRITE below a linked folder (or a file where a folder should be) fails the pass (`path
+  blocked: …`); a DELETE or a lookup there is treated as "the mirror has no file there" — nothing is touched.
+  A link sitting at a note's own path is replaced by a plain file, never written through. Only Noah's canonical
+  clone (`dataDir/knowledge/<userId>`) is touched — never a sandbox copy.
+- **`push: true`** (the background loop, the rollback, the first record after a cutover) also commits as the
+  owner (`VAULT_MIRROR_COMMIT_MESSAGE`) and pushes with the owner's stored token — an ordinary, never forced
+  push. **`push: false, locked: true`** only writes the working tree and returns `pending`; the caller (the
+  `commit` tool's hook) finalizes it with `finishVaultMirror` once ITS push is over — synced when it went
+  through, the failure when it did not. Row and ledger are settled only after a push.
+- **A commit never fights a direct git edit of a vault note** (`commitAndPushClone` with `vaultPaths`): when
+  the local commits have to be rebased onto remote ones and a rebase stop's conflicted paths are ALL vault
+  paths, the local side — the service's content — is kept (`keepLocalSide`: its text where it has the file,
+  its deletion where it deleted a file both knew) and the rebase goes on; the edit stays in git history. A
+  path only the REMOTE added (a rename done in git, say) is kept, not deleted, and is counted in the notice.
+  **Only when the copy was just written from the service:** the `commit` tool passes `vaultPaths` as "a vault
+  path AND this commit's mirror pass ended `synced`". When the pass FAILED (the service down), the clone's
+  vault files are not the vault's current text, so a conflict on them stops the commit like any other, with
+  a line that says to commit again once the service answers. A copy on HOLD never gets that far — see the
+  next rule. (The background pass never runs on hold.)
+  **While the copy is on hold no push changes a vault path** — also without a conflict, and for EVERY
+  pusher of the clone: the guard sits in `commitAndPushLocked` (`stopVaultPushOnHold`), which the `commit`
+  tool, skill learning / unlinking (`skillTransfer.ts`) and the mirror's own commit all go through. It reads
+  the hold through the context (`KnowledgeRepoContext.vaultHold`, set by `knowledgeRepoContextFor`) and is
+  given, by `commitAndPushClone`'s `beforePush`, the paths the unpushed commits AND the staged changes
+  change against `origin/<branch>` — merge base to the index, after the fetch and BEFORE the commit. With
+  the hold set and a vault path among them it throws `VAULT_ON_HOLD_PUSH:<hold>:<files>`. Nothing was
+  committed, rebased or pushed: the clone is as it was before the call, the pending changes uncommitted —
+  so no commit is left on a local branch that a later branch switch would strand, and the advice in the
+  refusal (set the branch back) still works after it. Surfaces: the tools answer with
+  `vaultHoldPushRefusal` (repoToolKit.ts), the skill routes with 409 and a Korean sentence; a mirror pass
+  stopped this way ends `skipped: hold` and records nothing. The hook looks once — not at a follow-up
+  commit made after a rebase (the mirror's re-apply, which does not run on hold).
+  **What a stopped pass or commit wrote stays in the working tree — and is dropped before the clone has to
+  follow a branch change** (`discardVaultCopyChanges`, called by the look at a newly connected repository
+  and by the owner's confirmation before they sync the clone): uncommitted changes at vault paths go back
+  to HEAD. For a memory-home owner those are only ever the mirror's writing (the tools never write there)
+  and the next pass writes them again. Without this a leftover that differs from the new branch's file made
+  git refuse the checkout, the look could never happen, and the hold it must end kept the leftover from
+  being committed. That is the clone a branch change could not switch (uncommitted
+  changes in the way): it still carries the previous branch's mirror commits, and its push would put those
+  notes onto a branch whose own notes the owner was not asked about. The local commits stay and go out
+  once the hold has ended; the refusal says so, and that setting the branch back lets the changes be
+  committed where they were made. A branch the remote does not have yet is not checked (nothing there to
+  change).
+  **A conflict that touches any other path aborts** as before (local commits preserved,
+  `REBASE_CONFLICT:<files>`), as does a rebase that cannot start. After the rebase and before the push the
+  mirror hook runs AGAIN (`afterRebase`, only when a rebase actually happened) — the remote's commits may
+  have changed vault files — and what it changes is a second commit on top (`followUpMessage`: "Mirror vault
+  notes from Noah"). Then push. Options: `commitAndPush` takes `beforeCommit` + `vaultPaths`;
+  `commitAndPushClone` takes `checkStaged`, `vaultPaths`, `afterRebase`, `followUpMessage`.
+- **Nothing to commit and nothing unpushed = no fetch.** `commitAndPushClone` returns before it fetches, so a
+  direct git edit of a vault note stays on the remote until a later pass has something to push — an idle
+  vault leaves it standing.
+- **A pass re-checks under the lock:** after it has the clone's repo lock it reads the row again — a rollback
+  (no row) ends it with nothing done, a hold that arrived while it waited is `skipped: hold`.
+- **When:** on every `mcp__repo__commit` of that owner, and in the background loop (`startVaultMirrorLoop`,
+  started at boot only when `config.memory` is set): at start EVERY vault is marked for a pass — a crash
+  between a service write and its dirty mark loses the mark — then a pass runs right away and again 60 s
+  after each one ends; it mirrors the dirty owners one at a time and stops early when the service is down.
+- **A write that arrives during a pass is not lost:** the pass reads `mirrorSeq` before it reads the service
+  and hands it back, and `recordVaultMirror` clears `mirrorDirty` only if the row was not marked since.
+- **The background pass never touches a clone with uncommitted changes OUTSIDE vault paths** (`skipped:
+  repo_dirty`, `mirrorError = "repo has uncommitted changes"`, stays dirty): the avatar's own `commit` carries
+  the mirror. That keeps `git add -A` safe without stashing (`checkStaged` looks at the staged paths once
+  more).
+- **A failed push pauses nothing in memory:** the note stays saved, the row stays dirty, `mirrorError` says
+  why (`VAULT_MIRROR_ERROR`: stable texts — `no git token`, `memory service unavailable (<reason>)`, `push
+  failed: …`, `rebase conflict: …` (outside the vault), `path blocked: …`, …), the next pass retries.
+- **Hold (`mirrorHold`):** `checking` or `confirm` — the mirror writes nothing into the connected repository
+  (`skipped: hold`); see "Repository connected or changed" below.
+- **A vault note EDITED directly in git is not read back** — the next mirror commit restores the service's
+  version, and the edit stays in git history. **A note ADDED directly in git stays there** (the notice) but
+  is not part of the brain: search and read do not see it. The repository template, the settings card and
+  both self-knowledge surfaces say so.
+
+### Moving a vault (`vaultMigration.ts`, `routes/personalVault.ts`)
+Per owner, one at a time, resumable; ONE background job per app instance, started by an admin route or by a
+repository change, never at boot. Until an owner is cut over they work on the repository exactly as before.
+- **The migration takes NO database backup — the way back is in how it works.** A cutover deletes and
+  rewrites no source file and adds ONE database row; every note is read back and hash-compared before the
+  home flips; a failed import withdraws what that attempt wrote (`discardImported` — only notes that still
+  are exactly what it sent), so the service is left as it was found; a rollback requires the mirror to end
+  `synced` first, so the repository holds every note before the row goes; whatever a rollback or a leftover
+  clear would delete from the service without a copy elsewhere is set aside first (quarantine, in Noah's data
+  dir).
+- **What `store.retirementGate()` does here:** it is asked before every cutover, every rollback and the
+  leftover-clearing step, and it only REFUSES. The gate backs the database up at boot ONLY when retired data
+  is present (`retirementDataPresent` — an ordinary boot writes no backup file); when that backup FAILED, the
+  gate stays closed for the rest of that boot and these steps answer `backup_failed` until a later boot's
+  backup works. Do not describe it as "the migration backs up first".
+- **Dry run** (`planVaultMigration`): what would be imported and what would not — nothing is skipped
+  silently. `skipped` lists files under `wiki/` / `raw/` that are not vault notes (`VAULT_SKIP`: not markdown,
+  a dot name, too deep, too long, a link, …): they stay in the repository and are served from the clone. It
+  changes nothing in the service or the database (each clone is synced with its remote, as any run does), so
+  it is not audited.
+- **Cutover** (`cutoverVault`; idempotent — a note already there with the same hash is skipped) holds the
+  owner's vault write queue for its whole length, then the clone's repo lock. It syncs the clone, checks that
+  the clone IS its remote branch, scans the vault files without following a link, compares with what the
+  service holds, imports, and verifies. **The home flips only when the service holds EXACTLY the clone's
+  vault** — every note read back with the clone's hash and no other vault note of that owner in the service.
+  **What it decided before it waited is asked again once the lock is held, and what a flip depends on once
+  more in the same tick as the flip:** the user still exists, the SAME repository and branch are connected, no
+  run is in progress — otherwise it stops (`no_user`, `repo_changed`, `run_in_progress`) and withdraws what it
+  imported; a newly connected repository is handled by its own hook. The first mirror record follows; its
+  failure never undoes the move.
+- **`ownerRunInProgress` is a courtesy, not the safety:** it counts the owner's routines and their chat /
+  task-API turns on their own avatar, and — on a SHARED account, where teammates write the repository too —
+  any teammate's chat with the avatar. It only avoids moving a vault under a run whose frozen prompt describes
+  the other home; a write can never straddle a flip because of the write queue (above).
+- **Blockers** (`VAULT_BLOCKER`, `<code>: <detail>`; the admin screen words them in Korean). A blocked owner
+  stays on `repo` and is retried on the next pass.
+  - `no_git_token` — no git token at all, or (an https remote) none for THAT repository's host. Checked
+    before anything is fetched: a vault moved without a token could never be mirrored.
+  - `sync_failed`, `uncommitted_changes`, `unpushed_commits` — the clone must be exactly its remote branch.
+  - `note_too_large` (over 512 KiB), `not_utf8`, `invalid_content` (a NUL) — the service could not hold it.
+  - `note_conflict` — two files of the CLONE are one note path once normalized (NFC), with different
+    content. Nothing to do with the service: the owner has to settle it in the repository.
+  - `vault_folder_link` — `wiki` or `raw` in the repository is a link or a file, not a plain folder: the
+    mirror never writes through a link, so no note under it could ever be copied back.
+  - **The two leftover blockers** (`VAULT_LEFTOVER_BLOCKERS` — the admin screen offers 남은 사본 비우기 on
+    exactly these codes): **`service_note_conflict`** — the SERVICE already holds a different note at a path
+    of the clone; **`service_only_note`** — the SERVICE holds a vault note the clone does not have. Both mean
+    the service still holds something for an owner on `repo`; the owner is not moved until it is cleared.
+  - `repo_changed` — the connected repository or branch changed while this owner was being looked at; the
+    new one is handled on its own. `no_user` — no such user, or the user was deleted meanwhile.
+  - `wiki_full`, `source_changed` (a file changed while it was imported), `verify_failed`, `refused`,
+    `memory_not_configured`, `memory_unavailable`, `backup_failed`, `run_in_progress`, `internal_error`.
+- **Every earlier state has an outcome:** a repo with `wiki/` and/or `raw/` → notes and `CLAUDE.md` imported;
+  a repo that predates the vault layout → `CLAUDE.md` imported if present (`brain-migrate` then builds the
+  skeleton in the service through the same repo tools); no repository → `no_repo`, nothing to import (the
+  vault starts in the service when one is connected).
+- **Rollback** (`rollbackVault(store, config, userId, { expect })`), inside the owner's write queue:
+  1. `expect` (`"memory"` | `"repo"`) is the home the caller believes the owner has. When it is not, NOTHING
+     is done (`home_mismatch`) — a stale screen must not turn "discard the leftover copy" into a real
+     rollback, or the reverse.
+  2. The gate, then `syncVaultMirror({ push: true })` must end `synced` and the row must not be dirty. A
+     mirror on hold, without a repository, blocked by a dirty clone, failed or still behind refuses with its
+     reason (`VAULT_ROLLBACK_REFUSAL`). It never falls back to an older copy. **A notice does NOT block:**
+     the repository then holds everything the service has, and more.
+  3. Wiki notes that are NOT vault paths (the mirror does not carry them) are quarantined — before the flip,
+     so a note that cannot be saved leaves everything as it was (`leftover_not_saved`).
+  4. `clearPersonalVault` (the flip), THEN `deleteWiki(owner)` — a wiki deleted under a row that still says
+     `memory` would be mirrored as deletions.
+- **Recovery after a lost service volume = roll the owner back, then move them again.** The mirror of an
+  emptied service deletes nothing (no ledger entry names those notes), ends `synced` with a notice, the
+  rollback goes through, and the repository — which still holds the notes as last pushed — is the vault
+  again; the next cutover imports them. Notes written after the last successful push are gone with the
+  volume.
+- **Clearing a leftover copy:** for an owner ALREADY on `repo` the same call with `expect: "repo"` (the admin
+  screen's 메모리 서비스에 남은 사본 비우기) discards what the service still holds for them — nothing reads
+  it, and it blocks the next cutover (`service_only_note`, `service_note_conflict`) until it is gone. That
+  copy was never verified against the repository, so every note of the wiki — vault path or not — that the
+  owner's clone does not hold BYTE FOR BYTE (the clone as it is on disk, no link followed) is quarantined
+  first; a note that cannot be read or put aside stops the step and nothing is deleted
+  (`leftover_not_saved`). A successful clear also drops that owner's cached report.
+- **The quarantine** (`quarantineLeftoverNotes`): written under `<dataDir>/personal-vault-leftover/<user>/
+  <time>/<note path>` and moved at once to `<dataDir>/retired/<boot stamp>/` + the same path with the
+  retirement helpers (`openRetirementSweep`, `quarantineRetired`; Noah never prunes it). Nothing to set aside
+  → nothing is written. The audit row states the counts; the HTTP answer stays `{ ok: true }`.
+- **Operating order — to KEEP someone on the repository, set the mode to `repo` FIRST, then roll back.**
+  While the mode is `memory`, a rolled-back owner is cut over again by the next pass or by their next
+  repository change. Mode `memory` → `repo` only stops NEW cutovers (also in the middle of a pass); it
+  rolls nobody back.
+- **Repository connected or changed** (`onKnowledgeRepoChanged`, fire-and-forget, called by
+  `PUT /api/me/knowledge-repo` when the repository OR its branch changed — a branch holds its own vault
+  files; a re-save of the same pair is not a change — and by `create_repo` after its first commit).
+  - Home `repo`, mode `memory`: the owner is cut over, queued behind any running job. Only
+    `run_in_progress` is retried here (a repository the avatar created with `create_repo` is connected in the
+    middle of a run); every other blocker waits for the next pass.
+  - Home `memory`: **the hold is set to `checking` the moment the change is stored** — before anything could
+    write into the new repository — and the deletion ledger is emptied: its entries (deletions not copied
+    yet, a confirmation of the previous repository's own notes) are about the repository that WAS connected,
+    and the new one is judged afresh. The queued check (`settleRepoChange`, inside the write queue and the repo lock, re-reading
+    the connected repository and branch before every change of state) then settles it:
+    - **lift** (and mark dirty — the mirror continues into it): the repository holds no vault file, or every
+      vault note it holds is already in the service with the same content (a repository reconnected);
+    - **`confirm`**: both hold notes and the repository has vault notes of its own — only the owner's press
+      lets the copy replace them;
+    - **import**: the service's wiki is EMPTY and the repository holds vault notes → they are imported as in a
+      cutover (same blockers) and the hold is lifted;
+    - **stays `checking`**: the repository could not be looked at or the import was blocked (no token,
+      unreachable, the service down, a blocker) — or the owner connected yet another repository meanwhile,
+      which has its own check queued. **A clone that is not at the connected branch's remote tip counts as
+      "could not be looked at"** (`cloneNotAtConnectedTip`: behind `origin/<branch>` after the sync — a
+      branch change whose `git checkout` was refused by uncommitted changes leaves the clone on the PREVIOUS
+      branch, and judging that tree would lift the hold for a branch nobody saw). A branch the remote does
+      not have yet passes; uncommitted changes alone pass. What was in the way is kept as the owner's report
+      (state `memory`, the blocker), so the admin table names it; a later look that settles drops it.
+  - **Retries:** the cutover follow-up is retried every 60 s, at most 30 times (`repoChangeRetry`). The look
+    at a repository on hold never gives up while the hold is `checking`: every 60 s for those 30 attempts,
+    then every 10 minutes (`slowDelayMs`) — with the mode on `repo` no pass would ever end the hold. The
+    timers are in process; `resumeVaultMirrorChecks` (boot, `index.ts`) starts the look again for every row
+    left `checking`. Every migration pass re-checks them too. The owner can ask for the look again NOW
+    (`POST /api/me/personal-vault/mirror-recheck`, the settings card's 지금 다시 확인): it does nothing unless
+    the hold is `checking`, and never changes the hold by itself.
+  - **The owner's press** (`POST /api/me/personal-vault/mirror-confirm`, body `{ repo, branch }`): accepted
+    only in the `confirm` state and only when the connected repository and branch are the ones the body names
+    (a stale screen confirms nothing) — every other case is 409. **The press covers the repository as it is
+    at the press** (`confirmVaultMirrorHold`): inside the write queue and the repo lock the clone is synced
+    and must be at the connected branch's tip, the service is listed, and every vault file the clone holds
+    that the service does not goes into the deletion ledger; then the hold is lifted and the mirror marked
+    dirty. The next pass removes exactly those and overwrites what both hold. A vault note that reaches the
+    repository by git AFTER the press is not in the ledger: it is kept and counted in the notice, however
+    long the pushes fail. A repository or service that cannot be read at the press changes nothing (503, the
+    hold stays `confirm`).
+  - A disconnected repository changes nothing: there is nothing to import and nowhere to mirror.
+- **Deleting a user:** `deleteWiki(owner)` runs INSIDE that owner's vault write queue (`routes/admin.ts`,
+  best effort, logged) — after any queued write or cutover in progress, so the wiki cannot come back; a
+  cutover in progress sees the user is gone right before the flip and does not flip. `deleteUser` removes the
+  row and the ledger. No quarantine here: the user is being deleted.
+- **Routes** (`createPersonalVaultRouter`, mounted after the admin router):
+  | Route | Who | What | Audit id |
+  |---|---|---|---|
+  | `GET /api/admin/personal-vaults` | admin | mode, `serviceConfigured`, `running`, per owner: state, repo, `migratedAt`, mirror, the last report this process still holds | — |
+  | `POST /api/admin/personal-vaults/dry-run` | admin | `{ reports }`, 4 owners at a time | — (changes nothing) |
+  | `POST /api/admin/personal-vaults/mode` | admin | `{ mode }` → `{ mode, started }`; `memory` starts a pass, refused 409 with no service configured | `set_personal_vault_mode` |
+  | `POST /api/admin/personal-vaults/run` | admin | 202 `{ started }` (false when one is running; audited only when it started); 409 while the mode is `repo` or no service is configured | `personal_vault_run` |
+  | `POST /api/admin/personal-vaults/:userId/rollback` | admin | body `{ expect: "memory" \| "repo" }` (400 without it) → `{ ok: true }`; 409 with the Korean reason when refused, also for a home that is not the expected one. The audit row says which of the two happened, with the quarantine counts | `personal_vault_rollback` |
+  | `GET /api/me/personal-vault` | owner | `{ home, mirror, serviceConfigured }` (`mirror` null for home `repo`; `serviceConfigured` false = no memory service on this server — the settings card says so above whatever the copy's last state was) | — |
+  | `POST /api/me/personal-vault/mirror-recheck` | owner | 202 `{ started }` (false unless the hold is `checking`) | — |
+  | `POST /api/me/personal-vault/mirror-confirm` | owner | body `{ repo, branch }` → `{ ok: true }`; 409 otherwise | `personal_vault_mirror_confirm` |
+
+  `mirror` in both GETs is `{ dirty, syncedAt, error, hold: "checking" | "confirm" | null, notice }`.
+  UI: 관리자 → 시스템 → 개인 브레인 이전; 설정 → 지식·플러그인 → 지식 저장소 (브레인 노트 보관) —
+  [`client.md`](client.md) "Personal vault screens".
+
+### Search: what differs from `rankBrainNotes`
+`MemoryVault.search` asks the service with prefix `wiki` and drops `wiki/index.md`, `wiki/log.md` and
+`*_template.md` itself, returning the same `BrainSearchResult`. What is the SERVICE's and Noah cannot change:
+- the body score looks at the whole note text INCLUDING its frontmatter block (the clone ranker scores the
+  body without it), so a word that appears only in frontmatter can now hit;
+- `no_vault` needs at least one note under `wiki/` or `raw/` — the service has no empty folders, so a vault
+  that holds no note yet reads as missing;
+- the service returns at most 20 hits, structural pages included: Noah asks for `limit + 3` (then for 20), so
+  at limit 18–20 a few hits can be missing when index / log / template match the query;
+- **a query is cut to its first 500 UTF-16 code units** (`searchQueryOf`; one fewer when the cut would split
+  a surrogate pair). The service's rule is `z.string().max(500)`, and what that counts depends on its zod
+  version (the one it pins counts code points, an older one UTF-16 units); 500 UTF-16 units is at most 500
+  code points, so the cut passes either way. `rankBrainNotes` takes any length, so a long query is cut, not
+  refused.
+
+The 2,000-note scan cap and its `unscanned` report are the same on both sides.
+
+### Self-knowledge (both surfaces)
+- **Shared facts:** `OwnerState.vault` (`summarizeOwnerState`): `home`, `migratedAt`, `mirror` (`dirty`,
+  `syncedAt`, `error`, `notice`, `hold`), `serviceConfigured`.
+- **Frozen prompt** (`AgentRequest.vaultHome`, stamped ONLY as `"memory"` by `stampPromptRequest`, on every
+  viewer class): `vaultMemoryHomeParagraph` in `brainSection`, three texts —
+  `owner` (where the vault lived when the conversation started, saved on write, what `commit` pushes, the
+  one-way copy, an outage is not an empty brain, and that `describe_system` reports the live state);
+  `writer` (a shared-account teammate: the same facts WITHOUT the `describe_system` promise — a non-owner's
+  `describe_system` carries no owner state — and "the tool result is right"); `reader` (a plain teammate, a
+  consultation: the location and the outage rule). The THREE "not pushed until you commit" sentences are
+  replaced for this home (`knowledgeRepoSection`'s last sentence, `brainSection`'s commit rule, the
+  shared-account teammate paragraph's parenthesis). An owner whose vault is in the service but who has NO
+  repository connected hears, next to "no repository yet", that the notes are still there and unreachable
+  through the tools (`VAULT_MEMORY_NO_REPO_SENTENCE`). Nothing live rides the prompt, and "commit after
+  writing" stays the instruction — which is also what keeps a frozen conversation right if its owner's vault
+  moves (in either direction) mid-conversation.
+- **`describe_system`** (owner only, `personalVaultLines`):
+  - home `repo` with a repository connected: ONE line — the vault is the knowledge repository and a note is
+    saved only by `mcp__repo__commit`; without a repository: no line;
+  - home `memory`: `Personal vault` (home + since when), `Memory service` (ONE listing of the vault's `raw/`
+    folder, bounded to 3 s: reachable / UNREACHABLE with the reason in words / answering but refused),
+    `Vault copy in the repository` (`vaultMirrorStateText`: up to date, BEHIND, BEHIND after a failure — with
+    a next step that depends on why, a text the table does not know getting the generic one —, CHECKING,
+    WAITING FOR THE OWNER; a notice is quoted as stored and explained: repository notes the service does not
+    hold, nothing deleted, not part of the brain);
+  - home `memory` with NO repository: the vault line says the notes are there but unreachable, the copy line
+    says there is nowhere to copy to, and neither names a tool that would refuse.
+- **Home `repo` renders the prompt exactly as before, and `describe_system` differs by that one line** — also
+  on a server with a memory service and mode `memory` (`tests/vault-self-knowledge.test.ts` pins the line and
+  compares everything else).
+- **Text every owner shares states no home:** the brain-* skills, `knowledge-backfill`, the capture tour, the
+  manual's `knowledge` topic and the repository template say "commit after writing" and tell saved from not
+  saved by the tool result's own words — "Not committed yet" is not saved until `mcp__repo__commit`
+  succeeds; "is saved now" is saved. The home-specific fact is said only where it is rendered per owner.
+
+### What Noah does not verify, and known limits
+- **That a write landed as sent.** A `put`'s answer is trusted; only the migration reads notes back and
+  compares hashes.
+- **Writers other than Noah.** Noah assumes it is the service's only client for these wikis. A `stale` /
+  `exists` is retried once on what is there now; whatever another client wrote is mirrored into the
+  repository like any note. Nothing prevents or detects the service being registered on pi's MCP page.
+- **The repository's vault files after cutover.** They are never read back to decide content: a direct git
+  edit is not detected, only overwritten; that the remote holds the copy is known from the push having
+  succeeded, nothing more.
+- **A `.gitignore` that ignores vault paths yields `synced` without a push.** `git add -A` stages nothing,
+  there is nothing to commit, and the pass is recorded ok — the repository then holds no copy and nothing
+  says so.
+- **The mirror reads EVERY note of the service on every pass** (8 at a time), also when one note changed: a
+  large vault makes every pass, and every `commit`, proportionally slower.
+- **No backoff on a failing push:** a dirty owner is retried every pass (60 s after the last one ended) for
+  as long as it fails; only the log line is once per cause.
+- **A stale ledger entry plus a lost service volume deletes that one repository file.** An entry is written
+  BEFORE the service is asked; when the deletion was then refused or failed, the entry stays (harmless while
+  the service holds the note). If the service later loses the note for another reason, the next pass reads
+  "Noah deleted it, the service no longer has it" and removes the repository file — git history keeps it.
+- **A rebase conflict OUTSIDE the vault paths stays until someone settles it.** The local commit that
+  conflicts remains in Noah's clone; every pass then fails `rebase conflict: <files>`, a rollback is refused
+  (`mirror_failed`), and the avatar has no tool that settles it (its `commit` answers the same conflict with
+  "reconcile it manually"). The settings card says so and no longer offers to ask the avatar. Ways out:
+  revert the conflicting change in the repository, or fix the clone on the server. Notes stay safe in the
+  service.
+- **A commit on a clone that could not switch branches pushes that clone's commits to the connected
+  branch** (older than the vault work, `alignBranch` keeps a clone it cannot switch) — for every file that
+  is NOT a vault note of a held copy. The vault part is closed: see "While the copy is on hold no push
+  changes a vault path" above.
+- **Rename conflicts other than rename/rename are untested** in the vault-conflict resolution.
+- **One guard has no deterministic test:** the `O_NOFOLLOW` on opening a note file in the mirror is a second
+  guard behind an `lstat` check (removing it alone fails no test, by design).
+- **A file that is not UTF-8, moved onto a vault path.** A repo file → note move reads the file as text
+  (`readFile`, utf8), so bytes that are not UTF-8 are not preserved in the note; the migration blocks on such
+  a file (`not_utf8`), the move does not.
+- **A long dry run can outlast the browser:** the client gives every request 120 s (`lib/api.ts`), and a dry
+  run syncs every owner's clone (4 at a time). The server finishes and keeps the reports, but the screen
+  shows a timeout; reload it.
+- **The service's ranking** (above) and its limits — Noah learns of a full wiki or an over-long path from
+  the refusal.
+- **The service's durability.** Noah backs up nothing of the service's data (and takes no database backup
+  for a move); the only other copy of a `memory`-home vault is its repository mirror, which can be behind.
+- **Exclusion across processes.** The per-owner write queue and the one-job-at-a-time migration are in
+  process (one Noah process per instance).
+- **More than reachability in `describe_system`:** its check is one listing, not a write.
+- **A moved owner on a real stack.** The boot test (`96-memory.mjs`, `build-run-verify.md`) saw the real
+  service give the answers the client depends on, from inside Noah's container — but nobody is moved there
+  (no git host with a knowledge repository), so the cutover, the tools of a moved owner, the mirror's push
+  and a rollback are tested only against a scripted `fetch` and the hand-written double.
+
+Tests (all in the tree): `tests/memory-client.test.ts`, `tests/personal-vault.test.ts` (paths, vault, store,
+queue, ledger), `tests/vault-tools.test.ts`, `tests/vault-readers.test.ts` (tools, routes, standing memory),
+`tests/vault-mirror.test.ts`, `tests/vault-migration.test.ts`, `tests/routes-personal-vault.test.ts`,
+`tests/vault-self-knowledge.test.ts`, `tests/client-vault-codes.test.ts` (the client's translation tables
+cover exactly the server's code lists); the two screens — `tests/react-settings-vault.test.tsx`,
+`tests/react-admin-vaults.test.tsx` ([`client.md`](client.md) "Personal vault screens"). The double they
+share is `tests/helpers/fakeMemory.ts`.

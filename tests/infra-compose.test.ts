@@ -12,7 +12,7 @@ const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 /** pi-gateway's compose (pinned commit): its services, its networks, and every `${VAR}` it reads. */
-const PI_SERVICES = ["sandbox-image", "egress-proxy", "jaeger", "sandboxd", "mcp-broker", "gateway"];
+const PI_SERVICES = ["sandbox-image", "egress-proxy", "jaeger", "sandboxd", "mcp-broker", "memory", "gateway"];
 const PI_NETWORKS = ["edge", "control", "broker-egress", "proxy-egress"];
 const PI_COMPOSE_VARIABLES = [
   "APT_MIRROR_URL",
@@ -163,7 +163,7 @@ describe("docker-compose.yml — the Noah service", () => {
   it("joins its own network, pi's gateway network and noah-mcp — nothing a sandbox is on", () => {
     const networks = block(noah, "networks", 4);
     const joined = [...networks.matchAll(/^ {6}([a-z][\w-]*):/gm)].map((m) => m[1]);
-    expect(joined).toEqual(["default", "edge", "noah-mcp"]);
+    expect(joined).toEqual(["default", "edge", "noah-mcp", "noah-memory"]);
     expect(networks).toContain("- ${NOAH_MCP_HOST_ALIAS:-noah-almighty}");
     // Sandboxes are network_mode none (pi's sandboxd); the only pi-side network the broker gains
     // is noah-mcp, and no sandbox-facing network (proxy-egress, control) is touched.
@@ -191,6 +191,30 @@ describe("docker-compose.yml — the Noah service", () => {
       "file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_gateway_api_key",
     );
     expect(block(noah, "depends_on", 4)).toMatch(/pi-setup:\n {8}condition: service_completed_successfully/);
+  });
+
+  it("reaches pi's memory service over a network only the two are on, with its own copy of the key", () => {
+    expect(environment).toMatch(/^ {6}PI_MEMORY_URL: http:\/\/memory:7090$/m);
+    expect(environment).toMatch(/^ {6}PI_MEMORY_API_KEY_FILE: \/run\/secrets\/pi_memory_api_key_noah$/m);
+    // File only: an inline key would sit in the container env (and Noah's config refuses it).
+    expect(compose).not.toMatch(/PI_MEMORY_API_KEY:/);
+    expect(noah).toContain("- source: pi_memory_api_key_noah");
+    expect(block(compose, "secrets", 0)).toContain(
+      "file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/pi_memory_api_key",
+    );
+    // The service joins noah-memory on top of pi's own network; the network is internal and holds
+    // nothing else (no other service in either file names it).
+    const memory = block(block(override, "services", 0), "memory", 2);
+    expect(memory).toMatch(/^ {4}networks:\n {6}noah-memory: \{\}$/m);
+    expect(block(block(override, "networks", 0), "noah-memory", 2)).toMatch(/^ {4}internal: true$/m);
+    const uses = (text: string): number => (text.match(/^ {6}noah-memory:/gm) ?? []).length;
+    expect(uses(compose) + uses(override)).toBe(2);
+    // pi's own compose must have the service this override extends, on the port Noah calls.
+    const pi = read("vendor/pi-gateway/docker-compose.yml");
+    expect(pi).toMatch(/^ {2}memory:$/m);
+    expect(read("vendor/pi-gateway/apps/memory/src/config.ts")).toContain("MEMORY_PORT = 7090");
+    // Noah starts without waiting for it: a memory outage degrades the brain, it does not stop the app.
+    expect(block(noah, "depends_on", 4)).not.toContain("memory");
   });
 
   it("keeps compose init off (#71) and the data volume name unchanged", () => {
@@ -276,6 +300,16 @@ describe("docker/pi scripts", () => {
     );
     // Never inline: the key would sit in the container env.
     expect(compose).not.toMatch(/PI_GATEWAY_ADMIN_API_KEY:/);
+  });
+
+  it("gives Noah its own 0400 copy of the memory service's key and stops when pi has not made one", () => {
+    const script = read("docker/pi/setup-host.sh");
+    expect(script).toContain('MEMORY_KEY="$SECRETS/memory/api_key"');
+    expect(script).toContain('DEST="$SECRETS/noah/pi_memory_api_key"');
+    expect(script).toContain('copy_for_noah "$MEMORY_KEY"');
+    expect(script).toMatch(/\[ -s "\$MEMORY_KEY" \] \\\n\s+\|\| fail /);
+    // pi's own script is what creates the service's key (same value, the service's uid).
+    expect(read("vendor/pi-gateway/scripts/setup-host.sh")).toContain('"$M/api_key:$MEM_UID"');
   });
 });
 

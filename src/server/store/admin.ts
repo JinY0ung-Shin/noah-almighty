@@ -14,12 +14,14 @@ import {
   type UserRow,
   ADMIN_NOTICE_KEY,
   MCP_TOOL_POLICY_KEY,
+  PERSONAL_VAULT_MODE_KEY,
   PRESENCE_WINDOW_MS,
   SIGNUP_MODE_KEY,
   now,
   parseNameList,
 } from "./internal.js";
 import logger from "../logger.js";
+import type { PersonalVaultMode } from "./personalVault.js";
 import {
   isAdminNoticeLevel,
   normalizeAdminNoticeText,
@@ -221,6 +223,21 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
       this.setAppSecret(SIGNUP_MODE_KEY, mode === "closed" ? "closed" : "approval");
     }
 
+    /**
+     * Where personal vaults should live. Fails to `repo`: only an explicitly
+     * stored `memory` reads as memory — absent or unreadable keeps every owner
+     * who was not cut over yet on their knowledge repo, exactly as before. This
+     * is the TARGET the migration pass works towards; an owner's actual vault
+     * home is their `personal_vaults` row (`getPersonalVault`).
+     */
+    getPersonalVaultMode(): PersonalVaultMode {
+      return this.getAppSecret(PERSONAL_VAULT_MODE_KEY) === "memory" ? "memory" : "repo";
+    }
+
+    setPersonalVaultMode(mode: PersonalVaultMode): void {
+      this.setAppSecret(PERSONAL_VAULT_MODE_KEY, mode === "memory" ? "memory" : "repo");
+    }
+
     // ---- 관리자 공지 (the one notice at the top of every screen) ---------
 
     /**
@@ -368,6 +385,10 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
         // Inline UI values this user left (the message FK takes the rest with
         // the conversations below; this covers any row outside them).
         this.db.prepare("DELETE FROM inline_ui_states WHERE user_id = ?").run(id);
+        // Vault-home row (the notes themselves are in the memory service; the
+        // admin delete handler removes that wiki next to the clone).
+        this.db.prepare("DELETE FROM personal_vaults WHERE user_id = ?").run(id);
+        this.db.prepare("DELETE FROM personal_vault_deletes WHERE user_id = ?").run(id);
         // Team-brain cards this user drafted; committed pages stay in the vault.
         this.deleteTeamBrainProposalsForUser(id);
         // Delete conversations owned by or targeting this user (+ their messages).

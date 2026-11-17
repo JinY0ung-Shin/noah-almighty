@@ -1466,6 +1466,11 @@ export function stampPromptRequest(
     // so a run without it never advertises names it could not type.
     browserSecrets: ownerToolAccess ? ownerState.browserSecrets : [],
     knowledgeRepoConfigured,
+    // Where the owner's vault lives rides EVERY viewer class, like
+    // `knowledgeRepoConfigured` (a teammate and a consultation read that vault
+    // too). Stamped only for the memory service: with the vault in the
+    // repository the request — and so the prompt — is exactly what it was.
+    ...(ownerState.vault.home === "memory" ? { vaultHome: "memory" as const } : {}),
     // Shared-account self-state rides on EVERY viewer class (it is not a secret):
     // the teammate branch switches its repo guidance to "writes allowed" on it,
     // and the owner branch surfaces it as META-COGNITION.

@@ -10,6 +10,7 @@ import {
   type KnowledgeRepoContext,
 } from "./knowledgeRepo.js";
 import logger from "./logger.js";
+import { memoryVaultFor, type MemoryVault } from "./personalVault.js";
 import { readRegularFileAsync } from "./chatImages.js";
 import { mcpHttpBridgeServerDef, type McpHttpBridgeConfig } from "./sharedMcpServers.js";
 import type { Store } from "./store.js";
@@ -720,14 +721,73 @@ export async function loadKnowledgeRepoMemory(
   store: Store,
   avatarId: string,
   config: AppConfig,
+  options: { vaultDeadlineMs?: number } = {},
 ): Promise<KnowledgeRepoMemory> {
   if (config.agentRuntime === "local") {
     return { personal: null };
   }
-  const personal = store.getKnowledgeRepo(avatarId).repo
-    ? await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP)
-    : null;
+  if (!store.getKnowledgeRepo(avatarId).repo) {
+    return { personal: null };
+  }
+  // Vault in the memory service: CLAUDE.md is a vault note and is read there, never from the clone's copy.
+  const vault = memoryVaultFor(store, config, avatarId);
+  const personal = vault
+    ? await readVaultClaudeMd(vault, PERSONAL_CLAUDE_MD_CAP, options.vaultDeadlineMs ?? STANDING_MEMORY_VAULT_DEADLINE_MS)
+    : await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP);
   return { personal };
+}
+
+/**
+ * What stands in for the standing memory when it could not be LOADED (the
+ * memory service was unavailable). It rides the same slot as CLAUDE.md, so
+ * every caller — a chat turn, a routine, a consultation — passes it on
+ * unchanged and the avatar reads it: a missing memory must never look like
+ * "the owner has no standing guidance". The prompt it lands in is frozen per
+ * conversation, so it also says how to get the real text later.
+ */
+export const STANDING_MEMORY_UNAVAILABLE_NOTICE =
+  "(Noah's notice, not the owner's text.) The owner's standing guidance (CLAUDE.md) could NOT be loaded when this conversation started: it is a vault note kept in the memory service, and that service was unavailable. It is NOT empty and NOT missing — it simply is not shown here. Before relying on the owner's standing rules, read it yourself with `mcp__repo__read_file` (path `CLAUDE.md`) if that tool is available in this run; if it cannot be read either, tell the user that the owner's standing guidance could not be loaded because the memory service is unavailable.";
+
+/**
+ * How long a turn waits for the standing memory of a vault in the memory
+ * service. The read is awaited at the start of EVERY turn (the prompt it feeds
+ * is frozen after the first), so a service that hangs must not hold each turn
+ * for the client's whole timeout: past this, the notice takes the memory's place.
+ */
+export const STANDING_MEMORY_VAULT_DEADLINE_MS = 3_000;
+
+/**
+ * {@link readRepoClaudeMd} for a vault in the memory service: same trim, cap
+ * and truncation mark; a missing or empty note is null. A service that cannot
+ * be used — or does not answer within `deadlineMs` — is NOT null: the notice
+ * above takes the memory's place.
+ */
+async function readVaultClaudeMd(vault: MemoryVault, cap: number, deadlineMs: number): Promise<string | null> {
+  let raw: string;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const reading = vault.read("CLAUDE.md");
+    // The read itself is left to end on the client's own timeout; nothing waits for it.
+    reading.catch(() => undefined);
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer within ${deadlineMs} ms`)), deadlineMs);
+      timer.unref?.();
+    });
+    raw = (await Promise.race([reading, late])).trim();
+  } catch (error) {
+    if (error instanceof Error && error.message === "NOT_FOUND") return null;
+    logger.warn(
+      { userId: vault.userId, err: error instanceof Error ? error.message : String(error) },
+      "standing memory (CLAUDE.md) could not be read from the memory service; the run gets a notice instead",
+    );
+    return STANDING_MEMORY_UNAVAILABLE_NOTICE;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!raw) {
+    return null;
+  }
+  return raw.length > cap ? `${raw.slice(0, cap)}\n…(truncated)` : raw;
 }
 
 /**

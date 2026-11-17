@@ -61,13 +61,15 @@ checks_stage() {
   extra 87-mcp-file-args         G-mcp-file-args.log           node 87-mcp-file-args.mjs
   setup "07 git fixture" 3 ./07-git-fixture.sh
   extra 88-plugin-refresh        P-plugin-refresh.log          node 88-plugin-refresh.mjs
-  # Guards for behaviour earlier bumps brought (argument validation, grep's glob, the tool call limit, turn timings).
+  # Guards for behaviour earlier bumps brought (argument validation, grep's glob, the tool call limit, turn timings,
+  # the memory service).
   extra 90-pi-validation         V-pi-validation.log           node 90-pi-validation.mjs
   extra 92-grep-glob             V-grep-glob.log               node 92-grep-glob.mjs
   extra 93-tool-call-limit       L-tool-call-limit.log         node 93-tool-call-limit.mjs
   extra 94-turn-timings          Q-turn-timings.log            node 94-turn-timings.mjs
   extra 80-context-usage         X-context-usage.log           node 80-context-usage.mjs
-  # A new bump's ONE quick check goes here, as the next free number below 95 (SKILL.md "Adding a check").
+  extra 96-memory                M-memory.log                  node 96-memory.mjs
+  # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
   grep -E 'error-level=|MiB' "$W/evidence/final-state.txt" | sed 's/^/  /'

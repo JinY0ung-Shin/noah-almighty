@@ -128,6 +128,9 @@ beforeEach(() => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown, init?: RequestInit) => {
+      // The tab also reads where the brain notes are kept when it opens (pinned in
+      // react-settings-vault.test.tsx). It is not one of the calls counted here.
+      if (String(input) === "/api/me/personal-vault") return ok({ home: "repo", mirror: null });
       const call: Call = {
         url: String(input),
         method: init?.method || "GET",
