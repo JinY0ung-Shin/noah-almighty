@@ -45,6 +45,8 @@ import logger from "./logger.js";
 import { marketplaceCloneUrl, sanitizeName, scrubGitError } from "./marketplace.js";
 import {
   MEMORY_REFUSAL,
+  MEMORY_WIKI_MAX_BYTES,
+  MEMORY_WIKI_MAX_NOTES,
   MemoryRefusedError,
   MemoryUnavailableError,
   memoryClientFor,
@@ -160,8 +162,8 @@ export type VaultRollbackResult =
 export const VAULT_LEFTOVER_DIR = "personal-vault-leftover";
 
 // The service's own limits (its contract): a wiki holds at most this much.
-const SERVICE_MAX_NOTES = 10_000;
-const SERVICE_MAX_WIKI_BYTES = 256 * 1024 * 1024;
+const SERVICE_MAX_NOTES = MEMORY_WIKI_MAX_NOTES;
+const SERVICE_MAX_WIKI_BYTES = MEMORY_WIKI_MAX_BYTES;
 /** At most this many blockers of one kind are spelled out; the rest are counted. */
 const MAX_BLOCKERS_PER_KIND = 20;
 /** At most this many non-markdown files are listed one by one. */

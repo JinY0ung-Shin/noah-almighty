@@ -616,6 +616,61 @@ describe("GET /api/me/personal-vault says whether this server has a memory servi
   });
 });
 
+describe("GET /api/admin/personal-vaults/usage", () => {
+  it("admin only; per MOVED owner the note count and bytes against the service's limits — never a path or content", async () => {
+    const { app, store, config, fake } = boot();
+    const admin = await mkUser(app, store, "admin");
+    const moved = await mkUser(app, store, "moved");
+    const onRepo = await mkUser(app, store, "onrepo");
+    connect(store, moved.id, "moved", VAULT);
+    connect(store, onRepo.id, "onrepo", VAULT);
+    await cutoverVault(store, config, moved.id);
+
+    await request(app).get("/api/admin/personal-vaults/usage").expect(401);
+    await moved.agent.get("/api/admin/personal-vaults/usage").expect(403);
+
+    fake.calls.length = 0;
+    const res = await admin.agent.get("/api/admin/personal-vaults/usage").expect(200);
+    const bytes = Object.values(VAULT).reduce((sum, text) => sum + Buffer.byteLength(text), 0);
+    expect(res.body).toEqual({
+      serviceConfigured: true,
+      limits: { notes: 10_000, bytes: 256 * 1024 * 1024 },
+      // Only the owner whose vault lives in the service; the one on the repository is not listed.
+      owners: [{ userId: moved.id, notes: Object.keys(VAULT).length, bytes }],
+    });
+    // Counts only: no note path or text of the owner's brain leaves the server here.
+    for (const [path, text] of Object.entries(VAULT)) {
+      expect(JSON.stringify(res.body)).not.toContain(path);
+      expect(JSON.stringify(res.body)).not.toContain(text.trim());
+    }
+    // It only lists: nothing was written or deleted.
+    expect(writes(fake)).toEqual([]);
+    expect(fake.calls.map((call) => call.op)).toEqual(["list"]);
+  });
+
+  it("an owner whose wiki cannot be listed says why; the others are still counted", async () => {
+    const { app, store, config, fake } = boot();
+    const admin = await mkUser(app, store, "admin");
+    const owner = await mkUser(app, store, "owner");
+    connect(store, owner.id, "brain", VAULT);
+    await cutoverVault(store, config, owner.id);
+
+    fake.failNext(new MemoryUnavailableError("memory service unavailable (list): network error", "network"), { op: "list" });
+    expect((await admin.agent.get("/api/admin/personal-vaults/usage").expect(200)).body.owners).toEqual([{ userId: owner.id, error: "unavailable" }]);
+    fake.failNext(new MemoryRefusedError("forbidden", 403), { op: "list" });
+    expect((await admin.agent.get("/api/admin/personal-vaults/usage").expect(200)).body.owners).toEqual([{ userId: owner.id, error: "refused" }]);
+    expect((await admin.agent.get("/api/admin/personal-vaults/usage").expect(200)).body.owners[0]).toMatchObject({ userId: owner.id, notes: 3 });
+  });
+
+  it("a server without a memory service answers with no owners", async () => {
+    const bare = boot({ fake: null });
+    const admin = await mkUser(bare.app, bare.store, "admin");
+    const owner = await mkUser(bare.app, bare.store, "owner");
+    bare.store.setPersonalVaultMemory(owner.id, { sourceRepo: "x", sourceCommit: null });
+    expect((await admin.agent.get("/api/admin/personal-vaults/usage").expect(200)).body).toMatchObject({ serviceConfigured: false, owners: [] });
+  });
+});
+
 describe("GET /api/me/personal-vault checks the memory service for an owner on home `memory`", () => {
   it("service: ok when it answers, unavailable when it cannot be used, refused when it answers no — null on home `repo`", async () => {
     const { app, store, config, fake } = boot();

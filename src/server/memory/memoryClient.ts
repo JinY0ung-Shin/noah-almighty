@@ -325,6 +325,10 @@ export function memoryClientFor(store: Store, config: AppConfig): MemoryClient |
   return client;
 }
 
+/** The service's per-owner wiki limits (pi's `MAX_NOTES` / `MAX_WIKI_BYTES`, apps/memory/src/wiki.ts): past them it refuses `wiki_full`. */
+export const MEMORY_WIKI_MAX_NOTES = 10_000;
+export const MEMORY_WIKI_MAX_BYTES = 256 * 1024 * 1024;
+
 /** How long {@link probeMemoryVault} waits for the service by default. */
 export const MEMORY_PROBE_TIMEOUT_MS = 3000;
 

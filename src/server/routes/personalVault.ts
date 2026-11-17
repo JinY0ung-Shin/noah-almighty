@@ -1,7 +1,14 @@
 import { Router, type NextFunction, type Response } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
-import { memoryClientFor, probeMemoryVault } from "../memory/memoryClient.js";
+import {
+  MEMORY_WIKI_MAX_BYTES,
+  MEMORY_WIKI_MAX_NOTES,
+  MemoryRefusedError,
+  MemoryUnavailableError,
+  memoryClientFor,
+  probeMemoryVault,
+} from "../memory/memoryClient.js";
 import type { PersonalVaultRow, VaultMirrorHold } from "../store/personalVault.js";
 import {
   VAULT_CONFIRM_REFUSAL,
@@ -25,6 +32,14 @@ import { apiError, safeString, type RouterDeps } from "./_shared.js";
 
 /** How many owners a dry run looks at at once (each one syncs its own clone, under its own lock). */
 const DRY_RUN_CONCURRENCY = 4;
+/** How many moved owners' wikis the usage view lists at once, and how long one listing may take. */
+const USAGE_CONCURRENCY = 4;
+const USAGE_TIMEOUT_MS = 10_000;
+
+/** One moved owner's wiki in the usage view: its size, or why it could not be listed. Never a note path or content. */
+type OwnerUsage =
+  | { userId: string; notes: number; bytes: number }
+  | { userId: string; error: "unavailable" | "refused" | "timeout" };
 
 const NOT_CONFIGURED_MESSAGE =
   "이 서버에는 메모리 서비스가 설정되어 있지 않습니다. 서버 설정(PI_MEMORY_URL, PI_MEMORY_API_KEY_FILE)을 확인해 주세요.";
@@ -106,6 +121,61 @@ export function createPersonalVaultRouter(deps: RouterDeps): Router {
       owners,
     });
   });
+
+  // How full each MOVED owner's wiki in the memory service is (notes, bytes) against the service's limits —
+  // counts and sizes only, never a note path or content: an admin sees whether a brain is near `wiki_full`,
+  // not what is in it. A separate route (not part of the list above, which the screen re-reads every 3 s
+  // while a pass runs) because it lists every moved wiki. Read-only, not audited.
+  router.get(
+    "/api/admin/personal-vaults/usage",
+    requireAuth(store),
+    requireAdmin,
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const limits = { notes: MEMORY_WIKI_MAX_NOTES, bytes: MEMORY_WIKI_MAX_BYTES };
+        const client = memoryClientFor(store, config);
+        if (!client) {
+          res.json({ serviceConfigured: false, limits, owners: [] });
+          return;
+        }
+        const moved = store.listPersonalVaults().map((row) => row.userId);
+        const owners: OwnerUsage[] = new Array(moved.length);
+        const usageOf = async (userId: string): Promise<OwnerUsage> => {
+          let timer: NodeJS.Timeout | undefined;
+          const timedOut = new Promise<OwnerUsage>((resolve) => {
+            timer = setTimeout(() => resolve({ userId, error: "timeout" }), USAGE_TIMEOUT_MS);
+            timer.unref?.();
+          });
+          const listed = client.list(userId).then(
+            (entries): OwnerUsage => ({ userId, notes: entries.length, bytes: entries.reduce((sum, entry) => sum + entry.bytes, 0) }),
+            (error: unknown): OwnerUsage => {
+              if (!(error instanceof MemoryRefusedError) && !(error instanceof MemoryUnavailableError)) {
+                logger.warn({ userId, err: error }, "personal vault usage: the listing failed unexpectedly");
+              }
+              return { userId, error: error instanceof MemoryRefusedError ? "refused" : "unavailable" };
+            },
+          );
+          try {
+            return await Promise.race([listed, timedOut]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        };
+        let cursor = 0;
+        const worker = async () => {
+          while (cursor < moved.length) {
+            const index = cursor++;
+            owners[index] = await usageOf(moved[index]);
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(USAGE_CONCURRENCY, moved.length) }, worker));
+        res.json({ serviceConfigured: true, limits, owners });
+      } catch (error) {
+        // Express 4 does not catch a rejected async handler.
+        next(error);
+      }
+    },
+  );
 
   // Dry run over every owner: what a cutover would import, skip and be blocked
   // by. Changes nothing in the service or the database (each clone is synced

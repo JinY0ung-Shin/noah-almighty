@@ -121,6 +121,37 @@ export function readMyPersonalVault(value: unknown): MyPersonalVault | null {
   return { home: value.home, mirror: normalizeVaultMirror(value.mirror), serviceConfigured: raw.serviceConfigured !== false, service };
 }
 
+/** One moved owner's wiki size (`GET /api/admin/personal-vaults/usage`), or why it could not be listed. */
+export type AdminVaultOwnerUsage =
+  | { userId: string; notes: number; bytes: number }
+  | { userId: string; error: "unavailable" | "refused" | "timeout" };
+
+/** `GET /api/admin/personal-vaults/usage`: counts and sizes only, never a note's path or content. */
+export interface AdminVaultUsage {
+  serviceConfigured: boolean;
+  /** The memory service's per-owner limits: past either it refuses to save (`wiki_full`). */
+  limits: { notes: number; bytes: number };
+  owners: AdminVaultOwnerUsage[];
+}
+
+export function readAdminVaultUsage(value: unknown): AdminVaultUsage | null {
+  const v = value as AdminVaultUsage | null;
+  if (!v || !Array.isArray(v.owners) || !v.limits || !(v.limits.notes > 0) || !(v.limits.bytes > 0)) return null;
+  const owners = v.owners.filter(
+    (o): o is AdminVaultOwnerUsage =>
+      Boolean(o) && typeof o.userId === "string" && (("notes" in o && Number.isFinite(o.notes) && Number.isFinite(o.bytes)) || "error" in o),
+  );
+  return { serviceConfigured: v.serviceConfigured !== false, limits: { notes: v.limits.notes, bytes: v.limits.bytes }, owners };
+}
+
+/** How full a wiki is, as the larger of its two shares of the limits (0..100+, rounded down to a whole percent). */
+export function vaultUsagePercent(usage: { notes: number; bytes: number }, limits: { notes: number; bytes: number }): number {
+  return Math.floor(Math.max(usage.notes / limits.notes, usage.bytes / limits.bytes) * 100);
+}
+
+/** From this share of a limit on, the admin screen marks a wiki as nearly full. */
+export const VAULT_USAGE_WARN_PERCENT = 80;
+
 export function readAdminPersonalVaults(value: unknown): AdminPersonalVaults | null {
   if (!isAdminPersonalVaults(value)) return null;
   return {

@@ -752,6 +752,12 @@ screens show what it says and ask before each step that changes where notes live
   `{ expect: "repo" }` — the server refuses (409) when the owner's home is not the expected one, so a stale
   screen can never turn one into the other. A notice on an owner's row says how to bring the repository's
   notes into the brain (되돌리기, then move again) only where that can be carried out.
+  - **How full a moved owner's wiki is** (`UsageLine`, under the 보관 위치 tag, home `memory` with the service
+    configured only): "노트 N개 · size · 한도의 P%" from `GET …/usage` (counts only), P = the larger share of
+    the two limits (`vaultUsagePercent`, "1% 미만" for a non-empty wiki under 1%); from 80 %
+    (`VAULT_USAGE_WARN_PERCENT`) it is marked and says the service may soon refuse to save. The usage view is
+    read with the table, after every action and when a pass ends — never by the 3 s poll; a failed listing reads
+    "사용량: 메모리 서비스에 연결하지 못했습니다"/"…거절했습니다", a failed read of the whole view "사용량을 확인하지 못했습니다".
   - **A report is dated** ("<time>에 확인 · …", from the report's `at`; an older server sends none): it is the
     last look, not the state now. For an owner already moved, blockers read "확인하지 못했습니다." — the look
     failed — never "아직 옮길 수 없습니다."

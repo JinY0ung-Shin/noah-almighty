@@ -9,7 +9,7 @@
 // Refusal bodies are the ones the server really sends: the sentences of
 // `src/server/routes/personalVault.ts`, and `{ error: "Internal server error" }`
 // (500) for a handler that threw (`app.ts`).
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AdminPersonalVaultPanel from "../src/client/src/components/AdminPersonalVaultPanel";
@@ -64,9 +64,13 @@ let calls: Call[] = [];
 /** What GET /api/admin/personal-vaults answers now. */
 let state: Record<string, unknown> = {};
 let handle: Handler = () => undefined;
+/** What GET /api/admin/personal-vaults/usage answers now (no owner listed: no usage line). */
+let usageState: Record<string, unknown> = {};
+const LIMITS = { notes: 10_000, bytes: 256 * 1024 * 1024 };
 
 const posts = (): Call[] => calls.filter((call) => call.method === "POST");
-const reads = (): number => calls.filter((call) => call.method === "GET").length;
+/** Reads of the TABLE (the usage view is its own GET, read alongside). */
+const reads = (): number => calls.filter((call) => call.method === "GET" && call.url === "/api/admin/personal-vaults").length;
 const click = (element: Element): Promise<void> => act(async () => void fireEvent.click(element));
 const status = (): string => document.getElementById("admin-personal-vault-status")?.textContent || "";
 const button = (name: string): HTMLButtonElement => screen.getByRole("button", { name }) as HTMLButtonElement;
@@ -88,6 +92,7 @@ beforeEach(() => {
   calls = [];
   state = { mode: "repo", serviceConfigured: true, running: false, owners: OWNERS };
   handle = () => undefined;
+  usageState = { serviceConfigured: true, limits: LIMITS, owners: [] };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown, init?: RequestInit) => {
@@ -100,6 +105,7 @@ beforeEach(() => {
       const custom = await handle(call);
       if (custom) return custom;
       if (call.url === "/api/admin/personal-vaults" && call.method === "GET") return json(state);
+      if (call.url === "/api/admin/personal-vaults/usage" && call.method === "GET") return json(usageState);
       return json({});
     }),
   );
@@ -109,6 +115,53 @@ afterEach(() => {
   if (get(confirmation)) resolveConfirmation(false);
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("how full each moved owner's wiki is", () => {
+  const moved = () => owner({ userId: "u2", username: "lee", displayName: "이두리", state: "memory", mirror: mirror() });
+  const usageLine = () => row("이두리").querySelector(".vault-usage");
+
+  it("shows the count, the size and the share of the service's limit under the 보관 위치 tag — counts only", async () => {
+    state = { ...state, owners: [moved()] };
+    usageState = { serviceConfigured: true, limits: LIMITS, owners: [{ userId: "u2", notes: 1234, bytes: 3_500_000 }] };
+    await open();
+    expect(calls.some((call) => call.url === "/api/admin/personal-vaults/usage")).toBe(true);
+    expect(usageLine()?.textContent).toBe("노트 1,234개 · 3.3 MB · 한도의 12%");
+    expect(usageLine()?.className).toContain("muted");
+  });
+
+  it("a small wiki reads 1% 미만, not 0%", async () => {
+    state = { ...state, owners: [moved()] };
+    usageState = { serviceConfigured: true, limits: LIMITS, owners: [{ userId: "u2", notes: 6, bytes: 1300 }] };
+    await open();
+    expect(usageLine()?.textContent).toBe("노트 6개 · 1.3 KB · 한도의 1% 미만");
+  });
+
+  it("near the limit (by notes OR by size) it is marked and says what happens next", async () => {
+    state = { ...state, owners: [moved()] };
+    usageState = { serviceConfigured: true, limits: LIMITS, owners: [{ userId: "u2", notes: 8_500, bytes: 1000 }] };
+    await open();
+    expect(usageLine()?.textContent).toBe("노트 8,500개 · 1000 B · 한도의 85% — 한도에 가까워 곧 저장을 거절할 수 있습니다");
+    expect(usageLine()?.className).toContain("vault-cell-hold");
+  });
+
+  it("an owner whose wiki could not be listed says so; a failed read of the whole view says so too", async () => {
+    state = { ...state, owners: [moved()] };
+    usageState = { serviceConfigured: true, limits: LIMITS, owners: [{ userId: "u2", error: "unavailable" }] };
+    await open();
+    expect(usageLine()?.textContent).toBe("사용량: 메모리 서비스에 연결하지 못했습니다");
+
+    cleanup();
+    usageState = { nonsense: true };
+    await open();
+    expect(usageLine()?.textContent).toBe("사용량을 확인하지 못했습니다");
+  });
+
+  it("nothing for an owner on the repository", async () => {
+    usageState = { serviceConfigured: true, limits: LIMITS, owners: [] };
+    await open();
+    expect(document.querySelector(".vault-usage")).toBeNull();
+  });
 });
 
 describe("a server without the memory service", () => {

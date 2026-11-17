@@ -14,6 +14,10 @@ import { cx } from "../lib/hooks";
 import {
   VAULT_OWNER_STATE_LABELS,
   readAdminPersonalVaults,
+  readAdminVaultUsage,
+  vaultUsagePercent,
+  VAULT_USAGE_WARN_PERCENT,
+  type AdminVaultUsage,
   vaultBlockerText,
   vaultHasLeftoverCopy,
   vaultMirrorAdminNoticeText,
@@ -65,6 +69,31 @@ function useLive<T>(initial: T): [T, (next: T) => void, { readonly current: T }]
     setValue(next);
   });
   return [value, set.current, ref];
+}
+
+/** One moved owner's wiki size under its 보관 위치 tag: counts and sizes only, with the share of the service's limit. */
+function UsageLine({ userId, usage, failed }: { userId: string; usage: AdminVaultUsage | null; failed: boolean }) {
+  const entry = usage?.owners.find((o) => o.userId === userId);
+  if (!entry) {
+    // Not read yet (or this owner moved after the last read): nothing, unless the read itself failed.
+    return failed ? <div className="vault-usage muted">사용량을 확인하지 못했습니다</div> : null;
+  }
+  if ("error" in entry) {
+    return (
+      <div className="vault-usage vault-cell-failed">
+        {entry.error === "refused" ? "사용량: 메모리 서비스가 거절했습니다" : "사용량: 메모리 서비스에 연결하지 못했습니다"}
+      </div>
+    );
+  }
+  const percent = vaultUsagePercent(entry, usage!.limits);
+  const near = percent >= VAULT_USAGE_WARN_PERCENT;
+  const limitText = `한도 노트 ${usage!.limits.notes.toLocaleString("ko-KR")}개 · ${formatFileSize(usage!.limits.bytes)}`;
+  return (
+    <div className={cx("vault-usage", near ? "vault-cell-hold" : "muted")} title={limitText}>
+      노트 {entry.notes.toLocaleString("ko-KR")}개 · {formatFileSize(entry.bytes) || "0 B"} · 한도의 {percent < 1 && (entry.notes > 0 || entry.bytes > 0) ? "1% 미만" : `${percent}%`}
+      {near ? " — 한도에 가까워 곧 저장을 거절할 수 있습니다" : ""}
+    </div>
+  );
 }
 
 function ReportDetail({
@@ -147,6 +176,10 @@ export default function AdminPersonalVaultPanel({ active = false }: AdminPersona
   const [rollbackId, setRollbackId] = useState("");
   // Bumped after every background read, so the next one is scheduled even when the read failed.
   const [pollTick, setPollTick] = useState(0);
+  // How full each moved owner's wiki is: read with the table, after an action and when a pass ends — never
+  // by the 3 s poll (it lists every moved wiki). null + usageFailed = the read itself failed.
+  const [usage, setUsage] = useState<AdminVaultUsage | null>(null);
+  const [usageFailed, setUsageFailed] = useState(false);
 
   const running = Boolean(data?.running);
   const owners = data?.owners ?? [];
@@ -161,8 +194,22 @@ export default function AdminPersonalVaultPanel({ active = false }: AdminPersona
 
   /** Take the server's state; a pass that was running and no longer is says so. */
   function apply(next: AdminPersonalVaults): void {
-    if (dataRef.current?.running && !next.running) setMessage("이전 실행이 끝났습니다. 팀원별 결과는 아래 표에 있습니다.");
+    if (dataRef.current?.running && !next.running) {
+      setMessage("이전 실행이 끝났습니다. 팀원별 결과는 아래 표에 있습니다.");
+      void loadUsage();
+    }
     setData(next);
+  }
+
+  /** The usage view; its failure is shown in the cells, never over the table. */
+  async function loadUsage(): Promise<void> {
+    try {
+      const next = readAdminVaultUsage(await api<unknown>("/api/admin/personal-vaults/usage"));
+      setUsage(next);
+      setUsageFailed(!next);
+    } catch {
+      setUsageFailed(true);
+    }
   }
 
   async function load(): Promise<void> {
@@ -177,6 +224,7 @@ export default function AdminPersonalVaultPanel({ active = false }: AdminPersona
     } finally {
       setBusy(false);
     }
+    void loadUsage();
   }
 
   // A layout effect, so the first paint of the tab already says it is loading.
@@ -224,6 +272,7 @@ export default function AdminPersonalVaultPanel({ active = false }: AdminPersona
         } catch {
           /* keep what we have */
         }
+        void loadUsage();
       }
       setBusy(false);
     }
@@ -485,6 +534,7 @@ export default function AdminPersonalVaultPanel({ active = false }: AdminPersona
                               <span className="tag danger">읽기·쓰기 불가</span>
                             </>
                           ) : null}
+                          {owner.state === "memory" && configured ? <UsageLine userId={owner.userId} usage={usage} failed={usageFailed} /> : null}
                         </td>
                         <td data-label="저장소">{owner.repo ? <code>{owner.repo}</code> : <span className="muted">—</span>}</td>
                         <td className="vault-cell-when" data-label="옮긴 때">{timeLabel(owner.migratedAt) || <span className="muted">—</span>}</td>
