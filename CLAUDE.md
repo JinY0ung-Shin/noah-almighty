@@ -286,6 +286,11 @@ These are the invariants the project is built around. New work should reinforce 
   personal vaults) sits on its own internal network with Noah alone; `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`
   are fixed by compose (the key from a FILE only; natively both unset = off, half-set stops the boot).
   → `pi-runtime.md`, `build-run-verify.md`.
+- **A domain name + HTTPS is the OPTIONAL nginx overlay (`docker-compose.nginx.yml`), or native TLS — never
+  both.** The overlay never touches pi's wiring (the broker still reaches Noah directly), and Noah believes
+  forwarded headers only from addresses in `NOAH_TRUSTED_PROXY_CIDRS` (default: none) — never `trust proxy:
+  true`, and never for `/mcp`'s source check. **What a proxy must do for Noah lives in ONE template**
+  (`docker/nginx/noah.conf.template`). → `build-run-verify.md` ("nginx overlay"), `server-core.md`.
 - **Project name diverges by layer:** "Noah Almighty" / `noah-almighty` / working dir `avatar-chat` — grep
   both slugs when auditing names.
 - **The user fleet is Windows/Linux only — no macOS.** Keep mac handling defensive-only and never

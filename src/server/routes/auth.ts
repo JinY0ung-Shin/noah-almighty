@@ -16,8 +16,9 @@ import { workspaceBrowserAvailable } from "../workspaceBrowser.js";
 
 /**
  * Instance-wide bounds on self-service signup, on top of the per-address
- * limiter (which is ONE bucket for everybody behind a reverse proxy — no
- * `trust proxy` — and none at all for a flood from many addresses):
+ * limiter (which is ONE bucket for everybody behind a reverse proxy that is
+ * not listed in `NOAH_TRUSTED_PROXY_CIDRS` — trustedProxies.ts — and none at
+ * all for a flood from many addresses):
  *
  * - `perHour`: accounts created in the last hour, any address.
  * - `pending`: signups still waiting for an admin (`countPendingSignups`). Each

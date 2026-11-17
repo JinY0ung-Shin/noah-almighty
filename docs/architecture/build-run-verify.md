@@ -599,6 +599,46 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   https origin) or hand-add it; the one-click updater cannot bridge that gap because it rides the
   very page↔extension channel that broke. The container runs as `node` (uid 1000): a root-owned
   mode-600 key in `./docker/tls` reads as EACCES at boot — make the PEMs readable by uid 1000.
+- **nginx overlay (`docker-compose.nginx.yml`, 2026-11-17) — the domain-name way to HTTPS; native TLS OR
+  this, never both.** `noah-nginx` (official nginx image, `NOAH_NGINX_IMAGE`) publishes 80/443, ends TLS with
+  the PEMs in `./docker/tls` and forwards to `noah-almighty:${PORT}` over its own pinned network `noah-front`
+  (`NOAH_NGINX_SUBNET` 172.16.249.0/24, nginx at `NOAH_NGINX_IP` .10; NOT internal — an internal-only
+  container cannot publish ports). The overlay replaces Noah's `ports` with a loopback-only one (`!override`,
+  Compose >= 2.24) and FIXES `SECURE_COOKIES=true`, empty `TLS_CERT_FILE`/`TLS_KEY_FILE` and
+  `NOAH_TRUSTED_PROXY_CIDRS=<nginx's address>/32` in Noah's environment. pi is untouched: the broker still
+  calls `http://noah-almighty:<PORT>` over `noah-mcp`, so `NOAH_MCP_PUBLIC_URL`/`NOAH_MCP_HOST_ALIAS` stay
+  unset. The config is ONE template (`docker/nginx/noah.conf.template`, rendered by the image's entrypoint
+  over `${NOAH_*}` + `${NGINX_LOCAL_RESOLVERS}` only — `NGINX_ENVSUBST_FILTER`, `$$` in compose):
+  - `Host`/`X-Forwarded-Host`/`X-Forwarded-Proto` = what the browser used (the same-origin gate,
+    `server-core.md`); `X-Forwarded-For` OVERWRITTEN with `$remote_addr`, never `$proxy_add_x_forwarded_for`.
+  - `proxy_buffering off` + `proxy_request_buffering off` (SSE; uploads stream), `client_max_body_size 0`
+    (Noah's limits are the only ones), read/send timeout `NOAH_NGINX_READ_TIMEOUT` (3600s; 지금 실행 holds a
+    request for the whole run), HTTP/2 to the browser.
+  - `resolver` + a variable `proxy_pass`: the name is resolved per request, so a recreated Noah container
+    (new address) needs no nginx restart — a name resolved once at start answers 502 until restarted.
+  - port 80 and every other host name on 443 → `308 https://<NOAH_SERVER_NAME>` (308 keeps a POST a POST);
+    `/mcp` → 404.
+  - nginx runs `read_only` with tmpfs for `/etc/nginx/conf.d`, `/var/cache/nginx`, `/run`, `cap_drop: ALL` +
+    `NET_BIND_SERVICE`, `CHOWN`, `SETUID`, `SETGID`, `DAC_READ_SEARCH` (the last reads a 0600 key owned by
+    another uid, e.g. one prepared for native TLS). Its healthcheck is the browser's whole path:
+    `curl --resolve <name>:443:127.0.0.1 https://<name>/api/bootstrap`.
+  - Static pins: `tests/infra-nginx-overlay.test.ts`. **Live check (run 2026-11-17, nginx 1.30.6, the Noah
+    image with this build's `dist`, `AGENT_RUNTIME=local`, a self-signed cert, nginx published on 18080/18443):**
+    `http://` → 308 to the name with path and query; the IP on 443 → 308; `/api/bootstrap` 200 over HTTP/2;
+    `/mcp` and `/mcp/system` 404; signup with `Origin: https://<name>` 201 and a `Secure` cookie; `Origin:
+    https://evil.test` 403; a 30 MB JSON body reaches Noah (401, no 413); a chat turn streams
+    (`open`/`status`/`delta`/`done`); a 700 ms-per-event stream arrives at +714/+1416/+2117/+2818 ms; with
+    Noah's container recreated on ANOTHER address nginx answers 502 while it is gone and 200 two seconds after,
+    never restarted; a replaced certificate is served after `nginx -s reload`. Limits: 20 wrong logins from
+    one address → 429, a forged `X-Forwarded-For` per request stays 429, a second address through the same
+    nginx still gets 401, and 22 tries straight at Noah's port with a new forged address each → 429 after 20.
+    Negative control (`NOAH_TRUSTED_PROXY_CIDRS` naming another address): the second client is 429 too. NOT
+    checked: the real deploy host (DNS, corporate certificate chain, firewall) and the full stack with pi —
+    so pi's `/admin` panel through nginx is unverified (its `fromPanel` check compares `Referer`'s host with
+    `Host`, which nginx passes through as the domain name on the standard port).
+  - Moving an existing deployment changes the ORIGIN: everyone signs in again, per-origin browser state
+    starts empty, and the browser bridge must learn the new address exactly as in the native-TLS flip above
+    (`BROWSER_BRIDGE_ORIGINS` for the policy channel).
 - **`CA_CERT_FILE` (#76, #77) is ONE file directly under `docker/` (`.crt`/`.pem`, never `docker/tls/`) and
   reaches every build that fetches over HTTPS, with verification ON** — never `GOSUMDB=off`, `strict-ssl=false`
   or `NODE_TLS_REJECT_UNAUTHORIZED=0` (the Noah image's npm steps used the last two until #77).

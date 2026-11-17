@@ -55,6 +55,17 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     host = `Host`) would need the same widening. The browser extension never calls Noah's HTTP API (no `fetch` in `extension/`); the SPA's calls
   are same-origin `fetch`es and there is no `<form action>` — a new cross-origin caller must be
   bearer-only or join the exemptions.
+- **Forwarded headers are believed from LISTED proxies only** (`NOAH_TRUSTED_PROXY_CIDRS` → `AppConfig.
+  trustedProxyCidrs` → `applyTrustedProxies`, `trustedProxies.ts`, set first thing in `createApp`). It is
+  Express's `trust proxy` as a PREDICATE over the peer address (`cidrAllowlist.ts`, shared with the `/mcp`
+  allowlist) — never `true` or a hop count, which would let any client choose its own `req.ip`. Default: none
+  trusted, `req.ip` is the TCP peer. What it changes: `req.ip` (the login limiter's `(ip, username)` key and
+  the signup limiter's `ip` key in `routes/auth.ts` — one bucket for the whole team behind an unlisted
+  proxy) and `req.protocol`. What it does NOT change: `/mcp`'s source check (always the TCP peer —
+  `mcpHttp/networkAcl.ts`), and `requestOrigin`/the same-origin gate, which read `X-Forwarded-Host`/`-Proto`
+  themselves and compare them with what the BROWSER says. An invalid entry stops the boot. The key is not
+  `TRUST_PROXY` (pi-gateway's; Noah's `.env` wins inside pi's compose). `docker-compose.nginx.yml` sets it to
+  its nginx's pinned address → [`build-run-verify.md`](build-run-verify.md) ("nginx overlay").
 - **PPT share links** have their own router (`routes/shareLinks.ts`, `createShareLinksRouter`, mounted right
   after the chat router) and store mixin (`store/shareLinks.ts`, `withShareLinks`, composed outermost); their
   cross-mixin cascade `deleteShareLinksForConversation` is declared on `StoreBase` and must sit next to EVERY

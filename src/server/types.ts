@@ -53,6 +53,13 @@ export interface AppConfig {
    */
   tlsCertFile?: string;
   tlsKeyFile?: string;
+  /**
+   * Reverse proxies whose forwarded headers are believed (env
+   * `NOAH_TRUSTED_PROXY_CIDRS`, trustedProxies.ts): `req.ip` is then the
+   * address the proxy saw, so the login/signup limiters stay per person.
+   * Empty/absent = none trusted (`req.ip` is the TCP peer).
+   */
+  trustedProxyCidrs?: string[];
   dataDir: string;
   dbPath: string;
   sessionSecret: string;
