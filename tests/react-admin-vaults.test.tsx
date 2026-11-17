@@ -406,6 +406,37 @@ describe("미리 확인 (dry run)", () => {
     expect((row("이두리").nextElementSibling as HTMLElement).textContent).toBe("옮긴 노트 40개 · 3.3 MB");
   });
 
+  it("dates a report: it is the last look, not the state now", async () => {
+    const at = "2026-11-17T14:00:00.000Z";
+    state = {
+      ...state,
+      owners: [owner({ userId: "u2", username: "lee", displayName: "이두리", state: "memory", mirror: mirror(), report: report({ userId: "u2", state: "memory", notes: 40, bytes: 3_500_000, at }) })],
+    };
+    await open();
+    expect((row("이두리").nextElementSibling as HTMLElement).textContent).toBe(`${timeLabel(at)}에 확인 · 옮긴 노트 40개 · 3.3 MB`);
+  });
+
+  it("an owner already moved whose look failed: it says the look failed, not that they cannot be moved yet", async () => {
+    state = {
+      ...state,
+      owners: [
+        owner({
+          userId: "u2",
+          username: "lee",
+          displayName: "이두리",
+          state: "memory",
+          mirror: mirror(),
+          report: report({ userId: "u2", state: "memory", notes: 0, bytes: 0, blockers: ["memory_unavailable: network error"] }),
+        }),
+      ],
+    };
+    await open();
+    const detail = row("이두리").nextElementSibling as HTMLElement;
+    expect(detail.querySelector(".vault-report-blockers strong")?.textContent).toBe("확인하지 못했습니다.");
+    // Nothing was counted: no "옮긴 노트 0개" that would read as an empty brain.
+    expect(detail.textContent).not.toContain("옮긴 노트");
+  });
+
   it("translates every known blocker and skip code, and passes unknown text through", () => {
     expect(vaultBlockerText("no_git_token: no git token is set for this repository's host, so the repository cannot be synced")).toBe(
       "Git 토큰이 없어 저장소를 최신으로 가져올 수 없습니다. 본인이 설정 ▸ 권한·연결에서 Git 토큰을 설정해야 합니다.",

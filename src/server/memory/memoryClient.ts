@@ -325,6 +325,48 @@ export function memoryClientFor(store: Store, config: AppConfig): MemoryClient |
   return client;
 }
 
+/** How long {@link probeMemoryVault} waits for the service by default. */
+export const MEMORY_PROBE_TIMEOUT_MS = 3000;
+
+/** What {@link probeMemoryVault} found: the service answered, refused this vault, did not answer in time, or could not be used. */
+export type MemoryProbeOutcome =
+  | { kind: "ok" }
+  | { kind: "refused"; code: string }
+  | { kind: "timeout" }
+  | { kind: "unavailable"; reason: MemoryUnavailableReason };
+
+/**
+ * Whether the memory service answers RIGHT NOW for this owner's vault: ONE
+ * cheap call (the listing of the vault's `raw/` folder), bounded so a hanging
+ * service cannot hold the caller. It never throws. The ONE check behind
+ * `describe_system`'s memory-service line and the settings card's outage line,
+ * so the two surfaces never disagree.
+ */
+export async function probeMemoryVault(
+  client: MemoryClient,
+  owner: string,
+  timeoutMs: number = MEMORY_PROBE_TIMEOUT_MS,
+): Promise<MemoryProbeOutcome> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<MemoryProbeOutcome>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+    timer.unref?.();
+  });
+  // Settles either way, so a check that loses the race never becomes an unhandled rejection.
+  const check = client.list(owner, "raw").then(
+    (): MemoryProbeOutcome => ({ kind: "ok" }),
+    (error: unknown): MemoryProbeOutcome => {
+      if (error instanceof MemoryRefusedError) return { kind: "refused", code: error.code };
+      return { kind: "unavailable", reason: error instanceof MemoryUnavailableError ? error.reason : "network" };
+    },
+  );
+  try {
+    return await Promise.race([check, timedOut]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /** Tests: install a client for this Store (pass null to remove). It wins over `config.memory`, set or not. */
 export function setMemoryClientForTests(store: Store, client: MemoryClient | null): void {
   if (client) installedForTests.set(store, client);

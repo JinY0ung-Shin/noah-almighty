@@ -296,7 +296,7 @@ describe("cutover — every existing state has a defined outcome", () => {
     const s = setup();
     for (const run of [planVaultMigration, cutoverVault]) {
       const report = await run(s.store, s.config, s.ownerId);
-      expect(report).toEqual({ userId: s.ownerId, repo: null, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [], state: "no_repo" });
+      expect(report).toEqual({ userId: s.ownerId, repo: null, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [], state: "no_repo", at: expect.any(String) });
     }
     expect(s.fake.calls).toEqual([]);
     expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
@@ -543,6 +543,7 @@ describe("dry run", () => {
       skipped: [{ path: "wiki/pic.png", reason: "not_markdown: not a markdown note; it stays in the repository" }],
       blockers: [],
       state: "repo",
+      at: expect.any(String),
     });
     // The service was only read; the store and the clone are as they were.
     expect(s.fake.calls.map((call) => call.op)).toEqual(["list"]);
@@ -1854,6 +1855,7 @@ describe("a look that could not happen is remembered as the owner's report, unti
       skipped: [],
       blockers: ["no_git_token: no git token is set, so the repository cannot be synced or mirrored"],
       state: "memory",
+      at: expect.any(String),
     });
     expect(s.fake.calls).toEqual([]);
 
@@ -1898,6 +1900,7 @@ describe("a look that could not happen is remembered as the owner's report, unti
       skipped: [],
       blockers: [named],
       state: "memory",
+      at: expect.any(String),
     });
 
     // It answers again (the next look comes by itself; here it is asked for).

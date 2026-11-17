@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Response } from "express";
 import { requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
-import { memoryClientFor } from "../memory/memoryClient.js";
+import { memoryClientFor, probeMemoryVault } from "../memory/memoryClient.js";
 import type { PersonalVaultRow, VaultMirrorHold } from "../store/personalVault.js";
 import {
   VAULT_CONFIRM_REFUSAL,
@@ -220,9 +220,27 @@ export function createPersonalVaultRouter(deps: RouterDeps): Router {
   // vault lives in the repository (there is no mirror then). `serviceConfigured`
   // false = this server has no memory service: for an owner in `memory` nothing
   // of the brain works and the copy loop does not run, whatever `mirror` says.
-  router.get("/api/me/personal-vault", requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const row = store.getPersonalVault(req.user!.id);
-    res.json({ home: row ? "memory" : "repo", mirror: mirrorOf(row), serviceConfigured: serviceConfigured() });
+  // `service` (home `memory` only, else null): whether the memory service answers RIGHT NOW for this vault —
+  // the same bounded check as describe_system's line, so the card states an outage instead of only the
+  // copy's last state. `ok` | `unavailable` (no answer, or not as the service) | `refused`.
+  router.get("/api/me/personal-vault", requireAuth(store), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user!.id;
+      const row = store.getPersonalVault(userId);
+      const client = memoryClientFor(store, config);
+      let service: "ok" | "unavailable" | "refused" | null = null;
+      if (row && client) {
+        const outcome = await probeMemoryVault(client, userId);
+        service = outcome.kind === "ok" ? "ok" : outcome.kind === "refused" ? "refused" : "unavailable";
+        if (service !== "ok") {
+          logger.warn({ userId, outcome }, "personal vault status: the memory service did not answer the settings card's check");
+        }
+      }
+      res.json({ home: row ? "memory" : "repo", mirror: mirrorOf(row), serviceConfigured: client !== null, service });
+    } catch (error) {
+      // Express 4 does not catch a rejected async handler.
+      next(error);
+    }
   });
 
   // The owner asks for the look at their newly connected repository to run

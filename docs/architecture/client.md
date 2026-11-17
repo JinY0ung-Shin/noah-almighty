@@ -735,6 +735,10 @@ screens show what it says and ask before each step that changes where notes live
     ask an admin to fix the server's clone.
   - **`serviceConfigured: false`** (this server has no memory service): an alert above everything else in
     the block — nothing of the brain works and no copy is made, whatever the copy's last state says.
+  - **`service: "unavailable" | "refused"`** (the server's check of the memory service failed on THIS read):
+    an alert in the same place — the notes cannot be read or written now, saved notes are kept, try
+    상태 새로 고침 later and tell an admin if it stays. The copy's state below is still shown: it is its last
+    state. `ok`, or a server that does not send the field, shows no such line.
   - **The notice** (`vaultMirrorNoticeText`): the repository copy holds N notes the memory service does not,
     nothing was deleted, they are not in the brain; a notice this file does not know is shown as it came.
 - **관리자 ▸ 시스템: `AdminPersonalVaultPanel.tsx` (개인 브레인 이전)** — the LAST card of the 시스템 tab,
@@ -748,6 +752,9 @@ screens show what it says and ask before each step that changes where notes live
   `{ expect: "repo" }` — the server refuses (409) when the owner's home is not the expected one, so a stale
   screen can never turn one into the other. A notice on an owner's row says how to bring the repository's
   notes into the brain (되돌리기, then move again) only where that can be carried out.
+  - **A report is dated** ("<time>에 확인 · …", from the report's `at`; an older server sends none): it is the
+    last look, not the state now. For an owner already moved, blockers read "확인하지 못했습니다." — the look
+    failed — never "아직 옮길 수 없습니다."
   - **A server with NO memory service configured** shows no controls — but it still shows who is on the
     memory service: with moved owners the warning says their notes can be neither read nor written until the
     service is configured again, and their rows carry 읽기·쓰기 불가; with none it says where to set it up.

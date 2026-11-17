@@ -60,9 +60,9 @@ import {
   type OwnerState,
 } from "./ownerState.js";
 import {
-  MemoryRefusedError,
-  MemoryUnavailableError,
+  MEMORY_PROBE_TIMEOUT_MS,
   memoryClientFor,
+  probeMemoryVault,
   type MemoryUnavailableReason,
 } from "../memory/memoryClient.js";
 import { INLINE_UI_MANUAL_TOPIC, INLINE_UI_STATE_TITLE } from "../../shared/widget/guide.js";
@@ -159,9 +159,6 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   return `${head}; every teammate writes it — after the user agrees and the intake, draft the page changes with mcp__brain__prepare_team_changes; nothing changes until the user presses the card, and nobody reviews it${adminLine}${pressLine}${health}${policyLine}${promotedLine}`;
 }
 
-/** describe_system waits at most this long for the memory service to answer its check. */
-const MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS = 3000;
-
 /** Why the memory service could not be used, in words the avatar can repeat (the server log has the detail). */
 const MEMORY_UNAVAILABLE_WORDS: Record<MemoryUnavailableReason, string> = {
   not_configured: "this server has no memory service configured",
@@ -175,8 +172,8 @@ const MEMORY_UNAVAILABLE_WORDS: Record<MemoryUnavailableReason, string> = {
 
 /**
  * Whether the memory service answers RIGHT NOW, for the owner whose vault
- * lives there: ONE cheap call (the listing of this vault's `raw/` folder),
- * bounded so a hanging service cannot hold the report. A failure is stated as
+ * lives there: `probeMemoryVault` (ONE cheap, bounded call — the same check
+ * the settings card's outage line uses). A failure is stated as
  * unreachable — never as an empty vault, which is what an empty listing from
  * a service that did answer would mean.
  */
@@ -188,28 +185,16 @@ async function memoryServiceStateText(store: Store, ctx: SystemToolsContext): Pr
   if (!client) {
     return unreachable(`${MEMORY_UNAVAILABLE_WORDS.not_configured} — an operator sets PI_MEMORY_URL and PI_MEMORY_API_KEY_FILE`);
   }
-  let timer: NodeJS.Timeout | undefined;
-  const timedOut = new Promise<{ kind: "timeout" }>((resolve) => {
-    timer = setTimeout(() => resolve({ kind: "timeout" }), MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  // Settles either way, so a check that loses the race never becomes an unhandled rejection.
-  const check = client.list(ctx.avatarUserId, "raw").then(
-    () => ({ kind: "ok" as const }),
-    (error: unknown) => ({ kind: "failed" as const, error }),
-  );
-  const outcome = await Promise.race([check, timedOut]);
-  if (timer) clearTimeout(timer);
+  const outcome = await probeMemoryVault(client, ctx.avatarUserId);
   if (outcome.kind === "ok") return "reachable right now (it answered a listing of this vault)";
   if (outcome.kind === "timeout") {
-    return unreachable(`no answer within ${Math.round(MEMORY_SERVICE_DESCRIBE_TIMEOUT_MS / 1000)} seconds`);
+    return unreachable(`no answer within ${Math.round(MEMORY_PROBE_TIMEOUT_MS / 1000)} seconds`);
   }
-  if (outcome.error instanceof MemoryRefusedError) {
+  if (outcome.kind === "refused") {
     // It answered, so it is up — but it would not serve this vault.
-    return `answering, but it REFUSED Noah's check of this vault (\`${outcome.error.code}\`) — vault notes may not be usable; ${vaultOutageRule(true)}. This needs an administrator`;
+    return `answering, but it REFUSED Noah's check of this vault (\`${outcome.code}\`) — vault notes may not be usable; ${vaultOutageRule(true)}. This needs an administrator`;
   }
-  const reason = outcome.error instanceof MemoryUnavailableError ? outcome.error.reason : "network";
-  return unreachable(MEMORY_UNAVAILABLE_WORDS[reason]);
+  return unreachable(MEMORY_UNAVAILABLE_WORDS[outcome.reason]);
 }
 
 /**
@@ -1516,7 +1501,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
           `- Avatar consultation (mcp__avatars__ask_avatar): ${enabledMcpToolGroups.includes("avatars") ? (state.reachableTeammateCount > 0 ? "available — you can ask a teammate's avatar one question on the owner's behalf (only active teammates whose avatar is not private answer); it answers from its persona + personal-knowledge recall. Attribute answers to that avatar and capture durable learnings with brain-ingest." : "enabled, but no teammate avatar is reachable (there are no other approved teammates, or every teammate's avatar is private)") : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Skill exchange (mcp__skill_exchange__*): ${enabledMcpToolGroups.includes("avatars") ? `${state.learnableSkillCount} skill(s) shared by teammates are learnable (find_shared_skills → learn_skill copies one into the knowledge repository${state.knowledgeRepoConfigured ? "" : " — connect a knowledge repository first"}); this avatar shares ${state.sharedSkillCount} of its own, learned by teammates ${state.sharedSkillLearnTotal} time(s) so far (share_skill/unshare_skill, also manageable in the '스킬 배우기' tab). A learned skill loads from the NEXT conversation` : "OFF for this conversation (avatars tool group deselected)"}`,
           `- Experimental features: ${state.experimentalFeatures.length ? state.experimentalFeatures.join(", ") + " (beta — behavior may change)" : "(none enabled)"}`,
-          `- Plugins: ${plugins.length} (${plugins.filter((p) => p.enabled).length} enabled; list/add/enable with mcp__system__plugin)`,
+          `- Plugins: ${plugins.length} (${plugins.filter((p) => p.enabled).length} enabled; actions list / add / set_enabled of mcp__system__plugin)`,
           // External task API self-state (META-COGNITION): how many keys are
           // live and what an outside system can actually do with one, so the
           // avatar answers "can a system call you?" from state, not from guess.

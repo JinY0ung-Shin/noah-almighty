@@ -74,7 +74,12 @@ export interface VaultMigrationReport {
   /** Non-empty → this owner is not cut over. */
   blockers: string[];
   state: "repo" | "memory" | "no_repo";
+  /** When this report was made (ISO): it is the LAST look, not the state now — the admin screen says when. */
+  at: string;
 }
+
+/** A report before `remember` stamps its time. */
+type VaultMigrationFindings = Omit<VaultMigrationReport, "at">;
 
 /** The code every blocker starts with (`<code>: <detail>`). */
 export const VAULT_BLOCKER = {
@@ -733,7 +738,8 @@ function stateOf(store: Store): MigrationState {
   return state;
 }
 
-function remember(store: Store, report: VaultMigrationReport): VaultMigrationReport {
+function remember(store: Store, findings: VaultMigrationFindings): VaultMigrationReport {
+  const report: VaultMigrationReport = { ...findings, at: new Date().toISOString() };
   stateOf(store).reports.set(report.userId, report);
   return report;
 }
@@ -791,9 +797,9 @@ function contextBlocker(store: Store, userId: string, ctx: KnowledgeRepoContext)
   return null;
 }
 
-async function migrateOwner(store: Store, config: AppConfig, userId: string, mode: "plan" | "cutover"): Promise<VaultMigrationReport> {
+async function migrateOwner(store: Store, config: AppConfig, userId: string, mode: "plan" | "cutover"): Promise<VaultMigrationFindings> {
   const repo = store.getKnowledgeRepo(userId).repo;
-  const report: VaultMigrationReport = {
+  const report: VaultMigrationFindings = {
     userId,
     repo,
     sourceCommit: null,
@@ -915,7 +921,7 @@ async function migrateOwner(store: Store, config: AppConfig, userId: string, mod
   });
 }
 
-function failedReport(store: Store, userId: string, error: unknown, what: string): VaultMigrationReport {
+function failedReport(store: Store, userId: string, error: unknown, what: string): VaultMigrationFindings {
   migrationLogger.error({ userId, err: error }, `vault migration: ${what} failed unexpectedly`);
   let repo: string | null = null;
   let state: VaultMigrationReport["state"] = "no_repo";
@@ -1137,6 +1143,8 @@ export async function rollbackVault(
 
       // The flip comes first: a wiki deleted under a row that still says `memory` would be mirrored as "delete every note".
       store.clearPersonalVault(userId);
+      // The last report described the vault in the service (or a look made before this); it is no longer this owner's state.
+      stateOf(store).reports.delete(userId);
       migrationLogger.warn({ userId, repo: row.sourceRepo }, "personal vault moved back to the repository (the mirror was in sync)");
       try {
         await client.deleteWiki(userId);
@@ -1297,7 +1305,7 @@ async function settleRepoChange(store: Store, config: AppConfig, userId: string)
         return;
       }
       // An empty wiki: the repository's vault becomes the vault.
-      const report: VaultMigrationReport = {
+      const report: VaultMigrationFindings = {
         userId,
         repo: ctx.repo,
         sourceCommit: clone.head,

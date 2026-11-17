@@ -1444,7 +1444,7 @@ export function buildSystemPromptAppend(
     if (mcpToolGroupEnabled(request, "system")) {
       lines.push(
         "When the owner asks about this system itself or requests configuration changes, check the current state with `mcp__system__describe_system`, then directly use `mcp__system__routine` or `mcp__system__plugin` (each takes an `action`). " +
-          "`mcp__system__notify_user` is for UNATTENDED runs only (a routine, a task-API turn); in a live chat the owner reads your answer, so it is refused there. Routine times are based on KST `HH:MM`, and plugin add/enable changes usually load starting from the next conversation.",
+          "`mcp__system__notify_user` is for UNATTENDED runs only (a routine, a task-API turn); in a live chat the owner reads your answer, so it is refused there. Routine times are based on KST `HH:MM`, and plugin changes usually load starting from the next conversation.",
       );
     }
     // Turn timings (capability plan stamp — the same boolean describe_system's

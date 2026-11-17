@@ -614,7 +614,12 @@ repository change, never at boot. Until an owner is cut over they work on the re
   copy was never verified against the repository, so every note of the wiki — vault path or not — that the
   owner's clone does not hold BYTE FOR BYTE (the clone as it is on disk, no link followed) is quarantined
   first; a note that cannot be read or put aside stops the step and nothing is deleted
-  (`leftover_not_saved`). A successful clear also drops that owner's cached report.
+  (`leftover_not_saved`). A successful clear also drops that owner's cached report — and so does a
+  successful rollback (the report described the vault in the service, no longer the owner's state).
+- **The cached report** (`lastVaultMigrationReport`, in memory, per process) is the LAST dry run or
+  cutover look for an owner, stamped with `at` when `remember` stores it; the admin screen dates it
+  ("… 에 확인"), because it is not the state now — a dry run made during an outage stays until the next
+  look, a rollback or a clear replaces or drops it.
 - **The quarantine** (`quarantineLeftoverNotes`): written under `<dataDir>/personal-vault-leftover/<user>/
   <time>/<note path>` and moved at once to `<dataDir>/retired/<boot stamp>/` + the same path with the
   retirement helpers (`openRetirementSweep`, `quarantineRetired`; Noah never prunes it). Nothing to set aside
@@ -678,7 +683,7 @@ repository change, never at boot. Until an owner is cut over they work on the re
   | `POST /api/admin/personal-vaults/mode` | admin | `{ mode }` → `{ mode, started }`; `memory` starts a pass, refused 409 with no service configured | `set_personal_vault_mode` |
   | `POST /api/admin/personal-vaults/run` | admin | 202 `{ started }` (false when one is running; audited only when it started); 409 while the mode is `repo` or no service is configured | `personal_vault_run` |
   | `POST /api/admin/personal-vaults/:userId/rollback` | admin | body `{ expect: "memory" \| "repo" }` (400 without it) → `{ ok: true }`; 409 with the Korean reason when refused, also for a home that is not the expected one. The audit row says which of the two happened, with the quarantine counts | `personal_vault_rollback` |
-  | `GET /api/me/personal-vault` | owner | `{ home, mirror, serviceConfigured }` (`mirror` null for home `repo`; `serviceConfigured` false = no memory service on this server — the settings card says so above whatever the copy's last state was) | — |
+  | `GET /api/me/personal-vault` | owner | `{ home, mirror, serviceConfigured, service }` (`mirror` null for home `repo`; `serviceConfigured` false = no memory service on this server — the settings card says so above whatever the copy's last state was; `service`, home `memory` with a client only, else null: `ok` \| `unavailable` \| `refused` from `probeMemoryVault` — the SAME bounded check as `describe_system`'s `Memory service` line, run on every read, so the card states an outage instead of only the copy's last state) | — |
   | `POST /api/me/personal-vault/mirror-recheck` | owner | 202 `{ started }` (false unless the hold is `checking`) | — |
   | `POST /api/me/personal-vault/mirror-confirm` | owner | body `{ repo, branch }` → `{ ok: true }`; 409 otherwise | `personal_vault_mirror_confirm` |
 
@@ -722,8 +727,9 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
 - **`describe_system`** (owner only, `personalVaultLines`):
   - home `repo` with a repository connected: ONE line — the vault is the knowledge repository and a note is
     saved only by `mcp__repo__commit`; without a repository: no line;
-  - home `memory`: `Personal vault` (home + since when), `Memory service` (ONE listing of the vault's `raw/`
-    folder, bounded to 3 s: reachable / UNREACHABLE with the reason in words / answering but refused),
+  - home `memory`: `Personal vault` (home + since when), `Memory service` (`probeMemoryVault` in
+    `memoryClient.ts`: ONE listing of the vault's `raw/` folder, bounded to 3 s — the check the settings
+    card uses too: reachable / UNREACHABLE with the reason in words / answering but refused),
     `Vault copy in the repository` (`vaultMirrorStateText`: up to date, BEHIND, BEHIND after a failure — with
     a next step that depends on why, a text the table does not know getting the generic one —, CHECKING,
     WAITING FOR THE OWNER; a notice is quoted as stored and explained: repository notes the service does not

@@ -86,18 +86,30 @@ function ReportDetail({
   const moved = owner.state === "memory";
   // The way out of "the service still holds something": discard that leftover copy.
   const leftover = canAct && owner.state === "repo" && vaultHasLeftoverCopy(report);
+  // The report is the LAST look (a dry run or a cutover), not the state now: it says when it was made.
+  const madeAt = timeLabel(report.at);
+  const lookFailed = moved && report.blockers.length > 0;
   return (
     <div className="vault-report">
       {report.state === "no_repo" ? (
-        <span className="muted">연결된 저장소가 없어 옮길 노트가 없습니다.</span>
+        <span className="muted">
+          {madeAt ? `${madeAt}에 확인 · ` : ""}연결된 저장소가 없어 옮길 노트가 없습니다.
+        </span>
       ) : (
         <span>
-          {moved ? "옮긴 노트" : "옮길 노트"} {report.notes}개 · {formatFileSize(report.bytes) || "0 B"}
+          {madeAt ? <span className="muted">{madeAt}에 확인{lookFailed ? "" : " · "}</span> : null}
+          {/* A moved owner's look that failed counted nothing: no "0개" that would read as an empty brain. */}
+          {lookFailed ? null : (
+            <>
+              {moved ? "옮긴 노트" : "옮길 노트"} {report.notes}개 · {formatFileSize(report.bytes) || "0 B"}
+            </>
+          )}
         </span>
       )}
       {report.blockers.length ? (
         <div className="vault-report-blockers">
-          <strong>아직 옮길 수 없습니다.</strong>
+          {/* An owner already moved is not waiting to be moved: the look itself could not be made. */}
+          <strong>{moved ? "확인하지 못했습니다." : "아직 옮길 수 없습니다."}</strong>
           <ul>
             {report.blockers.map((blocker, i) => (
               <li key={i}>{vaultBlockerText(blocker)}</li>

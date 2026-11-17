@@ -4,7 +4,7 @@ import path from "node:path";
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
-import { MemoryUnavailableError, memoryClientFor, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { MemoryRefusedError, MemoryUnavailableError, memoryClientFor, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { memoryVaultFor, withVaultWriteLock } from "../src/server/personalVault.js";
 import { cutoverVault, onKnowledgeRepoChanged, whenVaultMigrationIdle } from "../src/server/vaultMigration.js";
 import { syncVaultMirror } from "../src/server/vaultMirror.js";
@@ -123,7 +123,7 @@ describe("personal-vault routes — who may call them", () => {
     expect(store.getPersonalVaultMode()).toBe("repo");
 
     const mine = await member.agent.get("/api/me/personal-vault").expect(200);
-    expect(mine.body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect(mine.body).toEqual({ home: "repo", mirror: null, serviceConfigured: true, service: null });
   });
 });
 
@@ -162,11 +162,13 @@ describe("GET /api/admin/personal-vaults and the dry run", () => {
     fake.calls.length = 0;
     const dry = await admin.agent.post("/api/admin/personal-vaults/dry-run").expect(200);
     expect(dry.body.reports).toEqual([
-      { userId: admin.id, repo: null, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [], state: "no_repo" },
+      { userId: admin.id, repo: null, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [], state: "no_repo", at: expect.any(String) },
       expect.objectContaining({ userId: onRepo.id, repo: remote, notes: 3, skipped: [], blockers: [], state: "repo" }),
       expect.objectContaining({ userId: moved.id, repo: movedRemote, notes: 1, blockers: [], state: "memory" }),
     ]);
     expect(dry.body.reports[1].sourceCommit).toMatch(/^[0-9a-f]{40}$/);
+    // Each report says when it was made: it is the LAST look, which the admin screen dates.
+    for (const report of dry.body.reports) expect(Number.isNaN(Date.parse(report.at))).toBe(false);
     // Nothing changed: the service was only read, nobody moved, and a dry run is not an audited change.
     expect(writes(fake)).toEqual([]);
     expect(store.getPersonalVault(onRepo.id)).toBeNull();
@@ -303,15 +305,24 @@ describe("POST /api/admin/personal-vaults/:userId/rollback", () => {
     expect(fake.dump(owner.id)).toEqual(VAULT);
     expect(mirror).toHaveBeenCalledTimes(1); // the cutover's first mirror record only: no rollback was started
 
+    const ownerReport = async () =>
+      ((await admin.agent.get("/api/admin/personal-vaults").expect(200)).body.owners as { userId: string; report: unknown }[]).find(
+        (entry) => entry.userId === owner.id,
+      )!.report;
+    // The cutover's report is still shown before the rollback …
+    expect(await ownerReport()).toMatchObject({ state: "memory", notes: 3 });
+
     const res = await admin.agent.post(`/api/admin/personal-vaults/${owner.id}/rollback`).send({ expect: "memory" }).expect(200);
     expect(res.body).toEqual({ ok: true });
     expect(store.getPersonalVault(owner.id)).toBeNull();
     expect(fake.dump(owner.id)).toEqual({});
+    // … and dropped by it: it described the vault in the service, which is not this owner's state any more.
+    expect(await ownerReport()).toBeNull();
     expect(auditOf(store, admin.id, "personal_vault_rollback").map((event) => [event.status, event.detail])).toEqual([
       ["success", `personal vault of ${owner.id} moved back to the repository`],
       ["error", `rollback of ${owner.id} refused: home_mismatch`],
     ]);
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true, service: null });
 
     // … and the reverse: a stale "되돌리기" for an owner who is on the repository (a leftover copy is there).
     fake.seed(owner.id, "wiki/left.md", "left\n");
@@ -398,7 +409,7 @@ describe("the owner's own view and the mirror confirmation", () => {
     connect(store, owner.id, "brain", VAULT);
 
     // Home `repo`: no mirror.
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true, service: null });
 
     await cutoverVault(store, config, owner.id);
     store.recordVaultMirror(owner.id, { ok: true, notice: "2 repository notes are not in the memory service" });
@@ -408,6 +419,7 @@ describe("the owner's own view and the mirror confirmation", () => {
     expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({
       home: "memory",
       serviceConfigured: true,
+      service: "ok",
       mirror: {
         dirty: false,
         syncedAt: row.mirrorSyncedAt,
@@ -567,7 +579,7 @@ describe("GET /api/me/personal-vault says whether this server has a memory servi
     expect(configured.config.memory).toBeDefined();
     await mkUser(configured.app, configured.store, "admin");
     const owner = await mkUser(configured.app, configured.store, "owner");
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true, service: null });
     connect(configured.store, owner.id, "brain", VAULT);
     await cutoverVault(configured.store, configured.config, owner.id);
     expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toMatchObject({ home: "memory", serviceConfigured: true });
@@ -584,7 +596,7 @@ describe("GET /api/me/personal-vault says whether this server has a memory servi
     setMemoryClientForTests(services.store, createFakeMemoryClient());
     const app = createApp(services);
     const admin = await mkUser(app, services.store, "admin");
-    expect((await admin.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true });
+    expect((await admin.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: true, service: null });
     expect((await admin.agent.get("/api/admin/personal-vaults").expect(200)).body.serviceConfigured).toBe(true);
   });
 
@@ -594,12 +606,40 @@ describe("GET /api/me/personal-vault says whether this server has a memory servi
     expect(memoryClientFor(bare.store, bare.config)).toBeNull(); // really no client: neither configured nor installed
     const admin = await mkUser(bare.app, bare.store, "admin");
     const owner = await mkUser(bare.app, bare.store, "owner");
-    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: false });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body).toEqual({ home: "repo", mirror: null, serviceConfigured: false, service: null });
     // Moved while the service was configured; this server was then started without it.
     bare.store.setPersonalVaultMemory(owner.id, { sourceRepo: "x", sourceCommit: null });
     const mine = await owner.agent.get("/api/me/personal-vault").expect(200);
-    expect(mine.body).toMatchObject({ home: "memory", serviceConfigured: false, mirror: { hold: null } });
+    // No client to ask: `service` is null, and the card's "not configured" line is what speaks.
+    expect(mine.body).toMatchObject({ home: "memory", serviceConfigured: false, service: null, mirror: { hold: null } });
     expect((await admin.agent.get("/api/admin/personal-vaults").expect(200)).body.serviceConfigured).toBe(false);
+  });
+});
+
+describe("GET /api/me/personal-vault checks the memory service for an owner on home `memory`", () => {
+  it("service: ok when it answers, unavailable when it cannot be used, refused when it answers no — null on home `repo`", async () => {
+    const { app, store, config, fake } = boot();
+    await mkUser(app, store, "admin");
+    const owner = await mkUser(app, store, "owner");
+    // Home `repo`: nothing is asked of the service.
+    fake.calls.length = 0;
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body.service).toBeNull();
+    expect(fake.calls).toEqual([]);
+
+    connect(store, owner.id, "brain", VAULT);
+    await cutoverVault(store, config, owner.id);
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body.service).toBe("ok");
+
+    // An outage: the copy's state is still reported, and the card is told the brain cannot be used now.
+    fake.failNext(new MemoryUnavailableError("memory service unavailable (list): network error", "network"), { op: "list" });
+    const down = await owner.agent.get("/api/me/personal-vault").expect(200);
+    expect(down.body).toMatchObject({ home: "memory", serviceConfigured: true, service: "unavailable", mirror: { hold: null } });
+
+    fake.failNext(new MemoryRefusedError("forbidden", 403), { op: "list" });
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body.service).toBe("refused");
+
+    // Back up: the next read says so.
+    expect((await owner.agent.get("/api/me/personal-vault").expect(200)).body.service).toBe("ok");
   });
 });
 

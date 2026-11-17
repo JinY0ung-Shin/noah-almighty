@@ -261,6 +261,28 @@ describe("vault home `memory`: the block and the copy's state", () => {
     expect(block()!.textContent).not.toContain("메모리 서비스가 연결되어 있지 않습니다");
   });
 
+  it("the server's check of the memory service failed just now: an outage line above the copy's last state", async () => {
+    vault = { ...memory({ dirty: false, syncedAt: "2026-11-17T01:00:00.000Z" }), serviceConfigured: true, service: "unavailable" };
+    await open();
+    const alert = block()!.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("지금 메모리 서비스에 연결하지 못했습니다.");
+    expect(alert.textContent).toContain("저장된 노트는 그대로 있습니다");
+    // The copy's state is still shown — it is what it was; the line above says the brain cannot be used now.
+    expect(line()).toContain("사본 최신");
+  });
+
+  it("the service answered but refused this vault: its own outage line", async () => {
+    vault = { ...memory({ dirty: false, syncedAt: "2026-11-17T01:00:00.000Z" }), serviceConfigured: true, service: "refused" };
+    await open();
+    expect(block()!.querySelector('[role="alert"]')!.textContent).toContain("지금 메모리 서비스가 이 브레인 노트를 열어 주지 않습니다.");
+  });
+
+  it("no outage line when the service answered, or when the server does not say (an older server)", async () => {
+    vault = { ...memory({ dirty: false, syncedAt: "2026-11-17T01:00:00.000Z" }), serviceConfigured: true, service: "ok" };
+    await open();
+    expect(block()!.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("failed: the memory service could not be used", async () => {
     vault = memory({ dirty: true, error: "memory service unavailable (timeout)" });
     await open();

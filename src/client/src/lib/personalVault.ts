@@ -67,6 +67,12 @@ export interface MyPersonalVault {
   mirror: VaultMirrorState | null;
   /** False = this server has no memory service configured (an older server that does not say counts as configured). */
   serviceConfigured: boolean;
+  /**
+   * Home `memory`: whether the memory service answered the server's check of this vault just now — `ok`,
+   * `unavailable` (no answer) or `refused` (it answered but would not serve this vault). Null for home `repo`,
+   * a server without the service, or an older server that does not say.
+   */
+  service: "ok" | "unavailable" | "refused" | null;
 }
 
 export type VaultOwnerState = "repo" | "memory" | "no_repo";
@@ -83,6 +89,8 @@ export interface VaultMigrationReport {
   /** Non-empty: this owner is not moved. */
   blockers: string[];
   state: VaultOwnerState;
+  /** When the server made this report (ISO); an older server sends none. */
+  at?: string;
 }
 
 export interface AdminVaultOwner {
@@ -108,7 +116,9 @@ export interface AdminPersonalVaults {
 /** The answers as the screens use them: every mirror normalized (`normalizeVaultMirror`). */
 export function readMyPersonalVault(value: unknown): MyPersonalVault | null {
   if (!isMyPersonalVault(value)) return null;
-  return { home: value.home, mirror: normalizeVaultMirror(value.mirror), serviceConfigured: (value as { serviceConfigured?: unknown }).serviceConfigured !== false };
+  const raw = value as { serviceConfigured?: unknown; service?: unknown };
+  const service = raw.service === "ok" || raw.service === "unavailable" || raw.service === "refused" ? raw.service : null;
+  return { home: value.home, mirror: normalizeVaultMirror(value.mirror), serviceConfigured: raw.serviceConfigured !== false, service };
 }
 
 export function readAdminPersonalVaults(value: unknown): AdminPersonalVaults | null {

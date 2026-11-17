@@ -8,7 +8,10 @@
 // button) or `confirm` (it found brain notes there — the one confirmation that
 // lets the copy replace them, naming the repository and branch on screen).
 //
-// Only what the SERVER reported is shown: this file predicts no failure.
+// Only what the SERVER reported is shown: this file predicts no failure. That
+// includes the outage line: the server checks the memory service on every read
+// of this state (`service`), so the card does not show only the copy's last
+// state while the brain itself cannot be used.
 //
 // The state lives in `usePersonalVaultStatus`, called by the always-mounted
 // tab, so it survives a tab switch; this component only draws it.
@@ -231,6 +234,13 @@ export default function SettingsVaultStatus({ status, repo, branch, onOpenAccess
         <p className="error-note" role="alert">
           이 서버에 메모리 서비스가 연결되어 있지 않습니다. 브레인 노트를 읽거나 쓸 수 없고 저장소 사본도 올라가지 않습니다. 관리자에게 알려
           주세요. 노트는 메모리 서비스에 그대로 있습니다.
+        </p>
+      ) : vault.service === "unavailable" || vault.service === "refused" ? (
+        // The server's check of the service just now failed: the copy's state below is its LAST state, not a working brain.
+        <p className="error-note" role="alert">
+          {vault.service === "unavailable" ? "지금 메모리 서비스에 연결하지 못했습니다." : "지금 메모리 서비스가 이 브레인 노트를 열어 주지 않습니다."}{" "}
+          브레인 노트를 읽거나 쓸 수 없지만, 저장된 노트는 그대로 있습니다. 잠시 뒤 ‘상태 새로 고침’으로 다시 확인해 보고, 계속되면 관리자에게
+          알려 주세요.
         </p>
       ) : null}
       {repoConnected ? (
