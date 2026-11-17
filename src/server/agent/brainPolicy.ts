@@ -4,8 +4,11 @@
 // (promptBuilder.ts), the tool descriptions/results (brainTools.ts,
 // teamBrainTools.ts) and read_manual (systemManual.ts) import these strings;
 // the bundled brain-* / team-brain-curate skills and the knowledge-repo
-// template REFER to them ("the Brain policy in your instructions") instead of
-// restating them — tests/brain-policy.test.ts pins both halves. Agent-facing,
+// template REFER to them (BRAIN_POLICY_REFERENCE) instead of restating them —
+// tests/brain-policy.test.ts pins both halves. The prompt carries only the rules
+// judged on every turn (prompt diet 2026-11-17); the rest is read_manual topic
+// `brain-policy`, which a pointer names with the moment each rule applies, and
+// every tool result that hits one of those moments names the rule and the topic. Agent-facing,
 // so English. The team's ADMINS add their own rules in POLICY.md
 // (teamBrainPolicy.ts) — guidelines that refine these, never override them.
 
@@ -90,8 +93,24 @@ export const PROMOTED_NOTE_RULE =
 /** Frontmatter key of a personal note that became a link to its team page. */
 export const PERSONAL_TEAM_PAGE_KEY = "team_page";
 
+/** read_manual topic id of the whole policy (brainPolicyManualText). */
+export const BRAIN_POLICY_MANUAL_TOPIC = "brain-policy";
+
 /** How a skill or template refers to these rules instead of restating them. */
-export const BRAIN_POLICY_REFERENCE = "the Brain policy in your instructions";
+export const BRAIN_POLICY_REFERENCE = `the Brain policy (\`mcp__system__read_manual\` topic \`${BRAIN_POLICY_MANUAL_TOPIC}\`)`;
+
+/** How a tool result names ONE rule at the moment it applies: "PROMOTED NOTES in the Brain policy (…topic…)". */
+export function inBrainPolicy(rule: string): string {
+  return `${rule} in ${BRAIN_POLICY_REFERENCE}`;
+}
+
+/**
+ * The prompt's short form of TEAM_KNOWLEDGE_DEFINITION + TEAM_SHARE_LEVEL_RULE:
+ * what the everyday OFFER TO SHARE is judged by. The full wording (which the
+ * selection pass and the card drafting follow) is in both manual topics.
+ */
+export const TEAM_KNOWLEDGE_BRIEF =
+  "TEAM KNOWLEDGE — what belongs in the team brain: only what passes ALL four tests — (1) useful to others: another teammate would look for it in the same situation; (2) durable: not a one-off status update; (3) settled: a decision that was made or a fact that was verified, not an opinion or a guess; (4) safe to share: no secrets, tokens or passwords, personal or customer data, anyone's private matters or judgments about people — and at THE RIGHT LEVEL: the reusable conclusion (a decision and its reason, how a system works and where it lives, the fix for a problem that will come back, a convention, a term, who owns what), never the working detail (the steps of one session, the particulars of one ticket, meeting or case, one-off values, anyone's tasks or progress, drafts). Offer only the part that states the conclusion; when nothing reusable is left, or in doubt, leave it out.";
 
 export interface BrainPolicyScope {
   /** The personal second brain can be written in this run (capture/consolidate). */
@@ -106,18 +125,33 @@ export interface BrainPolicyScope {
 
 /**
  * The prompt's **Brain policy** section for what this run can do, or null when
- * the run has neither brain. Rules about writing are stated only where the run
- * can write; the conflict rule wherever both brains can be read.
+ * the run has neither brain: the rules judged on every turn (what to capture,
+ * where it goes, one home, show both on a conflict) and a pointer to the rules
+ * that apply only at a known moment — each named with that moment — which the
+ * run reads from topic `brain-policy` then. Rules about writing are stated (or
+ * pointed at) only where the run can write; the conflict rule wherever both
+ * brains can be read.
  */
 export function brainPolicySection(scope: BrainPolicyScope): string | null {
   const personal = scope.personalRead || scope.personalWrite;
   if (!personal && !scope.teamRead) return null;
   const parts: string[] = ["**Brain policy** (the rules for both brains; the brain-* and team-brain-curate skills follow them):"];
+  const later: string[] = [];
   if (scope.personalWrite) parts.push(PERSONAL_KNOWLEDGE_DEFINITION);
-  if (scope.personalWrite && scope.teamWrite) parts.push(BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE);
+  if (scope.personalWrite && scope.teamWrite) {
+    parts.push(BRAIN_ROUTING_RULE);
+    later.push(
+      `drafting any team-brain card (${BRAIN_LINK_CHECK_NAME})`,
+      "a selection pass over the owner's notes for the team (SELECTING FOR THE TEAM)",
+      `acting on the user's wish to keep a note out of the team brain (${BRAIN_KEPT_PERSONAL_NAME})`,
+    );
+  }
   if (personal && scope.teamRead) {
     parts.push(BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE);
-    if (scope.personalWrite) parts.push(PROMOTED_NOTE_RULE);
+    if (scope.personalWrite) later.push("acting on a personal note a tool result marks PROMOTED (PROMOTED NOTES)");
+  }
+  if (later.length > 0) {
+    parts.push(`The rest of the policy is \`mcp__system__read_manual\` topic \`${BRAIN_POLICY_MANUAL_TOPIC}\` — read it before ${later.join("; before ")}.`);
   }
   return parts.length > 1 ? parts.join(" ") : null;
 }

@@ -567,8 +567,8 @@ caps the injected length — keep it tight.
 - If the \`wiki/\` vault is missing (an older repo), run **brain-migrate** once — it never
   overwrites existing files.
 - An edit is not persisted until you commit.
-- What goes here vs the team brain follows the Brain policy in your instructions (one fact, one
-  home): a fact that went into the team brain is linked from here, never kept as a second full copy.
+- What goes here vs the team brain follows the Brain policy (\`mcp__system__read_manual\` topic \`brain-policy\`) — one fact, one
+  home: a fact that went into the team brain is linked from here, never kept as a second full copy.
 
 ## 여기에 적어 둘 것 (소유자 메모)
 - 자주 쓰는 용어·약어, 합의된 결정과 배경, 반복 작업의 기본 규칙, 선호하는 응답 말투/형식.

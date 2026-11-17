@@ -18,10 +18,10 @@ is what writes the team brain — nobody reviews it afterwards, so draft only wh
 - **Which run:** only where `mcp__brain__prepare_team_changes` exists — the owner's own interactive chat. In any
   other run (a routine, an API task, a teammate's chat) say that this pass needs the owner's own chat
   and stop; do not list candidates from rules this run does not carry.
-- **The rules:** follow the Brain policy in your instructions (SELECTING FOR THE TEAM, KEPT PERSONAL,
-  BEFORE A TEAM CARD, ONE FACT ONE HOME, WHEN THEY DISAGREE) and, in the team-brain section, the TEAM
-  KNOWLEDGE tests, THE RIGHT LEVEL, the INTAKE rules and WRITING THE TEAM BRAIN. This skill is the
-  procedure; it does not restate them, and when the two seem to differ the instructions win.
+- **The rules:** read and follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — SELECTING FOR THE TEAM, KEPT PERSONAL,
+  BEFORE A TEAM CARD, ONE FACT ONE HOME, WHEN THEY DISAGREE — and `mcp__system__read_manual` topic
+  `team-brain-writing` — the TEAM KNOWLEDGE tests, THE RIGHT LEVEL, the INTAKE rules and WRITING THE TEAM BRAIN — before the pass. This skill is the
+  procedure; it does not restate them, and when the two seem to differ those rules win.
 
 ## Procedure
 1. **Gather.** List the personal `wiki/` notes (`sources/`, `entities/`, `concepts/`, `synthesis/`; not

@@ -11,6 +11,8 @@ import {
   BRAIN_CONFLICT_RULE,
   BRAIN_KEPT_PERSONAL_NAME,
   PERSONAL_TEAM_PAGE_KEY,
+  PROMOTED_NOTE_RULE,
+  inBrainPolicy,
   PERSONAL_TEAM_SHARE_DECLINED,
   PERSONAL_TEAM_SHARE_KEY,
 } from "./brainPolicy.js";
@@ -123,7 +125,7 @@ async function personalNoteMark(
           `PROMOTED: ${notePath} was recorded as stating the same fact as the team page ${pages}, by a team-brain change that had no new source, applied${on} (card ${l.proposalId}). The canonical version is now the team page. This note was NOT that page's source — read the team page too: whatever only this note says is not in the team brain. This note ${changed ? "HAS CHANGED since the link was recorded" : "has not changed since the link was recorded"}.`,
     );
   }
-  if (forOwner) lines.push("Nothing in this note changes automatically: follow PROMOTED NOTES in the Brain policy (ask the user, with all five points, before rewriting it).");
+  if (forOwner) lines.push(`Nothing in this note changes automatically. ${PROMOTED_NOTE_RULE}`);
   return lines.join("\n");
 }
 
@@ -155,7 +157,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
             if (isKeptPersonalNote(content)) {
               return {
                 ok: false,
-                reason: `marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` — the owner keeps this note out of the team brain (${BRAIN_KEPT_PERSONAL_NAME} in the Brain policy). Do not put what this note says into the team brain, with or without the link; only when the user names this note and asks to share it, remove the mark (mcp__repo__edit_file + commit) and call again`,
+                reason: `marked \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` — the owner keeps this note out of the team brain (${inBrainPolicy(BRAIN_KEPT_PERSONAL_NAME)}). Do not put what this note says into the team brain, with or without the link; only when the user names this note and asks to share it, remove the mark (mcp__repo__edit_file + commit) and call again`,
               };
             }
             return { ok: true, link: { path: w.norm, blob: personalNoteBlobId(content) } };
@@ -192,7 +194,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
             }
           }
           const markBlock = marks.length
-            ? `\n\nTeam-brain links of these notes (the team page is the canonical version${ctx.viewerIsOwner ? "; PROMOTED NOTES in the Brain policy says what to ask the user" : ""}):\n${marks.join("\n")}`
+            ? `\n\nTeam-brain links of these notes (the team page is the canonical version${ctx.viewerIsOwner ? `; ${inBrainPolicy("PROMOTED NOTES")} says what to ask the user` : ""}):\n${marks.join("\n")}`
             : "";
           return text(
             `Top ${result.hits.length} note(s) from your second brain for "${args.query}":\n${formatBrainHits(

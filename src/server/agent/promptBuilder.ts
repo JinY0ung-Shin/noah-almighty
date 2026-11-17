@@ -24,15 +24,14 @@ import {
 import { PROMPT_TTL_MS } from "./runRegistry.js";
 import { systemManualIndex } from "./systemManual.js";
 import {
-  TEAM_ADMIN_EXTRAS,
   TEAM_ADMIN_ONLY_NOTE,
-  TEAM_CARD_PRESS_NOTE,
+  TEAM_ADMIN_POINTER,
+  TEAM_CARD_PRESS_BRIEF,
   TEAM_NOTE_TRUST_NOTE,
   TEAM_OFFER_TO_SHARE,
-  TEAM_WRITE_FLOW,
   teamGuidelinesBlock,
 } from "./teamBrainTools.js";
-import { TEAM_KNOWLEDGE_DEFINITION, TEAM_SHARE_LEVEL_RULE, brainPolicySection } from "./brainPolicy.js";
+import { TEAM_KNOWLEDGE_BRIEF, brainPolicySection } from "./brainPolicy.js";
 import {
   effectiveMcpToolGroups,
   MCP_TOOL_GROUPS,
@@ -285,11 +284,11 @@ function brainSection(
 
 /**
  * Team brain section (docs/architecture/team-brain.md): the ONE instance-wide
- * vault every run with a known approved principal may READ, the four
- * team-knowledge tests, and — only on a write-capable run (the owner's own
- * interactive chat) — the standing OFFER-TO-SHARE guidance plus the ONE write
- * flow every teammate has, closed by what an admin adds (or, for everyone else,
- * what stays with the admins). Keyed on `request.teamBrain`, stamped from the
+ * vault every run with a known approved principal may READ, and — only on a
+ * write-capable run (the owner's own interactive chat) — the short form of the
+ * team-knowledge tests, the standing OFFER-TO-SHARE guidance with the pointer to
+ * the write procedure (topic `team-brain-writing`), the admin pointer (or, for
+ * everyone else, what stays with the admins) and what a press report is. Keyed on `request.teamBrain`, stamped from the
  * SAME booleans that register the tools, so the prompt never names a tool the
  * run lacks. Nothing volatile (page/health counts live in describe_system).
  */
@@ -303,14 +302,15 @@ function teamBrainSection(request: AgentRequest): string | null {
     return `${base} Writing to the team brain is not available in this run (only in the owner's own interactive conversation).`;
   }
   const guidelines = teamGuidelinesBlock(tb.guidelines);
+  // Only what is judged on every turn rides the prompt; the write procedure is
+  // read_manual topic `team-brain-writing`, read after the user's yes
+  // (teamBrainGuide.ts — prompt diet 2026-11-17).
   return [
     base,
-    TEAM_KNOWLEDGE_DEFINITION,
-    TEAM_SHARE_LEVEL_RULE,
+    TEAM_KNOWLEDGE_BRIEF,
     TEAM_OFFER_TO_SHARE,
-    TEAM_WRITE_FLOW,
-    tb.admin ? TEAM_ADMIN_EXTRAS : TEAM_ADMIN_ONLY_NOTE,
-    TEAM_CARD_PRESS_NOTE,
+    tb.admin ? TEAM_ADMIN_POINTER : TEAM_ADMIN_ONLY_NOTE,
+    TEAM_CARD_PRESS_BRIEF,
     ...(guidelines ? [guidelines] : []),
   ].join(" ");
 }

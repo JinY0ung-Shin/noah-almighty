@@ -204,9 +204,16 @@
   The wording follows the 2026-11-13 change (every teammate writes the team brain directly; nothing is
   "submitted" or "approved" any more) — the rules themselves did not change.
   `brainPolicySection` renders the **Brain policy** prompt section per run (write rules only where the run can
-  write; conflict/one-home only with both brains); read_manual's `knowledge` guide uses
-  `brainPolicyManualText`; tool results quote the same constants. The brain-* + team-brain-curate skills and
-  the repo-template `CLAUDE.md` REFER to "the Brain policy in your instructions" instead of restating it —
+  write; conflict/one-home only with both brains). **The prompt carries only the rules judged on EVERY turn**
+  (PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT ONE HOME, WHEN THEY DISAGREE — prompt diet, user 2026-11-17);
+  the rules with a known moment (BEFORE A TEAM CARD, SELECTING FOR THE TEAM, KEPT PERSONAL, PROMOTED NOTES)
+  ride it only as ONE pointer that names each moment, and their text is read_manual topic `brain-policy`
+  (`BRAIN_POLICY_MANUAL_TOPIC`, `brainPolicyManualText`; the `knowledge` guide embeds it too). Every tool result
+  that hits such a moment names the rule AND the topic (`inBrainPolicy(name)`); the owner's `get_note` on a
+  PROMOTED note carries `PROMOTED_NOTE_RULE` itself. **A new rule goes into the prompt only when it is judged
+  on every turn; otherwise into the topic, with a pointer moment and a tool result that names it.** The
+  brain-* + team-brain-curate skills and the repo-template `CLAUDE.md` REFER to `BRAIN_POLICY_REFERENCE` ("the
+  Brain policy (`mcp__system__read_manual` topic `brain-policy`)") instead of restating it —
   `tests/brain-policy.test.ts` pins both halves. Personal search stays `wiki/`-only (user, 2026-11-10).
   It scores the first `BRAIN_SCAN_CAP` (2000) notes in path order and SAYS when a vault is larger
   (`unscannedNote`, on a hit and on a miss) — the same rule as the team search, [`team-brain.md`](team-brain.md) "Tools".

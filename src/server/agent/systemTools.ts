@@ -67,6 +67,7 @@ import {
 import { serverProxyState } from "./serverProxyState.js";
 import { MAX_SAVED_CAPTURES_PER_TURN } from "../chatFiles.js";
 import { readSystemManual } from "./systemManual.js";
+import { inBrainPolicy } from "./brainPolicy.js";
 import { consultationHistoryText } from "./avatarDirectoryTools.js";
 import { PiGatewayError, type PiTurnTrace } from "./pi/responsesClient.js";
 import { TURN_TIMINGS_DEFAULT_TURNS, TURN_TIMINGS_MAX_TURNS, summarizeTurnTimings } from "./turnTimings.js";
@@ -118,7 +119,7 @@ async function teamBrainStatusLine(store: Store, ctx: SystemToolsContext): Promi
   }`;
   const promoted = store.listTeamBrainPersonalLinks(ctx.avatarUserId).length;
   const promotedLine = promoted
-    ? `; ${promoted} of the owner's team-brain changes link personal notes — the team page is now canonical for them (PROMOTED NOTES in the Brain policy; mcp__brain__team_brain_health names them)`
+    ? `; ${promoted} of the owner's team-brain changes link personal notes — the team page is now canonical for them (${inBrainPolicy("PROMOTED NOTES")}; mcp__brain__team_brain_health names them)`
     : "";
   // Not a number: the standing fact that a card press reaches the avatar by itself (teamBrainCardPress.ts).
   const pressLine = "; a press of a card's confirm button (not a cancel) is reported to you in this conversation as it happens (a message starting with [Team-brain card press)";

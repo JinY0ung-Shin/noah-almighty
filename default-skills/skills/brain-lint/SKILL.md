@@ -15,7 +15,7 @@ brain-reflect pass.
   `mcp__repo__commit`. `mcp__repo__write_file` overwrites the entire file, so never use it to trim a passage.
 - **`raw/` is read-only for this skill.** It is the original-capture archive: read it to judge
   what is current, never edit or delete anything in it. Lint edits land in `wiki/` only.
-- **Which brain:** follow the Brain policy in your instructions (ONE FACT ONE HOME, PROMOTED NOTES); this
+- **Which brain:** follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — ONE FACT ONE HOME, PROMOTED NOTES; this
   skill checks the personal vault against it (checks 7–8) and never writes the team brain.
 
 ## Checks

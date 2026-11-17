@@ -39,7 +39,7 @@ routine, an API task), say this needs the owner's own chat and stop.
   source's specifics (names, numbers, commands, versions, links); prefer small source-backed edits over
   broad rewrites. Write page text in the source's language; frontmatter keys stay English.
 - Your own notes: before EVERY `mcp__brain__prepare_team_changes` card (sections 1 to 4), when this run
-  has a personal brain, do the BEFORE A TEAM CARD check of the Brain policy in your instructions and pass
+  has a personal brain, do the BEFORE A TEAM CARD check of the Brain policy (`mcp__system__read_manual` topic `brain-policy`) and pass
   what it finds in `personalNotes` — cards without a source take it too.
 - Never resolve a contradiction silently: keep the established text, add a line to `conflicts`, and tell
   the user in your reply — they judge it on the card.
@@ -53,8 +53,9 @@ routine, an API task), say this needs the owner's own chat and stop.
   into its current text (never overwrite a newer version from memory). A `create` needs no `baseBlob`.
 
 ## 1. New knowledge
-Judge it against the TEAM KNOWLEDGE tests and THE RIGHT LEVEL (they sit in the team-brain section; the
-rest of the Brain policy in your instructions applies too) and the team's guidelines in `POLICY.md`, and
+Judge it against the TEAM KNOWLEDGE tests and THE RIGHT LEVEL (in full, with the intake and the write
+flow: `mcp__system__read_manual` topic `team-brain-writing` — read it first; the rest of the Brain policy
+applies too) and the team's guidelines in `POLICY.md`, and
 run the intake, provenance included (`source_kind`, `source`, `author`, `authored_at` — the ORIGINAL's
 origin, author and date): ask ONCE, in one message, only for the facts the page type still needs.
 1. Search the team brain (`mcp__brain__search`, scope `"team"`) for the key names, terms and systems,

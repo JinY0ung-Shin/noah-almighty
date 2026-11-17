@@ -14,7 +14,8 @@ import {
   MAX_CHAT_DOCUMENT_BYTES,
 } from "../../shared/chatDocuments.js";
 import { DOCUMENT_ENCODING_CLAUSE, DOCUMENT_LIBRARIES_PHRASE, DOCUMENT_TYPES_PHRASE, PI_SUBAGENT_SENTENCE } from "./ownerState.js";
-import { brainPolicyManualText } from "./brainPolicy.js";
+import { BRAIN_POLICY_MANUAL_TOPIC, brainPolicyManualText } from "./brainPolicy.js";
+import { TEAM_BRAIN_WRITING_MANUAL_TOPIC, teamBrainWritingManualText } from "./teamBrainGuide.js";
 import { TEAM_POLICY_KEYS } from "../teamBrainPolicy.js";
 import { widgetComponentReference } from "../../shared/widget/spec.js";
 import { INLINE_UI_COMPONENTS_MANUAL_TOPIC, INLINE_UI_MANUAL_TOPIC, INLINE_UI_REPORT_TITLE, INLINE_UI_STATE_TITLE, widgetComponentBrief } from "../../shared/widget/guide.js";
@@ -254,6 +255,20 @@ Use 탐색 or mcp__avatars__search_avatars to find reachable avatars by name, bi
 Include all required context and the desired answer language: the other avatar cannot see this conversation and cannot ask follow-up questions. Read its answer and attribute what you learned; absence of an answer is not proof the teammate has no expertise. Consultation is limited (it answers from that avatar's knowledge, in a fresh, empty sandbox of its own that is deleted afterwards — it never sees your files or the teammate's), not a general background delegation channel.
 
 Example: "이번 릴리즈 정책을 담당하는 팀원 아바타에게 확인해줘." Search for the relevant avatar, then send a self-contained question.`,
+  },
+  {
+    id: BRAIN_POLICY_MANUAL_TOPIC,
+    title: "Brain policy (avatar reference)",
+    summary: "Every rule about what goes into the personal second brain vs the team brain and how the two relate.",
+    body: `The rules for both brains, in full. Your instructions carry the ones judged on every turn and say when to read the rest — before drafting a team-brain card, a selection pass over the owner's notes, keeping a note out of the team brain, and acting on a note marked PROMOTED.
+
+${brainPolicyManualText()}`,
+  },
+  {
+    id: TEAM_BRAIN_WRITING_MANUAL_TOPIC,
+    title: "Writing the team brain (avatar reference)",
+    summary: "After the user's yes: the intake, provenance, compiling a team-brain card, card presses and the admin tasks.",
+    body: teamBrainWritingManualText(),
   },
   {
     id: "routines",

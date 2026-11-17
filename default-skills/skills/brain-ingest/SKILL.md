@@ -17,8 +17,8 @@ not actually say. Never invent facts.
 - **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
 - **Personal only:** this skill writes the owner's OWN repo. The team brain is a separate wiki
   every teammate writes through cards — this skill never writes it (its `raw/`/`wiki/` layout is Noah's, not this repo's).
-- **Which brain:** follow the Brain policy in your instructions (PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT
-  ONE HOME; the TEAM KNOWLEDGE tests sit in the team-brain section, on runs that can write the team brain) — this skill does
+- **Which brain:** follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT
+  ONE HOME (your instructions carry these; the TEAM KNOWLEDGE tests sit in the team-brain section, on runs that can write the team brain) — this skill does
   not restate them. Personal knowledge is captured here without
   asking first. Team knowledge — at THE RIGHT LEVEL, never working detail — is OFFERED to the team (a
   `mcp__brain__prepare_team_changes` card the user presses) only in the owner's own chat; when you also captured it here, pass the

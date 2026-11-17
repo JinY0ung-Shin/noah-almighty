@@ -12,11 +12,13 @@ import { callTool, gitInit, makeBareRemote, withTempDir } from "./helpers.js";
 import { createServices } from "../src/server/app.js";
 import { buildBrainTools, isKeptPersonalNote } from "../src/server/agent/brainTools.js";
 import type { TeamBrainToolsContext } from "../src/server/agent/teamBrainTools.js";
-import { TEAM_OFFER_TO_SHARE, TEAM_WRITE_FLOW, teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
+import { TEAM_INTAKE, TEAM_WRITE_FLOW, teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
+import { teamBrainWritingManualText } from "../src/server/agent/teamBrainGuide.js";
 import {
   BRAIN_CONFLICT_RULE,
   BRAIN_KEPT_PERSONAL_RULE,
   BRAIN_ONE_HOME_RULE,
+  BRAIN_POLICY_MANUAL_TOPIC,
   BRAIN_POLICY_REFERENCE,
   BRAIN_LINK_CHECK_NAME,
   BRAIN_LINK_CHECK_RULE,
@@ -408,7 +410,8 @@ describe("personal notes linked to a team-brain card", () => {
     const after = await callTool(tools, "get_note", { path: "wiki/howto/deploy.md" });
     expect(after.content[0].text).toContain("PROMOTED: wiki/howto/deploy.md went into the team brain as the source of a team-brain change");
     expect(after.content[0].text).toContain("has not changed since it went in");
-    expect(after.content[0].text).toContain("follow PROMOTED NOTES");
+    // The rule itself rides the result that hits it (the prompt only points at it).
+    expect(after.content[0].text).toContain(PROMOTED_NOTE_RULE);
     // The note itself is untouched.
     expect(after.content[0].text).toContain("배포는 setup-host.sh 후 compose up.");
 
@@ -575,22 +578,27 @@ describe("the Brain policy is ONE source", () => {
   it("states each rule only where the run can use it", () => {
     expect(brainPolicySection({ personalRead: false, personalWrite: false, teamRead: false, teamWrite: false })).toBeNull();
     const owner = brainPolicySection({ personalRead: true, personalWrite: true, teamRead: true, teamWrite: true })!;
-    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE, PROMOTED_NOTE_RULE]) {
+    // The rules judged on every turn ride the prompt in full…
+    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_ONE_HOME_RULE, BRAIN_CONFLICT_RULE]) {
       expect(owner).toContain(rule);
     }
-    // The selection pass and the remembered "no" ride the runs that can both capture and write the team brain.
-    expect(owner).toContain(TEAM_SHARE_PASS_RULE);
-    expect(owner).toContain(BRAIN_KEPT_PERSONAL_RULE);
-    // A read-only teammate: the conflict rule, never the write-side rules.
+    // …the ones with a known moment only by name, with that moment and the topic (prompt diet 2026-11-17).
+    for (const rule of [BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE, PROMOTED_NOTE_RULE]) expect(owner).not.toContain(rule);
+    expect(owner).toContain("The rest of the policy is `mcp__system__read_manual` topic `brain-policy` — read it before ");
+    for (const name of ["(BEFORE A TEAM CARD)", "(SELECTING FOR THE TEAM)", "(KEPT PERSONAL)", "(PROMOTED NOTES)"]) expect(owner).toContain(name);
+    // A read-only teammate: the conflict rule, never the write-side rules nor a pointer to them.
     const reader = brainPolicySection({ personalRead: true, personalWrite: false, teamRead: true, teamWrite: false })!;
     expect(reader).toContain(BRAIN_CONFLICT_RULE);
-    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE, BRAIN_LINK_CHECK_RULE, PROMOTED_NOTE_RULE]) expect(reader).not.toContain(rule);
-    // A routine (personal write, no team-brain cards): no routing to the team.
+    for (const rule of [PERSONAL_KNOWLEDGE_DEFINITION, BRAIN_ROUTING_RULE]) expect(reader).not.toContain(rule);
+    expect(reader).not.toContain("topic `brain-policy`");
+    // A routine (personal write, no team-brain cards): no routing to the team, only the PROMOTED pointer.
     const routine = brainPolicySection({ personalRead: true, personalWrite: true, teamRead: true, teamWrite: false })!;
     expect(routine).not.toContain(BRAIN_ROUTING_RULE);
-    expect(routine).not.toContain(BRAIN_LINK_CHECK_RULE);
-    expect(routine).not.toContain(TEAM_SHARE_PASS_RULE);
-    expect(routine).not.toContain(BRAIN_KEPT_PERSONAL_RULE);
+    for (const name of ["(BEFORE A TEAM CARD)", "(SELECTING FOR THE TEAM)", "(KEPT PERSONAL)"]) expect(routine).not.toContain(name);
+    expect(routine).toContain("(PROMOTED NOTES)");
+    // The manual topic holds every rule.
+    const topic = SYSTEM_MANUAL_TOPICS.find((t) => t.id === BRAIN_POLICY_MANUAL_TOPIC)!;
+    for (const rule of [BRAIN_LINK_CHECK_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE, PROMOTED_NOTE_RULE, BRAIN_CONFLICT_RULE]) expect(topic.body).toContain(rule);
   });
 
   it("the level test gates offers and selection alike, and the selection pass is bounded and remembers a no (2026-11-12)", () => {
@@ -625,12 +633,14 @@ describe("the Brain policy is ONE source", () => {
     for (const part of [BRAIN_LINK_CHECK_NAME, "mcp__brain__prepare_team_changes", 'scope "personal"', "`personalNotes`", "AND for a correction or maintenance"]) {
       expect(BRAIN_LINK_CHECK_RULE).toContain(part);
     }
-    // The team flows point at it by NAME (never a second copy), only for a run that has a personal brain.
-    for (const flow of [TEAM_OFFER_TO_SHARE, TEAM_WRITE_FLOW]) {
-      expect(flow).toContain(`${BRAIN_LINK_CHECK_NAME} check of the Brain policy`);
+    // The team flows point at it by NAME, only for a run that has a personal brain; the write
+    // procedure topic carries the rule itself next to them.
+    for (const flow of [TEAM_INTAKE, TEAM_WRITE_FLOW]) {
+      expect(flow).toContain(`${BRAIN_LINK_CHECK_NAME} check`);
       expect(flow).toContain("a personal brain in this run");
       expect(flow).not.toContain(BRAIN_LINK_CHECK_RULE);
     }
+    expect(teamBrainWritingManualText()).toContain(BRAIN_LINK_CHECK_RULE);
   });
 
   it("no rule assumes a review queue or an approving admin any more", () => {

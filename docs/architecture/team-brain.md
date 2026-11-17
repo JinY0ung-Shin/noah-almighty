@@ -222,8 +222,8 @@
 - **The link exists only when the avatar passes it — soft by decision.** The server never searches the
   personal brain for candidates. The execution point is `BRAIN_LINK_CHECK_RULE` ("BEFORE A TEAM CARD",
   `brainPolicy.ts`): before every team card the avatar searches the personal brain for the topic and passes
-  the notes that state the same fact. `TEAM_OFFER_TO_SHARE` (intake) and `TEAM_WRITE_FLOW` point at it by
-  name (`BRAIN_LINK_CHECK_NAME`), the `personalNotes` parameter description repeats the trigger, and the
+  the notes that state the same fact. `TEAM_INTAKE` and `TEAM_WRITE_FLOW` point at it by
+  name (`BRAIN_LINK_CHECK_NAME`) and the `team-brain-writing` topic carries it next to them, the `personalNotes` parameter description repeats the trigger, and the
   curate skill refers to it. A server-side candidate detector is the next step only if this still misses.
 - A note marked `team_share: no` (`isKeptPersonalNote` — also `false`, quoted, or with a trailing comment; the
   owner's KEPT PERSONAL decision) is refused as a `personalNotes` entry, and the refusal says not to put what
@@ -391,14 +391,19 @@
 - Prompt (`teamBrainSection`, frozen, no counts) on the owner, teammate and consultation branches, keyed on
   `request.teamBrain` (`{read, write, admin, guidelines?}`): the read line ("a wiki every teammate writes
   through their own avatar and anyone may correct … with no review before or after") + trust note always; on
-  a WRITE run also `TEAM_KNOWLEDGE_DEFINITION`, `TEAM_SHARE_LEVEL_RULE`, `TEAM_OFFER_TO_SHARE` (offer +
-  intake: per-type required facts from `TEAM_INTAKE_REQUIRED`), `TEAM_WRITE_FLOW` (the ONE flow every teammate
-  has: read SCHEMA.md + index + the pages, compile ONE changeset, nothing changes until the user presses,
-  conflicts listed for the user to judge), then `TEAM_ADMIN_EXTRAS` for an admin (the policy card, the
-  migration pass) or `TEAM_ADMIN_ONLY_NOTE` for everyone else (what stays with the admins, and that the
-  server refuses a new `raw/legacy/` citation), then `TEAM_CARD_PRESS_NOTE`, then the guidelines block;
-  otherwise "Writing to the team brain is not available in this run". The Brain policy section keys its team
-  rules on `BrainPolicyScope.teamWrite`.
+  a WRITE run only what is judged on EVERY turn (prompt diet, user 2026-11-17): `TEAM_KNOWLEDGE_BRIEF` (the
+  four tests + THE RIGHT LEVEL in short), `TEAM_OFFER_TO_SHARE` (offer one question, never without the yes,
+  and — after the yes, BEFORE asking anything — read the topic below), `TEAM_ADMIN_POINTER` for an admin or
+  `TEAM_ADMIN_ONLY_NOTE` for everyone else (what stays with the admins, and that the server refuses a new
+  `raw/legacy/` citation), `TEAM_CARD_PRESS_BRIEF` (a `[Team-brain card press` message is Noah's report, not
+  the user), then the guidelines block; otherwise "Writing to the team brain is not available in this run".
+  The procedure after the yes is read_manual topic `team-brain-writing` (`teamBrainGuide.ts`,
+  `teamBrainWritingManualText`): the full `TEAM_KNOWLEDGE_DEFINITION` + `TEAM_SHARE_LEVEL_RULE`, `TEAM_INTAKE`
+  (per-type required facts from `TEAM_INTAKE_REQUIRED`, provenance), `TEAM_WRITE_FLOW` (read SCHEMA.md +
+  index + the pages, compile ONE changeset, nothing changes until the user presses, conflicts listed for the
+  user to judge), `BRAIN_LINK_CHECK_RULE`, `TEAM_CARD_PRESS_NOTE` and the ADMIN part (`TEAM_ADMIN_EXTRAS`:
+  the policy card, the migration pass). The write-flow strings live in `teamBrainGuide.ts` (re-exported from
+  `teamBrainTools.ts`). The Brain policy section keys its team rules on `BrainPolicyScope.teamWrite`.
 - The prompt is FROZEN per conversation, so the write/admin wording is the first turn's: a later routine
   or API turn on the same session, or a role change, can make it overstate — and a conversation started
   BEFORE 2026-11-13 still describes the review queue. The tool errors (incl. the retired-tool answers) and
@@ -485,9 +490,10 @@
   (≤ 10 min, same conversation): `streaming` drops at the `done` frame, but the send/attach loop's `finally`
   runs later and would wipe the live state of a turn started in between. A press turn that cannot be sent is
   undone without a toast (the card already shows the outcome). `pressTeamBrainCard` also records a failed
-  report when the action THROWS. Standing guidance: `TEAM_CARD_PRESS_NOTE` is its own part of every write
-  run's team-brain section, every "card shown" tool result ends "Then stop: Noah tells you what the press
-  did…" (`CARD_PRESS_REPORTED`), the `describe_system` team-brain line and `read_manual` say the same; when no
+  report when the action THROWS. Standing guidance: `TEAM_CARD_PRESS_BRIEF` is its own part of every write
+  run's team-brain section (`TEAM_CARD_PRESS_NOTE`, the full rule, is in topic `team-brain-writing`), every
+  "card shown" tool result ends "Then stop: Noah tells you what the press did…" with the cancel and the
+  no-report fallback (`CARD_PRESS_REPORTED`), the `describe_system` team-brain line and `read_manual` say the same; when no
   report came the avatar LOOKS (team `get_note` on the pages, or `wiki/log.md`). A conversation whose prompt
   was frozen before this still understands the report (it explains itself). **A new card button goes through
   `pressTeamBrainCard`** and joins `TEAM_BRAIN_CARD_PRESS_ACTIONS`.

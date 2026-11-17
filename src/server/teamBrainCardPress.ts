@@ -28,6 +28,7 @@ import {
   type TeamBrainLiveKind,
   type TeamBrainProposal,
 } from "../shared/teamBrain.js";
+import { inBrainPolicy } from "./agent/brainPolicy.js";
 
 /** A report nobody collected is dropped after this long. */
 export const TEAM_BRAIN_CARD_PRESS_TTL_MS = 10 * 60 * 1000;
@@ -144,7 +145,7 @@ function doneText(card: PressedCard): string {
     `DONE: committed to the team brain — ${card.path ? `the new source ${card.path} and ` : ""}${pagesText(card)}.`,
     ...(notes
       ? [
-          `Linked personal note(s): ${notes} — none of them was changed; for each, the team page is now the canonical version. Follow PROMOTED NOTES in the Brain policy (ask the user, with all five points, before rewriting one).`,
+          `Linked personal note(s): ${notes} — none of them was changed; for each, the team page is now the canonical version. Follow ${inBrainPolicy("PROMOTED NOTES")} — read it, then ask the user, with all five points, before rewriting one.`,
         ]
       : []),
     "What to do now: carry on with what was waiting on this press — the step you said would follow, the next card of a batch — or, if nothing was, confirm in one or two sentences. Do not draft this change again.",

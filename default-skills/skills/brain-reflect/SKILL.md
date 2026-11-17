@@ -11,7 +11,7 @@ asked to "tidy up / consolidate my notes".
 ## Scope
 - **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
   This consolidates the PERSONAL brain only; the team brain is written through cards and never touched here.
-- **Which brain:** follow the Brain policy in your instructions (ONE FACT ONE HOME, PROMOTED NOTES). Never
+- **Which brain:** follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — ONE FACT ONE HOME, PROMOTED NOTES. Never
   compile a capture into a new full personal note when the team brain already holds that fact — search it
   (scope `"team"`) first and link to the team page instead; a note `mcp__brain__get_note` marks as PROMOTED
   or as a LINK note is never re-expanded. Turning a promoted note into a link needs the owner's yes (an
