@@ -43,6 +43,14 @@ services:
         ipv4_address: ${NOAH_MCP_BROKER_IP:-172.16.248.10}
     build: *pi-node-builder
 
+  # pi's memory service keeps one markdown wiki per owner. Noah's server is its only caller in this stack:
+  # it joins a network only the two are on, so Noah gains no route to sandboxd or the broker and no
+  # sandbox (they have no network at all) can reach the service. It is NOT registered in pi's broker.
+  memory:
+    networks:
+      noah-memory: {}
+    build: *pi-node-builder
+
   # pi builds egress-proxy FROM ${GO_IMAGE}; hand it Noah's CA-trusting Go builder (the `pi-go-builder`
   # service in docker-compose.yml, docker/pi/golang-ca.Dockerfile) so `go mod download` trusts
   # CA_CERT_FILE behind an HTTPS GOPROXY. Merged onto pi's own build args (its mirror args stay).
@@ -72,3 +80,6 @@ networks:
     ipam:
       config:
         - subnet: ${NOAH_MCP_SUBNET:-172.16.248.0/24}
+  # memory ↔ Noah only. Internal: no route out; Docker picks the subnet (nothing pins an address here).
+  noah-memory:
+    internal: true

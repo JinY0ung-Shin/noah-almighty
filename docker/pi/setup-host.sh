@@ -18,6 +18,9 @@
 #   checks  $PI_GATEWAY_SECRETS/gateway/admin_api_key is set (the one-shot `pi-setup` service reads it)
 #   copies  it → $PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key, uid 1000, 0400, the same way: Noah serves
 #           pi's admin panel at /admin to Noah admins and injects this key (re-run after rotating pi's admin key)
+#   copies  $PI_GATEWAY_SECRETS/memory/api_key → $PI_GATEWAY_SECRETS/noah/pi_memory_api_key, uid 1000, 0400:
+#           Noah's server calls pi's memory service itself (personal vaults). pi's own script creates the
+#           service's key; without Noah's copy the stack does not start (compose mounts it as a secret)
 #   adds    PI_GATEWAY_HOME, PI_GATEWAY_SECRETS to Noah's .env (only when missing)
 #   checks  an EXISTING noah-almighty-data volume's root is uid 1000 (#79) — detection only: it fails with
 #           the repair to run (README.md "Upgrade" → "Data volume ownership"), it never changes the volume
@@ -94,6 +97,12 @@ DEST="$SECRETS/noah/pi_gateway_api_key"
 copy_for_noah "$API_KEY"
 DEST="$SECRETS/noah/pi_gateway_admin_api_key"
 copy_for_noah "$SECRETS/gateway/admin_api_key"
+# The memory service's key: pi-gateway's setup-host.sh (run above) creates it for the service's own uid.
+MEMORY_KEY="$SECRETS/memory/api_key"
+[ -s "$MEMORY_KEY" ] \
+  || fail "$MEMORY_KEY is missing or empty after pi-gateway's setup-host.sh — is the pi-gateway checkout older than its memory service? (git submodule update --init)"
+DEST="$SECRETS/noah/pi_memory_api_key"
+copy_for_noah "$MEMORY_KEY"
 
 touch "$ENV_FILE"
 add_env() {
