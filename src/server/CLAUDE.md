@@ -17,10 +17,11 @@ mechanics live in [`docs/architecture/`](../../docs/architecture/) — mainly
 - **`migrate()` runs on EVERY `new Store()` (every boot), so a value-guarded backfill is NOT one-time.** A backfill whose predicate
   can match rows the app creates LATER must be gated on the `PRAGMA user_version` ladder (`internal.ts`);
   only predicates that can match OLD rows alone may stay ungated.
-- **`deleteUser` cascades MANUALLY, in two halves that must stay in sync:** a new user-scoped table needs its
-  `DELETE` (both directions where the user is owner AND subject), and a new on-disk per-user namespace
-  (incl. the pi sandbox workspace) needs its sweep in the `routes/admin.ts` delete handler. Audit rows are
-  retained by design.
+- **`deleteUser` cascades MANUALLY, in three halves that must stay in sync:** a new user-scoped table needs its
+  `DELETE` (both directions where the user is owner AND subject), a new on-disk per-user namespace
+  (incl. the pi sandbox workspace) needs its sweep in the `routes/admin.ts` delete handler, and a per-user
+  namespace OFF this box needs its call there too — today the owner's wiki in the memory service
+  (`deleteWiki`, best effort and logged, inside that owner's vault write queue). Audit rows are retained by design.
 - **`SESSION_SECRET` keys EVERY at-rest reversible secret.** Rotating it is SILENT data loss (decrypt →
   "no secret"), not a crash — a deploy-migration concern.
 - **One home each:** schedule math lives in `routineSchedule.ts` — a new schedule field touches it +

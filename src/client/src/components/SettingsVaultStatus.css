@@ -1,0 +1,71 @@
+/* 설정 ▸ 지식 저장소 card: where the brain notes are kept (vault home `memory`). */
+.vault-status:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  display: grid;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg-subtle);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.vault-status:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) p {
+  margin: 0;
+}
+.vault-status-head:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.vault-status-head:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) .linkish.small {
+  margin-top: 0;
+}
+.vault-status-state:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  display: grid;
+  justify-items: start;
+  gap: var(--s-1);
+}
+.vault-status-state:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) .linkish.small {
+  margin-top: 0;
+  white-space: normal;
+  text-align: left;
+}
+.vault-status-line.synced:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) strong {
+  color: var(--ok);
+}
+.vault-status-line.waiting:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) strong {
+  color: var(--info);
+}
+.vault-status-line.failed:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) strong {
+  color: var(--danger);
+}
+.vault-status-hold:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  display: grid;
+  justify-items: start;
+  gap: var(--s-2);
+}
+.vault-status-hold:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) .ghost-sm {
+  white-space: normal;
+  text-align: left;
+}
+.vault-status-failed:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  margin-top: var(--s-3);
+}
+.vault-status-notice:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  padding: var(--s-2) var(--s-2-5);
+  border: 1px solid var(--info-line);
+  border-radius: var(--r-sm);
+  background: var(--info-soft);
+  color: var(--info);
+}
+.vault-status-actions:is(.cmp-settings-vault-status, .cmp-settings-vault-status *) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+}

@@ -39,5 +39,9 @@ not actually say. Never invent facts.
    changed to Y on <date>" / "기존 … 였으나 … 로 변경" narrative to a `wiki/` note: the `raw/` file
    you just wrote carries the date and the old context, and brain-lint deletes such narrative on
    sight.
-4. **Always commit** after writing — an uncommitted write is not persisted.
+4. **Always commit** after writing (`mcp__repo__commit`) — the commit is what pushes the capture to
+   the repository. Read each write's tool result before you report: a result that says "Not committed
+   yet" is NOT saved until `mcp__repo__commit` succeeds; a result that says the vault note "is saved
+   now" is saved, and the commit pushes its copy. If the commit fails, say exactly what is saved and
+   what is not instead of calling the capture done or lost.
 5. Confirm briefly what you captured and where.

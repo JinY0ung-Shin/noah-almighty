@@ -778,6 +778,11 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   wider blast radius: the admin key configures pi itself.
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
+- **Memory service** — pi's `memory` service (the home of personal vaults that were moved out of their
+  repositories) joins `noah-memory`, an INTERNAL network only it and Noah are on; Noah reads it through the
+  fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
+  (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
+  #84)" below.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,
@@ -815,6 +820,68 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
   tools and relays on a pi run, so the prompt's egress line, describe_system's and the `network-policy` manual
   topic say exactly that.
+
+## Memory service (personal vaults, #84)
+
+pi-gateway ships a second service next to the gateway, `apps/memory`: one markdown wiki per owner. Noah keeps
+the personal vault of an owner whose vault home is `memory` there (`personalVault.ts`; the rules, the client
+and the contract → [`repo-knowledge.md`](repo-knowledge.md) "Personal vault: two homes"). This section is what
+Noah needs from the STACK.
+
+**In Noah's code:**
+- `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE` → `config.memory` (`parseMemoryConfig`). Both or neither; the key
+  from a file only (an inline `PI_MEMORY_API_KEY` stops the boot, like pi's admin key), so it is never in
+  `process.env`. Neither set (a native run without the service) = the feature is off: no owner can be moved,
+  the mirror loop does not start, and the admin screen says the service is not configured.
+- Noah calls the service DIRECTLY (`memory/memoryClient.ts`, `/wiki/<owner>/…`, bearer key). It is never
+  registered in pi's broker (`PI_NOAH_SERVER_NAMES`, `scripts/pi-register-mcp.mjs` are unchanged): pi has no
+  per-request server filter, so a registered memory server would give every session a second, ungated set of
+  memory tools, and a broker registration can name only the requesting user, never an avatar owner.
+- The service's address is one of Noah's `internalServices` (`gitSourcePolicy.ts`), so it cannot be
+  registered as a git source or a plugin source.
+- A sandbox never reaches it: sandboxes have no network, and Noah's tools are the only way to a vault note.
+- **OPERATOR RULE — in a Noah stack pi's memory service must NOT be registered on pi's MCP page.** pi's own
+  documentation (`docs/OPERATIONS.md`, "장기 메모리") describes exactly that registration — server id
+  `memory`, the key from `$PI_GATEWAY_SECRETS/memory/api_key` — for pi used standalone, and pi's
+  `setup-host.sh` prints the key for it. Noah proxies that very page at `/admin` to Noah admins. A registered
+  server shows EVERY session a second set of memory tools that never pass Noah: no run-class gate (a
+  teammate's chat, a consultation), no `isPersonalVaultPath`, no vault write queue, no deletion ledger, the
+  wiki chosen by the requesting principal instead of the avatar owner — and the mirror then copies whatever
+  landed in an owner's wiki into their repository. **Nothing in the code prevents or detects it:** the
+  `/admin` proxy forwards MCP-page writes like any other, `pi-setup` (`scripts/pi-register-mcp.mjs`) only
+  registers and retires Noah's own ids and does not look for `memory`, and the client assumes it is the
+  wiki's only writer (`repo-knowledge.md` "What Noah does not verify").
+
+**In the bundled stack** (`tests/infra-compose.test.ts` pins every line of this; pi's compose file is not edited):
+- **The service** is pi's own (`memory` in pi's compose: uid 10002, pi's internal `control` network, the
+  `memory-data` volume, no published port, key from pi's compose secret). `docker/pi/compose.override.yml`
+  merges two things onto it: it ALSO joins `noah-memory`, and it builds FROM Noah's CA-trusting Node base
+  like pi's other Node services (`*pi-node-builder`).
+- **`noah-memory`** (declared in the override) is `internal: true` and holds exactly two services — Noah and
+  `memory`; no subnet or address is pinned (Docker picks it; nothing checks a source address here, the key
+  does). **Noah is NOT on pi's `control` network**, so it gains no route to sandboxd or the broker. It is
+  Noah's fourth network (`default`, `edge`, `noah-mcp`, `noah-memory`).
+- **Noah's env is FIXED by `docker-compose.yml`:** `PI_MEMORY_URL: http://memory:7090` (pi's `MEMORY_PORT`)
+  and `PI_MEMORY_API_KEY_FILE: /run/secrets/pi_memory_api_key_noah` — literals in `environment`, never read
+  from `.env`, and no inline `PI_MEMORY_API_KEY` anywhere in the file.
+- **The key copy:** pi's `scripts/setup-host.sh` creates `$PI_GATEWAY_SECRETS/memory/api_key` for the
+  service's uid; `docker/pi/setup-host.sh` then copies it to `$PI_GATEWAY_SECRETS/noah/pi_memory_api_key`
+  (uid 1000, 0400, the same `copy_for_noah` as the service and admin keys — same same-uid caveat, #71) and
+  FAILS when pi's key is missing or empty (a pi checkout older than its memory service). Compose mounts
+  Noah's copy as the secret `pi_memory_api_key_noah`.
+- **Without Noah's copy the stack does not start** — compose mounts it as a secret, so this holds also for an
+  instance where nobody was moved. `setup-host.sh` therefore runs before `docker compose up` on the upgrade
+  that brings the service in, as on every upgrade.
+- **No `depends_on`:** Noah does not wait for the memory service. An outage degrades the brain of moved
+  owners (reported as an outage on every surface — `repo-knowledge.md`); it does not stop the app.
+- **Pin:** the service arrives with pi-gateway `e0e5b8c` (the memory service and its JSON API).
+- **NOT verified in a real stack yet:** the dind boot test has not run with this wiring. Until it does,
+  Noah → memory over `noah-memory` with the copied key (a write, a read, a search, deleting a wiki) is
+  covered only by the compose test's text pins and by unit tests against a hand-written double of the
+  service (`tests/helpers/fakeMemory.ts`).
+- **Not sized:** the service's volume, its backup and its limits (10,000 notes / 256 MiB per wiki) are pi's
+  and the operator's. Noah backs up nothing of it: the only other copy of a moved vault is its repository
+  mirror.
 
 ## pi admin panel proxy (`routes/piAdminProxy.ts`)
 

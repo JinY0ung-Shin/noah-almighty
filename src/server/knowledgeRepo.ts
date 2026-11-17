@@ -153,7 +153,15 @@ export async function ensureClone(ctx: KnowledgeRepoContext): Promise<string> {
   return withRepoLock(repoRoot, () => ensureCloneLocked(ctx, repoRoot));
 }
 
-async function ensureCloneLocked(ctx: KnowledgeRepoContext, repoRoot: string): Promise<string> {
+/**
+ * {@link ensureClone} for a caller that ALREADY holds the clone's repo lock
+ * (`withRepoLock(knowledgeClonePath(…))` is not reentrant): the same clone /
+ * fetch / align, without taking the lock again.
+ */
+export async function ensureCloneLocked(
+  ctx: KnowledgeRepoContext,
+  repoRoot: string = knowledgeClonePath(ctx.userId, ctx.config),
+): Promise<string> {
   const url = marketplaceCloneUrl(ctx.repo, ctx.config.githubHost);
   // Reject values git would read as options (e.g. `--upload-pack=…` → RCE) and
   // `scheme::` remote-helper syntax (`ext::sh -c …` → command execution). ONE
@@ -566,7 +574,12 @@ caps the injected length — keep it tight.
 - Link related notes inline as \`[[Note Title]]\` — these links connect the knowledge graph view.
 - If the \`wiki/\` vault is missing (an older repo), run **brain-migrate** once — it never
   overwrites existing files.
-- An edit is not persisted until you commit.
+- Commit after you edit: \`mcp__repo__commit\` is what pushes your changes to this repository.
+- Where the vault (\`CLAUDE.md\`, \`wiki/\`, \`raw/\` notes) is stored is set per owner in Noah:
+  in this repository, or in Noah's memory service with this repository holding a COPY that Noah
+  pushes. When it is a copy, a note edited directly in git is not read back and is replaced by
+  the next push — change notes through the avatar. In the owner's own conversations
+  \`mcp__system__describe_system\` says which; each write's tool result says whether it is saved.
 - What goes here vs the team brain follows the Brain policy (\`mcp__system__read_manual\` topic \`brain-policy\`) — one fact, one
   home: a fact that went into the team brain is linked from here, never kept as a second full copy.
 
@@ -588,6 +601,11 @@ function repoTemplateReadme(name: string): string {
 - \`wiki/{sources,entities,concepts,synthesis}/\` — 정제된 노트 (brain-reflect)
 - \`wiki/index.md\` · \`wiki/log.md\` · \`wiki/_template.md\` — 목차 / 정리 이력 / 노트 템플릿
 - \`.claude-plugin/marketplace.json\` — 추가 스킬(플러그인) 목록
+
+Noah가 개인 브레인을 메모리 서비스에 보관하도록 설정되어 있으면, 이 저장소의 \`CLAUDE.md\`와
+\`wiki/\`·\`raw/\`의 마크다운 노트는 Noah가 올려 두는 **사본**입니다. 그 파일을 git에서 직접
+고쳐도 Noah는 다시 읽지 않고, 다음에 사본을 올릴 때 덮어씁니다(고친 내용은 git 이력에 남습니다).
+노트는 아바타에게 요청해서 고치세요. 스킬·플러그인과 그 밖의 파일은 언제나 이 저장소가 원본입니다.
 
 팀 전체가 알아야 할 결정·시스템 정보는 팀 브레인이 정본입니다. 팀 브레인에 반영된 내용은
 아바타가 동의를 구한 뒤 여기서 팀 브레인 링크로 바꿉니다.
@@ -639,6 +657,24 @@ notes inline as \`[[Note Title]]\` — these links connect the knowledge graph. 
 }
 
 /**
+ * The message of a commit that only brings the clone's copy of the vault notes
+ * up to date (`vaultMirror.ts`) — the background mirror's commits, and the
+ * follow-up commit of a `commitAndPush` whose `beforeCommit` hook had to write
+ * the copy again after a rebase.
+ */
+export const VAULT_MIRROR_COMMIT_MESSAGE = `Mirror vault notes from Noah
+
+A copy of the notes Noah keeps for this avatar. Change them through the avatar: an edit made here is overwritten by the next mirror.`;
+
+/** What `commitAndPushClone` lets a caller add to a knowledge-repo commit (see its options). */
+interface KnowledgeCommitExtras {
+  checkStaged?: (staged: string[]) => void | Promise<void>;
+  vaultPaths?: (path: string) => boolean;
+  afterRebase?: () => Promise<void>;
+  followUpMessage?: string;
+}
+
+/**
  * Stage all changes, commit with the user's identity, and push to the remote
  * branch. Returns false (no commit) when the tree is clean. Throws on git
  * failure (auth, conflicts) so the route can surface the detail.
@@ -647,24 +683,72 @@ export async function commitAndPush(
   ctx: KnowledgeRepoContext,
   message: string,
   identity: { name: string; email: string },
+  options: {
+    /**
+     * Runs INSIDE the repo lock this call takes, once the clone is known to be
+     * there (a missing clone throws NOT_CLONED first) and before anything is
+     * staged — so what it writes into the working tree (the vault mirror,
+     * `vaultMirror.ts`, with `locked: true`) is part of this commit. It runs
+     * AGAIN when the local commits had to be rebased onto remote ones (the
+     * remote's commits changed the working tree), before the push; what it
+     * changes then is committed on top (`VAULT_MIRROR_COMMIT_MESSAGE`). A
+     * throw propagates: before the commit nothing is committed, after the
+     * rebase nothing is pushed. It must not take the repo lock.
+     */
+    beforeCommit?: (repoRoot: string) => Promise<void>;
+    /**
+     * The paths the hook owns (`isPersonalVaultPath` for an owner whose vault
+     * lives in the memory service): a rebase conflict confined to them is
+     * settled for the local side instead of failing the commit — a direct git
+     * edit of a vault note never blocks it. Absent = every conflict fails.
+     */
+    vaultPaths?: (path: string) => boolean;
+  } = {},
 ): Promise<boolean> {
   const repoRoot = knowledgeClonePath(ctx.userId, ctx.config);
   // Serialize the add/commit/push against any concurrent ensureClone or other
   // commit on the same working tree (git-02). Keyed by clone path, same as
   // ensureClone, and never nested under that lock (commitAndPush doesn't clone).
-  return withRepoLock(repoRoot, () =>
-    commitAndPushClone(repoRoot, {
-      url: marketplaceCloneUrl(ctx.repo, ctx.config.githubHost),
-      config: ctx.config,
-      tokens: repoTokens(ctx),
-      branch: ctx.branch,
-      message,
-      defaultMessage: "Update knowledge repo",
-      identity,
-      log: { userId: ctx.userId, repo: ctx.repo },
-      pushedMessage: "knowledge repo pushed",
-    }),
-  );
+  return withRepoLock(repoRoot, async () => {
+    const { beforeCommit, vaultPaths } = options;
+    if (beforeCommit) {
+      if (!(await pathExists(path.join(repoRoot, ".git")))) {
+        throw new Error("NOT_CLONED");
+      }
+      await beforeCommit(repoRoot);
+    }
+    return commitAndPushLocked(ctx, message, identity, {
+      ...(vaultPaths ? { vaultPaths } : {}),
+      ...(beforeCommit ? { afterRebase: () => beforeCommit(repoRoot), followUpMessage: VAULT_MIRROR_COMMIT_MESSAGE } : {}),
+    });
+  });
+}
+
+/**
+ * {@link commitAndPush} for a caller that ALREADY holds the clone's repo lock
+ * (it is not reentrant): the vault mirror's own commit (`vaultMirror.ts`).
+ * The extras are `commitAndPushClone`'s: `checkStaged` (a last look at the
+ * staged paths), `vaultPaths` (conflicts settled for the local side),
+ * `afterRebase` + `followUpMessage` (the hook between a rebase and the push).
+ */
+export function commitAndPushLocked(
+  ctx: KnowledgeRepoContext,
+  message: string,
+  identity: { name: string; email: string },
+  options: KnowledgeCommitExtras = {},
+): Promise<boolean> {
+  return commitAndPushClone(knowledgeClonePath(ctx.userId, ctx.config), {
+    url: marketplaceCloneUrl(ctx.repo, ctx.config.githubHost),
+    config: ctx.config,
+    tokens: repoTokens(ctx),
+    branch: ctx.branch,
+    message,
+    defaultMessage: "Update knowledge repo",
+    identity,
+    log: { userId: ctx.userId, repo: ctx.repo },
+    pushedMessage: "knowledge repo pushed",
+    ...options,
+  });
 }
 
 /**

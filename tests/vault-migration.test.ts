@@ -1,0 +1,1715 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createServices } from "../src/server/app.js";
+import { closeRun, openRun } from "../src/server/agent/runRegistry.js";
+import { withRepoLock } from "../src/server/gitMutex.js";
+import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
+import { MemoryRefusedError, MemoryUnavailableError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { VAULT_HOME_CHANGED, VAULT_NOTE_MAX_BYTES, memoryVaultFor, withVaultWrite } from "../src/server/personalVault.js";
+import { claimRoutineSlot, releaseRoutineSlot } from "../src/server/routineRunRegistry.js";
+import {
+  VAULT_BLOCKER,
+  VAULT_LEFTOVER_BLOCKERS,
+  VAULT_LEFTOVER_DIR,
+  VAULT_ROLLBACK_REFUSAL,
+  VAULT_SKIP,
+  cutoverVault,
+  isVaultMigrationRunning,
+  lastVaultMigrationReport,
+  onKnowledgeRepoChanged,
+  ownerRunInProgress,
+  planVaultMigration,
+  recheckVaultMirrorHold,
+  rollbackVault,
+  runVaultMigrationPass,
+  setVaultCutoverRetryForTests,
+  startVaultMigrationPass,
+  whenVaultMigrationIdle,
+} from "../src/server/vaultMigration.js";
+import { syncVaultMirror } from "../src/server/vaultMirror.js";
+import { createFakeMemoryClient, fakeMemoryHash, type FakeMemoryClient } from "./helpers/fakeMemory.js";
+import { makeBareRemote, withTempDir } from "./helpers.js";
+
+// vaultMigration.ts: the dry run, the cutover repo → memory, the rollback, the
+// pass and the "repository changed" rules — over real clones of LOCAL bare
+// remotes (offline; a local path needs no token) and the in-process fake of
+// the memory service. The git mirror (vaultMirror.ts, another module) is
+// stubbed: these tests pin how the migration CALLS it and what it does with
+// each outcome.
+
+vi.mock("../src/server/vaultMirror.js", () => ({
+  syncVaultMirror: vi.fn(),
+  startVaultMirrorLoop: vi.fn(() => ({ stop() {} })),
+}));
+
+// The real clone sync, except that a test can make the NEXT one a no-op that reports success: the checks the
+// migration makes AFTER the sync are its last line of defence when git did not do what it was asked.
+const cloneSync = vi.hoisted(() => ({ skipNext: false, afterNext: null as (() => void) | null }));
+vi.mock("../src/server/knowledgeRepo.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/server/knowledgeRepo.js")>();
+  const ensureCloneLocked: typeof actual.ensureCloneLocked = (ctx, repoRoot) => {
+    if (cloneSync.skipNext) {
+      cloneSync.skipNext = false;
+      return Promise.resolve(repoRoot ?? actual.knowledgeClonePath(ctx.userId, ctx.config));
+    }
+    // … or run something right after the next sync (the owner doing something while a job has the clone).
+    const after = cloneSync.afterNext;
+    cloneSync.afterNext = null;
+    return actual.ensureCloneLocked(ctx, repoRoot).then((root) => {
+      after?.();
+      return root;
+    });
+  };
+  return { ...actual, ensureCloneLocked };
+});
+
+const mirror = vi.mocked(syncVaultMirror);
+type Services = ReturnType<typeof createServices>;
+
+// Every test here clones and fetches real git repositories: room for a loaded machine (the whole suite in parallel).
+vi.setConfig({ testTimeout: 30_000 });
+
+const getTempDir = withTempDir("vault-migration");
+
+beforeEach(() => {
+  cloneSync.skipNext = false;
+  cloneSync.afterNext = null;
+  setVaultCutoverRetryForTests();
+  mirror.mockReset();
+  // A mirror that works: the clone equals the service, and the row says so.
+  mirror.mockImplementation(async (store, _config, userId) => {
+    store.recordVaultMirror(userId, { ok: true });
+    return { kind: "synced", changed: 0, seq: 0 };
+  });
+});
+
+const git = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, ...args], { stdio: "pipe" }).toString().trim();
+
+type Files = Record<string, string | Buffer>;
+
+function writeFiles(root: string, files: Files): void {
+  for (const [rel, content] of Object.entries(files)) {
+    const abs = path.join(root, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, content);
+  }
+}
+
+/** A bare remote on `main` holding `files`, outside the data root; returns its path. Its seed tree stays for later pushes. */
+function seedRemote(name: string, files: Files): string {
+  const remotes = path.join(getTempDir(), "remotes");
+  fs.mkdirSync(remotes, { recursive: true });
+  const remote = makeBareRemote(path.join(remotes, `${name}.git`));
+  const seed = path.join(remotes, `${name}-seed`);
+  fs.mkdirSync(seed, { recursive: true });
+  git(seed, "init", "-q");
+  git(seed, "config", "user.email", "seed@example.com");
+  git(seed, "config", "user.name", "Seed");
+  git(seed, "config", "commit.gpgsign", "false");
+  writeFiles(seed, { "README.md": "# brain\n", ...files });
+  git(seed, "add", "-A");
+  git(seed, "commit", "-q", "-m", "seed");
+  git(seed, "branch", "-M", "main");
+  git(seed, "remote", "add", "origin", remote);
+  git(seed, "push", "-q", "origin", "main");
+  return remote;
+}
+
+/** Push one more commit to a seeded remote (the owner working from elsewhere). */
+function pushMore(name: string, files: Files, remove: string[] = []): void {
+  const seed = path.join(getTempDir(), "remotes", `${name}-seed`);
+  writeFiles(seed, files);
+  for (const rel of remove) fs.rmSync(path.join(seed, rel), { force: true });
+  git(seed, "add", "-A");
+  git(seed, "commit", "-q", "-m", "more");
+  git(seed, "push", "-q", "origin", "main");
+}
+
+function setup(options: { fake?: FakeMemoryClient | null } = {}) {
+  const services = createServices({ dataDir: path.join(getTempDir(), "data"), agentRuntime: "local", sessionSecret: "t" });
+  const { store, config } = services;
+  const fake = options.fake === undefined ? createFakeMemoryClient() : options.fake;
+  if (fake) setMemoryClientForTests(store, fake);
+  const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
+  store.setGitToken(owner.id, "test-token");
+  return { services, store, config, fake: fake as FakeMemoryClient, ownerId: owner.id };
+}
+
+/** One more teammate, with a git token like the owner. */
+function addUser(s: { store: Services["store"] }, username: string): string {
+  const user = s.store.createUser({ username, displayName: username, password: "password123" });
+  s.store.setGitToken(user.id, "test-token");
+  return user.id;
+}
+
+/** Connect `files` as the owner's knowledge repository (a seeded local remote on `main`). */
+function connect(s: { store: Services["store"] }, userId: string, name: string, files: Files): string {
+  const remote = seedRemote(name, files);
+  s.store.setKnowledgeRepo(userId, remote, "main");
+  return remote;
+}
+
+const VAULT: Files = {
+  "CLAUDE.md": "# standing memory\n",
+  "wiki/index.md": "# Index\n",
+  "wiki/concepts/deploy.md": "---\ntitle: Deploy\n---\nHow we deploy.\n",
+  "raw/2026-11-01.md": "captured\n",
+};
+
+/** Every file under this boot's quarantine of leftover notes, `<user>/<time>/<note path>` → content. */
+function quarantinedLeftovers(s: { config: Services["config"] }): Record<string, string> {
+  const retired = path.join(s.config.dataDir, "retired");
+  const out: Record<string, string> = {};
+  if (!fs.existsSync(retired) || !fs.statSync(retired).isDirectory()) return out;
+  for (const stamp of fs.readdirSync(retired)) {
+    const root = path.join(retired, stamp, VAULT_LEFTOVER_DIR);
+    if (!fs.existsSync(root)) continue;
+    const walk = (dir: string, rel: string) => {
+      for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const child = rel ? `${rel}/${dirent.name}` : dirent.name;
+        if (dirent.isDirectory()) walk(path.join(dir, dirent.name), child);
+        else out[child] = fs.readFileSync(path.join(dir, dirent.name), "utf8");
+      }
+    };
+    walk(root, "");
+  }
+  return out;
+}
+
+const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Hold the owner's clone lock — a commit or a sync of some run — until released. */
+function holdCloneLock(s: { ownerId: string; config: Services["config"] }): { release(): Promise<void> } {
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => (open = resolve));
+  const held = withRepoLock(knowledgeClonePath(s.ownerId, s.config), () => gate);
+  return {
+    release: async () => {
+      open();
+      await held;
+    },
+  };
+}
+
+const writes = (fake: FakeMemoryClient) => fake.calls.filter((call) => call.op === "put" || call.op === "remove" || call.op === "deleteWiki");
+const codes = (blockers: string[]) => blockers.map((text) => text.split(":")[0]);
+
+/** Every file of a directory tree (no `.git`), `path → sha256`, to prove a clone was not changed. */
+function treeHashes(root: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (dir: string, rel: string) => {
+    for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (dirent.name === ".git") continue;
+      const child = rel ? `${rel}/${dirent.name}` : dirent.name;
+      if (dirent.isDirectory()) walk(path.join(dir, dirent.name), child);
+      else if (dirent.isFile()) out[child] = fakeMemoryHash(fs.readFileSync(path.join(dir, dirent.name), "utf8"));
+      else out[child] = "link";
+    }
+  };
+  walk(root, "");
+  return out;
+}
+
+// ---- The state table of the issue ("Every existing state has a defined outcome") ----
+
+describe("cutover — every existing state has a defined outcome", () => {
+  it("a repository with wiki/ and raw/: notes and CLAUDE.md are imported, verified, and the home flips", async () => {
+    const s = setup();
+    const remote = connect(s, s.ownerId, "brain", VAULT);
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(report).toMatchObject({ userId: s.ownerId, repo: remote, state: "memory", notes: 4, blockers: [], skipped: [] });
+    expect(report.bytes).toBe(Object.values(VAULT).reduce((sum, text) => sum + Buffer.byteLength(text), 0));
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    const row = s.store.getPersonalVault(s.ownerId);
+    expect(row).toMatchObject({ sourceRepo: remote, sourceCommit: git(clone, "rev-parse", "HEAD"), mirrorHold: null, mirrorDirty: false });
+    expect(report.sourceCommit).toBe(row!.sourceCommit);
+    // Every note was read back after the import.
+    const putAt = s.fake.calls.map((call) => call.op).lastIndexOf("put");
+    const readBack = s.fake.calls.slice(putAt + 1).filter((call) => call.op === "read").map((call) => call.path);
+    expect(readBack.sort()).toEqual(Object.keys(VAULT).sort());
+    // The first mirror record, under the locks the cutover already holds.
+    expect(mirror).toHaveBeenCalledTimes(1);
+    expect(mirror).toHaveBeenCalledWith(s.store, s.config, s.ownerId, { push: true, locked: true });
+    expect(row!.mirrorSyncedAt).not.toBeNull();
+    // Source files are never deleted or rewritten: the clone is still exactly its commit.
+    expect(git(clone, "status", "--porcelain")).toBe("");
+    expect(fs.readFileSync(path.join(clone, "wiki/concepts/deploy.md"), "utf8")).toBe(VAULT["wiki/concepts/deploy.md"]);
+    expect(lastVaultMigrationReport(s.store, s.ownerId)).toEqual(report);
+  });
+
+  it("a repository that predates the vault layout: CLAUDE.md is imported if present, then the home flips", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "old", { "CLAUDE.md": "old rules\n", "skills/x/SKILL.md": "---\nname: x\n---\n" });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 1, blockers: [], skipped: [] });
+    expect(s.fake.dump(s.ownerId)).toEqual({ "CLAUDE.md": "old rules\n" });
+
+    const other = { id: addUser(s, "bare") };
+    connect(s, other.id, "bare", { "skills/x/SKILL.md": "---\nname: x\n---\n" });
+    const empty = await cutoverVault(s.store, s.config, other.id);
+    expect(empty).toMatchObject({ state: "memory", notes: 0, bytes: 0, blockers: [] });
+    expect(s.fake.dump(other.id)).toEqual({});
+    expect(s.store.getPersonalVault(other.id)).not.toBeNull();
+  });
+
+  it("no repository connected: nothing to import, nothing changes", async () => {
+    const s = setup();
+    for (const run of [planVaultMigration, cutoverVault]) {
+      const report = await run(s.store, s.config, s.ownerId);
+      expect(report).toEqual({ userId: s.ownerId, repo: null, sourceCommit: null, notes: 0, bytes: 0, skipped: [], blockers: [], state: "no_repo" });
+    }
+    expect(s.fake.calls).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it("a dirty clone is refused and reported; the owner stays on `repo` and the next pass moves them", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    await planVaultMigration(s.store, s.config, s.ownerId); // clones
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    fs.writeFileSync(path.join(clone, "wiki/draft.md"), "not committed\n");
+
+    const [refused] = await runVaultMigrationPass(s.store, s.config);
+    expect(refused.state).toBe("repo");
+    expect(codes(refused.blockers)).toEqual([VAULT_BLOCKER.uncommitted]);
+    expect(refused.blockers[0]).toContain("wiki/draft.md");
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(writes(s.fake)).toEqual([]);
+    expect(fs.readFileSync(path.join(clone, "wiki/draft.md"), "utf8")).toBe("not committed\n");
+
+    fs.rmSync(path.join(clone, "wiki/draft.md"));
+    const [moved] = await runVaultMigrationPass(s.store, s.config);
+    expect(moved).toMatchObject({ state: "memory", blockers: [] });
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+
+  it("a clone with unpushed commits is refused", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    await planVaultMigration(s.store, s.config, s.ownerId);
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    fs.writeFileSync(path.join(clone, "wiki/local.md"), "local only\n");
+    git(clone, "add", "-A");
+    git(clone, "-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "local");
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.unpushed]);
+    expect(report.blockers[0]).toContain("1 commit on main is not pushed");
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(writes(s.fake)).toEqual([]);
+  });
+
+  it("an unreachable repository is refused", async () => {
+    const s = setup();
+    s.store.setKnowledgeRepo(s.ownerId, path.join(getTempDir(), "remotes", "missing.git"), "main");
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.syncFailed]);
+    expect(report.blockers[0]).toMatch(/^sync_failed: could not fetch the repository \(/);
+    expect(s.fake.calls).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+
+  it("a note over the size cap is reported and the owner is not flipped until it is resolved", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", { ...VAULT, "wiki/big.md": "x".repeat(VAULT_NOTE_MAX_BYTES + 1) });
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(report.blockers).toEqual([`note_too_large: wiki/big.md is ${VAULT_NOTE_MAX_BYTES + 1} bytes (a note is at most ${VAULT_NOTE_MAX_BYTES})`]);
+    expect(report.notes).toBe(4);
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+
+    // Exactly at the cap is a note like any other.
+    pushMore("brain", { "wiki/big.md": "x".repeat(VAULT_NOTE_MAX_BYTES) });
+    const resolved = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(resolved).toMatchObject({ state: "memory", notes: 5, blockers: [] });
+    expect(s.fake.dump(s.ownerId)["wiki/big.md"]).toHaveLength(VAULT_NOTE_MAX_BYTES);
+  });
+
+  it("non-markdown files under wiki/ and raw/ are not memory: listed as skipped, left in the repository", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", {
+      ...VAULT,
+      "wiki/diagram.png": Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]),
+      "raw/export.csv": "a,b\n",
+      "raw/.gitkeep": "",
+      "wiki/sources/.gitkeep": "",
+    });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    expect(report.skipped).toEqual([
+      { path: "raw/export.csv", reason: "not_markdown: not a markdown note; it stays in the repository" },
+      { path: "wiki/diagram.png", reason: "not_markdown: not a markdown note; it stays in the repository" },
+    ]);
+    expect(Object.keys(s.fake.dump(s.ownerId)).sort()).toEqual(Object.keys(VAULT).sort());
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(fs.existsSync(path.join(clone, "wiki/diagram.png"))).toBe(true);
+    expect(fs.existsSync(path.join(clone, "raw/export.csv"))).toBe(true);
+  });
+});
+
+// ---- What is and is not a note --------------------------------------------------
+
+describe("what is imported", () => {
+  it("a .md the service cannot store, a link and a duplicate are skipped — never blockers, never followed", async () => {
+    const s = setup();
+    const outside = path.join(getTempDir(), "outside.md");
+    fs.writeFileSync(outside, "SECRET outside the repository\n");
+    const remote = seedRemote("brain", {
+      ...VAULT,
+      "wiki/.obsidian/workspace.md": "hidden\n",
+      [`wiki/${Array.from({ length: 16 }, (_, i) => `d${i}`).join("/")}/deep.md`]: "too deep\n",
+      "notes/elsewhere.md": "not a vault path at all\n",
+    });
+    const seed = path.join(getTempDir(), "remotes", "brain-seed");
+    fs.symlinkSync(outside, path.join(seed, "wiki/link.md"));
+    fs.symlinkSync(path.dirname(outside), path.join(seed, "raw/linked-dir"));
+    git(seed, "add", "-A");
+    git(seed, "commit", "-q", "-m", "links");
+    git(seed, "push", "-q", "origin", "main");
+    s.store.setKnowledgeRepo(s.ownerId, remote, "main");
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    const reasons = Object.fromEntries(report.skipped.map((entry) => [entry.path, entry.reason.split(":")[0]]));
+    expect(reasons).toEqual({
+      "raw/linked-dir": VAULT_SKIP.symlink,
+      "wiki/.obsidian/workspace.md": VAULT_SKIP.dotName,
+      [`wiki/${Array.from({ length: 16 }, (_, i) => `d${i}`).join("/")}/deep.md`]: VAULT_SKIP.tooDeep,
+      "wiki/link.md": VAULT_SKIP.symlink,
+    });
+    expect(JSON.stringify(s.fake.dump(s.ownerId))).not.toContain("SECRET");
+    expect(Object.keys(s.fake.dump(s.ownerId)).sort()).toEqual(Object.keys(VAULT).sort());
+  });
+
+  it("wiki/ or raw/ being a link (or a file) blocks the owner: the mirror could never write under it", async () => {
+    const s = setup();
+    const outside = path.join(getTempDir(), "outside-wiki");
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, "secret.md"), "SECRET outside the repository\n");
+    const remote = seedRemote("brain", { "CLAUDE.md": "memory\n", raw: "a file named raw\n" });
+    const seed = path.join(getTempDir(), "remotes", "brain-seed");
+    fs.symlinkSync(outside, path.join(seed, "wiki"));
+    git(seed, "add", "-A");
+    git(seed, "commit", "-q", "-m", "link");
+    git(seed, "push", "-q", "origin", "main");
+    s.store.setKnowledgeRepo(s.ownerId, remote, "main");
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(report.blockers).toEqual([
+      "vault_folder_link: raw is a file in the repository, not a plain folder: the mirror could never write notes under it",
+      "vault_folder_link: wiki is a link in the repository, not a plain folder: the mirror could never write notes under it",
+    ]);
+    expect(report.notes).toBe(1);
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+
+  it("a note path is stored NFC; a BOM and CRLF come back byte for byte", async () => {
+    const s = setup();
+    const nfd = "wiki/한글 노트.md".normalize("NFD");
+    const text = "﻿첫 줄\r\n둘째 줄\r\n";
+    connect(s, s.ownerId, "brain", { [nfd]: text });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 1, blockers: [] });
+    expect(s.fake.dump(s.ownerId)).toEqual({ ["wiki/한글 노트.md".normalize("NFC")]: text });
+  });
+
+  it("two files of the clone that are ONE note path once normalized: the same text is one note, different text blocks (note_conflict)", async () => {
+    const s = setup();
+    const nfc = "wiki/한글.md".normalize("NFC");
+    const nfd = "wiki/한글.md".normalize("NFD");
+    connect(s, s.ownerId, "same", { [nfc]: "같은 내용\n", [nfd]: "같은 내용\n" });
+    const same = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(same).toMatchObject({ state: "memory", notes: 1, blockers: [] });
+    expect(same.skipped.map((entry) => entry.reason.split(":")[0])).toEqual([VAULT_SKIP.duplicate]);
+    expect(s.fake.dump(s.ownerId)).toEqual({ [nfc]: "같은 내용\n" });
+
+    const other = addUser(s, "twins");
+    connect(s, other, "twins", { [nfc]: "하나\n", [nfd]: "둘\n" });
+    const report = await cutoverVault(s.store, s.config, other);
+    expect(report.state).toBe("repo");
+    // The clone's own problem — not a leftover copy in the service.
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.conflict]);
+    expect(VAULT_LEFTOVER_BLOCKERS).not.toContain(VAULT_BLOCKER.conflict);
+    expect(s.fake.dump(other)).toEqual({});
+  });
+
+  it("a note that is not UTF-8, or holds a NUL, blocks the owner", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", {
+      ...VAULT,
+      "wiki/latin1.md": Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]),
+      "raw/nul.md": "a\u0000b\n",
+    });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(report.blockers).toEqual(["invalid_content: raw/nul.md contains a NUL character", "not_utf8: wiki/latin1.md is not UTF-8 text"]);
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+});
+
+// ---- Dry run --------------------------------------------------------------------
+
+describe("dry run", () => {
+  it("reports what a cutover would do and changes nothing", async () => {
+    const s = setup();
+    const remote = connect(s, s.ownerId, "brain", { ...VAULT, "wiki/pic.png": Buffer.from([1, 2, 3]) });
+    await planVaultMigration(s.store, s.config, s.ownerId); // the first one clones
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    const before = { head: git(clone, "rev-parse", "HEAD"), tree: treeHashes(clone), users: s.store.listUsers(), mode: s.store.getPersonalVaultMode() };
+    s.fake.calls.length = 0;
+
+    const report = await planVaultMigration(s.store, s.config, s.ownerId);
+
+    expect(report).toEqual({
+      userId: s.ownerId,
+      repo: remote,
+      sourceCommit: before.head,
+      notes: 4,
+      bytes: Object.values(VAULT).reduce((sum, text) => sum + Buffer.byteLength(text), 0),
+      skipped: [{ path: "wiki/pic.png", reason: "not_markdown: not a markdown note; it stays in the repository" }],
+      blockers: [],
+      state: "repo",
+    });
+    // The service was only read; the store and the clone are as they were.
+    expect(s.fake.calls.map((call) => call.op)).toEqual(["list"]);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.store.listPersonalVaults()).toEqual([]);
+    expect(s.store.getPersonalVaultMode()).toBe(before.mode);
+    expect(s.store.listUsers()).toEqual(before.users);
+    expect({ head: git(clone, "rev-parse", "HEAD"), tree: treeHashes(clone) }).toEqual({ head: before.head, tree: before.tree });
+    expect(git(clone, "status", "--porcelain")).toBe("");
+    expect(mirror).not.toHaveBeenCalled();
+    expect(lastVaultMigrationReport(s.store, s.ownerId)).toEqual(report);
+  });
+
+  it("names every blocker at once, also without a memory service on this server", async () => {
+    const s = setup({ fake: null });
+    connect(s, s.ownerId, "brain", { ...VAULT, "wiki/big.md": "x".repeat(VAULT_NOTE_MAX_BYTES + 1) });
+    await planVaultMigration(s.store, s.config, s.ownerId);
+    fs.writeFileSync(path.join(knowledgeClonePath(s.ownerId, s.config), "untracked.txt"), "x");
+    s.store.touchConversation(s.ownerId, "c-run", s.ownerId, "hi");
+    openRun("run-plan", s.ownerId, { conversationId: "c-run", avatarId: s.ownerId });
+    try {
+      const report = await planVaultMigration(s.store, s.config, s.ownerId);
+      expect(codes(report.blockers)).toEqual([
+        VAULT_BLOCKER.notConfigured,
+        VAULT_BLOCKER.runInProgress,
+        VAULT_BLOCKER.uncommitted,
+        VAULT_BLOCKER.tooLarge,
+      ]);
+      expect(report).toMatchObject({ state: "repo", notes: 4 });
+    } finally {
+      closeRun("run-plan");
+    }
+  });
+
+  it("an owner already in the memory service is reported from the service", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    await cutoverVault(s.store, s.config, s.ownerId);
+    s.fake.calls.length = 0;
+    const report = await planVaultMigration(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 4, blockers: [], sourceCommit: s.store.getPersonalVault(s.ownerId)!.sourceCommit });
+    expect(s.fake.calls.map((call) => call.op)).toEqual(["list"]);
+
+    s.fake.failNext(new MemoryUnavailableError("down", "network"));
+    const down = await planVaultMigration(s.store, s.config, s.ownerId);
+    expect(down).toMatchObject({ state: "memory", blockers: ["memory_unavailable: the memory service could not be used (network)"] });
+  });
+
+  it("an unknown user is a report, not an exception", async () => {
+    const s = setup();
+    const report = await planVaultMigration(s.store, s.config, "nobody");
+    expect(report).toMatchObject({ state: "no_repo", blockers: ["no_user: no such user"] });
+  });
+});
+
+// ---- Idempotent and resumable ---------------------------------------------------
+
+describe("cutover is idempotent and resumable", () => {
+  it("a second cutover sends nothing", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    await cutoverVault(s.store, s.config, s.ownerId);
+    const migratedAt = s.store.getPersonalVault(s.ownerId)!.migratedAt;
+    s.fake.calls.length = 0;
+    mirror.mockClear();
+
+    const again = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(again).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    expect(writes(s.fake)).toEqual([]);
+    expect(mirror).not.toHaveBeenCalled();
+    expect(s.store.getPersonalVault(s.ownerId)!.migratedAt).toBe(migratedAt);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+
+  it("notes an interrupted import already stored (same path, same hash) are not sent again", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.seed(s.ownerId, "CLAUDE.md", VAULT["CLAUDE.md"] as string);
+    s.fake.seed(s.ownerId, "wiki/index.md", VAULT["wiki/index.md"] as string);
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    expect(s.fake.calls.filter((call) => call.op === "put").map((call) => call.path)).toEqual(["raw/2026-11-01.md", "wiki/concepts/deploy.md"]);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+});
+
+// ---- Blockers -------------------------------------------------------------------
+
+describe("blockers leave the owner on `repo` and the service as it was", () => {
+  const expectUntouched = (s: ReturnType<typeof setup>, dump: Record<string, string> = {}) => {
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual(dump);
+    expect(mirror).not.toHaveBeenCalled();
+  };
+
+  it("no git token — nothing is fetched (no token at all, or none for an https repository's host)", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.store.setGitToken(s.ownerId, null);
+    const none = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(none.blockers).toEqual(["no_git_token: no git token is set, so the repository cannot be synced or mirrored"]);
+    expect(none.state).toBe("repo");
+
+    // Only the token of github.com is set; the repository is on the internal host.
+    s.store.setUserSecret(s.ownerId, "GITHUB_TOKEN", "external-only");
+    s.store.setKnowledgeRepo(s.ownerId, "owner/brain", "main");
+    const wrongHost = await cutoverVault(s.store, { ...s.config, githubHost: "git.internal.example" }, s.ownerId);
+    expect(wrongHost.blockers).toEqual(["no_git_token: no git token is set for this repository's host, so the repository cannot be synced or mirrored"]);
+
+    expect(fs.existsSync(knowledgeClonePath(s.ownerId, s.config))).toBe(false);
+    expect(s.fake.calls).toEqual([]);
+    expectUntouched(s);
+  });
+
+  it("the service already holds a DIFFERENT note at a path, or a note the repository does not have", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.seed(s.ownerId, "wiki/index.md", "# Another index\n");
+    s.fake.seed(s.ownerId, "wiki/only-here.md", "stray\n");
+    // Same size, different text: the size alone must not pass for "the same note".
+    s.fake.seed(s.ownerId, "raw/2026-11-01.md", "CAPTURED\n");
+    const seeded = s.fake.dump(s.ownerId);
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(report.blockers).toEqual([
+      "service_note_conflict: the memory service already holds a different note at raw/2026-11-01.md",
+      "service_note_conflict: the memory service already holds a different note at wiki/index.md",
+      "service_only_note: the memory service already holds wiki/only-here.md, which the repository does not have",
+    ]);
+    // The codes a client keys "discard the leftover copy" on — and nothing else in this report.
+    expect(codes(report.blockers).every((code) => VAULT_LEFTOVER_BLOCKERS.includes(code))).toBe(true);
+    expect([...VAULT_LEFTOVER_BLOCKERS].sort()).toEqual([VAULT_BLOCKER.serviceConflict, VAULT_BLOCKER.serviceOnly].sort());
+    expect(writes(s.fake)).toEqual([]);
+    expectUntouched(s, seeded);
+  });
+
+  it("wiki_full: the import stops, what it stored is taken back", async () => {
+    const s = setup({ fake: createFakeMemoryClient({ maxNotes: 2 }) });
+    connect(s, s.ownerId, "brain", VAULT);
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.wikiFull]);
+    expect(s.fake.calls.filter((call) => call.op === "put")).toHaveLength(3);
+    expectUntouched(s);
+  });
+
+  it("a run of the owner in progress — a chat turn on their own avatar, or a routine", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    expect(ownerRunInProgress(s.store, s.ownerId)).toBe(false);
+
+    s.store.touchConversation(s.ownerId, "c-own", s.ownerId, "hi");
+    openRun("run-own", s.ownerId, { conversationId: "c-own", avatarId: s.ownerId });
+    try {
+      expect(ownerRunInProgress(s.store, s.ownerId)).toBe(true);
+      const report = await cutoverVault(s.store, s.config, s.ownerId);
+      expect(report.blockers).toEqual(["run_in_progress: a run is in progress for this owner"]);
+      expect(s.fake.calls).toEqual([]);
+      expectUntouched(s);
+    } finally {
+      closeRun("run-own");
+    }
+
+    const job = { id: "job-1", avatarUserId: s.ownerId };
+    claimRoutineSlot(job);
+    try {
+      const report = await cutoverVault(s.store, s.config, s.ownerId);
+      expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.runInProgress]);
+      expectUntouched(s);
+    } finally {
+      releaseRoutineSlot(job);
+    }
+
+    // Retried once the run is over.
+    expect(await cutoverVault(s.store, s.config, s.ownerId)).toMatchObject({ state: "memory", blockers: [] });
+  });
+
+  it("the backup gate refusing holds the cutover before anything is touched", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    const gate = vi.spyOn(s.store, "retirementGate").mockReturnValue({ allowed: false, stamp: "x", backupPath: null });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.backupFailed]);
+    // It says what the server is doing (holding), and promises no backup.
+    expect(report.blockers[0]).toContain("has been holding data-changing maintenance steps since its last start because a database backup failed");
+    expect(gate).toHaveBeenCalled();
+    expect(fs.existsSync(knowledgeClonePath(s.ownerId, s.config))).toBe(false);
+    expect(s.fake.calls).toEqual([]);
+    expectUntouched(s);
+
+    // A dry run never asks for the backup.
+    gate.mockClear();
+    expect((await planVaultMigration(s.store, s.config, s.ownerId)).blockers).toEqual([]);
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it("no memory service on this server", async () => {
+    const s = setup({ fake: null });
+    connect(s, s.ownerId, "brain", VAULT);
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.blockers).toEqual(["memory_not_configured: this server has no memory service configured"]);
+    expect(report.state).toBe("repo");
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+
+  it("the service going away is an outage, said as one — before and during the import", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.failNext(new MemoryUnavailableError("down", "timeout"), { op: "list" });
+    const before = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(before.blockers).toEqual(["memory_unavailable: the memory service could not be used (timeout)"]);
+    expectUntouched(s);
+
+    // The second put's answer is lost on the way back (the note WAS stored): still taken back.
+    s.fake.beforeNext("put", () => s.fake.failNext(new MemoryUnavailableError("lost", "network"), { op: "put", applied: true }));
+    const during = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(codes(during.blockers)).toEqual([VAULT_BLOCKER.unavailable]);
+    expect(during.state).toBe("repo");
+    expectUntouched(s);
+
+    expect(await cutoverVault(s.store, s.config, s.ownerId)).toMatchObject({ state: "memory", blockers: [] });
+  });
+
+  it("a refusal of one note names the note", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.failNext(new MemoryRefusedError("invalid_path", 400, "no"), { op: "put" });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.blockers).toEqual(["refused: the service refused CLAUDE.md (code: invalid_path)"]);
+    expectUntouched(s);
+  });
+});
+
+describe("verification", () => {
+  it("a note that reads back different does not flip the home", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    // With an empty wiki the first read is the read-back of the first note.
+    s.fake.beforeNext("read", () => s.fake.seed(s.ownerId, "CLAUDE.md", "tampered\n"));
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(report.blockers).toEqual(["verify_failed: CLAUDE.md read back from the service differs from the repository's file"]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(mirror).not.toHaveBeenCalled();
+    // What this attempt stored is taken back; the note that is no longer its own stays.
+    expect(s.fake.dump(s.ownerId)).toEqual({ "CLAUDE.md": "tampered\n" });
+  });
+
+  it("a note that appeared in the service during the import does not flip the home", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    let lists = 0;
+    const list = s.fake.list.bind(s.fake);
+    s.fake.list = (owner, prefix) => {
+      lists += 1;
+      if (lists === 2) s.fake.seed(owner, "wiki/stray.md", "appeared\n");
+      return list(owner, prefix);
+    };
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.serviceOnly]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({ "wiki/stray.md": "appeared\n" });
+  });
+
+  it("a first mirror record that fails does not undo the move: the row is marked for the mirror loop", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    mirror.mockImplementation(async (store, _config, userId) => {
+      store.recordVaultMirror(userId, { ok: false, error: "push rejected" });
+      return { kind: "failed", error: "push rejected" };
+    });
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+    expect(report).toMatchObject({ state: "memory", blockers: [] });
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorDirty: true, mirrorError: "push rejected" });
+
+    const other = { id: addUser(s, "thrown") };
+    connect(s, other.id, "thrown", VAULT);
+    mirror.mockRejectedValue(new Error("boom"));
+    expect(await cutoverVault(s.store, s.config, other.id)).toMatchObject({ state: "memory", blockers: [] });
+    expect(s.store.getPersonalVault(other.id)).toMatchObject({ mirrorDirty: true });
+  });
+});
+
+// ---- Rollback -------------------------------------------------------------------
+
+describe("rollback", () => {
+  async function migrated() {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    await cutoverVault(s.store, s.config, s.ownerId);
+    mirror.mockClear();
+    return s;
+  }
+
+  it("pushes the mirror one last time, flips the home back and deletes the service's copy", async () => {
+    const s = await migrated();
+    const vault = memoryVaultFor(s.store, s.config, s.ownerId)!;
+    await vault.write("wiki/after.md", "written after the cutover\n");
+    expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(true);
+    const order: string[] = [];
+    mirror.mockImplementation(async (store, _config, userId) => {
+      // The row still says `memory` and the wiki is whole while the mirror runs.
+      order.push(`mirror home=${store.getPersonalVault(userId) ? "memory" : "repo"} notes=${Object.keys(s.fake.dump(userId)).length}`);
+      store.recordVaultMirror(userId, { ok: true });
+      return { kind: "synced", changed: 1, seq: 0 };
+    });
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true });
+
+    expect(order).toEqual(["mirror home=memory notes=5"]);
+    expect(mirror).toHaveBeenCalledWith(s.store, s.config, s.ownerId, { push: true });
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(memoryVaultFor(s.store, s.config, s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(s.fake.calls.at(-1)).toMatchObject({ op: "deleteWiki", owner: s.ownerId });
+  });
+
+  it.each([
+    [{ kind: "failed", error: "push rejected (non-fast-forward)" } as const, "mirror_failed: push rejected (non-fast-forward)"],
+    [{ kind: "skipped", reason: "hold" } as const, VAULT_ROLLBACK_REFUSAL.mirrorHold],
+    [{ kind: "skipped", reason: "no_repo" } as const, VAULT_ROLLBACK_REFUSAL.mirrorNoRepo],
+    [{ kind: "skipped", reason: "repo_dirty" } as const, VAULT_ROLLBACK_REFUSAL.mirrorRepoDirty],
+  ])("a mirror that cannot be brought up to date (%j) blocks it and says why", async (outcome, reason) => {
+    const s = await migrated();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("wiki/after.md", "kept\n");
+    mirror.mockResolvedValue(outcome);
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason });
+
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({ ...VAULT, "wiki/after.md": "kept\n" });
+    expect(s.fake.calls.some((call) => call.op === "deleteWiki")).toBe(false);
+  });
+
+  it("a mirror that says synced but left the row behind, or throws, blocks it too", async () => {
+    const s = await migrated();
+    s.store.markVaultMirrorDirty(s.ownerId);
+    mirror.mockResolvedValue({ kind: "synced", changed: 0, seq: 0 }); // records nothing: the row stays dirty
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.mirrorBehind });
+    mirror.mockRejectedValue(new Error("boom"));
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: "mirror_failed: the mirror could not run" });
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+
+  it("the backup gate refusing, and a server without a memory service, block it", async () => {
+    const s = await migrated();
+    const gate = vi.spyOn(s.store, "retirementGate").mockReturnValue({ allowed: false, stamp: "x", backupPath: null });
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.backupFailed });
+    gate.mockRestore();
+    setMemoryClientForTests(s.store, null);
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.notConfigured });
+    expect(mirror).not.toHaveBeenCalled();
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+  });
+
+  it("a write queued during the rollback ends in VAULT_HOME_CHANGED and leaves nothing in the service", async () => {
+    const s = await migrated();
+    const vault = memoryVaultFor(s.store, s.config, s.ownerId)!;
+    let queued: Promise<unknown> | undefined;
+    mirror.mockImplementation(async (store, _config, userId) => {
+      // While the rollback holds the owner's write lock, the avatar writes a note.
+      queued = vault.write("wiki/late.md", "too late\n").then(
+        () => "written",
+        (error: unknown) => (error as Error).message,
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      store.recordVaultMirror(userId, { ok: true });
+      return { kind: "synced", changed: 0, seq: 0 };
+    });
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true });
+    expect(await queued).toBe(VAULT_HOME_CHANGED);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(s.fake.calls.filter((call) => call.op === "put" && call.path === "wiki/late.md")).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+
+  it("a wiki that could not be deleted does not undo the flip; rolling back again discards it", async () => {
+    const s = await migrated();
+    s.fake.failNext(new MemoryUnavailableError("down", "network"), { op: "deleteWiki" });
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true });
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+
+    // The clone holds every one of those notes as it is: nothing to put aside.
+    mirror.mockClear();
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true, leftover: { notes: 4, quarantined: 0 } });
+    expect(mirror).not.toHaveBeenCalled();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(quarantinedLeftovers(s)).toEqual({});
+
+    s.fake.seed(s.ownerId, "wiki/left.md", "left\n");
+    s.fake.failNext(new MemoryUnavailableError("down", "network"), { op: "deleteWiki" });
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.unavailable });
+    // The note was put aside before the delete that failed.
+    expect(Object.values(quarantinedLeftovers(s))).toEqual(["left\n"]);
+  });
+
+  describe("an owner whose home already is `repo`: the leftover copy in the service", () => {
+    async function leftover(notes: Record<string, string>) {
+      const s = setup();
+      connect(s, s.ownerId, "brain", VAULT);
+      await planVaultMigration(s.store, s.config, s.ownerId); // the clone is on disk
+      for (const [notePath, content] of Object.entries(notes)) s.fake.seed(s.ownerId, notePath, content);
+      s.fake.calls.length = 0;
+      return s;
+    }
+
+    it("a successful discard also drops the cached report that named the leftover", async () => {
+      const s = await leftover({ "wiki/only-here.md": "only in the service\n" });
+      const report = await planVaultMigration(s.store, s.config, s.ownerId);
+      expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.serviceOnly]);
+      expect(lastVaultMigrationReport(s.store, s.ownerId)).toEqual(report);
+
+      // Refused: the report (and the button it carries) stays.
+      s.fake.failNext(new MemoryUnavailableError("down", "timeout"), { op: "read" });
+      expect((await rollbackVault(s.store, s.config, s.ownerId, { expect: "repo" })).ok).toBe(false);
+      expect(lastVaultMigrationReport(s.store, s.ownerId)).toEqual(report);
+
+      expect((await rollbackVault(s.store, s.config, s.ownerId, { expect: "repo" })).ok).toBe(true);
+      expect(lastVaultMigrationReport(s.store, s.ownerId)).toBeNull();
+    });
+
+    it("identical to the clone: deleted, nothing quarantined", async () => {
+      const s = await leftover(VAULT as Record<string, string>);
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true, leftover: { notes: 4, quarantined: 0 } });
+      expect(s.fake.dump(s.ownerId)).toEqual({});
+      expect(quarantinedLeftovers(s)).toEqual({});
+      expect(fs.existsSync(path.join(s.config.dataDir, VAULT_LEFTOVER_DIR))).toBe(false);
+      expect(mirror).not.toHaveBeenCalled();
+      expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    });
+
+    it("a note only the service holds and a note that differs are quarantined with their content, then the copy is deleted", async () => {
+      const s = await leftover({
+        ...(VAULT as Record<string, string>),
+        "wiki/index.md": "# An index the repository does not have\n",
+        "wiki/only-here.md": "only in the service\n",
+        "notes/outside-the-vault.md": "not a vault path, deleted with the wiki all the same\n",
+      });
+
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true, leftover: { notes: 6, quarantined: 3 } });
+
+      const saved = quarantinedLeftovers(s);
+      const byNote = Object.fromEntries(Object.entries(saved).map(([file, content]) => [file.split("/").slice(2).join("/"), content]));
+      expect(byNote).toEqual({
+        "wiki/index.md": "# An index the repository does not have\n",
+        "wiki/only-here.md": "only in the service\n",
+        "notes/outside-the-vault.md": "not a vault path, deleted with the wiki all the same\n",
+      });
+      // One folder per owner and discard, under this boot's quarantine stamp.
+      expect(new Set(Object.keys(saved).map((file) => file.split("/")[0]))).toEqual(new Set([s.ownerId]));
+      expect(s.fake.dump(s.ownerId)).toEqual({});
+      expect(s.fake.calls.at(-1)).toMatchObject({ op: "deleteWiki", owner: s.ownerId });
+      // Nothing is left outside the quarantine, and the clone was not touched.
+      expect(fs.existsSync(path.join(s.config.dataDir, VAULT_LEFTOVER_DIR))).toBe(false);
+      const clone = knowledgeClonePath(s.ownerId, s.config);
+      expect(git(clone, "status", "--porcelain")).toBe("");
+      expect(fs.readFileSync(path.join(clone, "wiki/index.md"), "utf8")).toBe(VAULT["wiki/index.md"]);
+    });
+
+    it("a note that cannot be read: refused, nothing deleted", async () => {
+      const s = await leftover({ ...(VAULT as Record<string, string>), "wiki/only-here.md": "only in the service\n" });
+      const before = s.fake.dump(s.ownerId);
+      s.fake.failNext(new MemoryUnavailableError("down", "timeout"), { op: "read" });
+
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.leftoverNotSaved });
+
+      expect(s.fake.dump(s.ownerId)).toEqual(before);
+      expect(s.fake.calls.some((call) => call.op === "deleteWiki" || call.op === "remove")).toBe(false);
+      expect(quarantinedLeftovers(s)).toEqual({});
+
+      // The listing failing is the same refusal.
+      s.fake.failNext(new MemoryUnavailableError("down", "timeout"), { op: "list" });
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.leftoverNotSaved });
+      expect(s.fake.dump(s.ownerId)).toEqual(before);
+    });
+
+    it("a note that cannot be put aside (the quarantine is not writable): refused, nothing deleted", async () => {
+      const s = await leftover({ "wiki/only-here.md": "only in the service\n" });
+      // A FILE where the quarantine root must be a folder.
+      fs.writeFileSync(path.join(s.config.dataDir, "retired"), "in the way");
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.leftoverNotSaved });
+      expect(s.fake.dump(s.ownerId)).toEqual({ "wiki/only-here.md": "only in the service\n" });
+      expect(s.fake.calls.some((call) => call.op === "deleteWiki")).toBe(false);
+    });
+
+    it("an owner without a clone: every note is quarantined; a link in the clone is never read through", async () => {
+      const s = setup();
+      s.fake.seed(s.ownerId, "CLAUDE.md", "no clone to compare with\n");
+      expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true, leftover: { notes: 1, quarantined: 1 } });
+      expect(Object.values(quarantinedLeftovers(s))).toEqual(["no clone to compare with\n"]);
+
+      // `wiki` in the clone is a link to a folder that holds the very same text: still not "in the repository".
+      const other = addUser(s, "linked");
+      const outside = path.join(getTempDir(), "outside");
+      fs.mkdirSync(outside, { recursive: true });
+      fs.writeFileSync(path.join(outside, "a.md"), "same text\n");
+      const clone = knowledgeClonePath(other, s.config);
+      fs.mkdirSync(clone, { recursive: true });
+      fs.symlinkSync(outside, path.join(clone, "wiki"));
+      s.fake.seed(other, "wiki/a.md", "same text\n");
+      expect(await rollbackVault(s.store, s.config, other)).toEqual({ ok: true, leftover: { notes: 1, quarantined: 1 } });
+    });
+  });
+
+  it("a mirror that ends in sync WITH A NOTICE does not block it (the repository holds all the service has, and more)", async () => {
+    const s = await migrated();
+    mirror.mockImplementation(async (store, _config, userId) => {
+      store.recordVaultMirror(userId, { ok: true, notice: "3 repository notes are not in the memory service" });
+      return { kind: "synced", changed: 0, seq: 0 };
+    });
+    expect(await rollbackVault(s.store, s.config, s.ownerId, { expect: "memory" })).toEqual({ ok: true });
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+  });
+
+  it("wiki notes OUTSIDE the vault paths (never mirrored) are quarantined before the wiki is deleted; vault notes are not", async () => {
+    const s = await migrated();
+    // A vault note the (stubbed) mirror never wrote into the clone: the verified mirror is what covers it.
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("wiki/after.md", "a vault note\n");
+    s.fake.seed(s.ownerId, "notes/elsewhere.md", "not a vault path\n");
+    s.fake.seed(s.ownerId, "top.md", "nor is this\n");
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true, quarantined: 2 });
+
+    const saved = quarantinedLeftovers(s);
+    expect(Object.fromEntries(Object.entries(saved).map(([file, content]) => [file.split("/").slice(2).join("/"), content]))).toEqual({
+      "notes/elsewhere.md": "not a vault path\n",
+      "top.md": "nor is this\n",
+    });
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+  });
+
+  it("such a note that cannot be read blocks the rollback before anything changes", async () => {
+    const s = await migrated();
+    s.fake.seed(s.ownerId, "notes/elsewhere.md", "not a vault path\n");
+    mirror.mockImplementation(async (store, _config, userId) => {
+      store.recordVaultMirror(userId, { ok: true });
+      s.fake.failNext(new MemoryUnavailableError("down", "timeout"), { op: "read" }); // the next read is the quarantine's
+      return { kind: "synced", changed: 0, seq: 0 };
+    });
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.leftoverNotSaved });
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({ ...VAULT, "notes/elsewhere.md": "not a vault path\n" });
+    expect(s.fake.calls.some((call) => call.op === "deleteWiki")).toBe(false);
+  });
+
+  it("`expect`: nothing is done when the owner's home is not the one the caller acted on", async () => {
+    const s = await migrated();
+    // A stale screen offering "discard the leftover copy" for an owner who is in `memory` by now.
+    expect(await rollbackVault(s.store, s.config, s.ownerId, { expect: "repo" })).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.homeMismatch });
+    expect(mirror).not.toHaveBeenCalled();
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId, { expect: "memory" })).toEqual({ ok: true });
+    // … and the reverse: a stale "roll back" for an owner who is on the repository, with a leftover copy.
+    s.fake.seed(s.ownerId, "wiki/left.md", "left\n");
+    s.fake.calls.length = 0;
+    expect(await rollbackVault(s.store, s.config, s.ownerId, { expect: "memory" })).toEqual({ ok: false, reason: VAULT_ROLLBACK_REFUSAL.homeMismatch });
+    expect(s.fake.calls).toEqual([]);
+    expect(s.fake.dump(s.ownerId)).toEqual({ "wiki/left.md": "left\n" });
+    expect(await rollbackVault(s.store, s.config, s.ownerId, { expect: "repo" })).toEqual({ ok: true, leftover: { notes: 1, quarantined: 1 } });
+  });
+
+  it("after a rollback the owner can be cut over again", async () => {
+    const s = await migrated();
+    await rollbackVault(s.store, s.config, s.ownerId);
+    expect(await cutoverVault(s.store, s.config, s.ownerId)).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+});
+
+// ---- The pass -------------------------------------------------------------------
+
+describe("the migration pass", () => {
+  it("cuts over every owner with a repository still on `repo`, only while the mode is `memory`", async () => {
+    const s = setup();
+    const second = { id: addUser(s, "second") };
+    const none = { id: addUser(s, "none") };
+    const done = { id: addUser(s, "done") };
+    connect(s, s.ownerId, "one", VAULT);
+    connect(s, second.id, "two", { "CLAUDE.md": "two\n" });
+    connect(s, done.id, "three", { "CLAUDE.md": "three\n" });
+    await cutoverVault(s.store, s.config, done.id);
+    s.fake.calls.length = 0;
+
+    expect(await runVaultMigrationPass(s.store, s.config)).toEqual([]);
+    expect(s.fake.calls).toEqual([]);
+
+    s.store.setPersonalVaultMode("memory");
+    const reports = await runVaultMigrationPass(s.store, s.config);
+    expect(reports.map((report) => [report.userId, report.state])).toEqual([
+      [s.ownerId, "memory"],
+      [second.id, "memory"],
+    ]);
+    expect(s.store.listPersonalVaults().map((row) => row.userId).sort()).toEqual([s.ownerId, second.id, done.id].sort());
+    expect(s.store.getPersonalVault(none.id)).toBeNull();
+    expect(s.fake.calls.some((call) => call.owner === none.id || (call.owner === done.id && call.op === "put"))).toBe(false);
+  });
+
+  it("setting the mode back to `repo` in the middle stops NEW cutovers and rolls nobody back", async () => {
+    const s = setup();
+    const second = { id: addUser(s, "second") };
+    connect(s, s.ownerId, "one", VAULT);
+    connect(s, second.id, "two", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    mirror.mockImplementation(async (store, _config, userId) => {
+      store.setPersonalVaultMode("repo"); // an admin, while the first owner is being moved
+      store.recordVaultMirror(userId, { ok: true });
+      return { kind: "synced", changed: 0, seq: 0 };
+    });
+    const reports = await runVaultMigrationPass(s.store, s.config);
+    expect(reports.map((report) => report.userId)).toEqual([s.ownerId]);
+    expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull();
+    expect(s.store.getPersonalVault(second.id)).toBeNull();
+  });
+
+  it("one pass at a time: a second start while one runs is refused and joins it", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "one", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    expect(isVaultMigrationRunning(s.store)).toBe(false);
+
+    expect(startVaultMigrationPass(s.store, s.config)).toBe(true);
+    expect(isVaultMigrationRunning(s.store)).toBe(true);
+    expect(startVaultMigrationPass(s.store, s.config)).toBe(false);
+    const joined = await runVaultMigrationPass(s.store, s.config);
+    expect(joined.map((report) => report.state)).toEqual(["memory"]);
+
+    await whenVaultMigrationIdle(s.store);
+    expect(isVaultMigrationRunning(s.store)).toBe(false);
+    expect(s.fake.calls.filter((call) => call.op === "put")).toHaveLength(4);
+    expect(startVaultMigrationPass(s.store, s.config)).toBe(true);
+    await whenVaultMigrationIdle(s.store);
+  });
+});
+
+// ---- A repository connected or changed -------------------------------------------
+
+describe("onKnowledgeRepoChanged", () => {
+  it("home `repo`: cuts the owner over in `memory` mode, does nothing in `repo` mode", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.calls).toEqual([]);
+
+    s.store.setPersonalVaultMode("memory");
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    expect(isVaultMigrationRunning(s.store)).toBe(true);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null });
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+    expect(lastVaultMigrationReport(s.store, s.ownerId)).toMatchObject({ state: "memory", notes: 4 });
+  });
+
+  it("a repository connected in the middle of a run (create_repo): the cutover is retried once the run is over", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    setVaultCutoverRetryForTests({ delayMs: 25 });
+    s.store.touchConversation(s.ownerId, "c-create", s.ownerId, "hi");
+    openRun("run-create", s.ownerId, { conversationId: "c-create", avatarId: s.ownerId });
+    try {
+      onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+      await whenVaultMigrationIdle(s.store);
+      expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+      expect(codes(lastVaultMigrationReport(s.store, s.ownerId)!.blockers)).toEqual([VAULT_BLOCKER.runInProgress]);
+      // Still refused on the retries made while the run goes on.
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      await whenVaultMigrationIdle(s.store);
+      expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+      expect(writes(s.fake)).toEqual([]);
+    } finally {
+      closeRun("run-create");
+    }
+    await vi.waitFor(() => expect(s.store.getPersonalVault(s.ownerId)).not.toBeNull(), { timeout: 20_000, interval: 25 });
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+
+    // Any other blocker is left to the next pass: no retry is scheduled.
+    const other = addUser(s, "dirty");
+    connect(s, other, "dirty", { ...VAULT, "wiki/big.md": "x".repeat(VAULT_NOTE_MAX_BYTES + 1) });
+    s.fake.calls.length = 0;
+    onKnowledgeRepoChanged(s.store, s.config, other, null);
+    await whenVaultMigrationIdle(s.store);
+    const lists = s.fake.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    await whenVaultMigrationIdle(s.store);
+    expect(s.fake.calls.length).toBe(lists);
+    expect(s.store.getPersonalVault(other)).toBeNull();
+  });
+
+  it("a repository disconnected, or a server without the service, starts nothing", async () => {
+    const s = setup({ fake: null });
+    s.store.setPersonalVaultMode("memory");
+    connect(s, s.ownerId, "brain", VAULT);
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    expect(isVaultMigrationRunning(s.store)).toBe(false);
+    s.store.setKnowledgeRepo(s.ownerId, null, null);
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, "x/y");
+    expect(isVaultMigrationRunning(s.store)).toBe(false);
+  });
+
+  async function migrated() {
+    const s = setup();
+    const first = connect(s, s.ownerId, "first", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    await cutoverVault(s.store, s.config, s.ownerId);
+    mirror.mockClear();
+    s.fake.calls.length = 0;
+    return { ...s, first };
+  }
+
+  it("CONFIRM: the new repository holds vault notes and the wiki is not empty — nothing is imported, the mirror waits for the owner's press", async () => {
+    const s = await migrated();
+    const second = connect(s, s.ownerId, "second", { "CLAUDE.md": "another memory\n", "wiki/theirs.md": "theirs\n" });
+
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    // On hold at once (`checking`: nobody has looked yet), before anything could mirror into the new repository.
+    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("checking");
+    await whenVaultMigrationIdle(s.store);
+
+    // Looked at: the repository has vault notes of its own → the owner is asked.
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "confirm", sourceRepo: s.first, mirrorReplaceAll: false });
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+    expect(mirror).not.toHaveBeenCalled();
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(git(clone, "remote", "get-url", "origin")).toBe(second);
+    expect(fs.readFileSync(path.join(clone, "wiki/theirs.md"), "utf8")).toBe("theirs\n");
+  });
+
+  it("IMPORT: the wiki is empty — the new repository's vault is imported as in a cutover", async () => {
+    const s = await migrated();
+    for (const notePath of Object.keys(s.fake.dump(s.ownerId))) await memoryVaultFor(s.store, s.config, s.ownerId)!.remove(notePath);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    const second = connect(s, s.ownerId, "second", { "CLAUDE.md": "another memory\n", "wiki/theirs.md": "theirs\n", "wiki/pic.png": Buffer.from([1]) });
+
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+
+    expect(s.fake.dump(s.ownerId)).toEqual({ "CLAUDE.md": "another memory\n", "wiki/theirs.md": "theirs\n" });
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, sourceRepo: second, sourceCommit: git(clone, "rev-parse", "HEAD") });
+    expect(mirror).toHaveBeenCalledWith(s.store, s.config, s.ownerId, { push: true, locked: true });
+    expect(lastVaultMigrationReport(s.store, s.ownerId)).toMatchObject({ state: "memory", repo: second, notes: 2, blockers: [] });
+  });
+
+  it("IMPORT blocked (a note the service cannot store): it stays `checking`, nothing is imported, the pass retries it", async () => {
+    const s = await migrated();
+    for (const notePath of Object.keys(s.fake.dump(s.ownerId))) await memoryVaultFor(s.store, s.config, s.ownerId)!.remove(notePath);
+    connect(s, s.ownerId, "second", { "CLAUDE.md": "another memory\n", "wiki/big.md": "x".repeat(VAULT_NOTE_MAX_BYTES + 1) });
+
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking", sourceRepo: s.first });
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(codes(lastVaultMigrationReport(s.store, s.ownerId)!.blockers)).toEqual([VAULT_BLOCKER.tooLarge]);
+
+    pushMore("second", {}, ["wiki/big.md"]);
+    expect(await runVaultMigrationPass(s.store, s.config)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null });
+    expect(s.fake.dump(s.ownerId)).toEqual({ "CLAUDE.md": "another memory\n" });
+  });
+
+  it("CONTINUE: the new repository holds no vault note — the mirror simply continues into it", async () => {
+    const s = await migrated();
+    connect(s, s.ownerId, "second", { "skills/x/SKILL.md": "---\nname: x\n---\n", "wiki/.gitkeep": "", "wiki/pic.png": Buffer.from([1]) });
+
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("checking");
+    await whenVaultMigrationIdle(s.store);
+
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+  });
+
+  it("CONTINUE: a repository whose vault notes are all in the service already (reconnected) needs no press", async () => {
+    const s = await migrated();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("wiki/newer.md", "only in the service\n");
+    s.store.recordVaultMirror(s.ownerId, { ok: true });
+    connect(s, s.ownerId, "copy", VAULT);
+
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+
+    // One note of the repository differs from the service: the mirror would replace it → the owner is asked.
+    connect(s, s.ownerId, "differs", { ...VAULT, "wiki/index.md": "# Edited in git\n" });
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "confirm" });
+    expect(s.fake.dump(s.ownerId)["wiki/index.md"]).toBe(VAULT["wiki/index.md"]);
+
+    // The owner confirmed (the one-shot "make the repository equal to the service" is armed), then connects
+    // yet another repository before the mirror ran: that confirmation was not about this one.
+    s.store.setVaultMirrorHold(s.ownerId, null);
+    s.store.setVaultMirrorReplaceAll(s.ownerId, true);
+    connect(s, s.ownerId, "third", { "wiki/theirs.md": "theirs\n" });
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking", mirrorReplaceAll: false });
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "confirm", mirrorReplaceAll: false });
+  });
+
+  it("a new repository that cannot be looked at stays `checking` (never `confirm`), and is looked at again", async () => {
+    const s = await migrated();
+    s.store.setGitToken(s.ownerId, null);
+    s.store.setKnowledgeRepo(s.ownerId, "owner/unreachable", "main"); // no token: nothing is fetched
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking" });
+    expect(writes(s.fake)).toEqual([]);
+
+    s.store.setGitToken(s.ownerId, "test-token");
+    s.fake.failNext(new MemoryUnavailableError("down", "network"));
+    connect(s, s.ownerId, "second", { "wiki/theirs.md": "theirs\n" });
+    setVaultCutoverRetryForTests({ delayMs: 25 });
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, "owner/unreachable");
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking" });
+    // The service is back: the retry settles it without anyone pressing anything.
+    await vi.waitFor(() => expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "confirm" }), { timeout: 20_000, interval: 25 });
+  });
+});
+
+// ---- What was decided before a wait is asked again -------------------------------
+
+describe("cutover: what it decided before it waited is asked again inside the locks", () => {
+  const B: Files = { "CLAUDE.md": "# B's standing memory\n", "wiki/b-only.md": "only in B\n" };
+
+  it("a run that starts while the cutover waits for the clone is seen", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    const lock = holdCloneLock(s);
+    const cut = cutoverVault(s.store, s.config, s.ownerId);
+    await tick(); // past its first checks, waiting for the clone
+    s.store.touchConversation(s.ownerId, "c-late", s.ownerId, "hi");
+    openRun("run-late", s.ownerId, { conversationId: "c-late", avatarId: s.ownerId });
+    try {
+      await lock.release();
+      const report = await cut;
+      expect(report.blockers).toEqual(["run_in_progress: a run is in progress for this owner"]);
+      expect(report.state).toBe("repo");
+      expect(s.fake.calls).toEqual([]);
+      expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    } finally {
+      closeRun("run-late");
+    }
+  });
+
+  it("the owner connects another repository while the cutover waits: nothing is imported from the old one, and the new one is moved on its own", async () => {
+    const s = setup();
+    s.store.setPersonalVaultMode("memory");
+    const remoteA = connect(s, s.ownerId, "a", VAULT);
+    const remoteB = seedRemote("b", B);
+    const lock = holdCloneLock(s);
+    const cut = cutoverVault(s.store, s.config, s.ownerId); // the admin's pass, reading repository A
+    await tick();
+    // PUT /api/me/knowledge-repo: the owner connects B.
+    s.store.setKnowledgeRepo(s.ownerId, remoteB, "main");
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, remoteA);
+    await lock.release();
+
+    const report = await cut;
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.repoChanged]);
+
+    await whenVaultMigrationIdle(s.store);
+    // The change's own follow-up moved the owner — from B. Nothing of A ever reached the service.
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ sourceRepo: remoteB, mirrorHold: null });
+    expect(s.fake.dump(s.ownerId)).toEqual(B);
+    expect(s.fake.calls.filter((call) => call.op === "put").map((call) => call.path).sort()).toEqual(Object.keys(B).sort());
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(git(clone, "remote", "get-url", "origin")).toBe(remoteB);
+    expect(fs.readFileSync(path.join(clone, "wiki/b-only.md"), "utf8")).toBe("only in B\n");
+  });
+
+  it.each([
+    ["another repository", (s: ReturnType<typeof setup>, other: string) => s.store.setKnowledgeRepo(s.ownerId, other, "main")],
+    ["another branch of the same repository", (s: ReturnType<typeof setup>) => s.store.setKnowledgeRepo(s.ownerId, s.store.getKnowledgeRepo(s.ownerId).repo, "other")],
+  ])("%s connected DURING the import: no flip, and what was imported is taken back", async (_what, change) => {
+    const s = setup();
+    connect(s, s.ownerId, "a", VAULT);
+    const remoteB = seedRemote("b", B);
+    s.fake.beforeNext("put", () => {
+      change(s, remoteB);
+    });
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(report.state).toBe("repo");
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.repoChanged]);
+    expect(s.fake.calls.filter((call) => call.op === "put")).toHaveLength(4); // the import itself went through
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it("the user is deleted during the import: no row comes back, and the wiki is left empty", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.beforeNext("put", () => {
+      s.store.deleteUser(s.ownerId);
+    });
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(codes(report.blockers)).toEqual([VAULT_BLOCKER.noUser]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.store.listPersonalVaults()).toEqual([]);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it("a source file that changed between the scan and its import is not imported (source_changed)", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    // The service is listed after the clone was scanned and before the first note is sent.
+    s.fake.beforeNext("list", () => fs.writeFileSync(path.join(clone, "wiki/index.md"), "# changed under the import\n"));
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(report.blockers).toEqual(["source_changed: wiki/index.md changed while it was being imported"]);
+    expect(report.state).toBe("repo");
+    expect(s.fake.calls.filter((call) => call.op === "put").map((call) => call.path)).not.toContain("wiki/index.md");
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+  });
+
+  it("a clone that still belongs to another repository after the sync is refused", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "a", VAULT);
+    await planVaultMigration(s.store, s.config, s.ownerId); // the clone of A is on disk
+    s.store.setKnowledgeRepo(s.ownerId, seedRemote("b", B), "main");
+    cloneSync.skipNext = true; // the sync "worked" without re-pointing the clone
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(report.blockers).toContain("sync_failed: the clone belongs to another repository (the connected repository just changed)");
+    expect(report.state).toBe("repo");
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+
+  it("a clone the sync could not bring up to its remote (behind) is refused", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", { ...VAULT, ".mcp.json": '{"mcpServers":{}}\n' });
+    await planVaultMigration(s.store, s.config, s.ownerId);
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    // Noah's own load-time edit of a tracked .mcp.json (not the owner's work, so not "dirty") …
+    fs.writeFileSync(path.join(clone, ".mcp.json"), '{"mcpServers":{"runtime":{}}}\n');
+    // … and a push from elsewhere that touches the same file: git refuses to move the clone forward over it.
+    pushMore("brain", { ".mcp.json": '{"mcpServers":{"remote":{}}}\n', "wiki/pushed.md": "pushed from elsewhere\n" });
+
+    const report = await cutoverVault(s.store, s.config, s.ownerId);
+
+    expect(report.blockers).toEqual(["sync_failed: the clone is behind its remote and could not be fast-forwarded"]);
+    expect(report.state).toBe("repo");
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+  });
+});
+
+describe("cutover holds the owner's vault write queue", () => {
+  it("a tool write that arrives during the cutover waits, then lands in the new home — it is not lost in the clone", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    const lock = holdCloneLock(s);
+    const cut = cutoverVault(s.store, s.config, s.ownerId);
+    await tick();
+    // What every vault-changing tool call does (repoTools: withVaultWrite) — here from a teammate's run on a
+    // shared account, which is not "a run of the owner" and was never what made this safe.
+    const write = withVaultWrite(s.store, s.config, s.ownerId, async (target) => {
+      if (target.home === "memory") await target.vault.write("wiki/during.md", "written during the cutover\n");
+      else fs.writeFileSync(path.join(clone, "wiki/during.md"), "written during the cutover\n");
+      return target.home;
+    });
+    await tick();
+    await lock.release();
+
+    expect(await cut).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+    expect(await write).toBe("memory");
+    expect(s.fake.dump(s.ownerId)).toEqual({ ...VAULT, "wiki/during.md": "written during the cutover\n" });
+    expect(fs.existsSync(path.join(clone, "wiki/during.md"))).toBe(false);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorDirty: true });
+  });
+
+  it("a run in progress: on a shared account a teammate's chat with the avatar counts, otherwise it does not", () => {
+    const s = setup();
+    const mate = addUser(s, "mate");
+    s.store.touchConversation(mate, "c-mate", s.ownerId, "hi");
+    openRun("run-mate", mate, { conversationId: "c-mate", avatarId: s.ownerId });
+    try {
+      expect(ownerRunInProgress(s.store, s.ownerId)).toBe(false);
+      s.store.updateProfile(s.ownerId, { sharedAccount: true });
+      expect(ownerRunInProgress(s.store, s.ownerId)).toBe(true);
+      expect(ownerRunInProgress(s.store, mate)).toBe(false);
+    } finally {
+      closeRun("run-mate");
+    }
+    expect(ownerRunInProgress(s.store, s.ownerId)).toBe(false);
+  });
+});
+
+describe("a repository change for an owner in `memory`: the import into an empty wiki has the cutover's blockers", () => {
+  /** A migrated owner whose wiki was emptied; the clone of their repository is on disk. */
+  async function emptied() {
+    const s = setup();
+    const first = connect(s, s.ownerId, "first", VAULT);
+    s.store.setPersonalVaultMode("memory");
+    await cutoverVault(s.store, s.config, s.ownerId);
+    for (const notePath of Object.keys(s.fake.dump(s.ownerId))) await memoryVaultFor(s.store, s.config, s.ownerId)!.remove(notePath);
+    mirror.mockClear();
+    s.fake.calls.length = 0;
+    return { ...s, first, clone: knowledgeClonePath(s.ownerId, s.config) };
+  }
+
+  /** The same repository connected again (its clone is kept): the check runs, and must not import. */
+  async function expectNotImported(s: Awaited<ReturnType<typeof emptied>>, code: string) {
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    expect(codes(lastVaultMigrationReport(s.store, s.ownerId)!.blockers)).toEqual([code]);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking" });
+    expect(writes(s.fake)).toEqual([]);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(mirror).not.toHaveBeenCalled();
+  }
+
+  it("a dirty clone", async () => {
+    const s = await emptied();
+    fs.writeFileSync(path.join(s.clone, "unfinished.txt"), "someone's work\n");
+    await expectNotImported(s, VAULT_BLOCKER.uncommitted);
+  });
+
+  it("a clone with unpushed commits", async () => {
+    const s = await emptied();
+    fs.writeFileSync(path.join(s.clone, "local.txt"), "local only\n");
+    git(s.clone, "add", "-A");
+    git(s.clone, "-c", "user.name=T", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "local");
+    await expectNotImported(s, VAULT_BLOCKER.unpushed);
+  });
+
+  it("a run of the owner in progress", async () => {
+    const s = await emptied();
+    s.store.touchConversation(s.ownerId, "c-own", s.ownerId, "hi");
+    openRun("run-own", s.ownerId, { conversationId: "c-own", avatarId: s.ownerId });
+    try {
+      await expectNotImported(s, VAULT_BLOCKER.runInProgress);
+    } finally {
+      closeRun("run-own");
+    }
+  });
+
+  it("the backup gate refusing", async () => {
+    const s = await emptied();
+    vi.spyOn(s.store, "retirementGate").mockReturnValue({ allowed: false, stamp: "x", backupPath: null });
+    await expectNotImported(s, VAULT_BLOCKER.backupFailed);
+  });
+
+  it("without any of them it imports — the control for the four above", async () => {
+    const s = await emptied();
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null });
+  });
+
+  it("yet another repository connected during that import: nothing stays imported, the provenance is not touched", async () => {
+    const s = await emptied();
+    const third = seedRemote("third", { "skills/x/SKILL.md": "---\nname: x\n---\n" });
+    s.fake.beforeNext("put", () => {
+      s.store.setKnowledgeRepo(s.ownerId, third, "main");
+    });
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    expect(codes(lastVaultMigrationReport(s.store, s.ownerId)!.blockers)).toEqual([VAULT_BLOCKER.repoChanged]);
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "checking", sourceRepo: s.first });
+    expect(mirror).not.toHaveBeenCalled();
+  });
+
+  it("a check that waited while the owner connected yet another repository settles nothing about the old one", async () => {
+    const s = await emptied();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("CLAUDE.md", "memory in the service\n");
+    const withVault = connect(s, s.ownerId, "second", { "wiki/theirs.md": "theirs\n" });
+    const lock = holdCloneLock(s);
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first); // would end in `confirm` for `second`
+    await tick();
+    const plain = seedRemote("plain", { "skills/x/SKILL.md": "---\nname: x\n---\n" });
+    s.store.setKnowledgeRepo(s.ownerId, plain, "main");
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, withVault); // nothing to replace there → lifted
+    s.fake.calls.length = 0;
+    await lock.release();
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+    expect(git(s.clone, "remote", "get-url", "origin")).toBe(plain);
+    // The outdated check stopped at once: it never cloned `second` again or asked the service about it.
+    expect(s.fake.calls).toEqual([]);
+  });
+
+  it("a look that would LIFT the hold does not, when the owner connected a repository with vault notes meanwhile", async () => {
+    const s = await emptied();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("CLAUDE.md", "memory in the service\n");
+    connect(s, s.ownerId, "plain", { "skills/x/SKILL.md": "---\nname: x\n---\n" }); // nothing to replace → would lift
+    const theirs = seedRemote("theirs", { "wiki/theirs.md": "theirs\n" });
+    cloneSync.afterNext = () => {
+      // Right after the look synced `plain`: the owner connects a repository that has vault notes of its own.
+      s.store.setKnowledgeRepo(s.ownerId, theirs, "main");
+      onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    };
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    // Lifting for `plain` would have let the mirror write into `theirs` unasked — and skipped its own look.
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: "confirm" });
+    expect(git(s.clone, "remote", "get-url", "origin")).toBe(theirs);
+  });
+
+  it("a look that would ask the owner (`confirm`) does not, when they connected a repository without vault notes meanwhile", async () => {
+    const s = await emptied();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("CLAUDE.md", "memory in the service\n");
+    connect(s, s.ownerId, "theirs", { "wiki/theirs.md": "theirs\n" }); // would end in `confirm`
+    const plain = seedRemote("plain", { "skills/x/SKILL.md": "---\nname: x\n---\n" });
+    s.fake.beforeNext("list", () => {
+      // While the look compares `theirs` with the service: the owner connects `plain`.
+      s.store.setKnowledgeRepo(s.ownerId, plain, "main");
+      onKnowledgeRepoChanged(s.store, s.config, s.ownerId, null);
+    });
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    await whenVaultMigrationIdle(s.store);
+    // A `confirm` left over from `theirs` would ask about a repository that has nothing to replace.
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, mirrorDirty: true });
+  });
+
+  it("a second look queued for the same change does not put back a hold the owner has confirmed", async () => {
+    const s = await emptied();
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("CLAUDE.md", "memory in the service\n");
+    connect(s, s.ownerId, "theirs", { "wiki/theirs.md": "theirs\n" });
+    // The owner presses 확인 the moment the first look asks them (what `mirror-confirm` does).
+    const setHold = s.store.setVaultMirrorHold.bind(s.store);
+    const spy = vi.spyOn(s.store, "setVaultMirrorHold");
+    spy.mockImplementation((userId, state) => {
+      setHold(userId, state);
+      if (state !== "confirm") return;
+      spy.mockRestore();
+      s.store.setVaultMirrorHold(userId, null);
+      s.store.setVaultMirrorReplaceAll(userId, true);
+      s.store.markVaultMirrorDirty(userId);
+    });
+    // Two looks are queued for one change (the route and a 다시 확인 press, say).
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId, s.first);
+    expect(recheckVaultMirrorHold(s.store, s.config, s.ownerId)).toBe(true);
+    await whenVaultMigrationIdle(s.store);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorHold: null, mirrorReplaceAll: true, mirrorDirty: true });
+  });
+});
+
+// ---- With the real mirror (vaultMirror.ts) ---------------------------------------
+
+describe("with the real git mirror", () => {
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("../src/server/vaultMirror.js")>("../src/server/vaultMirror.js");
+    mirror.mockImplementation(actual.syncVaultMirror);
+  });
+
+  const remoteFile = (remote: string, rel: string) => {
+    try {
+      return execFileSync("git", ["-C", remote, "show", `main:${rel}`], { stdio: "pipe" }).toString();
+    } catch {
+      return null;
+    }
+  };
+
+  it("cutover leaves the repository as it is; a rollback after a vault write carries that write into it", async () => {
+    const s = setup();
+    const remote = connect(s, s.ownerId, "brain", VAULT);
+    const before = git(remote, "rev-parse", "main");
+
+    expect(await cutoverVault(s.store, s.config, s.ownerId)).toMatchObject({ state: "memory", blockers: [] });
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorDirty: false, mirrorError: null });
+    expect(s.store.getPersonalVault(s.ownerId)!.mirrorSyncedAt).not.toBeNull();
+    expect(git(remote, "rev-parse", "main")).toBe(before);
+
+    const vault = memoryVaultFor(s.store, s.config, s.ownerId)!;
+    await vault.write("wiki/after.md", "written after the cutover\n");
+    await vault.remove("raw/2026-11-01.md");
+
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true });
+    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
+    expect(s.fake.dump(s.ownerId)).toEqual({});
+    expect(remoteFile(remote, "wiki/after.md")).toBe("written after the cutover\n");
+    expect(remoteFile(remote, "raw/2026-11-01.md")).toBeNull();
+    expect(remoteFile(remote, "wiki/index.md")).toBe(VAULT["wiki/index.md"]);
+    // The clone is the vault again, and holds every note written after the cutover.
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(fs.readFileSync(path.join(clone, "wiki/after.md"), "utf8")).toBe("written after the cutover\n");
+    expect(await cutoverVault(s.store, s.config, s.ownerId)).toMatchObject({ state: "memory", notes: 4, blockers: [] });
+  });
+
+  it("a rollback is blocked while the repository cannot take the mirror, and keeps the post-cutover write", async () => {
+    const s = setup();
+    const remote = connect(s, s.ownerId, "brain", VAULT);
+    await cutoverVault(s.store, s.config, s.ownerId);
+    await memoryVaultFor(s.store, s.config, s.ownerId)!.write("wiki/after.md", "kept in the service\n");
+    fs.renameSync(remote, `${remote}.gone`);
+
+    const result = await rollbackVault(s.store, s.config, s.ownerId);
+    expect(result.ok).toBe(false);
+    expect((result as { reason: string }).reason).toMatch(/^mirror_failed: /);
+    expect(s.store.getPersonalVault(s.ownerId)).toMatchObject({ mirrorDirty: true });
+    expect(s.fake.dump(s.ownerId)["wiki/after.md"]).toBe("kept in the service\n");
+
+    fs.renameSync(`${remote}.gone`, remote);
+    expect(await rollbackVault(s.store, s.config, s.ownerId)).toEqual({ ok: true });
+    expect(remoteFile(remote, "wiki/after.md")).toBe("kept in the service\n");
+  });
+});

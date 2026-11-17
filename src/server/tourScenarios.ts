@@ -61,7 +61,7 @@ const CAPTURE_TOUR = [
   "- 정기 배포는 매주 목요일 오후 4시. 금요일 배포는 금지(주말 대응 인원이 없음).",
   "- 롤백 여부는 QA 리드가 판단하고, 사유를 배포 채널에 남긴다.",
   "",
-  "Step 2 — capture it properly. Follow the second-brain convention in the repository: a curated note belongs under `wiki/` (a quick unprocessed capture under `raw/`), written with `mcp__repo__write_file`/`edit_file`, and then you MUST call `mcp__repo__commit` — uncommitted means it was never persisted, so an uncommitted 'saved!' is a lie. Tell them the exact file path it landed in, and keep the note itself short and searchable rather than padded.",
+  "Step 2 — capture it properly. Follow the second-brain convention in the repository: a curated note belongs under `wiki/` (a quick unprocessed capture under `raw/`), written with `mcp__repo__write_file`/`edit_file`, and then you MUST call `mcp__repo__commit` — it is what pushes the note to the repository. Read each tool result before you say 'saved': a result that says 'Not committed yet' is NOT saved until `mcp__repo__commit` succeeds, and a result that says the vault note 'is saved now' is saved — claiming more is a lie. Tell them the exact file path it landed in, and keep the note itself short and searchable rather than padded.",
   "",
   "Step 3 — recall it back, out loud. Invite them to ask you the question this note answers, then answer it by actually searching the vault with `mcp__brain__search` (`mcp__brain__get_note` to read one in full) instead of from what you remember of this conversation. Say that the search is read-only recall: writing is a deliberate act, reading is not. This is the proof that the knowledge survives the conversation.",
   "",

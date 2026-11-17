@@ -247,6 +247,13 @@ export interface RoutineJobRow {
 export const SIGNUP_MODE_KEY = "signup_mode";
 
 /**
+ * app_config key: where personal vaults SHOULD live ("repo" | "memory",
+ * absent = "repo"). The target, not the state: an owner's actual vault home is
+ * whether they have a `personal_vaults` row (store/personalVault.ts).
+ */
+export const PERSONAL_VAULT_MODE_KEY = "personal_vault_mode";
+
+/**
  * app_config key: the ONE 관리자 공지 (JSON `AdminNoticeSetting`, see
  * `shared/adminNotice.ts`; absent = no notice was ever saved).
  */
@@ -695,6 +702,49 @@ export class StoreBase {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      -- Personal vault home (store/personalVault.ts, personalVault.ts). A row
+      -- exists ONLY for an owner whose vault lives in the memory service (home
+      -- 'memory'); no row = the vault is the knowledge-repo clone, as it always
+      -- was. source_repo/source_commit record what the vault was imported from
+      -- (the source files are never deleted). The mirror_* columns are the state
+      -- of the copy that goes back into the connected repo: mirror_dirty = a
+      -- vault write happened since the last successful mirror, mirror_seq counts
+      -- those writes (a mirror pass clears dirty only when no write arrived while
+      -- it ran), mirror_notice = what the last successful pass has to tell the
+      -- owner (repository notes the service does not hold), mirror_hold_state =
+      -- 'checking' | 'confirm' | NULL (the mirror must not write into the
+      -- connected repo: nobody looked at it yet / the owner must confirm),
+      -- mirror_replace_all = the owner's one-shot "make the repository equal to
+      -- the service". No FKs (todo_items precedent); deleteUser removes the row.
+      -- A brand-new table: CREATE TABLE IF NOT EXISTS IS the existing-deployment
+      -- migration; a database made by an earlier build of this table (boolean
+      -- mirror_hold, no notice/replace-all) is brought up by
+      -- migratePersonalVaultColumns.
+      CREATE TABLE IF NOT EXISTS personal_vaults (
+        user_id TEXT PRIMARY KEY,
+        migrated_at TEXT NOT NULL,
+        source_repo TEXT NOT NULL,
+        source_commit TEXT,
+        mirror_dirty INTEGER NOT NULL DEFAULT 0,
+        mirror_seq INTEGER NOT NULL DEFAULT 0,
+        mirror_synced_at TEXT,
+        mirror_error TEXT,
+        mirror_notice TEXT,
+        mirror_hold_state TEXT,
+        mirror_replace_all INTEGER NOT NULL DEFAULT 0
+      );
+      -- The deletion ledger of a memory-home owner (store/personalVault.ts): the
+      -- vault paths NOAH deleted from the service and the mirror has not yet
+      -- removed from the clone. The mirror deletes a clone vault file only when
+      -- its path is here AND the service no longer holds it — a clone file the
+      -- service merely lacks is never deleted. Rows die with the owner's
+      -- personal_vaults row (clearPersonalVault) and with the user (deleteUser).
+      CREATE TABLE IF NOT EXISTS personal_vault_deletes (
+        user_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, path)
+      );
       CREATE INDEX IF NOT EXISTS idx_team_brain_proposals_status ON team_brain_proposals(status, kind);
       CREATE INDEX IF NOT EXISTS idx_team_brain_proposals_proposer ON team_brain_proposals(proposer_user_id, status);
       CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
@@ -925,6 +975,7 @@ export class StoreBase {
     this.migrateOnboardedAndRoutineFlags();
     this.migrateTeamBrainWikiRows();
     this.migrateTodoStatuses();
+    this.migratePersonalVaultColumns();
     // Deliberately ABOVE the retirement gate, so it runs even when the backup
     // failed: the new trust model (every active user is a teammate) is already
     // live in this build, so skipping the conversion would trust every former
@@ -1356,6 +1407,28 @@ export class StoreBase {
           "OR title LIKE '[루틴] %' OR title LIKE '[예약 작업] %')",
       )
       .run();
+  }
+
+  /**
+   * `personal_vaults` as an EARLIER build of this feature created it: add the
+   * columns that build lacked, and fold its boolean `mirror_hold` into
+   * `mirror_hold_state` (a hold that was on becomes `confirm` — the owner is
+   * asked, never skipped). Runs on every boot, so the fold also zeroes the old
+   * column in the same statement: this build never writes `mirror_hold` again
+   * (inserts leave it at its default 0), so the predicate can only match a row
+   * an older build wrote — a hold the owner has since confirmed is never put
+   * back. A database made by this build has no `mirror_hold` column at all.
+   */
+  private migratePersonalVaultColumns(): void {
+    this.addColumnIfMissing("personal_vaults", "mirror_notice", "TEXT");
+    this.addColumnIfMissing("personal_vaults", "mirror_hold_state", "TEXT");
+    this.addColumnIfMissing("personal_vaults", "mirror_replace_all", "INTEGER NOT NULL DEFAULT 0");
+    const columns = this.db.prepare("PRAGMA table_info(personal_vaults)").all() as { name: string }[];
+    if (columns.some((column) => column.name === "mirror_hold")) {
+      this.db
+        .prepare("UPDATE personal_vaults SET mirror_hold_state = COALESCE(mirror_hold_state, 'confirm'), mirror_hold = 0 WHERE mirror_hold = 1")
+        .run();
+    }
   }
 
   /** 할 일 statuses (todo|in_progress|done|dropped) over the pre-status

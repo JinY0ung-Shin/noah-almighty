@@ -3,7 +3,17 @@ import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AppConfig } from "../types.js";
 import { ensureClone, knowledgeRepoContextFor, readFile as readRepoFile } from "../knowledgeRepo.js";
-import { OWNER_ONLY, cloneFailureMessage, readFileErrorMessage } from "./repoToolKit.js";
+import {
+  OWNER_ONLY,
+  assertNoVaultAlias,
+  cloneFailureMessage,
+  memoryUnavailableMessage,
+  readFileErrorMessage,
+  vaultNotePathOf,
+  vaultToolErrorMessage,
+} from "./repoToolKit.js";
+import { MemoryUnavailableError } from "../memory/memoryClient.js";
+import { memoryVaultFor, type MemoryVault } from "../personalVault.js";
 import { text } from "./mcpTools.js";
 import { formatBrainHits, normalizeWikiPath, rankBrainNotes, unscannedNote } from "./brainSearch.js";
 import { buildTeamBrainTools, readTeamNoteTool, teamNoMatchText, teamSearchBlock, type TeamBrainToolsContext } from "./teamBrainTools.js";
@@ -60,6 +70,25 @@ const NO_REPO =
   "No knowledge repository is connected yet, so there is no second brain to search. If you are the owner, create and connect one with the `mcp__repo__create_repo` tool first, then capture notes under `wiki/`. Do not walk through manual setup — use `create_repo`.";
 const NO_VAULT =
   "Your knowledge repository has no `wiki/` vault yet (it predates the second-brain layout). Run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing files), then capture notes with the `brain-ingest` skill and retry. Do not use Bash — use the repo tools.";
+
+/** What a `get_note` of a vault note that is not there answers (the clone words a missing file as an invalid path). */
+const NO_SUCH_NOTE =
+  "No such note in your second brain. Check the path with mcp__brain__search or mcp__repo__list_files.";
+
+/**
+ * A note of the owner's vault in the memory service, or null when it is not
+ * there — for the read-time marks and the `personalNotes` check. Only "this
+ * note does not exist" is null: a service that cannot be used is thrown on, so
+ * it is never read as a missing note.
+ */
+async function readVaultNoteOrNull(vault: MemoryVault, notePath: string): Promise<string | null> {
+  try {
+    return await vault.read(notePath);
+  } catch (error) {
+    if (error instanceof Error && (error.message === "NOT_FOUND" || error.message === "INVALID_PATH")) return null;
+    throw error;
+  }
+}
 
 /** A note's git blob id (`blob <bytes>\0<content>`, SHA-1) — what `personalNotes` records when the card is drafted. */
 export function personalNoteBlobId(content: string): string {
@@ -141,6 +170,27 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
   const team = ctx.team;
   const teamRead = Boolean(team?.read);
   const repoCtx = () => knowledgeRepoContextFor(store, ctx.avatarUserId, ctx.config);
+  /**
+   * One file of the owner's clone. For an owner whose vault is in the memory service (`memoryHome`) a path
+   * that resolves through a link into the clone's vault folders is refused: those files are not read.
+   */
+  const readClone = async (c: NonNullable<ReturnType<typeof repoCtx>>, relPath: string, memoryHome: boolean) => {
+    const repoRoot = await ensureClone(c);
+    if (memoryHome) assertNoVaultAlias(repoRoot, relPath);
+    return readRepoFile(repoRoot, relPath);
+  };
+  // The owner's vault when its home is the memory service; null = the clone is the vault (the code below, as it was).
+  const memoryVault = () => memoryVaultFor(store, ctx.config, ctx.avatarUserId);
+  // Results that say the personal half could not be SEARCHED (the memory service is unavailable, or it
+  // refused the request): in a search of BOTH brains such a result must stay visible next to the team hits —
+  // an ordinary personal error (no repo, no vault) gives way to them.
+  const vaultFailureResults = new WeakSet<object>();
+  const vaultFailure = (message: string) => {
+    const result = text(message, true);
+    vaultFailureResults.add(result);
+    return result;
+  };
+  const vaultUnavailable = (subject: string) => vaultFailure(memoryUnavailableMessage("read", subject));
   // The OWNER's applied team-brain cards that recorded personal notes (read-time marks).
   const personalLinks = () => (teamRead ? store.listTeamBrainPersonalLinks(ctx.avatarUserId) : []);
   /** Resolve a `personalNotes` entry against the owner's clone (owner runs only). */
@@ -152,7 +202,11 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
           const w = normalizeWikiPath(rawPath);
           if (!w.ok || !w.norm.endsWith(".md")) return { ok: false, reason: "not a `wiki/…md` note path of the personal brain" };
           try {
-            const content = await readRepoFile(await ensureClone(c), w.norm);
+            // The path is classified the way every tool classifies it; a clone file is read only when it is not
+            // a vault note of an owner whose vault is in the memory service.
+            const vault = memoryVault();
+            const note = vault ? vaultNotePathOf(w.norm) : null;
+            const content = vault && note ? await vault.read(note) : await readClone(c, w.norm, vault !== null);
             if (linkNoteTarget(content)) return { ok: false, reason: "already a link note to the team brain" };
             if (isKeptPersonalNote(content)) {
               return {
@@ -161,17 +215,67 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
               };
             }
             return { ok: true, link: { path: w.norm, blob: personalNoteBlobId(content) } };
-          } catch {
+          } catch (error) {
+            if (error instanceof MemoryUnavailableError) {
+              return {
+                ok: false,
+                reason:
+                  "the memory service is unavailable right now, so the note could not be read — this does NOT mean the note is missing; tell the user and try again later",
+              };
+            }
             return { ok: false, reason: "no such note in the personal brain (search it with scope \"personal\" for the exact path)" };
           }
         }
       : undefined;
   const teamCtx: TeamBrainToolsContext | undefined = team ? { ...team, personalNote } : undefined;
 
+  /**
+   * `searchPersonal` for an owner whose vault is in the memory service: the
+   * ranking is the service's, every string is the clone branch's. A service
+   * that cannot be used is an error that says so — never "no match".
+   */
+  const searchPersonalVault = async (vault: MemoryVault, args: { query: string; limit?: number }) => {
+    try {
+      const result = await vault.search(args.query, args.limit);
+      if (result.kind === "no_vault") return text(NO_VAULT, true);
+      const partial = unscannedNote(result.unscanned, "personal");
+      if (result.hits.length === 0) {
+        return text(
+          `No notes in your second brain matched "${args.query}". ${partial || "It may not be captured yet — if it is durable, capture it with the brain-ingest skill."}`,
+        );
+      }
+      const marks: string[] = [];
+      if (teamRead) {
+        const links = personalLinks();
+        for (const hit of result.hits) {
+          const content = await readVaultNoteOrNull(vault, hit.path);
+          const mark = content === null ? null : await personalNoteMark(ctx.config, hit.path, content, links, false);
+          if (mark) marks.push(mark);
+        }
+      }
+      const markBlock = marks.length
+        ? `\n\nTeam-brain links of these notes (the team page is the canonical version${ctx.viewerIsOwner ? `; ${inBrainPolicy("PROMOTED NOTES")} says what to ask the user` : ""}):\n${marks.join("\n")}`
+        : "";
+      return text(
+        `Top ${result.hits.length} note(s) from your second brain for "${args.query}":\n${formatBrainHits(
+          result.hits,
+        )}${markBlock}\n\nRead a full note with get_note or mcp__repo__read_file.${partial ? `\n\n${partial}` : ""}`,
+      );
+    } catch (error) {
+      if (error instanceof MemoryUnavailableError) return vaultUnavailable("your second brain");
+      // A refusal is not "no match" either: the search did not run.
+      return vaultFailure(
+        `Your second brain could not be searched: ${vaultToolErrorMessage(error, readFileErrorMessage, "")} This is NOT an empty result.`,
+      );
+    }
+  };
+
   const searchPersonal = async (args: { query: string; limit?: number }) => {
         if (!canRead) return text(OWNER_ONLY, true);
         const c = repoCtx();
         if (!c) return text(NO_REPO, true);
+        const vault = memoryVault();
+        if (vault) return searchPersonalVault(vault, args);
         try {
           const repoRoot = await ensureClone(c);
           const result = await rankBrainNotes(repoRoot, args.query, args.limit);
@@ -242,6 +346,12 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
           const own = personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
           return text(`${own}\n\n${teamNoMatchText(args.query, teamBlock.partial)}`, Boolean(personal.isError));
         }
+        // The personal half could not be SEARCHED (memory service unavailable, or it refused): that is not
+        // "nothing personal" — the team hits are shown with it, and the result stays an error.
+        if (vaultFailureResults.has(personal)) {
+          const own = personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
+          return text(`${teamBlock.body}\n\n${own}`, true);
+        }
         // Both halves: keep a personal hit list or its no-match line; a personal ERROR
         // (no repo / no vault) gives way to the team hits rather than hiding them.
         const personalText = personal.isError ? "" : personal.content.map((c) => ("text" in c ? c.text : "")).join("\n");
@@ -277,9 +387,24 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
         if (!w.ok) {
           return text("get_note only reads notes under `wiki/`. Use mcp__repo__read_file for other paths.", true);
         }
+        // Vault in the memory service: a vault note is read there (the clone's file at that path is not the
+        // tools' to read). The path is classified the way every tool classifies it (`wiki/a.md/` is the note
+        // `wiki/a.md`); anything else under wiki/ — a non-markdown file, a folder — is still the clone's.
+        const vault = memoryVault();
+        const note = vault ? vaultNotePathOf(w.norm) : null;
+        if (vault && note) {
+          try {
+            const content = await vault.read(note);
+            const mark = teamRead ? await personalNoteMark(ctx.config, note, content, personalLinks(), ctx.viewerIsOwner) : null;
+            return text(mark ? `${mark}\n\n${content}` : content);
+          } catch (error) {
+            if (error instanceof MemoryUnavailableError) return vaultUnavailable(w.norm);
+            if (error instanceof Error && error.message === "NOT_FOUND") return text(NO_SUCH_NOTE, true);
+            return text(vaultToolErrorMessage(error, readFileErrorMessage, ""), true);
+          }
+        }
         try {
-          const repoRoot = await ensureClone(c);
-          const content = await readRepoFile(repoRoot, w.norm);
+          const content = await readClone(c, w.norm, vault !== null);
           const mark = teamRead ? await personalNoteMark(ctx.config, w.norm, content, personalLinks(), ctx.viewerIsOwner) : null;
           return text(mark ? `${mark}\n\n${content}` : content);
         } catch (error) {

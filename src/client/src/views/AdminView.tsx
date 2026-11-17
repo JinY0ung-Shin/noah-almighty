@@ -3,6 +3,7 @@ import "./AdminView.css";
 import Icon from "../components/Icon";
 import AdminUserRow from "../components/AdminUserRow";
 import AdminEgressPanel from "../components/AdminEgressPanel";
+import AdminPersonalVaultPanel from "../components/AdminPersonalVaultPanel";
 import AdminSharedMcpPanel from "../components/AdminSharedMcpPanel";
 import AdminTeamBrainPanel from "../components/AdminTeamBrainPanel";
 import AdminToolPolicyPanel from "../components/AdminToolPolicyPanel";
@@ -171,6 +172,10 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   shared_mcp_check: "공용 MCP 서버 연결 확인",
   shared_mcp_bind: "공용 MCP 서버 시크릿 연결",
   shared_mcp_unbind: "공용 MCP 서버 시크릿 연결 해제",
+  set_personal_vault_mode: "개인 브레인 보관 방식 변경",
+  personal_vault_run: "개인 브레인 이전 실행",
+  personal_vault_rollback: "개인 브레인 되돌리기",
+  personal_vault_mirror_confirm: "개인 브레인 저장소 사본 확인",
   knowledge_repo_create: "지식 저장소 생성",
   knowledge_repo_push: "지식 저장소 푸시",
   group_repo_create: "그룹 지식 저장소 생성",
@@ -1381,6 +1386,12 @@ export default function AdminView() {
                   </section>
                 </div>
               ) : null}
+              {/* 시스템 ▸ 개인 브레인 이전: always mounted (its messages and the last dry-run survive a
+                  tab switch), below the system cards; it reads its own route, so it shows even when
+                  the system info could not be loaded. */}
+              <div className={state.adminTab === "system" ? "admin-list admin-vault-slot" : undefined}>
+                <AdminPersonalVaultPanel active={state.adminTab === "system"} />
+              </div>
             </div>
           </>
         )}

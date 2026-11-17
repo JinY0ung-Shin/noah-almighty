@@ -4,6 +4,8 @@ import { Router, type Response } from "express";
 import { hashPassword, requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
+import { memoryClientFor } from "../memory/memoryClient.js";
+import { withVaultWriteLock } from "../personalVault.js";
 import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
 import { deletePiUserWorkspace } from "../agent/pi/piWorkspace.js";
@@ -206,6 +208,22 @@ export function createAdminRouter(deps: RouterDeps): Router {
       }
       auditAs(req, "delete_user", `deleted user ${req.params.id}`);
       logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "user deleted");
+      // The owner's wiki in the memory service (their personal vault when its
+      // home was `memory`, or the copy an unfinished import left). Best effort,
+      // like the disk sweep below: the account is gone either way, and a wiki
+      // that could not be deleted is logged for the operator. It runs in the
+      // owner's vault write queue, BEHIND whatever is still in it (a queued
+      // note write, a cutover in the middle of its import): those find the
+      // user gone and write nothing, so nothing re-creates the wiki afterwards.
+      const targetId = req.params.id;
+      const memory = memoryClientFor(store, config);
+      if (memory) {
+        void withVaultWriteLock(store, targetId, () => memory.deleteWiki(targetId))
+          .then(() => logger.info({ targetId }, "deleted user's wiki removed from the memory service"))
+          .catch((err: unknown) =>
+            logger.warn({ err, targetId }, "post-delete cleanup: the user's wiki in the memory service could not be deleted"),
+          );
+      }
       // Best-effort on-disk cleanup (the DB rows are already gone). Never throw:
       // a cleanup failure must not turn a successful deletion into a 500. The
       // knowledge clone is a full copy of a possibly-private repo, so removing it

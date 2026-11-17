@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentRuntime, AppConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
+import type { AgentRuntime, AppConfig, MemoryServiceConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { assertProcFdPinning } from "./pinnedFs.js";
@@ -117,6 +117,48 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
     ...(mcpAcl ? { mcpAllowedCidrs: mcpAcl.cidrs } : {}),
     deckSandbox: ["true", "1", "on"].includes(env("PI_DECK_SANDBOX").toLowerCase()),
   };
+}
+
+/**
+ * The memory service (`AppConfig.memory`): `PI_MEMORY_URL` +
+ * `PI_MEMORY_API_KEY_FILE`, or undefined when neither is set (the feature is
+ * off and every personal vault stays in its knowledge repo). The key is read
+ * ONLY from a file, for the reason pi's admin key is
+ * (`readPiGatewayAdminApiKey`): an inline `PI_MEMORY_API_KEY` would sit in
+ * process.env, where every child Noah spawns could inherit it, so it stops the
+ * boot. Half a configuration stops the boot too — a vault that already lives
+ * in the service must never be served from a server that cannot reach it. No
+ * message here carries the key.
+ */
+export function parseMemoryConfig(values: { url: string; apiKeyFile: string; inlineApiKey: string }): MemoryServiceConfig | undefined {
+  if (values.inlineApiKey) {
+    throw new Error("PI_MEMORY_API_KEY is not read: put the memory service's key in a file and set PI_MEMORY_API_KEY_FILE.");
+  }
+  const { url, apiKeyFile: file } = values;
+  if (!url && !file) return undefined;
+  if (!url || !file) {
+    throw new Error("The memory service needs both PI_MEMORY_URL and PI_MEMORY_API_KEY_FILE (set both, or neither to turn it off).");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("PI_MEMORY_URL must be an absolute URL (e.g. http://memory:7090).");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("PI_MEMORY_URL must be an http(s) URL.");
+  if (parsed.username || parsed.password) throw new Error("PI_MEMORY_URL must not carry credentials.");
+  if (parsed.search || parsed.hash) throw new Error("PI_MEMORY_URL must not carry a query or fragment.");
+  let key: string;
+  try {
+    key = fs.readFileSync(file, "utf8").trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "read error";
+    throw new Error(`PI_MEMORY_API_KEY_FILE (${file}) cannot be read (${code}).`);
+  }
+  if (!key) throw new Error(`PI_MEMORY_API_KEY_FILE (${file}) is empty.`);
+  // It becomes an Authorization header value: a second line or inner blank is a wrong file.
+  if (/\s/.test(key)) throw new Error(`PI_MEMORY_API_KEY_FILE (${file}) must hold the key alone on one line.`);
+  return { url: `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`, apiKey: key };
 }
 
 function parseMinutes(value: string, fallbackMinutes: number): number {
@@ -246,6 +288,14 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       apiUrl: env("UPLOAD_RELAY_API_URL"),
       secret: env("UPLOAD_RELAY_SECRET"),
     });
+  // Same rule: an override (tests) supplies its own block; only the env path validates.
+  const memory =
+    overrides.memory ??
+    parseMemoryConfig({
+      url: env("PI_MEMORY_URL"),
+      apiKeyFile: env("PI_MEMORY_API_KEY_FILE"),
+      inlineApiKey: env("PI_MEMORY_API_KEY"),
+    });
 
   return {
     // `|| 48787` guards a typo'd PORT (NaN would ERR_SOCKET_BAD_PORT at boot).
@@ -264,6 +314,9 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // Off unless both the URL and the secret are set; half a configuration
     // stops the boot (parseUploadRelayConfig).
     ...(uploadRelay ? { uploadRelay } : {}),
+    // Off unless both the URL and the key file are set; half a configuration
+    // or an inline key stops the boot (parseMemoryConfig).
+    ...(memory ? { memory } : {}),
     // Default browser-control allowlist, seeded into browsers whose extension
     // allowlist is still empty (see AppConfig). Normalized here once; the
     // self-host filtering happens per request, where Noah's host is known.

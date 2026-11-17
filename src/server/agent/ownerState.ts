@@ -6,6 +6,9 @@ import type {
   SharedMcpRunState,
 } from "../types.js";
 import { kstDateString } from "../routineSchedule.js";
+import { memoryClientFor } from "../memory/memoryClient.js";
+import { vaultHomeOf, type VaultHome } from "../personalVault.js";
+import { VAULT_MIRROR_ERROR } from "../vaultMirror.js";
 import type { BrowserSecretPolicy } from "../secretPolicy.js";
 import type { Store } from "../store.js";
 import type { TodoSnapshot } from "../../shared/todos.js";
@@ -39,7 +42,51 @@ import { CHAT_DOCUMENT_EXTENSIONS, CHAT_DOCUMENT_SANDBOX_DIR } from "../../share
  * `falcon` tier, else pi's own default), both
  * known to describe_system from its own context.
  */
+/**
+ * The copy of a `memory`-home vault that Noah pushes into the owner's
+ * repository (`vaultMirror.ts`), as the `personal_vaults` row records it.
+ */
+export interface OwnerVaultMirrorState {
+  /** A vault note changed since the last successful push. */
+  dirty: boolean;
+  /** ISO time of the last successful push; null = none since the vault moved. */
+  syncedAt: string | null;
+  /** The last attempt's failure (a short English code or message); null when it worked. */
+  error: string | null;
+  /**
+   * What the last successful push has to tell the owner (the repository holds
+   * vault notes the memory service does not); null = nothing.
+   */
+  notice: string | null;
+  /**
+   * Why Noah is not writing the vault into the connected repository (null = it
+   * may): `checking` — a repository or branch was just connected or changed and
+   * Noah has not looked at it yet; `confirm` — it holds vault notes the copy
+   * would replace, and only the owner can confirm.
+   */
+  hold: "checking" | "confirm" | null;
+}
+
+/** Where the owner's personal vault lives (`personalVault.ts`) and, for `memory`, what its repository copy is doing. */
+export interface OwnerVaultState {
+  /** `repo`: the knowledge repository is the vault, as it always was. `memory`: the memory service is. */
+  home: VaultHome;
+  /** `memory` only: when the vault moved there (ISO). */
+  migratedAt: string | null;
+  /** `memory` only: the repository copy's state. */
+  mirror: OwnerVaultMirrorState | null;
+  /** Whether THIS server has a memory service to call (`config.memory`). False with home `memory` = every vault call fails. */
+  serviceConfigured: boolean;
+}
+
 export interface OwnerState {
+  /**
+   * Where the owner's personal vault lives. The prompt (frozen per
+   * conversation) states only `home`; describe_system states the rest live,
+   * plus whether the service answers right now (its own probe — not a fact
+   * of the store, so not read here).
+   */
+  vault: OwnerVaultState;
   /** Active personal keys for the external task API (POST /api/v1/avatar/tasks). */
   avatarApiKeyCount: number;
   /** Whether the owner has connected a personal knowledge repo (repo set). */
@@ -111,7 +158,25 @@ export function summarizeOwnerState(
   avatarUserId: string,
 ): OwnerState {
   const knowledgeRepo = store.getKnowledgeRepo(avatarUserId);
+  // One row read, eager: both surfaces need the home. `vaultHomeOf` stays the
+  // one answer to "where does it live" — the row only adds the mirror facts.
+  const vaultHome = vaultHomeOf(store, avatarUserId);
+  const vaultRow = vaultHome === "memory" ? store.getPersonalVault(avatarUserId) : null;
   return {
+    vault: {
+      home: vaultHome,
+      migratedAt: vaultRow?.migratedAt ?? null,
+      mirror: vaultRow
+        ? {
+            dirty: vaultRow.mirrorDirty,
+            syncedAt: vaultRow.mirrorSyncedAt,
+            error: vaultRow.mirrorError,
+            notice: vaultRow.mirrorNotice,
+            hold: vaultRow.mirrorHold,
+          }
+        : null,
+      serviceConfigured: memoryClientFor(store, config) !== null,
+    },
     // Eager like every other field here: the key list is capped per owner, so
     // one small read is cheaper than the getter it replaced (which re-queried on
     // every access, and hid the read from `{...state}` spreads).
@@ -407,6 +472,138 @@ export function sharedMcpServerLines(
         return `${head}: NOT available in this conversation — it authenticates with personal secrets from a user's own vault, which this kind of run never carries.`;
     }
   });
+}
+
+/** What a personal vault IS, in the words both metacognition surfaces use. */
+export const VAULT_NOTES_PHRASE = "the repository-root `CLAUDE.md` and every `.md` note under `wiki/` and `raw/`";
+
+/**
+ * A memory-service failure is an OUTAGE, never an empty brain — ONE rule for
+ * the prompt's vault paragraph and describe_system's memory-service line.
+ * `writes` adds the half that only a run able to write notes needs.
+ */
+export function vaultOutageRule(writes: boolean): string {
+  return (
+    "that is an outage, never an empty brain: tell the user, and do not answer as if nothing were known or as if no note existed" +
+    (writes ? "; do not write the note somewhere else instead, and try again later rather than in a loop" : "")
+  );
+}
+
+/**
+ * The standing fact for a conversation whose owner's vault lives in the memory
+ * service (`AgentRequest.vaultHome === "memory"`). FROZEN with the prompt, so it
+ * says only what holds for the whole conversation — where the vault lived at
+ * its first turn, that a note is saved when written, what `commit` does.
+ * "Commit after writing" stays the instruction, which is also what keeps a
+ * conversation right if its owner's vault moves back.
+ *
+ * Three readers, three texts:
+ * - `owner` — the owner's own run (chat, routine, task API). Live questions
+ *   (still there? reachable? copy behind?) go to describe_system, which
+ *   answers them for the owner.
+ * - `writer` — a shared-account teammate, who may write notes but is NOT the
+ *   owner: describe_system gives a non-owner no owner state, so this text
+ *   promises nothing about it and points at the tool results instead.
+ * - `reader` — a plain teammate or a consultation: where the notes are, and
+ *   that an outage is not an empty brain.
+ */
+export function vaultMemoryHomeParagraph(viewer: "owner" | "writer" | "reader"): string {
+  if (viewer === "reader") {
+    return (
+      `**Where the owner's vault lives**: when this conversation started, the owner's personal vault (${VAULT_NOTES_PHRASE}) was stored in Noah's memory service, not in the git repository. The same tools and paths read it. ` +
+      `If a tool reports that the memory service is unavailable, ${vaultOutageRule(false)}.`
+    );
+  }
+  const head =
+    viewer === "owner"
+      ? `**Where your vault lives**: when this conversation started, your personal vault — ${VAULT_NOTES_PHRASE} — was stored in Noah's memory service, not in the git repository (\`mcp__system__describe_system\` reports where it is now, whether the memory service answers, and the state of the repository copy). `
+      : `**Where the owner's vault lives**: when this conversation started, the owner's personal vault — ${VAULT_NOTES_PHRASE} — was stored in Noah's memory service, not in the git repository. Each write's tool result says where that note went; if a result and this paragraph differ, the result is right. `;
+  return (
+    head +
+    "The same tools and paths apply: `mcp__repo__*` reads and writes those notes there, `mcp__brain__*` recalls them. " +
+    "A vault note is SAVED the moment its write, edit, move or delete succeeds — it needs no commit to exist, and the tool result says so. " +
+    "The git repository keeps a COPY of the vault that only Noah writes: `mcp__repo__commit` pushes that copy now, together with your other repository changes, so commit after writing as before. " +
+    "Everything else in the repository (skills, plugins, non-markdown files) lives in git and is pushed only by that commit. " +
+    "A vault note edited directly in git is NOT read back — the next push of the copy replaces it, so change vault notes only through these tools. " +
+    `If a tool reports that the memory service is unavailable, ${vaultOutageRule(true)}.`
+  );
+}
+
+/**
+ * The owner's vault is in the memory service but NO knowledge repository is
+ * connected: every `mcp__repo__*` file tool refuses (NO_REPO) and the brain
+ * tools are not registered, so the notes cannot be reached through the tools
+ * — and must not be reported as gone. ONE text for the prompt's no-repository
+ * branch and describe_system's vault line (which adds "since when").
+ */
+export const VAULT_MEMORY_NO_REPO_SENTENCE =
+  `${VAULT_NOTES_PHRASE} are kept in Noah's memory service and are still there, but they are NOT reachable through your tools while no knowledge repository is connected: the repository file tools refuse and brain recall is off until one is. ` +
+  "Nothing was lost, so never tell the owner their brain is empty. Connecting a repository again makes the notes reachable — Noah looks at that repository before it writes anything into it";
+
+/**
+ * describe_system's line about the repository copy of a `memory`-home vault,
+ * in plain words, with what to do when it is behind or on hold. Notes are
+ * saved in the memory service in every one of these states — the line says so
+ * wherever the state could read as "your notes are not saved".
+ * `repoConnected` false = there is no repository to copy into (and no
+ * `mcp__repo__commit` to recommend: it refuses).
+ */
+export function vaultMirrorStateText(mirror: OwnerVaultMirrorState, repoConnected = true): string {
+  if (!repoConnected) {
+    return "none right now — no knowledge repository is connected, so there is nowhere to copy the notes to; they exist only in the memory service until one is connected again";
+  }
+  const oneWay = " The copy is one-way: a vault note edited directly in git is not read back and is replaced by the next push.";
+  if (mirror.hold === "checking") {
+    return (
+      "CHECKING — a repository (or branch) was just connected or changed, and Noah has not looked at it yet: it writes nothing into it until it has. " +
+      "There is nothing to confirm and nothing for you or the owner to do — the check runs by itself, and the copy starts once the repository is known to hold no vault notes the copy would replace. " +
+      "If it stays in this state, the check could not finish — the repository could not be read (no usable `GIT_TOKEN`, unreachable) or the memory service did not answer. Noah retries on its own about once a minute, and once what was in the way is fixed the owner can start it at once with 지금 다시 확인 in 설정 → 지식·플러그인 → 지식 저장소 (브레인 노트 보관) — so report it instead of waiting; you have no tool for it. " +
+      "Meanwhile notes keep being saved in the memory service, and `mcp__repo__commit` still pushes the other repository files." +
+      oneWay
+    );
+  }
+  if (mirror.hold === "confirm") {
+    return (
+      "WAITING FOR THE OWNER — Noah looked at the connected repository and it holds vault notes of its own (`CLAUDE.md`, `wiki/`, `raw/`) that the copy would replace with the memory service's version (a note only the repository has would be removed from it; the earlier content stays in git history). Nothing there has been overwritten. " +
+      "Only the owner can confirm, in 설정 → 지식·플러그인 → 지식 저장소 (브레인 노트 보관) — tell them; you have no tool for it. Until then notes keep being saved in the memory service, the repository's vault files stay as they are, and `mcp__repo__commit` still pushes the other repository files." +
+      oneWay
+    );
+  }
+  // What the last successful push found: the repository holds vault notes the service does not. Stated with
+  // every state below — it stays true until a later push says otherwise.
+  const notice = mirror.notice
+    ? ` Notice from the last successful push: \`${mirror.notice}\` — the repository holds vault notes that the memory service does not (added directly in git, or no longer in the service). Noah deleted NOTHING: they stay in the repository, but they are not part of the brain — search and read do not see them, and you cannot read them through your tools. Tell the owner; for a note they want in the brain, they can give you its text and you write it as a note. If many are missing or the brain itself looks emptied, that is an administrator's recovery — moving this owner back to the repository and then to the memory service again brings every repository note into the brain — not something to rebuild by hand.`
+    : "";
+  const last = mirror.syncedAt
+    ? `the last successful push was ${mirror.syncedAt}`
+    : "nothing has been pushed since the vault moved to the memory service";
+  if (mirror.error) {
+    // What to do depends on WHY it failed (`VAULT_MIRROR_ERROR` — each value is the stored text or its
+    // beginning). A text this table does not know gets the generic sentence.
+    const failedWith = (head: string) => mirror.error === head || mirror.error!.startsWith(`${head} `) || mirror.error!.startsWith(`${head}:`);
+    const next = failedWith(VAULT_MIRROR_ERROR.repoDirty)
+      ? "Call `mcp__repo__commit` to push the copy now: that error means the repository's working copy holds uncommitted changes outside the vault, which Noah's own background push never touches — your commit carries both."
+      : failedWith(VAULT_MIRROR_ERROR.noToken)
+        ? "No commit can push it either: the owner has no usable internal Git token (`GIT_TOKEN`) — ask them to register one under Settings → Git credentials."
+        : failedWith(VAULT_MIRROR_ERROR.serviceUnavailable) || failedWith(VAULT_MIRROR_ERROR.serviceRefused)
+          ? "A commit will not help while the memory service does not serve the vault (see the memory service line): nothing can be copied out of it until it does."
+          : "Call `mcp__repo__commit` to push the copy now. If the commit fails too, report its error as it is (a rejected `GIT_TOKEN`, a protected branch, a conflict) instead of retrying in a loop.";
+    return (
+      `BEHIND — the last attempt to push the copy FAILED (\`${mirror.error}\`); ${last}. Vault notes written since then are saved in the memory service but may be missing from the repository. ` +
+      `${next} The notes stay saved either way, and Noah retries on its own.` +
+      oneWay +
+      notice
+    );
+  }
+  if (mirror.dirty) {
+    return (
+      `BEHIND — vault notes changed since the last push are saved in the memory service but not yet in the repository; ${last}. ` +
+      "Call `mcp__repo__commit` to push the copy now (Noah also pushes it on its own, usually within a minute or two)." +
+      oneWay +
+      notice
+    );
+  }
+  return `up to date — ${last}${mirror.syncedAt ? "" : ", and the repository holds the notes as they were then"}.${oneWay}${notice}`;
 }
 
 /**

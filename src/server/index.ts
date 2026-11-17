@@ -6,6 +6,7 @@ import { createAppServer } from "./appServer.js";
 import logger from "./logger.js";
 import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
+import { startVaultMirrorLoop } from "./vaultMirror.js";
 import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { retireExternalAvatars } from "./retireExternalAvatars.js";
 import { retireGroupAgents } from "./retireGroupAgents.js";
@@ -132,6 +133,11 @@ server.listen(services.config.port, () => {
 // Fire owner-scheduled routine jobs in the background.
 const stopScheduler = startRoutineScheduler(services);
 const stopAvatarTaskDispatcher = startAvatarTaskDispatcher(services);
+// Personal vaults that live in the memory service are copied into their owners'
+// knowledge repositories in the background (push-only; vaultMirror.ts). Every
+// vault is mirrored once now, then whichever changed. Only with a memory
+// service configured — without one no vault can live there.
+const vaultMirrorLoop = services.config.memory ? startVaultMirrorLoop(services.store, services.config) : null;
 
 // A rejected promise from an async Express 4 route handler is NOT routed to the
 // error middleware — it surfaces here. Log and CONTINUE: a single bad request
@@ -158,6 +164,7 @@ function shutdown(signal: string): void {
   logger.info({ signal }, "shutting down");
   stopScheduler();
   stopAvatarTaskDispatcher();
+  vaultMirrorLoop?.stop();
   // Abort in-flight chat runs so their cancel path persists the streamed partial
   // and ends the SSE responses (otherwise open streams would block server.close
   // until the timeout and the watched turn would be lost).

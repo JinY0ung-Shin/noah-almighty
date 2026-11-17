@@ -23,6 +23,7 @@ import { createChatRouter, expandChatSlashCommand } from "./routes/chat.js";
 import { createUploadRelayRouter } from "./routes/uploadRelay.js";
 import { createWorkspaceFilesRouter } from "./routes/workspaceFiles.js";
 import { createAdminRouter } from "./routes/admin.js";
+import { createPersonalVaultRouter } from "./routes/personalVault.js";
 import { createShareLinksRouter } from "./routes/shareLinks.js";
 import { createBrowserExtensionRouter } from "./routes/browserExtension.js";
 import { createBrowserClipboardRouter } from "./browserClipboard.js";
@@ -196,6 +197,8 @@ export function createApp(services = createServices()) {
   app.use(createBrowserExtensionRouter(deps));
   app.use(createBrowserClipboardRouter({ store }));
   app.use(createAdminRouter(deps));
+  // Personal vault: its home and mirror (settings), the migration (admin).
+  app.use(createPersonalVaultRouter(deps));
 
   // Unknown API requests must stay API-shaped. Without this boundary, GET
   // /api/typo falls through to the SPA index with HTTP 200, hiding route drift

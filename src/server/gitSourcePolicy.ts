@@ -27,7 +27,7 @@ import type { AppConfig } from "./types.js";
 
 /** What the policy reads from the app config. */
 export type GitSourcePolicyConfig = Pick<AppConfig, "dataDir" | "githubHost" | "defaultPluginsDir" | "pi"> &
-  Partial<Pick<AppConfig, "egressControlUrl">>;
+  Partial<Pick<AppConfig, "egressControlUrl" | "memory">>;
 
 /** A resolver with `dns.promises.lookup(host, { all: true })`'s shape (injectable in tests). */
 export type GitSourceLookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
@@ -247,8 +247,9 @@ function canonicalHost(host: string): string {
 /**
  * The internal services Noah itself is configured to talk to — pi-gateway
  * (`PI_GATEWAY_URL`), the address pi's broker reaches Noah's `/mcp` at
- * (`NOAH_MCP_PUBLIC_URL`) and the egress policy controller
- * (`NOAH_EGRESS_CONTROL_URL`) — as canonical host + port. They sit on private
+ * (`NOAH_MCP_PUBLIC_URL`), the egress policy controller
+ * (`NOAH_EGRESS_CONTROL_URL`) and the memory service (`PI_MEMORY_URL`) — as
+ * canonical host + port. They sit on private
  * addresses, which the address classes allow on purpose (the internal git host
  * is private too), so they are refused by identity: a registered source must
  * never make Noah's git send a request to them. The configured git host is
@@ -256,7 +257,7 @@ function canonicalHost(host: string): string {
  */
 function internalServices(config: GitSourcePolicyConfig): { host: string; port: number | null }[] {
   const services: { host: string; port: number | null }[] = [];
-  for (const raw of [config.pi?.gatewayUrl, config.pi?.mcpPublicUrl, config.egressControlUrl]) {
+  for (const raw of [config.pi?.gatewayUrl, config.pi?.mcpPublicUrl, config.egressControlUrl, config.memory?.url]) {
     if (!raw) continue;
     try {
       const url = new URL(raw);
