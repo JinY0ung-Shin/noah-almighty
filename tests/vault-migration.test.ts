@@ -2707,7 +2707,8 @@ describe("a pass or a commit that the hold stopped leaves copies in the clone: t
   };
 
   it("the deadlock: a pass running when the branch changed is stopped before its commit; the look still reaches the new branch", async () => {
-    const s = await onMain({ "wiki/a.md": "a, as the other branch has it\n" });
+    // `other` has its own text of `wiki/a.md`, and a note that only it holds.
+    const s = await onMain({ "wiki/a.md": "a, as the other branch has it\n", "wiki/only-other.md": "only on the other branch\n" });
     await s.vault.write("wiki/a.md", "a, edited through Noah\n");
     const before = s.tips();
     // The pass is reading the service when the owner switches the branch.
@@ -2730,9 +2731,11 @@ describe("a pass or a commit that the hold stopped leaves copies in the clone: t
     expect(s.fake.dump(s.ownerId)["wiki/a.md"]).toBe("a, edited through Noah\n");
 
     // The press, then the mirror: `other` becomes the service's vault, as after any confirmation.
-    expect(await confirmVaultMirrorHold(s.store, s.config, s.ownerId, { repo: s.repo, branch: "other" })).toEqual({ ok: true, removes: 0 });
+    expect(await confirmVaultMirrorHold(s.store, s.config, s.ownerId, { repo: s.repo, branch: "other" })).toEqual({ ok: true, removes: 1 });
+    expect(s.store.listVaultDeletes(s.ownerId)).toEqual(["wiki/only-other.md"]);
     expect(await syncVaultMirror(s.store, s.config, s.ownerId, { push: true })).toMatchObject({ kind: "synced" });
     expect(onBranch(s.repo, "other", "wiki/a.md")).toBe("a, edited through Noah\n");
+    expect(onBranch(s.repo, "other", "wiki/only-other.md")).toBeNull();
     expect(onBranch(s.repo, "other", "CLAUDE.md")).toBe(VAULT["CLAUDE.md"]);
     expect(onBranch(s.repo, "main", "wiki/a.md")).toBe("a, as main has it\n");
     expect(s.tips().main).toBe(before.main);
