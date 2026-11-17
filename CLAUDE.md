@@ -282,7 +282,8 @@ These are the invariants the project is built around. New work should reinforce 
   compose file are never edited). What `pi-setup` applies is re-applied on every `up`, so the repo stays
   its source. A pi bump moves the submodule to a PUSHED commit and re-runs the dind boot test (the `pi-bump` skill). Every upgrade
   re-runs `docker/pi/setup-host.sh` before `docker compose up` — Compose mounts Noah's key copies as secrets,
-  so a missing one (the memory service's is the newest) stops the stack. The memory service (home of moved
+  so a missing one (the memory service's is the newest) stops the stack; `scripts/deploy.sh` is that order in ONE
+  command (pull, setup-host, up, wait, checks) — a new upgrade step goes INTO it. The memory service (home of moved
   personal vaults) is on `noah-memory` (Noah and it only) and on pi's own internal `control` — never in a
   sandbox's reach; what keeps it Noah's is the key only Noah holds and the never-registered-in-pi rule; `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`
   are fixed by compose (the key from a FILE only; natively both unset = off, half-set stops the boot).

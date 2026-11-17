@@ -31,3 +31,6 @@ docker/tls/*
 # repo — see scripts/openxml-validator/README.md).
 scripts/openxml-validator/bin/
 scripts/openxml-validator/obj/
+
+# scripts/deploy.sh --backup (default BACKUP_DIR)
+/backups/
