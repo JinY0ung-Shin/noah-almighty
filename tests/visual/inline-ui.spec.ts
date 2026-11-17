@@ -593,3 +593,110 @@ test("a mermaid block next to inline UI is drawn too, in the answer's Markdown r
   expect(await leaks(page)).toEqual([]);
   expect(await cspViolations(page)).toEqual([]);
 });
+
+// A diagram wider than the bubble (lib/mermaidBlock.ts, lib/diagramViewer.ts):
+// the fit stops at a floor and the block scrolls, and 크게 보기 puts the same
+// drawing over the whole window to be zoomed and moved. Layout, the wheel and a
+// drag are what jsdom cannot show.
+const WIDE_FLOW = `flowchart LR
+  A["사용자 요청 접수"] --> B["인증 서버 확인"] --> C["권한 정책 조회"] --> D["작업 큐 등록"] --> E["샌드박스 실행"]
+  E --> F["결과 검증"] --> G["응답 스트리밍"] --> H["대화 기록 저장"] --> I["알림 발송"] --> J["완료"]`;
+const WIDE_ANSWER = `전체 흐름입니다.\n\n\`\`\`mermaid\n${WIDE_FLOW}\n\`\`\`\n\n끝.`;
+
+test("a wide mermaid block keeps a readable size, and 크게 보기 opens it to zoom and move", async ({ page }) => {
+  const { reports } = await mockApp(page, { storedText: WIDE_ANSWER });
+  await openConversation(page);
+  const block = page.locator(".message.assistant .bubble .code-block").first();
+  await expect(block).toHaveAttribute("data-diagram", "drawn", { timeout: 20_000 });
+
+  // In the answer: not shrunk below 60% of the drawn size — the block scrolls sideways instead.
+  const inline = await block.evaluate((el) => {
+    const host = el.querySelector<HTMLElement>(".code-diagram")!;
+    const svg = host.shadowRoot!.querySelector("svg")!;
+    const natural = svg.viewBox.baseVal.width;
+    return {
+      scale: svg.getBoundingClientRect().width / natural,
+      scrolls: host.scrollWidth > host.clientWidth + 1,
+      startsAtTheLeft: svg.getBoundingClientRect().left >= host.getBoundingClientRect().left,
+      blockInBubble: el.getBoundingClientRect().right <= el.closest(".bubble")!.getBoundingClientRect().right + 1,
+    };
+  });
+  expect(inline.scale).toBeGreaterThan(0.59);
+  expect(inline.scale).toBeLessThan(0.61);
+  expect(inline).toMatchObject({ scrolls: true, startsAtTheLeft: true, blockInBubble: true });
+
+  // 크게 보기: a dialog over the page with the same drawing, fitted to the window.
+  const zoom = block.getByRole("button", { name: "크게 보기" });
+  await zoom.click();
+  const viewer = page.getByRole("dialog", { name: "다이어그램 크게 보기" });
+  await expect(viewer).toBeVisible();
+  await expect(viewer.getByRole("button", { name: "닫기" })).toBeFocused();
+  const percent = viewer.locator(".diagram-viewer-scale");
+  const shown = () =>
+    viewer.evaluate((el) => {
+      const svg = el.querySelector(".diagram-viewer-svg")!.shadowRoot!.querySelector("svg")!;
+      const box = svg.getBoundingClientRect();
+      const stage = el.querySelector(".diagram-viewer-stage")!.getBoundingClientRect();
+      return { left: box.left, top: box.top, width: box.width, height: box.height, natural: svg.viewBox.baseVal.width, stage: { left: stage.left, top: stage.top, width: stage.width, height: stage.height }, text: svg.textContent ?? "" };
+    });
+  const fitted = await shown();
+  expect(fitted.text).toContain("샌드박스 실행");
+  // Whole and centred in the stage.
+  expect(fitted.left).toBeGreaterThan(fitted.stage.left);
+  expect(fitted.left + fitted.width).toBeLessThan(fitted.stage.left + fitted.stage.width);
+  expect(Math.abs(fitted.left - fitted.stage.left - (fitted.stage.left + fitted.stage.width - fitted.left - fitted.width))).toBeLessThan(2);
+  await expect(percent).toHaveText(`${Math.round((fitted.width / fitted.natural) * 100)}%`);
+
+  // The wheel zooms about the pointer: the point under it stays put.
+  const anchor = { x: fitted.left + fitted.width * 0.25, y: fitted.top + fitted.height / 2 };
+  await page.mouse.move(anchor.x, anchor.y);
+  await page.mouse.wheel(0, -400);
+  await expect.poll(async () => (await shown()).width).toBeGreaterThan(fitted.width * 1.5);
+  const zoomed = await shown();
+  expect(Math.abs(zoomed.left + zoomed.width * 0.25 - anchor.x)).toBeLessThan(2);
+  // Resized, not CSS-scaled: the drawing is laid out at the size it shows.
+  expect(await viewer.evaluate((el) => getComputedStyle(el.querySelector(".diagram-viewer-svg")!).transform)).toBe("none");
+
+  // A drag moves it.
+  await page.mouse.down();
+  await page.mouse.move(anchor.x + 120, anchor.y + 40, { steps: 4 });
+  await page.mouse.up();
+  const moved = await shown();
+  expect(Math.round(moved.left - zoomed.left)).toBe(120);
+  expect(Math.round(moved.top - zoomed.top)).toBe(40);
+  await expect(viewer).toBeVisible(); // a drag is not a press on the empty stage
+
+  // The buttons, and back to the fit.
+  const before = Number.parseInt((await percent.textContent()) ?? "", 10);
+  await viewer.getByRole("button", { name: "확대" }).click();
+  await expect(percent).toHaveText(`${Math.round(before * 1.25)}%`);
+  await viewer.getByRole("button", { name: "화면에 맞춤" }).click();
+  expect(Math.round((await shown()).width)).toBe(Math.round(fitted.width));
+
+  // Escape closes and hands focus back; a press on the empty stage closes too.
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await expect(zoom).toBeFocused();
+  await block.locator(".code-diagram").click({ position: { x: 40, y: 40 } }); // a press on the diagram opens it as well
+  await expect(viewer).toBeVisible();
+  const again = await shown();
+  await page.mouse.click(again.stage.left + 12, again.stage.top + again.stage.height - 12);
+  await expect(viewer).toHaveCount(0);
+
+  // A window too small to fit it readably: it opens at the floor, from its start; 화면에 맞춤 shows it whole.
+  await page.setViewportSize({ width: 700, height: 600 });
+  await zoom.click();
+  await expect(percent).toHaveText("60%");
+  const floored = await shown();
+  expect(Math.round(floored.left - floored.stage.left)).toBe(32);
+  expect(floored.left + floored.width).toBeGreaterThan(floored.stage.left + floored.stage.width);
+  await viewer.getByRole("button", { name: "화면에 맞춤" }).click();
+  const whole = await shown();
+  expect(whole.left + whole.width).toBeLessThan(whole.stage.left + whole.stage.width);
+  expect(whole.width / whole.natural).toBeLessThan(0.6);
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+
+  expect(reports).toEqual([]);
+  expect(await cspViolations(page)).toEqual([]);
+});

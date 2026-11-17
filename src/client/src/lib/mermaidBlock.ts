@@ -18,11 +18,18 @@
 // - Results are cached by (theme, source): one answer is mounted up to three
 //   times (live bubble → drain → stored message), and a cache hit draws in the
 //   same task, so the diagram does not blink back to code at each handover.
+// - The answer fits a diagram to its width, but never below `MIN_READABLE_SCALE`
+//   of the size mermaid drew it at: a wider one scrolls sideways in its block
+//   instead of shrinking until its labels cannot be read. 크게 보기 (the header
+//   button, or a press on the diagram) opens it over the whole window to be
+//   zoomed and moved (lib/diagramViewer.ts).
 // - A diagram ENTERS (lib/mermaidEntrance.ts) when it appears now: its fence was
 //   seen being written and then closed — once, whichever of the answer's mounts
 //   draws it first — or it sits under `[data-entrance="always"]` (the gallery).
 //   A diagram of an answer opened from the history, a theme flip and the 소스
 //   toggle are at rest.
+import { MIN_READABLE_SCALE, svgNaturalSize } from "./diagramSize";
+import type { DiagramViewer } from "./diagramViewer";
 import { planMermaidEntrance } from "./mermaidEntrance";
 import { renderMermaidSvg, MermaidLoadError } from "./mermaidRender";
 import { shadowSvg } from "./shadowSvg";
@@ -91,6 +98,11 @@ interface DiagramView {
   /** Guards an async render against a newer one. */
   token: number;
   toggle: HTMLButtonElement;
+  zoom: HTMLButtonElement;
+  /** The 크게 보기 view of this block, while it is open. */
+  viewer: DiagramViewer | null;
+  /** 크게 보기 was pressed and the viewer's chunk is on its way. */
+  opening: boolean;
   host: HTMLElement;
   note: HTMLElement;
   noteText: HTMLElement;
@@ -143,6 +155,7 @@ function setPhase(wrapper: HTMLElement, view: DiagramView, phase: Phase): void {
   const drawn = phase === "drawn";
   view.host.hidden = !drawn;
   view.toggle.hidden = !drawn;
+  view.zoom.hidden = !drawn;
   view.note.hidden = phase !== "failed";
   if (!drawn) showSource(wrapper, view, false);
 }
@@ -162,6 +175,14 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
   toggle.title = "다이어그램 대신 Mermaid 소스 보기";
   toggle.setAttribute("aria-pressed", "false");
   toggle.hidden = true;
+
+  const zoom = doc.createElement("button");
+  zoom.className = "code-zoom";
+  zoom.type = "button";
+  zoom.textContent = "크게 보기";
+  zoom.title = "다이어그램을 화면 가득 띄워 확대·이동하며 보기";
+  zoom.setAttribute("aria-haspopup", "dialog");
+  zoom.hidden = true;
 
   const host = doc.createElement("div");
   host.className = "code-diagram";
@@ -192,6 +213,9 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
     stop: () => {},
     token: 0,
     toggle,
+    zoom,
+    viewer: null,
+    opening: false,
     host,
     note,
     noteText,
@@ -207,19 +231,64 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
     event.stopPropagation();
     draw(wrapper, view);
   });
+  zoom.addEventListener("click", (event) => {
+    event.stopPropagation();
+    enlarge(view);
+  });
+  // A press on the diagram itself enlarges it too (the button is the keyboard's way in) —
+  // not one that ends a text selection, and not one on the block's own scrollbar.
+  host.addEventListener("click", (event) => {
+    if (event.button !== 0 || !host.ownerDocument.getSelection()?.isCollapsed) return;
+    if (event.clientY - host.getBoundingClientRect().top > host.clientHeight) return;
+    enlarge(view);
+  });
 
   const actions = wrapper.querySelector(":scope > .code-head > .code-actions");
-  if (actions) actions.insertBefore(toggle, actions.firstChild);
+  if (actions) {
+    actions.insertBefore(toggle, actions.firstChild);
+    actions.insertBefore(zoom, toggle);
+  }
   wrapper.insertBefore(host, pre);
   wrapper.insertBefore(note, pre);
   wrapper.dataset.diagram = "code";
   return view;
 }
 
+/** Open 크게 보기 on what the block shows. The viewer is a lazy chunk: it loads on the first press. */
+function enlarge(view: DiagramView): void {
+  if (view.phase !== "drawn" || view.viewer || view.opening) return;
+  view.opening = true;
+  void import("./diagramViewer").then(
+    ({ openDiagramViewer }) => {
+      view.opening = false;
+      if (view.phase !== "drawn" || !view.host.isConnected) return; // redrawn as code, or gone, meanwhile
+      const hit = cache.get(cacheKey(view.source, view.dark));
+      const markup = hit && "svg" in hit ? hit.svg : (view.host.shadowRoot?.querySelector("svg")?.outerHTML ?? "");
+      if (!markup) return;
+      view.viewer = openDiagramViewer(markup, () => {
+        view.viewer = null;
+      });
+    },
+    () => {
+      // The chunk did not load: the diagram stays as it is, and the next press tries again.
+      view.opening = false;
+    },
+  );
+}
+
+/** The fit-to-width of the answer stops at `MIN_READABLE_SCALE`; `.code-diagram` scrolls what is wider. */
+function holdReadable(host: HTMLElement): void {
+  const svg = host.shadowRoot?.querySelector<SVGSVGElement>("svg");
+  const size = svgNaturalSize(svg);
+  if (svg?.style && size) svg.style.minWidth = `${Math.round(size.width * MIN_READABLE_SCALE)}px`;
+}
+
 function dismantle(wrapper: HTMLElement, view: DiagramView): void {
   view.token += 1;
   view.stop();
+  view.viewer?.close();
   view.toggle.remove();
+  view.zoom.remove();
   view.host.remove();
   view.note.remove();
   wrapper.classList.remove("code-source-on");
@@ -233,6 +302,9 @@ function apply(wrapper: HTMLElement, view: DiagramView, outcome: Outcome): void 
   if ("svg" in outcome) {
     if (view.shadow) view.shadow.update(outcome.svg);
     else view.shadow = shadowSvg(view.host, outcome.svg);
+    holdReadable(view.host);
+    // An open 크게 보기 follows a redraw (a theme flip bakes new colours in).
+    view.viewer?.update(outcome.svg);
     setPhase(wrapper, view, "drawn");
     // In the task that wrote the drawing: its parts are held at their start before a frame shows them.
     const entrance = view.entered ? null : entranceOf(wrapper, view.source);

@@ -834,7 +834,24 @@
   bubble → drain → stored message) and a hit draws in the same task; a failed parse is cached too. Drawn, the
   block takes the page's surface (mermaid draws for the app's light/dark background, not the fixed dark code
   surface — the `--code-*` set is re-pointed for that state only); 소스 on, or a failure, is an ordinary code
-  block. One renderer serves this and the `mermaid` canvas (`lib/mermaidRender.ts`: `securityLevel: strict`,
+  block. **A drawn diagram stays readable (2026-11-17, the user's picks: a fullscreen viewer + a floor under
+  the fit).** The answer still fits a diagram to its width, but never below `MIN_READABLE_SCALE` (0.6) of the
+  size mermaid drew it at (`viewBox`; labels are 16px there): `holdReadable` sets that as the svg's
+  `min-width` and `.code-diagram` scrolls what is wider — before, a ten-box `flowchart LR` shrank until its
+  labels could not be read and nothing could enlarge it. 크게 보기 — a `.code-zoom` header button (the
+  keyboard's way in; hidden with 소스 on) or a press on the diagram (not one ending a text selection or on the
+  block's scrollbar) — opens `lib/diagramViewer.ts` (a lazy chunk, loaded on the first press — the block needs only
+  `lib/diagramSize.ts` of it; it had pushed the first chunk past the build's size warning): imperative DOM
+  under `<body>` like the block itself, a
+  root dialog through `lib/modalBehavior.ts` wearing the canvas stage's `.canvas-fs` bar and glass. The
+  drawing is RESIZED, never CSS-scaled (the host gets `natural × scale` px, so text stays sharp; 100% = the
+  drawn size); the wheel zooms about the pointer, a drag moves it, `+`/`-`/`0`/arrows work from the keyboard,
+  Escape or a press on the empty stage closes. It opens fitted to the window (a small diagram up to 2×) but
+  not below the same floor — then from the drawing's start, with 화면에 맞춤 for the whole. It takes the
+  cached sanitized svg, outlives the block that opened it (an answer is remounted when it stops streaming),
+  follows a redraw while the block still can hand it one (a theme flip), and closes on a route change. It
+  never reaches the avatar beyond the two manual lines that name the button. One renderer serves this and the
+  `mermaid` canvas (`lib/mermaidRender.ts`: `securityLevel: strict`,
   SVG-text labels, DOMPurify, `suppressErrorRendering` — without it a failed parse leaves mermaid's "Syntax
   error" picture under `<body>`); a theme flip redraws every diagram through ONE store subscription.
   **Nothing checks the source before it is on screen** (the canvas's server-side `mermaidCheck` has no tool

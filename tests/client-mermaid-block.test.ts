@@ -15,6 +15,7 @@ vi.mock("../src/client/src/lib/mermaidRender.js", () => {
 import { MAX_REPORT_ERROR_CHARS } from "../src/client/src/lib/canvasReport.js";
 import { enhanceMarkdown, markdownBlocks } from "../src/client/src/lib/dom.js";
 import { renderMarkdown } from "../src/client/src/lib/format.js";
+import { MIN_READABLE_SCALE } from "../src/client/src/lib/diagramSize.js";
 import { DIAGRAM_ERROR_EVENT, diagramProblems, resetMermaidBlocks } from "../src/client/src/lib/mermaidBlock.js";
 import { MermaidLoadError } from "../src/client/src/lib/mermaidRender.js";
 import { createStreamMarkdown, renderMarkdownBlocks } from "../src/client/src/lib/streamMarkdown.js";
@@ -87,7 +88,7 @@ describe("a ```mermaid block of a whole render (enhanceMarkdown)", () => {
     expect(toggle.type).toBe("button");
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     const buttons = Array.from(wrapper.querySelectorAll(".code-actions > button")).map((button) => button.className);
-    expect(buttons).toEqual(["code-view", "code-wrap", "code-copy"]);
+    expect(buttons).toEqual(["code-zoom", "code-view", "code-wrap", "code-copy"]);
 
     toggle.click();
     expect(wrapper.classList.contains("code-source-on")).toBe(true);
@@ -144,6 +145,140 @@ describe("a ```mermaid block of a whole render (enhanceMarkdown)", () => {
     await settle();
     expect(render).toHaveBeenLastCalledWith(DIAGRAM, true);
     expect(drawing(wrapper)).toContain('data-theme="dark"');
+  });
+});
+
+describe("a drawn diagram can be read: a floor under the fit, and 크게 보기 (lib/diagramViewer.ts)", () => {
+  const WIDE = (dark: boolean): string => `<svg viewBox="0 0 1000 400" width="100%" style="max-width: 1000px;" data-theme="${dark ? "dark" : "light"}"><text>wide</text></svg>`;
+  const viewer = (): HTMLElement | null => document.querySelector<HTMLElement>("body > .diagram-viewer");
+  const viewerSvg = (): SVGSVGElement | null => viewer()?.querySelector(".diagram-viewer-svg")?.shadowRoot?.querySelector("svg") ?? null;
+
+  /** Press something that opens the viewer, and wait for its lazy chunk. */
+  async function open(target: HTMLElement): Promise<HTMLElement> {
+    target.click();
+    return vi.waitFor(() => {
+      const dialog = viewer();
+      if (!dialog) throw new Error("the viewer did not open");
+      return dialog;
+    });
+  }
+
+  async function drawn(): Promise<HTMLElement> {
+    const node = mount(ANSWER);
+    enhanceMarkdown(node, ANSWER);
+    await settle();
+    return node.querySelector<HTMLElement>(".code-block")!;
+  }
+
+  it("is not shrunk below MIN_READABLE_SCALE of the size it was drawn at", async () => {
+    render.mockImplementation(async (_source, dark) => WIDE(dark));
+    const wrapper = await drawn();
+    const svg = wrapper.querySelector(".code-diagram")!.shadowRoot!.querySelector("svg")!;
+    expect(MIN_READABLE_SCALE).toBe(0.6);
+    expect(svg.style.minWidth).toBe("600px");
+  });
+
+  it("leaves a drawing that states no size alone", async () => {
+    const wrapper = await drawn();
+    expect(wrapper.querySelector(".code-diagram")!.shadowRoot!.querySelector("svg")!.style.minWidth).toBe("");
+  });
+
+  it("has a 크게 보기 button, hidden until there is a diagram, that opens the drawing in a dialog over the page", async () => {
+    render.mockImplementation(async (_source, dark) => WIDE(dark));
+    const node = mount(ANSWER);
+    enhanceMarkdown(node, ANSWER);
+    const wrapper = node.querySelector<HTMLElement>(".code-block")!;
+    const zoom = wrapper.querySelector<HTMLButtonElement>("button.code-zoom")!;
+    expect(zoom.hidden).toBe(true);
+    await settle();
+    expect(zoom.hidden).toBe(false);
+    expect(zoom.textContent).toBe("크게 보기");
+    expect(viewer()).toBeNull();
+
+    zoom.focus();
+    const dialog = await open(zoom);
+    expect(dialog.getAttribute("role")).toBe("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    // The same drawing, in its own shadow root, freed from the size mermaid asked for.
+    expect(viewerSvg()!.getAttribute("viewBox")).toBe("0 0 1000 400");
+    expect(viewerSvg()!.style.maxWidth).toBe("none");
+    expect(dialog.querySelector(".diagram-viewer-svg svg")).toBeNull();
+    // A root dialog: the page behind is inert and focus is inside.
+    expect(node.inert).toBe(true);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    // The block is as it was; a second press does not stack another viewer.
+    expect(wrapper.dataset.diagram).toBe("drawn");
+    expect(render).toHaveBeenCalledTimes(1);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(viewer()).toBeNull();
+    expect(node.inert).toBe(false);
+    expect(document.activeElement).toBe(zoom);
+    // Closed means closed: it opens again.
+    (await open(zoom)).querySelector<HTMLButtonElement>("[data-modal-autofocus]")!.click();
+    expect(viewer()).toBeNull();
+  });
+
+  it("opens on a press on the diagram itself — and never without a diagram", async () => {
+    const wrapper = await drawn();
+    const host = wrapper.querySelector<HTMLElement>(".code-diagram")!;
+    await open(host);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+
+    render.mockRejectedValue(new Error("Parse error on line 2"));
+    resetMermaidBlocks();
+    const broken = mount(ANSWER.replace("홈", "집"));
+    enhanceMarkdown(broken, "broken");
+    await settle();
+    const failed = broken.querySelector<HTMLElement>(".code-block")!;
+    expect(failed.dataset.diagram).toBe("failed");
+    expect(failed.querySelector<HTMLButtonElement>("button.code-zoom")!.hidden).toBe(true);
+    failed.querySelector<HTMLButtonElement>("button.code-zoom")!.click();
+    await settle();
+    expect(viewer()).toBeNull();
+  });
+
+  it("zooms in steps from 100% (the drawn size), and 화면에 맞춤 goes back", async () => {
+    render.mockImplementation(async (_source, dark) => WIDE(dark));
+    const wrapper = await drawn();
+    const dialog = await open(wrapper.querySelector<HTMLButtonElement>("button.code-zoom")!);
+    const percent = dialog.querySelector(".diagram-viewer-scale")!;
+    const host = dialog.querySelector<HTMLElement>(".diagram-viewer-svg")!;
+    const press = (label: string): void => dialog.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click();
+    // jsdom lays nothing out, so the fit is the drawn size.
+    expect(percent.textContent).toBe("100%");
+    expect(host.style.width).toBe("1000px");
+    press("확대");
+    expect(percent.textContent).toBe("125%");
+    // Resized, not CSS-scaled: the vector is laid out again at the new size.
+    expect(host.style.width).toBe("1250px");
+    expect(host.style.height).toBe("500px");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "-" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "-" }));
+    expect(percent.textContent).toBe("80%");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "0" }));
+    expect(percent.textContent).toBe("100%");
+    // The browser's own zoom keys are left alone.
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "+", ctrlKey: true }));
+    expect(percent.textContent).toBe("100%");
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  });
+
+  it("follows a redraw while it is open (a theme flip), and outlives the block that opened it", async () => {
+    render.mockImplementation(async (_source, dark) => WIDE(dark));
+    const wrapper = await drawn();
+    await open(wrapper.querySelector<HTMLButtonElement>("button.code-zoom")!);
+    expect(viewerSvg()!.getAttribute("data-theme")).toBe("light");
+    setThemePref("dark");
+    await settle();
+    expect(viewerSvg()!.getAttribute("data-theme")).toBe("dark");
+    expect(viewerSvg()!.style.maxWidth).toBe("none");
+
+    // The answer is remounted when it stops streaming: the viewer stays.
+    wrapper.remove();
+    expect(viewer()).not.toBeNull();
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+    expect(viewer()).toBeNull();
   });
 });
 

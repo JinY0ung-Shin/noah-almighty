@@ -973,6 +973,7 @@ details[open] > summary > .disclosure-chevron,
 }
 .code-block .code-wrap,
 .code-block .code-view,
+.code-block .code-zoom,
 .code-block .code-copy {
   height: 28px;
   display: grid;
@@ -985,7 +986,8 @@ details[open] > summary > .disclosure-chevron,
   transition: background 0.15s var(--ease-out), color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
 }
 .code-block .code-wrap,
-.code-block .code-view {
+.code-block .code-view,
+.code-block .code-zoom {
   padding: 0 var(--s-2);
   white-space: nowrap;
 }
@@ -994,12 +996,14 @@ details[open] > summary > .disclosure-chevron,
 }
 .code-block .code-wrap:hover,
 .code-block .code-view:hover,
+.code-block .code-zoom:hover,
 .code-block .code-copy:hover {
   background: var(--code-overlay-strong);
   color: var(--code-fg);
 }
 .code-block .code-wrap:focus-visible,
 .code-block .code-view:focus-visible,
+.code-block .code-zoom:focus-visible,
 .code-block .code-copy:focus-visible {
   outline: 2px solid var(--code-fg);
   outline-offset: 1px;
@@ -1043,13 +1047,65 @@ details[open] > summary > .disclosure-chevron,
 .md .code-block[data-diagram="drawn"]:not(.code-source-on) > pre,
 .code-block[data-diagram="drawn"]:not(.code-source-on) > pre,
 .code-block[data-diagram="drawn"]:not(.code-source-on) .code-wrap,
+.code-block.code-source-on .code-zoom,
 .code-block.code-source-on > .code-diagram {
   display: none;
 }
+/* Fitted to the block's width down to a floor (MIN_READABLE_SCALE, set on the svg);
+   a wider diagram scrolls here. A press on it opens 크게 보기. */
 .code-diagram {
   padding: var(--s-2) var(--s-4) var(--s-4);
   text-align: center;
   overflow-x: auto;
+  cursor: zoom-in;
+}
+/* 크게 보기 (lib/diagramViewer.ts): the diagram over the whole window, on the
+   bar and glass of the canvas's fullscreen stage (.canvas-fs). The stage is the
+   drag surface; the card is the page surface mermaid drew the diagram for. */
+.diagram-viewer-hint {
+  margin-left: var(--s-3);
+  color: var(--muted);
+  font-size: var(--t-xs);
+  font-weight: 400;
+}
+.diagram-viewer-scale {
+  min-width: 3.2em;
+  text-align: center;
+  font-size: var(--t-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-soft);
+}
+.diagram-viewer .canvas-tool-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.diagram-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.diagram-viewer-stage.is-dragging {
+  cursor: grabbing;
+}
+.diagram-viewer-card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* The drawing's own box is placed by the viewer; the padding hangs outside it. */
+  margin: calc(var(--s-4) * -1);
+  padding: var(--s-4);
+  border-radius: var(--r-lg);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--line), var(--shadow-md);
+}
+@media (max-width: 640px) {
+  .diagram-viewer-hint {
+    display: none;
+  }
 }
 .code-diagram-note {
   display: flex;
