@@ -192,6 +192,29 @@ test("an html canvas renders as its own page: styled, contained and fitted", asy
   await page.locator(".canvas-fs iframe.canvas-html-frame").hover();
   await page.mouse.wheel(0, -100);
   await expect(page.locator(".canvas-fs-zoom")).toContainText("115%");
+
+  // A zoom that reflows: the frame still fills the stage exactly (nothing is pushed
+  // out of reach), and the page inside is laid out in a viewport 1/zoom as wide.
+  await page.getByRole("button", { name: "확대" }).click();
+  await page.getByRole("button", { name: "확대" }).click();
+  await expect(page.locator(".canvas-fs-zoom")).toContainText("155%");
+  const framed = await page.evaluate(() => {
+    const stage = document.querySelector<HTMLElement>(".canvas-fs-stage")!;
+    const frame = document.querySelector<HTMLIFrameElement>(".canvas-fs iframe.canvas-html-frame")!;
+    const style = getComputedStyle(stage);
+    const inner = stage.getBoundingClientRect();
+    const box = frame.getBoundingClientRect();
+    return {
+      left: Math.round(box.left - inner.left - Number.parseFloat(style.paddingLeft)),
+      slack: Math.round(inner.right - Number.parseFloat(style.paddingRight) - box.right),
+      overflowX: stage.scrollWidth - stage.clientWidth,
+      viewport: frame.clientWidth / box.width,
+    };
+  });
+  expect(framed.left).toBe(0);
+  expect(Math.abs(framed.slack)).toBeLessThanOrEqual(1);
+  expect(framed.overflowX).toBeLessThanOrEqual(1);
+  expect(framed.viewport).toBeCloseTo(1 / 1.55, 2);
 });
 
 test("an svg canvas draws in its own shadow root: styled, contained, sized and exportable", async ({ page }) => {
@@ -211,7 +234,7 @@ test("an svg canvas draws in its own shadow root: styled, contained, sized and e
   await expect(panel).toBeVisible();
   expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe("rgb(9, 9, 9)");
 
-  // 2. The panel still fits the drawing to its width; fullscreen keeps its natural size.
+  // 2. The panel still fits the drawing to its width.
   const width = (selector: string) =>
     page.locator(selector).evaluate((el) => Math.round(el.getBoundingClientRect().width));
   const hostWidth = await panel.locator(".canvas-svg").evaluate((el) => el.clientWidth);
@@ -221,9 +244,39 @@ test("an svg canvas draws in its own shadow root: styled, contained, sized and e
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "SVG" }).click()]);
   expect(await readFile(await download.path(), "utf8")).toContain(".shape { fill: rgb(1, 2, 3); }");
 
-  await page.getByRole("button", { name: "전체화면" }).click();
-  expect(await width(".canvas-fs .canvas-svg svg")).toBe(2000);
+  // Fullscreen of a drawing is 크게 보기 (lib/zoomViewer.ts): fitted to the window —
+  // whole — with its own <style> still on it. (It used to open at its natural size on
+  // a stage whose zoom scaled it about the top centre: zoomed in, the left part of a
+  // wide drawing could not be scrolled to.)
+  const opener = page.getByRole("button", { name: "전체화면" });
+  await opener.click();
+  const viewer = page.getByRole("dialog", { name: "캔버스 전체화면" });
+  await expect(viewer).toBeVisible();
+  await expect(viewer.locator(".zoom-viewer-name")).toHaveText("도형");
+  await expect(viewer.locator(".zoom-viewer-svg .shape")).toHaveCSS("fill", "rgb(1, 2, 3)");
+  const shown = () =>
+    viewer.evaluate((el) => {
+      const svg = el.querySelector(".zoom-viewer-svg")!.shadowRoot!.querySelector("svg")!.getBoundingClientRect();
+      const stage = el.querySelector(".zoom-viewer-stage")!.getBoundingClientRect();
+      return { left: svg.left, right: svg.right, top: svg.top, width: svg.width, stageLeft: stage.left, stageRight: stage.right, stageTop: stage.top };
+    });
+  const fitted = await shown();
+  expect(fitted.left).toBeGreaterThan(fitted.stageLeft);
+  expect(fitted.right).toBeLessThan(fitted.stageRight);
+  expect(Math.round(fitted.width)).toBe(Math.round(fitted.stageRight - fitted.stageLeft - 64));
+  // Zoomed past the window, every part is still in reach: a drag brings the left edge in.
+  for (let i = 0; i < 4; i += 1) await viewer.getByRole("button", { name: "확대" }).click();
+  const zoomed = await shown();
+  expect(zoomed.left).toBeLessThan(zoomed.stageLeft);
+  expect(zoomed.right).toBeGreaterThan(zoomed.stageRight);
+  await page.mouse.move(640, zoomed.top + 20);
+  await page.mouse.down();
+  await page.mouse.move(640 + (zoomed.stageLeft + 40 - zoomed.left), zoomed.top + 20, { steps: 5 });
+  await page.mouse.up();
+  expect(Math.round((await shown()).left - zoomed.stageLeft)).toBe(40);
   await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await expect(opener).toBeFocused();
 
   // 4. mermaid's id-scoped sheet still styles its nodes inside the shadow root.
   await page.getByRole("tab", { name: "흐름" }).click();
@@ -254,4 +307,46 @@ test("every labeled mermaid diagram keeps its labels through the sanitize", asyn
     await page.getByRole("tab", { name: title, exact: true }).click();
     await expect(page.locator(".canvas-panel .canvas-svg svg text", { hasText: label }).first()).toBeVisible();
   }
+});
+
+// Fullscreen of a TEXT canvas zooms by a reflow (CanvasTab): the text grows and
+// wraps again inside the stage. A CSS scale about the top centre used to push
+// the start of every line out of reach.
+test("a markdown canvas in fullscreen zooms its text without losing the left edge", async ({ page }) => {
+  const LONG = `# 정리\n\n${"긴 문장이 화면 너비를 넘어 이어집니다. ".repeat(40)}`;
+  await mockApp(page, [{ id: "cv-doc", title: "문서", content: LONG, contentType: "markdown" }]);
+  await page.goto(`${process.env.REPRO_BASE_URL || ""}/`);
+  await page.getByRole("button", { name: "대화 열기: 목업 대화" }).click();
+  await page.getByRole("button", { name: "전체화면" }).click();
+  const stage = page.locator(".canvas-fs .canvas-fs-stage");
+  await expect(stage.locator("h1")).toHaveText("정리");
+  const measure = () =>
+    stage.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      const content = el.querySelector(".canvas-fs-content")!.getBoundingClientRect();
+      const heading = el.querySelector("h1")!.getBoundingClientRect();
+      const text = el.querySelector("p")!.getBoundingClientRect();
+      return {
+        left: Math.round(content.left - box.left - Number.parseFloat(style.paddingLeft)),
+        slack: Math.round(box.right - Number.parseFloat(style.paddingRight) - content.right),
+        overflowX: el.scrollWidth - el.clientWidth,
+        headingHeight: heading.height,
+        textHeight: text.height,
+      };
+    });
+  const at100 = await measure();
+  expect(at100).toMatchObject({ left: 0 });
+  for (let i = 0; i < 3; i += 1) await page.getByRole("button", { name: "확대" }).click();
+  await expect(page.locator(".canvas-fs-zoom")).toContainText("160%");
+  const at160 = await measure();
+  // Still exactly the stage's width, from its left edge — nothing to scroll sideways to, nothing cut.
+  expect(at160.left).toBe(0);
+  expect(Math.abs(at160.slack)).toBeLessThanOrEqual(1);
+  expect(at160.overflowX).toBeLessThanOrEqual(1);
+  // The text is larger, and wrapped again into more lines.
+  expect(at160.headingHeight / at100.headingHeight).toBeCloseTo(1.6, 1);
+  expect(at160.textHeight).toBeGreaterThan(at100.textHeight * 2);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".canvas-fs")).toHaveCount(0);
 });

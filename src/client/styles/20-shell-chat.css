@@ -1157,7 +1157,10 @@ body.col-resizing .canvas-html-frame {
   margin: 0;
   padding-left: 1.1em;
 }
-/* Fullscreen overlay: re-renders the same sanitized content, CSS-zoomed. */
+/* Fullscreen overlay of a text or page canvas: the same sanitized content, zoomed
+   by a reflow (CanvasTab sets the box 1/zoom as wide and scales it back). A
+   drawing (svg/mermaid) opens in 크게 보기 instead (lib/zoomViewer.ts), on this
+   overlay's bar and glass. */
 .canvas-fs {
   position: fixed;
   inset: 0;
@@ -1197,15 +1200,13 @@ body.col-resizing .canvas-html-frame {
   overflow: auto;
   display: flex;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   padding: var(--s-5);
   z-index: 1;
 }
 .canvas-fs-content {
-  transform-origin: top center;
-}
-.canvas-fs-content svg {
-  max-width: none;
+  flex: none;
+  transform-origin: top left;
 }
 /* Fullscreen gives an `html` page the whole stage as its viewport. */
 .canvas-fs-content.is-html {

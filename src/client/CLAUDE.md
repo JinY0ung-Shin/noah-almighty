@@ -37,6 +37,10 @@ React gotchas, mirrored validators, Playwright recipe) live in
   `prefersReducedMotion()`; no native smooth scroll (`scrollToStart`). Details in `client.md`.
 - **Selective motion is gated INSIDE the transition/animation function**, on non-reactive state read when it
   starts. Details in `client.md`.
+- **What is fitted into a column must still be readable: a drawing or picture that is shrunk to fit opens
+  in 크게 보기.** ONE viewer (`lib/zoomViewer.ts`), always through `lib/zoomOpener.ts`; it RESIZES, never
+  CSS-scales (a scale about the centre pushes the start out of the scroll range). A new surface that fits a
+  drawing, page or image gets the same way in, with a real button for the keyboard. Details in `client.md`.
 - **A status indicator that only STATES a problem is a dead end — make it the way to the fix.** Actionable
   states are buttons; each state carries its own TEXT, not just a colour; a gated button makes its
   prerequisite its first step. Cross-view deep links ride a one-shot flag in `lib/state.ts`, not a router

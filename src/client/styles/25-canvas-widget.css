@@ -424,9 +424,12 @@
 }
 
 /* A drawing bound to state (components/widget/WidgetSvg.tsx). It lives in
-   its own shadow root; the host only places it and hands down the text colour
-   (the drawing's default fill) and the app's font. */
+   its own shadow root (.wg-svg-drawing); this box only places it and hands down
+   the text colour (the drawing's default fill) and the app's font. A drawing
+   large enough to be worth it opens in 크게 보기 on a press, or from the corner
+   button that shows on hover and on keyboard focus. */
 .wg-svg {
+  position: relative;
   align-self: flex-start;
   max-width: 100%;
   /* The library already keeps a drawing under this height (MAX_SVG_HEIGHT_PX);
@@ -439,6 +442,40 @@
 }
 .wg-row > .wg-svg {
   flex: 0 1 auto;
+}
+.wg-svg.is-zoomable > .wg-svg-drawing {
+  cursor: zoom-in;
+}
+.wg-svg-zoom {
+  position: absolute;
+  top: var(--s-1);
+  right: var(--s-1);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--text-soft);
+  font-size: var(--t-sm);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease-out);
+}
+.wg-svg:hover > .wg-svg-zoom,
+.wg-svg-zoom:focus-visible {
+  opacity: 1;
+}
+.wg-svg-zoom:hover {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+.wg-svg-zoom:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Pager: its <page>s one at a time under a compact "‹ n / N ›" header. */

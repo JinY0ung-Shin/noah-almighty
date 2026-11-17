@@ -1,0 +1,25 @@
+/* ZoomableImage's own styles, scoped to .cmp-zoomable-image: a button that is
+   nothing but its picture (the surface's own rules still size the <img>). */
+.cmp-zoomable-image {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  font: inherit;
+  /* The <img> inside is inline by default: no gap for a text baseline under it. */
+  line-height: 0;
+  cursor: zoom-in;
+}
+/* The app's press feedback scales a button; a page-wide picture should not twitch. */
+.cmp-zoomable-image:active:not(:disabled) {
+  transform: none;
+}
+.cmp-zoomable-image:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+:is(.cmp-zoomable-image, .cmp-zoomable-image *) > img {
+  display: block;
+}

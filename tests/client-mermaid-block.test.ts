@@ -148,19 +148,22 @@ describe("a ```mermaid block of a whole render (enhanceMarkdown)", () => {
   });
 });
 
-describe("a drawn diagram can be read: a floor under the fit, and 크게 보기 (lib/diagramViewer.ts)", () => {
+describe("a drawn diagram can be read: a floor under the fit, and 크게 보기 (lib/zoomViewer.ts)", () => {
   const WIDE = (dark: boolean): string => `<svg viewBox="0 0 1000 400" width="100%" style="max-width: 1000px;" data-theme="${dark ? "dark" : "light"}"><text>wide</text></svg>`;
-  const viewer = (): HTMLElement | null => document.querySelector<HTMLElement>("body > .diagram-viewer");
-  const viewerSvg = (): SVGSVGElement | null => viewer()?.querySelector(".diagram-viewer-svg")?.shadowRoot?.querySelector("svg") ?? null;
+  const viewer = (): HTMLElement | null => document.querySelector<HTMLElement>("body > .zoom-viewer");
+  const viewerSvg = (): SVGSVGElement | null => viewer()?.querySelector(".zoom-viewer-svg")?.shadowRoot?.querySelector("svg") ?? null;
 
-  /** Press something that opens the viewer, and wait for its lazy chunk. */
+  /** Press something that opens the viewer, and wait for its lazy chunk (longer than waitFor's 1 s when the whole suite runs). */
   async function open(target: HTMLElement): Promise<HTMLElement> {
     target.click();
-    return vi.waitFor(() => {
-      const dialog = viewer();
-      if (!dialog) throw new Error("the viewer did not open");
-      return dialog;
-    });
+    return vi.waitFor(
+      () => {
+        const dialog = viewer();
+        if (!dialog) throw new Error("the viewer did not open");
+        return dialog;
+      },
+      { timeout: 10_000 },
+    );
   }
 
   async function drawn(): Promise<HTMLElement> {
@@ -202,7 +205,7 @@ describe("a drawn diagram can be read: a floor under the fit, and 크게 보기 
     // The same drawing, in its own shadow root, freed from the size mermaid asked for.
     expect(viewerSvg()!.getAttribute("viewBox")).toBe("0 0 1000 400");
     expect(viewerSvg()!.style.maxWidth).toBe("none");
-    expect(dialog.querySelector(".diagram-viewer-svg svg")).toBeNull();
+    expect(dialog.querySelector(".zoom-viewer-svg svg")).toBeNull();
     // A root dialog: the page behind is inert and focus is inside.
     expect(node.inert).toBe(true);
     expect(dialog.contains(document.activeElement)).toBe(true);
@@ -242,8 +245,8 @@ describe("a drawn diagram can be read: a floor under the fit, and 크게 보기 
     render.mockImplementation(async (_source, dark) => WIDE(dark));
     const wrapper = await drawn();
     const dialog = await open(wrapper.querySelector<HTMLButtonElement>("button.code-zoom")!);
-    const percent = dialog.querySelector(".diagram-viewer-scale")!;
-    const host = dialog.querySelector<HTMLElement>(".diagram-viewer-svg")!;
+    const percent = dialog.querySelector(".zoom-viewer-scale")!;
+    const host = dialog.querySelector<HTMLElement>(".zoom-viewer-content")!;
     const press = (label: string): void => dialog.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!.click();
     // jsdom lays nothing out, so the fit is the drawn size.
     expect(percent.textContent).toBe("100%");

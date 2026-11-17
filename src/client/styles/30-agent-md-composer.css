@@ -1059,27 +1059,39 @@ details[open] > summary > .disclosure-chevron,
   overflow-x: auto;
   cursor: zoom-in;
 }
-/* 크게 보기 (lib/diagramViewer.ts): the diagram over the whole window, on the
-   bar and glass of the canvas's fullscreen stage (.canvas-fs). The stage is the
-   drag surface; the card is the page surface mermaid drew the diagram for. */
-.diagram-viewer-hint {
+/* 크게 보기 (lib/zoomViewer.ts): a drawing or a picture over the whole window, on
+   the bar and glass of the canvas's fullscreen stage (.canvas-fs). The stage is
+   the drag surface; the card is the page surface the drawing was made for. */
+.zoom-viewer-title {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+.zoom-viewer-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zoom-viewer-hint {
+  flex: none;
   margin-left: var(--s-3);
   color: var(--muted);
   font-size: var(--t-xs);
   font-weight: 400;
 }
-.diagram-viewer-scale {
+.zoom-viewer-scale {
   min-width: 3.2em;
   text-align: center;
   font-size: var(--t-xs);
   font-variant-numeric: tabular-nums;
   color: var(--text-soft);
 }
-.diagram-viewer .canvas-tool-btn:disabled {
+.zoom-viewer .canvas-tool-btn:disabled {
   opacity: 0.45;
   cursor: default;
 }
-.diagram-viewer-stage {
+.zoom-viewer-stage {
   position: relative;
   flex: 1;
   min-height: 0;
@@ -1088,10 +1100,10 @@ details[open] > summary > .disclosure-chevron,
   touch-action: none;
   user-select: none;
 }
-.diagram-viewer-stage.is-dragging {
+.zoom-viewer-stage.is-dragging {
   cursor: grabbing;
 }
-.diagram-viewer-card {
+.zoom-viewer-card {
   position: absolute;
   top: 0;
   left: 0;
@@ -1100,10 +1112,22 @@ details[open] > summary > .disclosure-chevron,
   padding: var(--s-4);
   border-radius: var(--r-lg);
   background: var(--bg-elevated);
+  /* An svg that draws in currentColor (an inline <svg>) takes the text colour, as in the answer. */
+  color: var(--text);
   box-shadow: inset 0 0 0 1px var(--line), var(--shadow-md);
 }
+.zoom-viewer-svg,
+.zoom-viewer-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.zoom-viewer-image {
+  /* A page or a slide is drawn for a white sheet, in either theme. */
+  background: var(--diagram-bg);
+}
 @media (max-width: 640px) {
-  .diagram-viewer-hint {
+  .zoom-viewer-hint {
     display: none;
   }
 }

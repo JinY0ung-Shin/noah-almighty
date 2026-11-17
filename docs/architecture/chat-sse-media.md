@@ -605,13 +605,21 @@
   viewport a viewport-filling page keeps; a shorter page shrinks the frame, a longer one grows it, and growth
   that only chases the viewport (`min-height: 100vh` + padding) stops. Fullscreen forwards the page's wheel
   (zoom) and keydown (Escape) — events inside the frame never reach the app's DOM. Links inside don't open.
+  **The fullscreen stage's zoom REFLOWS (2026-11-17)** — for a page and for a markdown canvas alike: the
+  content box is laid out `1/zoom` as wide (a page: as tall too) and scaled back from its top left, so it
+  always fills the stage exactly; text grows and wraps again, the page gets a narrower viewport. Before, a
+  CSS scale about the top centre pushed the left part out of the scroll range (nothing can scroll to a
+  negative offset).
 - **A drawing (`svg`/`mermaid`) renders in its own SHADOW ROOT, never injected into the app
   document (`dangerouslySetInnerHTML`).** An `<svg><style>` is
   a stylesheet for the whole document, so in the app's DOM an avatar's drawing restyled the app (in Chromium a
   `.canvas-panel {…}` rule inside an svg hid the panel). `shadowSvg` (CanvasTab) keeps the drawing's own
-  sheet — mermaid's id-scoped one included — inside the drawing, gives each copy (panel/fullscreen) its own id
-  scope, and carries the two app rules that sized it (`:host([data-fit]) svg { max-width: 100%; height: auto }`
-  in the panel, natural size in fullscreen). The root is OPEN so export (`getSvgEl`) reads the `<svg>` out of
+  sheet — mermaid's id-scoped one included — inside the drawing, gives each copy (panel/크게 보기) its own id
+  scope, and carries the app rule that fits it to the panel (`:host([data-fit]) svg { max-width: 100%; height:
+  auto }`). **Fullscreen of a drawing is 크게 보기** (`lib/zoomViewer.ts`, client.md "크게 보기"), not the
+  stage: `fullscreen` stays the one flag (the tab keeps rendering under it) and `drawingShown` /
+  `stageShown` say which of the two shows, so a surface that turns from a drawing into text meanwhile moves
+  between them. The root is OPEN so export (`getSvgEl`) reads the `<svg>` out of
   it. A shadow root rather than the html frame: the same containment for a drawing, while sizing, zoom and
   export stay as they were. Only markdown and the source `<pre>` fallback still parse into the app's DOM
   (`showRendered` keeps exactly one surface up; async renders swap only when they land).
@@ -840,14 +848,16 @@
   `min-width` and `.code-diagram` scrolls what is wider — before, a ten-box `flowchart LR` shrank until its
   labels could not be read and nothing could enlarge it. 크게 보기 — a `.code-zoom` header button (the
   keyboard's way in; hidden with 소스 on) or a press on the diagram (not one ending a text selection or on the
-  block's scrollbar) — opens `lib/diagramViewer.ts` (a lazy chunk, loaded on the first press — the block needs only
-  `lib/diagramSize.ts` of it; it had pushed the first chunk past the build's size warning): imperative DOM
+  block's scrollbar) — opens `lib/zoomViewer.ts` through `lib/zoomOpener.ts` (a lazy chunk, loaded on the first press — the block
+  needs only `lib/diagramSize.ts` of it; it had pushed the first chunk past the build's size warning; the
+  same viewer serves the canvas, the file tabs and an inline `<svg>` — client.md "크게 보기"): imperative DOM
   under `<body>` like the block itself, a
   root dialog through `lib/modalBehavior.ts` wearing the canvas stage's `.canvas-fs` bar and glass. The
   drawing is RESIZED, never CSS-scaled (the host gets `natural × scale` px, so text stays sharp; 100% = the
   drawn size); the wheel zooms about the pointer, a drag moves it, `+`/`-`/`0`/arrows work from the keyboard,
   Escape or a press on the empty stage closes. It opens fitted to the window (a small diagram up to 2×) but
-  not below the same floor — then from the drawing's start, with 화면에 맞춤 for the whole. It takes the
+  not below the same floor (`minOpenScale`, passed by the block) — then from the drawing's start, with 화면에
+  맞춤 for the whole. It takes the
   cached sanitized svg, outlives the block that opened it (an answer is remounted when it stops streaming),
   follows a redraw while the block still can hand it one (a theme flip), and closes on a route change. It
   never reaches the avatar beyond the two manual lines that name the button. One renderer serves this and the

@@ -7,7 +7,8 @@ import { getGraphViewer, isDrawioAttachment, loadGraphViewer } from "../lib/draw
 import { useAppState, useLatest } from "../lib/hooks";
 import { isPptxCard } from "../../../shared/shareLinks";
 import type { ChatPane, MessageAttachment, PaneFileTab } from "../lib/types";
-import ReservedImage, { knownImageSize } from "./ReservedImage";
+import { knownImageSize } from "./ReservedImage";
+import ZoomableImage from "./ZoomableImage";
 
 // ONE shared file opened as a tab of the side panel (SidePanel): a file-card
 // click opens it, and a live .drawio share opens itself once. Slides are the
@@ -268,9 +269,10 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
         ) : slides.length ? (
           slides.map((slide, index) => (
             <figure className="file-preview-slide" key={slide.id}>
-              <ReservedImage
+              <ZoomableImage
                 src={slideSrc(pane.conversationId, slide)}
                 alt={slide.name || `슬라이드 ${index + 1}`}
+                title={slides.length > 1 ? `${name} — ${index + 1} / ${slides.length}` : name}
                 loading="lazy"
                 size={knownImageSize(slide.width, slide.height)}
               />

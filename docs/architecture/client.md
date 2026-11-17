@@ -473,6 +473,25 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   normalized same-origin `/api/share/…` paths become an `<img>` or the download (`isShareAssetUrl`).
 - **Viewer tickets live `SHARE_TICKET_TTL_MINUTES` (30)**: a viewer open ≥ 25 minutes re-opens the link
   with `refresh: true` before presenting, downloading or retrying a render (a refresh is not a counted view).
+- **크게 보기 is ONE viewer for everything the app fits into a narrow column (2026-11-17).**
+  `lib/zoomViewer.ts` shows sanitized svg markup (in its own shadow root) or an image the app serves, over the
+  whole window: opened fitted (a caller that knows what 100% means passes `minOpenScale`), the wheel zooms
+  about the pointer, a drag moves, `+`/`-`/`0`/arrows from the keyboard, Escape / 닫기 / a press on the empty
+  stage closes. The content is RESIZED (`natural × scale` px), never CSS-scaled, so vector text stays sharp;
+  `lib/diagramSize.ts` `svgNaturalSize` is what 100% is (pixel `width`/`height`; one of them + `viewBox` by
+  its ratio — an inline `<svg>`; a `viewBox` alone — mermaid), and an image with no recorded size learns it
+  on `load`. It is imperative DOM under `<body>` (a code block has no React owner), a root dialog through
+  `lib/modalBehavior.ts` on the canvas stage's `.canvas-fs` bar, one at a time, closed by a route change.
+  **Everything opens it through `lib/zoomOpener.ts`** (one per owner): it loads the lazy chunk on the first
+  press, never stacks two, hands the open viewer a redraw (`update`) and takes it down (`close`, without the
+  caller's `onClose`). Entrances: a ```mermaid block (`.code-zoom` + a press on the diagram), a drawing
+  canvas's ⤢ (`CanvasTab`), `ZoomableImage` (a real button around every page/slide/image of `FileTab` and
+  `WorkspaceTab` — the same URL the tab already shows, so nothing new is fetched or converted), and
+  `WidgetSvg` (a press, or a corner button shown on hover and focus; a drawing under 120×80 px is left
+  alone). A viewer outlives a block or an inline drawing that is remounted when its answer stops streaming;
+  a React owner that is a TAB closes it on unmount. Pinned by `tests/client-mermaid-block.test.ts`,
+  `tests/client-diagram-size.test.ts`, `tests/react-zoomable-image.test.tsx` and, for layout, wheel and drag,
+  `tests/visual/inline-ui.spec.ts` + `canvas-isolation.spec.ts`.
 - **`SlidePresenter`** requests element fullscreen; the same markup is its fixed-overlay fallback. Leaving
   fullscreen by ANY route (`fullscreenchange` with `fullscreenElement` null) ends present mode, because Esc
   in fullscreen never reaches the page. Initial focus is the stage (tabindex -1), never 닫기, so the first
@@ -531,7 +550,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   backdrop-filter is the containing block of every fixed-position descendant, so inside the panel
   "fullscreen" covered only the panel (and a hidden tabpanel hid it outright). It stays open when the
   avatar shows another tab; when the restore to its ⤢ misses, closing it focuses the card's new ⤢ (tab
-  shown again) or else the shown tab — never `<body>`. `FileTab` keeps
+  shown again) or else the shown tab — never `<body>`. The stage serves a text or page canvas only; ⤢ on a
+  drawing (svg/mermaid) opens 크게 보기 (below) under the same `fullscreen` flag. `FileTab` keeps
   its DOM (the draw.io viewer has no `destroy()`): it paints only into a body that has a width (hidden tab
   or collapsed panel = 0) and its ResizeObserver repaints (debounced) when the width changes —
   `.canvas-body` reserves its scrollbar gutter, so a tall diagram's scrollbar cannot flip that width.

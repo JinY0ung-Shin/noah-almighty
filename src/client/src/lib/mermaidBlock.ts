@@ -22,19 +22,19 @@
 //   of the size mermaid drew it at: a wider one scrolls sideways in its block
 //   instead of shrinking until its labels cannot be read. 크게 보기 (the header
 //   button, or a press on the diagram) opens it over the whole window to be
-//   zoomed and moved (lib/diagramViewer.ts).
+//   zoomed and moved (lib/zoomViewer.ts, through lib/zoomOpener.ts).
 // - A diagram ENTERS (lib/mermaidEntrance.ts) when it appears now: its fence was
 //   seen being written and then closed — once, whichever of the answer's mounts
 //   draws it first — or it sits under `[data-entrance="always"]` (the gallery).
 //   A diagram of an answer opened from the history, a theme flip and the 소스
 //   toggle are at rest.
 import { MIN_READABLE_SCALE, svgNaturalSize } from "./diagramSize";
-import type { DiagramViewer } from "./diagramViewer";
 import { planMermaidEntrance } from "./mermaidEntrance";
 import { renderMermaidSvg, MermaidLoadError } from "./mermaidRender";
 import { shadowSvg } from "./shadowSvg";
 import { currentTheme, theme } from "./theme";
 import { claimEntrance, playSteps, renewEntrance, type Entrance } from "./uiEntrance";
+import { zoomOpener, type ZoomOpener } from "./zoomOpener";
 
 /** Bubbles from a block whose diagram could not be drawn; `detail.problem` is one English line. */
 export const DIAGRAM_ERROR_EVENT = "diagramerror";
@@ -99,10 +99,8 @@ interface DiagramView {
   token: number;
   toggle: HTMLButtonElement;
   zoom: HTMLButtonElement;
-  /** The 크게 보기 view of this block, while it is open. */
-  viewer: DiagramViewer | null;
-  /** 크게 보기 was pressed and the viewer's chunk is on its way. */
-  opening: boolean;
+  /** This block's way into 크게 보기. */
+  zoomer: ZoomOpener;
   host: HTMLElement;
   note: HTMLElement;
   noteText: HTMLElement;
@@ -214,8 +212,7 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
     token: 0,
     toggle,
     zoom,
-    viewer: null,
-    opening: false,
+    zoomer: zoomOpener(),
     host,
     note,
     noteText,
@@ -254,25 +251,17 @@ function build(wrapper: HTMLElement, pre: HTMLElement): DiagramView {
   return view;
 }
 
-/** Open 크게 보기 on what the block shows. The viewer is a lazy chunk: it loads on the first press. */
+/** Open 크게 보기 on what the block shows (read when the viewer has loaded: redrawn as code, or gone, opens nothing). */
 function enlarge(view: DiagramView): void {
-  if (view.phase !== "drawn" || view.viewer || view.opening) return;
-  view.opening = true;
-  void import("./diagramViewer").then(
-    ({ openDiagramViewer }) => {
-      view.opening = false;
-      if (view.phase !== "drawn" || !view.host.isConnected) return; // redrawn as code, or gone, meanwhile
-      const hit = cache.get(cacheKey(view.source, view.dark));
-      const markup = hit && "svg" in hit ? hit.svg : (view.host.shadowRoot?.querySelector("svg")?.outerHTML ?? "");
-      if (!markup) return;
-      view.viewer = openDiagramViewer(markup, () => {
-        view.viewer = null;
-      });
-    },
+  if (view.phase !== "drawn") return;
+  view.zoomer.open(
     () => {
-      // The chunk did not load: the diagram stays as it is, and the next press tries again.
-      view.opening = false;
+      if (view.phase !== "drawn" || !view.host.isConnected) return null;
+      const hit = cache.get(cacheKey(view.source, view.dark));
+      const svg = hit && "svg" in hit ? hit.svg : (view.host.shadowRoot?.querySelector("svg")?.outerHTML ?? "");
+      return svg ? { svg } : null;
     },
+    { title: "다이어그램", label: "다이어그램 크게 보기", minOpenScale: MIN_READABLE_SCALE },
   );
 }
 
@@ -286,7 +275,7 @@ function holdReadable(host: HTMLElement): void {
 function dismantle(wrapper: HTMLElement, view: DiagramView): void {
   view.token += 1;
   view.stop();
-  view.viewer?.close();
+  view.zoomer.close();
   view.toggle.remove();
   view.zoom.remove();
   view.host.remove();
@@ -304,7 +293,7 @@ function apply(wrapper: HTMLElement, view: DiagramView, outcome: Outcome): void 
     else view.shadow = shadowSvg(view.host, outcome.svg);
     holdReadable(view.host);
     // An open 크게 보기 follows a redraw (a theme flip bakes new colours in).
-    view.viewer?.update(outcome.svg);
+    view.zoomer.update({ svg: outcome.svg });
     setPhase(wrapper, view, "drawn");
     // In the task that wrote the drawing: its parts are held at their start before a frame shows them.
     const entrance = view.entered ? null : entranceOf(wrapper, view.source);

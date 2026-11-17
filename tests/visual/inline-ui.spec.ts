@@ -594,7 +594,7 @@ test("a mermaid block next to inline UI is drawn too, in the answer's Markdown r
   expect(await cspViolations(page)).toEqual([]);
 });
 
-// A diagram wider than the bubble (lib/mermaidBlock.ts, lib/diagramViewer.ts):
+// A diagram wider than the bubble (lib/mermaidBlock.ts, lib/zoomViewer.ts):
 // the fit stops at a floor and the block scrolls, and 크게 보기 puts the same
 // drawing over the whole window to be zoomed and moved. Layout, the wheel and a
 // drag are what jsdom cannot show.
@@ -631,12 +631,12 @@ test("a wide mermaid block keeps a readable size, and 크게 보기 opens it to 
   const viewer = page.getByRole("dialog", { name: "다이어그램 크게 보기" });
   await expect(viewer).toBeVisible();
   await expect(viewer.getByRole("button", { name: "닫기" })).toBeFocused();
-  const percent = viewer.locator(".diagram-viewer-scale");
+  const percent = viewer.locator(".zoom-viewer-scale");
   const shown = () =>
     viewer.evaluate((el) => {
-      const svg = el.querySelector(".diagram-viewer-svg")!.shadowRoot!.querySelector("svg")!;
+      const svg = el.querySelector(".zoom-viewer-svg")!.shadowRoot!.querySelector("svg")!;
       const box = svg.getBoundingClientRect();
-      const stage = el.querySelector(".diagram-viewer-stage")!.getBoundingClientRect();
+      const stage = el.querySelector(".zoom-viewer-stage")!.getBoundingClientRect();
       return { left: box.left, top: box.top, width: box.width, height: box.height, natural: svg.viewBox.baseVal.width, stage: { left: stage.left, top: stage.top, width: stage.width, height: stage.height }, text: svg.textContent ?? "" };
     });
   const fitted = await shown();
@@ -655,7 +655,7 @@ test("a wide mermaid block keeps a readable size, and 크게 보기 opens it to 
   const zoomed = await shown();
   expect(Math.abs(zoomed.left + zoomed.width * 0.25 - anchor.x)).toBeLessThan(2);
   // Resized, not CSS-scaled: the drawing is laid out at the size it shows.
-  expect(await viewer.evaluate((el) => getComputedStyle(el.querySelector(".diagram-viewer-svg")!).transform)).toBe("none");
+  expect(await viewer.evaluate((el) => getComputedStyle(el.querySelector(".zoom-viewer-content")!).transform)).toBe("none");
 
   // A drag moves it.
   await page.mouse.down();
@@ -698,5 +698,98 @@ test("a wide mermaid block keeps a readable size, and 크게 보기 opens it to 
   await expect(viewer).toHaveCount(0);
 
   expect(reports).toEqual([]);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+// An inline <svg> is fitted to the answer like a diagram; one large enough to be
+// worth it opens in the same 크게 보기 view, where 100% is the size the answer
+// draws it at (its pixel width), not its viewBox's units.
+const SVG_ANSWER = `구조입니다.
+
+<svg viewBox="0 0 300 100" width={600} label="구조도">
+  <rect x="10" y="20" width="120" height="60" fill="none" stroke="accent" />
+  <text x="70" y="55" text-anchor="middle" font-size="14">게이트웨이</text>
+  <rect x="170" y="20" width="120" height="60" fill="none" stroke="line" />
+  <text x="230" y="55" text-anchor="middle" font-size="14">샌드박스</text>
+</svg>
+
+<svg viewBox="0 0 24 24" width={24} label="점"><circle cx="12" cy="12" r="8" /></svg>
+`;
+
+test("an inline <svg> opens in 크게 보기 on a press; a small one is left alone", async ({ page }) => {
+  await mockApp(page, { storedText: SVG_ANSWER });
+  await openConversation(page);
+  const drawings = page.locator(`${UI} .wg-svg`);
+  await expect(drawings).toHaveCount(2);
+  const large = drawings.nth(0);
+  await expect(large).toHaveClass(/is-zoomable/);
+  await expect(drawings.nth(1)).not.toHaveClass(/is-zoomable/);
+  await expect(drawings.nth(1).locator("button")).toHaveCount(0);
+
+  // The corner button shows on hover (and is there for the keyboard).
+  const corner = large.getByRole("button", { name: "구조도 크게 보기" });
+  await expect(corner).toHaveCSS("opacity", "0");
+  await large.hover();
+  await expect(corner).toHaveCSS("opacity", "1");
+  const inlineWidth = await large.evaluate((el) => el.querySelector(".wg-svg-drawing")!.shadowRoot!.querySelector("svg")!.getBoundingClientRect().width);
+  expect(Math.round(inlineWidth)).toBe(600);
+
+  await large.locator(".wg-svg-drawing").click();
+  const viewer = page.getByRole("dialog", { name: "구조도 크게 보기" });
+  await expect(viewer).toBeVisible();
+  const shown = await viewer.evaluate((el) => {
+    const svg = el.querySelector(".zoom-viewer-svg")!.shadowRoot!.querySelector("svg")!;
+    const text = svg.querySelector("text")!;
+    return { width: svg.getBoundingClientRect().width, text: svg.textContent ?? "", ink: getComputedStyle(text).fill, bodyInk: getComputedStyle(document.body).color };
+  });
+  expect(shown.text).toContain("게이트웨이");
+  // Fitted to the window, capped at twice the drawn size; the label says so in the answer's terms.
+  expect(Math.round(shown.width)).toBe(1200);
+  await expect(viewer.locator(".zoom-viewer-scale")).toHaveText("200%");
+  // Its text is drawn in the app's text colour there too.
+  expect(shown.ink).toBe(shown.bodyInk);
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  expect(await cspViolations(page)).toEqual([]);
+});
+
+// The viewer's image mode (a page or image of a side-panel tab: ZoomableImage),
+// driven directly: the size of a picture with none recorded comes from its
+// bytes, and it is then fitted, zoomed and moved like a drawing.
+test("크게 보기 fits an image whose size it learns on load, and zooms it", async ({ page }) => {
+  await mockApp(page, { storedText: "그림입니다." });
+  await openConversation(page);
+  await page.evaluate(async () => {
+    const picture = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900"><rect width="1600" height="900" fill="#246"/></svg>`;
+    const { openZoomViewer } = (await import(/* @vite-ignore */ `${location.origin}/src/lib/zoomViewer.ts`)) as {
+      openZoomViewer: (content: { image: { src: string; alt?: string } }, options?: { title?: string }) => unknown;
+    };
+    openZoomViewer({ image: { src: `data:image/svg+xml,${encodeURIComponent(picture)}`, alt: "화면 캡처" } }, { title: "capture.png" });
+  });
+  const viewer = page.getByRole("dialog", { name: "capture.png 크게 보기" });
+  await expect(viewer).toBeVisible();
+  const box = () =>
+    viewer.evaluate((el) => {
+      const img = el.querySelector("img.zoom-viewer-image")!.getBoundingClientRect();
+      const stage = el.querySelector(".zoom-viewer-stage")!.getBoundingClientRect();
+      return { left: img.left, top: img.top, width: img.width, height: img.height, stage: { left: stage.left, top: stage.top, width: stage.width, height: stage.height } };
+    });
+  // Whole in the stage at the picture's own ratio, once the bytes said 1600×900.
+  await expect.poll(async () => Math.round(((await box()).width / (await box()).height) * 100)).toBe(178);
+  const fitted = await box();
+  expect(Math.round(fitted.height)).toBe(Math.round(fitted.stage.height - 64));
+  expect(fitted.left).toBeGreaterThan(fitted.stage.left);
+  await expect(viewer.locator(".zoom-viewer-scale")).toHaveText(`${Math.round((fitted.width / 1600) * 100)}%`);
+  await expect(viewer.getByRole("img", { name: "화면 캡처" })).toBeVisible();
+
+  await page.mouse.move(fitted.left + fitted.width / 2, fitted.top + fitted.height / 2);
+  await page.mouse.wheel(0, -300);
+  await expect.poll(async () => (await box()).width).toBeGreaterThan(fitted.width * 1.5);
+  await page.mouse.down();
+  await page.mouse.move(fitted.left + fitted.width / 2 - 90, fitted.top + fitted.height / 2, { steps: 4 });
+  await page.mouse.up();
+  await expect(viewer).toBeVisible();
+  await viewer.getByRole("button", { name: "닫기" }).click();
+  await expect(viewer).toHaveCount(0);
   expect(await cspViolations(page)).toEqual([]);
 });

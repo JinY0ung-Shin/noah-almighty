@@ -2,7 +2,8 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import CanvasHtmlFrame from "./CanvasHtmlFrame";
 import DrawioDiagram from "./DrawioDiagram";
 import Icon from "./Icon";
-import ReservedImage, { knownImageSize, type PixelSize } from "./ReservedImage";
+import { knownImageSize, type PixelSize } from "./ReservedImage";
+import ZoomableImage from "./ZoomableImage";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
@@ -945,7 +946,12 @@ function WorkspacePreview({
     ) : (
       <figure className="file-preview-slide">
         {/* A workspace file has no recorded size: a placeholder holds the box until it loads. */}
-        <ReservedImage src={workspaceFileUrl(path, true, version)} alt={workspaceDisplayName(entry.name)} onError={() => setImageFailed(true)} />
+        <ZoomableImage
+          src={workspaceFileUrl(path, true, version)}
+          alt={workspaceDisplayName(entry.name)}
+          title={workspaceDisplayName(entry.name)}
+          onError={() => setImageFailed(true)}
+        />
       </figure>
     );
   } else if (state.status === "loading") {
@@ -964,9 +970,10 @@ function WorkspacePreview({
       <>
         {Array.from({ length: pages }, (_, index) => (
           <figure className="file-preview-slide" key={index}>
-            <ReservedImage
+            <ZoomableImage
               src={workspacePreviewPageUrl(id, index + 1)}
               alt={`${workspaceDisplayName(entry.name)} ${index + 1}쪽`}
+              title={pages > 1 ? `${workspaceDisplayName(entry.name)} — ${index + 1} / ${pages}` : workspaceDisplayName(entry.name)}
               loading="lazy"
               size={knownImageSize(sizes?.[index]?.width, sizes?.[index]?.height)}
             />

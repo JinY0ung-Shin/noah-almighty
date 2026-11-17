@@ -19,8 +19,10 @@ import {
   submitCanvasEdit,
 } from "../lib/chat";
 import { queueCanvasRenderReport } from "../lib/canvasReport";
+import { MIN_READABLE_SCALE } from "../lib/diagramSize";
 import { renderMermaidSvg } from "../lib/mermaidRender";
 import { shadowSvg } from "../lib/shadowSvg";
+import { zoomOpener, type ZoomOpener } from "../lib/zoomOpener";
 import { copyText } from "../lib/dom";
 import { copyPng, downloadPng, downloadSvg } from "../lib/canvasExport";
 import { notify } from "../lib/state";
@@ -313,10 +315,44 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
     showRendered({ html: sourceFallback(target.content) });
   }
 
-  // The drawing's host in the card and the one in the fullscreen view: each
-  // draws the same sanitized markup into its own shadow root.
+  // The drawing's host in the card: the sanitized markup in its own shadow root.
   const panelSvgRef = useAction<HTMLDivElement, string>(shadowSvg, surface.svg);
-  const stageSvgRef = useAction<HTMLDivElement, string>(shadowSvg, surface.svg);
+
+  // Fullscreen of a DRAWING (svg/mermaid) is 크게 보기 (lib/zoomViewer.ts): fitted
+  // to the window, the wheel zooms about the pointer and a drag moves it. The
+  // stage below zoomed a drawing with a CSS scale about its top centre, which
+  // pushed its left part out of reach. `fullscreen` stays the one flag for
+  // "the fullscreen view is open" (the tab keeps rendering under it), so a
+  // surface that turns into a page or text meanwhile (a new version, a mermaid
+  // source that no longer draws) moves to the stage, and back.
+  const zoomer = useRef<ZoomOpener | null>(null);
+  zoomer.current ??= zoomOpener();
+  const latestSvg = useLatest(surface.svg);
+  const drawingShown = fullscreen && surface.svg !== "";
+  /** The stage below is what shows: fullscreen of a text or page canvas. */
+  const stageShown = fullscreen && !drawingShown;
+  useEffect(() => {
+    const opener = zoomer.current!;
+    if (!drawingShown) {
+      opener.close();
+      return;
+    }
+    if (opener.isOpen) {
+      opener.update({ svg: surface.svg });
+      return;
+    }
+    opener.open(() => (latestSvg.current ? { svg: latestSvg.current } : null), {
+      title: latest.current.canvas.title,
+      label: "캔버스 전체화면",
+      // 100% of a mermaid diagram is 16px labels; an svg's own units say nothing about legibility.
+      minOpenScale: latest.current.canvas.contentType === "mermaid" ? MIN_READABLE_SCALE : undefined,
+      onClose: () => setFullscreen(false),
+    });
+    // `latest`, `latestSvg` and the opener are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawingShown, surface.svg]);
+  // The tab going away takes its viewer with it, like the stage.
+  useEffect(() => () => zoomer.current?.close(), []);
 
   // ---- form controls ----
   function setControl(ctrlId: string, value: unknown): void {
@@ -500,7 +536,7 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
 
   useWindowEvent("keydown", (event) => {
     // A dialog opened over the stage takes Escape and Tab first.
-    if (fullscreen && isTopDialogLayer(fsRef.current)) onFsKey(event);
+    if (stageShown && isTopDialogLayer(fsRef.current)) onFsKey(event);
   });
 
   // The stage lives under <body>: inside the side panel — whose backdrop-filter
@@ -513,7 +549,7 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
   // focus lands on this card's new ⤢ if the tab shows again, else on the tab
   // the panel shows — never on <body>.
   useLayoutEffect(() => {
-    if (!fullscreen) return;
+    if (!stageShown) return;
     const node = fsRef.current;
     if (!node) return;
     const releaseFocus = openModalFocus(node);
@@ -533,9 +569,9 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
       if (latest.current.active && fsOpener.current?.isConnected) fsOpener.current.focus();
       else document.querySelector<HTMLElement>('.canvas-panel [role="tab"][aria-selected="true"]')?.focus();
     };
-    // `latest` and the refs are stable; the stage exists exactly while `fullscreen`.
+    // `latest` and the refs are stable; the stage exists exactly while `stageShown`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fullscreen]);
+  }, [stageShown]);
 
   const hasControls = Boolean(canvas.controls?.length);
 
@@ -877,7 +913,7 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
     </div>
   ) : null;
 
-  const stage = fullscreen
+  const stage = stageShown
     ? createPortal(
         <div ref={fsRef} className="canvas-fs" role="dialog" aria-modal="true" aria-label="캔버스 전체화면">
           <div className="canvas-fs-bar">
@@ -899,13 +935,16 @@ export default function CanvasTab({ pane, canvas, active = false }: CanvasTabPro
           <div className="canvas-fs-stage">
             <div
               className={cx("canvas-fs-content md", surface.doc !== "" && "is-html")}
-              style={{ transform: `scale(${zoom})` }}
+              // A zoom that REFLOWS: the box is laid out 1/zoom as wide (a page: as tall too) and
+              // scaled back from its top left, so it always fills the stage exactly — text
+              // grows, lines wrap again, and nothing is pushed out of reach.
+              style={{
+                width: `${100 / zoom}%`,
+                height: surface.doc !== "" ? `${100 / zoom}%` : undefined,
+                transform: `scale(${zoom})`,
+              }}
               {...surfaceContent(
-                surface.doc ? (
-                  <CanvasHtmlFrame doc={surface.doc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} />
-                ) : surface.svg ? (
-                  <div className="canvas-svg" ref={stageSvgRef}></div>
-                ) : null,
+                surface.doc ? <CanvasHtmlFrame doc={surface.doc} title={canvas.title} onWheel={onFsWheel} onKeydown={onFsKey} /> : null,
                 surface.html,
               )}
             />

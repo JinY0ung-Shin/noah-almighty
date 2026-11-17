@@ -17,6 +17,7 @@
   aspect-ratio: 3 / 2;
 }
 /* A page/slide in a side-panel tab (full width): a 16:9 slide's box. */
-:where(.file-preview-slide) > .cmp-reserved-image[data-pending] {
+:where(.file-preview-slide) > .cmp-reserved-image[data-pending],
+:where(.file-preview-slide) > .cmp-zoomable-image > .cmp-reserved-image[data-pending] {
   aspect-ratio: 16 / 9;
 }
