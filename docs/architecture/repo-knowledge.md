@@ -701,6 +701,17 @@ repository change, never at boot. Until an owner is cut over they work on the re
   that holds no note yet reads as missing;
 - the service returns at most 20 hits, structural pages included: Noah asks for `limit + 3` (then for 20), so
   at limit 18–20 a few hits can be missing when index / log / template match the query;
+- **the ranking itself is BM25 since pi `1d4a1fe` (2026-11-19), no longer the clone ranker's count.** Title and
+  aliases, tags and the whole note are scored separately and weighted 5·3·1, so title > tag > body holds on both
+  sides, but: an English word matches only as a WHOLE word (`deploy` does not find `deployment`; the clone
+  ranker's substring match does), Korean is cut into two-character pieces so a word still matches with another
+  particle (`결함을` finds `결함이`; the clone ranker needs the same string), a rare word counts for more and a
+  long note for less, and scores are decimals. So the same query can rank — and find — differently for an
+  owner in each home. Seen through Noah's built client on a real stack: `build-run-verify.md` (pi `9f579dd`);
+- **a query with no letter or digit in it is answered by Noah, never sent** (`hasSearchWord`): the service
+  refuses it with `invalid_query` (a blank query always; one of symbols only, `?!`, since `1d4a1fe`), and it
+  can match no note there. The clone ranker splits on whitespace only, so `?!` can still match that literal
+  text in a repository-home vault;
 - **a query is cut to its first 500 UTF-16 code units** (`searchQueryOf`; one fewer when the cut would split
   a surrogate pair). The service's rule is `z.string().max(500)`, and what that counts depends on its zod
   version (the one it pins counts code points, an older one UTF-16 units); 500 UTF-16 units is at most 500

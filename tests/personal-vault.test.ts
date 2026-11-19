@@ -1515,11 +1515,20 @@ describe("MemoryVault: search (the personal brain)", () => {
   });
 
   it("a query without a word is no hit (not the service's refusal), and still tells a vault from none", async () => {
-    const { vault, fake } = setupVault();
+    const { vault, fake, ownerId } = setupVault();
     expect(await vault.search("   ")).toEqual({ kind: "no_vault" });
-    await vault.write("wiki/a.md", "text");
+    await vault.write("wiki/a.md", "text?! --- …");
     expect(await vault.search("")).toEqual({ kind: "ok", hits: [] });
+    // Symbols only: the service has no word to look for either (pi 1d4a1fe refuses it with invalid_query).
+    for (const symbols of ["?!", "---", " … ", "@#$%", "😀"]) {
+      expect(await vault.search(symbols), symbols).toEqual({ kind: "ok", hits: [] });
+    }
     expect(fake.calls.some((call) => call.op === "search")).toBe(false);
+    // The double refuses what the service refuses — the reason none of the above may be sent.
+    await expect(fake.search(ownerId, "?!")).rejects.toMatchObject({ code: "invalid_query", status: 400 });
+    // One letter or digit is a word: sent, and answered by the service.
+    expect(await vault.search("7x9")).toEqual({ kind: "ok", hits: [] });
+    expect(fake.calls.filter((call) => call.op === "search").map((call) => call.query)).toEqual(["?!", "7x9"]);
   });
 
   it.each(["utf16", "codePoints"] as const)(
@@ -1562,12 +1571,16 @@ describe("MemoryVault: search (the personal brain)", () => {
       expect(sent().at(-1)).toBe(`needle ${"z".repeat(491)}😀`);
       expect(sent().at(-1)).toHaveLength(500);
 
-      // Nothing but pairs: 250 of them are the 500 units (a service counting code points would take 500).
+      // Nothing but pairs holds no word: answered here as no hit, never sent (the service would refuse it).
+      const sentBefore = sent().length;
       expect(await paths("😀".repeat(600))).toEqual([]);
-      expect(sent().at(-1)).toBe("😀".repeat(250));
-      // The reviewers' case: 600 units but only 300 code points — still cut to 500 units (a unit-counting service refuses it whole).
-      expect(await paths("😀".repeat(300))).toEqual([]);
-      expect(sent().at(-1)).toBe("😀".repeat(250));
+      expect(sent()).toHaveLength(sentBefore);
+      // Pairs after a word, at even offsets: 249 of them fill the 500 units (a service counting code points would take 500).
+      expect(await paths(`xx${"😀".repeat(600)}`)).toEqual([]);
+      expect(sent().at(-1)).toBe(`xx${"😀".repeat(249)}`);
+      // The reviewers' case: 602 units but only 302 code points — still cut to 500 units (a unit-counting service refuses it whole).
+      expect(await paths(`xx${"😀".repeat(300)}`)).toEqual([]);
+      expect(sent().at(-1)).toBe(`xx${"😀".repeat(249)}`);
       // Pairs at odd offsets: the cut falls inside one.
       expect(await paths(`x${"😀".repeat(600)}`)).toEqual([]);
       expect(sent().at(-1)).toBe(`x${"😀".repeat(249)}`);
@@ -1647,8 +1660,10 @@ describe("the fake memory service keeps the service's rules", () => {
       await expect(fake.search("u1", "x".repeat(500))).resolves.toEqual(none);
       await expect(fake.search("u1", "x".repeat(501))).rejects.toMatchObject(refused);
       await expect(fake.search("u1", " ".repeat(501))).rejects.toMatchObject(refused);
-      await expect(fake.search("u1", "😀".repeat(250))).resolves.toEqual(none);
+      await expect(fake.search("u1", `xx${"😀".repeat(249)}`)).resolves.toEqual(none);
       await expect(fake.search("u1", "😀".repeat(501))).rejects.toMatchObject(refused);
+      // Within the limit, a query with no letter or digit has no word to look for (pi 1d4a1fe).
+      await expect(fake.search("u1", "😀".repeat(250))).rejects.toMatchObject({ code: "invalid_query", status: 400 });
     }
     // Where the two rules differ: a surrogate pair is two UTF-16 units and one code point.
     const units = createFakeMemoryClient();
@@ -1656,7 +1671,7 @@ describe("the fake memory service keeps the service's rules", () => {
     await expect(units.search("u1", "😀".repeat(251))).rejects.toMatchObject(refused);
     const points = createFakeMemoryClient({ queryLength: "codePoints" });
     await expect(points.search("u1", `${"x".repeat(499)}😀`)).resolves.toEqual(none);
-    await expect(points.search("u1", "😀".repeat(500))).resolves.toEqual(none);
+    await expect(points.search("u1", `x${"😀".repeat(499)}`)).resolves.toEqual(none);
     await expect(points.search("u1", `${"x".repeat(500)}😀`)).rejects.toMatchObject(refused);
   });
 

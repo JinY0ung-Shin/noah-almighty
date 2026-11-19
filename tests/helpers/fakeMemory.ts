@@ -320,7 +320,8 @@ export function createFakeMemoryClient(limits: FakeMemoryOptions = {}): FakeMemo
         }
         // The service's `q` limit (judged before the query is looked at).
         if (queryLength(query) > MAX_QUERY_CHARS) throw refuse("invalid_request", 400, "the request does not have the expected fields");
-        if (!query.trim()) throw refuse("invalid_query", 400, "the query has no words to look for");
+        // The service's rule since pi 1d4a1fe: a query that holds no letter or digit has no word (blank, `?!`).
+        if (!/[\p{L}\p{N}]/u.test(query)) throw refuse("invalid_query", 400, "the query has no words to look for");
         const wiki = wikiOf(owner);
         const notes = under(wiki, prefix).map((path): [string, string] => [path, wiki.get(path)!]);
         return searchNotes(notes, query, limit ?? DEFAULT_LIMIT);

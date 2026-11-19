@@ -187,6 +187,17 @@ function searchQueryOf(query: string): string {
   return query.slice(0, splitsPair ? MAX_SEARCH_QUERY_UNITS - 1 : MAX_SEARCH_QUERY_UNITS);
 }
 
+/**
+ * Whether a query holds anything the service can look for: a letter or a
+ * digit. The service cuts a query into words at every other character and
+ * REFUSES one that leaves none (`invalid_query` — a blank one, and since pi
+ * `1d4a1fe` one of symbols only, `?!`). Such a query matches no note, so it is
+ * answered here as no hit instead of being sent to be refused.
+ */
+function hasSearchWord(query: string): boolean {
+  return /[\p{L}\p{N}]/u.test(query);
+}
+
 /** The exclusions `rankBrainNotes` applies to the personal wiki. */
 function isSearchableNote(notePath: string): boolean {
   return (
@@ -412,8 +423,8 @@ class ServiceMemoryVault implements MemoryVault {
       let hits: BrainNoteHit[] = [];
       let unscanned = 0;
       const asked = searchQueryOf(query);
-      // The service refuses a query without a word; rankBrainNotes answers it with no hit.
-      if (asked.trim()) {
+      // The service refuses a query without a word (`hasSearchWord`); it is no hit here, never a refusal.
+      if (hasSearchWord(asked)) {
         // The service ranks every note under wiki/, the structural pages included, and returns at most 20: ask
         // for enough that dropping those pages still leaves `wanted` hits, and for all 20 when it did not.
         for (const ask of new Set([Math.min(MAX_SEARCH_LIMIT, wanted + SEARCH_STRUCTURAL_SLACK), MAX_SEARCH_LIMIT])) {
