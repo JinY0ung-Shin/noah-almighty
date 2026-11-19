@@ -859,7 +859,7 @@ export function pickShareLinkCard(
       if (!card) continue;
       if (!isShareableFileCard(card)) {
         return {
-          error: `Share links can only be created for files you delivered with share_file, and "${card.name ?? attachmentId}" is not one (a file the user attached and a screenshot card cannot be linked).${menuTail}`,
+          error: `Share links can only be created for files you delivered with share_file, and "${card.name ?? attachmentId}" is not one (a file the user attached, a screenshot card and an HTML page cannot be linked).${menuTail}`,
         };
       }
       return { card, attachments: batch };

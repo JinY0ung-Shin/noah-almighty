@@ -12,6 +12,7 @@ import {
   saveHiddenChatImage,
   workspaceSubdirForWrite,
 } from "./chatImages.js";
+import { HTML_MEDIA_TYPE } from "../shared/shareLinks.js";
 
 /**
  * Chat file attachments (agent-GENERATED documents handed to the user as
@@ -73,7 +74,7 @@ export const DRAWIO_MEDIA_TYPE = "application/vnd.jgraph.mxfile";
  * the actual content where the format has one (OOXML containers are zip, pdf is
  * `%PDF`) so a mislabeled file can't ride an innocuous extension.
  */
-const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[] }> = {
+const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[]; link?: false }> = {
   pptx: {
     mediaType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     magic: [Buffer.from("PK")],
@@ -95,19 +96,24 @@ const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[] }> = {
   // payloads — still a text file, so no magic prefix like csv/md/txt). This
   // mediaType is what FileTab keys on to render the diagram client-side.
   drawio: { mediaType: DRAWIO_MEDIA_TYPE },
+  // A page the avatar wrote. The owner reads it in the chat's 파일 tab (drawn
+  // script-less, in a sandboxed frame); the card's own bytes are only ever a
+  // download. `link: false`: never exported by a share link (`HTML_MEDIA_TYPE`).
+  html: { mediaType: HTML_MEDIA_TYPE, link: false },
 };
 
 /**
- * Whether `ext` (lowercase, no dot) is a type share_file publishes — the only
- * stored bytes a share link serves (`shareLinks.ts`): never a screenshot card,
- * a legacy Craft-app card or a type only a user's own attachment can have.
+ * Whether `ext` (lowercase, no dot) is a type a SHARE LINK serves
+ * (`shareLinks.ts`, `shareFiles.ts`): what share_file publishes, minus an HTML
+ * page — and so never a screenshot card, a legacy Craft-app card or a type
+ * only a user's own attachment can have.
  */
 export function isShareFileExtension(ext: string): boolean {
-  return Object.hasOwn(FILE_TYPES, ext);
+  return Object.hasOwn(FILE_TYPES, ext) && FILE_TYPES[ext].link !== false;
 }
 
 /**
- * The media type of a share_file type, or null when `ext` is not one. With
+ * The media type of a type a share link serves, or null when `ext` is not one. With
  * `bytes`, the content check share_file applies runs too (OOXML containers are
  * zip, a pdf starts `%PDF`): null for a mislabeled file riding an innocuous
  * extension.
@@ -163,6 +169,8 @@ export function chatFilesDir(config: AppConfig, conversationId: string): string 
 
 /** Human list of shareable extensions, for agent-facing error text. */
 export const SHAREABLE_EXTENSIONS = Object.keys(FILE_TYPES);
+/** The ones a share link serves ({@link isShareFileExtension}) — `src/shared/shareLinks.ts` mirrors the list. */
+export const LINK_SHAREABLE_EXTENSIONS = SHAREABLE_EXTENSIONS.filter(isShareFileExtension);
 
 /**
  * The longest download name stored or served, in UTF-16 units — the same unit

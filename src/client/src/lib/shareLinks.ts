@@ -360,7 +360,7 @@ export const SHARE_CONVERSATION_AUDIENCE_NOTE =
 
 /** What a conversation link shows and what it leaves out — said BEFORE the owner presses. */
 export const SHARE_CONVERSATION_SCOPE_NOTE =
-  "지금까지의 대화만 공유됩니다. 이후에 이어지는 대화는 포함되지 않습니다. 도구 실행 기록과 생각 과정은 공유되지 않습니다. 직접 첨부한 문서는 이름만 보이고 내려받을 수 없으며, 첨부한 이미지는 대화와 함께 보입니다.";
+  "지금까지의 대화만 공유됩니다. 이후에 이어지는 대화는 포함되지 않습니다. 도구 실행 기록과 생각 과정은 공유되지 않습니다. 직접 첨부한 문서와 아바타가 만든 HTML 페이지는 이름만 보이고 내려받을 수 없으며, 첨부한 이미지는 대화와 함께 보입니다.";
 
 function validDate(iso: string | null | undefined): Date | null {
   if (!iso) return null;

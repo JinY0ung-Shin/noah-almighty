@@ -2035,6 +2035,49 @@ describe("stream events applied to a pane", () => {
     expect(pane(closed).workspaceTab).toBe(false); // a tab the viewer closed is not reopened for them
   });
 
+  it("a shared .html page opens in the 파일 tab the viewer has open, quietly — and nowhere else", async () => {
+    updateState((s) => {
+      s.bootstrap = { ...(s.bootstrap ?? {}), workspaceFiles: true } as any;
+    });
+    const open = seedPane({ workspaceTab: true } as any);
+    const page = { id: "h1", kind: "file", mediaType: "text/html", name: "보고서.html", workspacePath: "c/x/보고서.html" };
+    await driveEvents(open, [["file", { attachment: page }]]);
+    expect(pane(open).fileTabs ?? []).toEqual([]);
+    expect(pane(open).workspaceReveal).toMatchObject({
+      path: "c/x/보고서.html",
+      open: true,
+      quiet: true,
+      fallback: { attachment: page, slides: [] },
+    });
+    expect(pane(open).sideTab).toEqual({ kind: "workspace", id: "workspace" });
+    expect(pane(open).sideExpand).toBe(true);
+  });
+
+  it("a shared .html page stays a card when the viewer closed the 파일 tab, or the card has no place", async () => {
+    updateState((s) => {
+      s.bootstrap = { ...(s.bootstrap ?? {}), workspaceFiles: true } as any;
+    });
+    // A tab the viewer closed is not reopened for them — and the card's own tab cannot draw a page.
+    const closed = seedPane({ workspaceTab: false } as any);
+    const placed = { id: "h2", kind: "file", mediaType: "text/html", name: "보고서.html", workspacePath: "c/x/보고서.html" };
+    await driveEvents(closed, [["file", { attachment: placed }]]);
+    expect(pane(closed).fileTabs ?? []).toEqual([]);
+    expect(pane(closed).workspaceReveal).toBeUndefined();
+    expect(pane(closed).workspaceTab).toBe(false);
+    expect(pane(closed).liveAttachments).toHaveLength(1);
+
+    const unplaced = seedPane({ workspaceTab: true } as any);
+    await driveEvents(unplaced, [["file", { attachment: { ...placed, id: "h3", workspacePath: undefined } }]]);
+    expect(pane(unplaced).fileTabs ?? []).toEqual([]);
+    expect(pane(unplaced).workspaceReveal).toBeUndefined();
+
+    // A page past the tab's preview cap would open on "too large": nothing opens by itself.
+    const big = seedPane({ workspaceTab: true } as any);
+    await driveEvents(big, [["file", { attachment: { ...placed, id: "h4", size: 3 * 1024 * 1024 } }]]);
+    expect(pane(big).workspaceReveal).toBeUndefined();
+    expect(pane(big).fileTabs ?? []).toEqual([]);
+  });
+
   it("a .drawio share stays a card when more than one pane is open", async () => {
     seedPane();
     const id = seedPane();

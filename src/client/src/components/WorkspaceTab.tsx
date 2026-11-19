@@ -7,7 +7,7 @@ import ZoomableImage from "./ZoomableImage";
 import { ApiError } from "../lib/api";
 import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
-import { takeWorkspaceReveal, workspaceFileGone } from "../lib/chat";
+import { SHARED_FILE_PREVIEW_FAILED_NOTICE, openFileTab, takeWorkspaceReveal, workspaceFileGone } from "../lib/chat";
 import { cx, useAppState, useLatest, useStore } from "../lib/hooks";
 import { theme as themeStore } from "../lib/theme";
 import {
@@ -31,7 +31,7 @@ import {
   type WorkspacePreviewKind,
 } from "../../../shared/workspaceFiles";
 import { isShareableWorkspacePath } from "../../../shared/shareLinks";
-import type { ChatPane } from "../lib/types";
+import type { ChatPane, PaneFileTab } from "../lib/types";
 import "./WorkspaceTab.css";
 
 // The 파일 tab of the side panel: the viewer's OWN sandbox workspace
@@ -210,6 +210,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
     setCurrentState(path);
   }
   const [opened, setOpened] = useState<{ path: string; entry: WorkspaceEntry } | null>(null);
+  // The card whose click opened `path`, when it holds page renders of its own (see `onCardCopy`).
+  const [cardCopy, setCardCopy] = useState<{ path: string; fallback: PaneFileTab } | null>(null);
   /** The file being opened was not the viewer's press: its preview does not take the keyboard focus. */
   const quietOpen = useRef(false);
   /** Bumped by 새로고침: the open file is read again. */
@@ -437,6 +439,9 @@ const WorkspaceTree = memo(function WorkspaceTree({
         // unfolded down to its row, which takes the focus on the way back.
         quietOpen.current = Boolean(ask.quiet);
         showFile({ path: target, entry });
+        // A card that carries page renders of its own (a pdf, a docx): they
+        // stay reachable from here if this tab cannot render the file.
+        if (ask.fallback?.slides.length) setCardCopy({ path: target, fallback: ask.fallback });
         return;
       }
       setMarked(target);
@@ -538,6 +543,7 @@ const WorkspaceTree = memo(function WorkspaceTree({
       setMarked("");
       setNotice("");
     }
+    setCardCopy(null);
     setOpened(next);
   }
 
@@ -806,6 +812,12 @@ const WorkspaceTree = memo(function WorkspaceTree({
             active={active}
             raw={raw}
             onRawOffered={setRawOffered}
+            onCardCopy={
+              cardCopy && cardCopy.path === opened.path
+                ? () =>
+                    openFileTab(paneId, cardCopy.fallback.attachment, cardCopy.fallback.slides, SHARED_FILE_PREVIEW_FAILED_NOTICE)
+                : undefined
+            }
           />
         </div>
       ) : null}
@@ -832,6 +844,7 @@ function WorkspacePreview({
   active,
   raw,
   onRawOffered,
+  onCardCopy,
 }: {
   path: string;
   entry: WorkspaceEntry;
@@ -841,6 +854,12 @@ function WorkspacePreview({
   raw: boolean;
   /** Whether this file has both a rendering and a source to switch between. */
   onRawOffered: (offered: boolean) => void;
+  /**
+   * The file was opened from a card that holds page renders of its own: when
+   * nothing can be drawn here, this opens the card's tab — the pages as they
+   * were when it was shared. The viewer's press, never automatic.
+   */
+  onCardCopy?: () => void;
 }) {
   const kind = workspacePreviewKind(entry.name, entry.size ?? 0);
   const refusal = PREVIEW_REFUSALS[kind];
@@ -1024,7 +1043,18 @@ function WorkspacePreview({
       </>
     );
   } else if (state.status === "none") {
-    body = <p className="muted">{state.message}</p>;
+    body = (
+      <>
+        <p className="muted">{state.message}</p>
+        {onCardCopy ? (
+          <p>
+            <button className="canvas-tool-btn" type="button" onClick={onCardCopy}>
+              전달한 시점의 미리보기 보기
+            </button>
+          </p>
+        ) : null}
+      </>
+    );
   } else if (kind === "drawio" && !raw) {
     body = <DrawioDiagram xml={text} active={active} />;
   } else {

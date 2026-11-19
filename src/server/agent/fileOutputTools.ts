@@ -1,6 +1,8 @@
 import { createMcpToolServer, tool } from "./mcpServer.js";
 import { z } from "zod";
 import { DRAWIO_MEDIA_TYPE } from "../chatFiles.js";
+import { HTML_MEDIA_TYPE } from "../../shared/shareLinks.js";
+import { workspacePreviewKind } from "../../shared/workspaceFiles.js";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
   SHARE_LINK_EXPIRY_DAYS,
@@ -61,9 +63,10 @@ function shareFileDescription(deckConverterInstalled: boolean): string {
     : "For PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders page previews into the card's side panel — do NOT render or publish slide images yourself for delivery. ";
   return (
     "Hand a generated document to the user as a DOWNLOAD CARD in the chat. " +
-    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). " +
+    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, HTML page (.html), or draw.io diagram (.drawio). " +
     pptxSentence +
     "A shared .drawio file renders as an INTERACTIVE diagram in that same panel (client-side) — never export a diagram to PNG just to deliver it. " +
+    "A page you SAVED AS A FILE (.html) is delivered here too: the app draws it for the user from the card (a static page of up to 1 MB — scripts never run, links don't open; a larger one is a download only). Do NOT also paste that page into `mcp__canvas__show`: the user would get the same page in two places. " +
     "Pass the local file path from your working directory; never paste a local path or file:// URL into Markdown, because the browser cannot reach your filesystem and there is NO Bash workaround for delivering files. " +
     "The file must be inside the run's working directory or scratch workspace, at most 30 MB, and its content must match its extension. A turn can share at most 3 files."
   );
@@ -119,6 +122,20 @@ function sharePreviewNotes(result: SharedFile, deckConverterInstalled: boolean):
   if (!notes.length && result.attachment.mediaType === DRAWIO_MEDIA_TYPE) {
     notes.push("The card's side panel renders the diagram interactively — do not publish separate preview images.");
   }
+  if (!notes.length && result.attachment.mediaType === HTML_MEDIA_TYPE) {
+    // What the client will really do with this card (`opensInWorkspaceTab`):
+    // it draws the workspace file, so only a card that recorded its place, of
+    // a size the file view previews as a page.
+    const place = result.attachment.workspacePath ?? "";
+    const drawn =
+      Boolean(place) &&
+      workspacePreviewKind(place.slice(place.lastIndexOf("/") + 1), result.attachment.size ?? 0) === "html";
+    notes.push(
+      drawn
+        ? "The app draws the page for the user in the side panel (static: scripts never run, links don't open) — do not also show it with mcp__canvas__show."
+        : "This page is a DOWNLOAD ONLY: the app does not draw it for the user (it draws a page of up to 1 MB) — tell the user it is a file to download, and do not say they can see it.",
+    );
+  }
   return notes;
 }
 
@@ -144,7 +161,7 @@ const SHARE_LINK_DESCRIPTION =
   "Each file CARD has at most one active link: asking again for the same card returns it unchanged, and a different expiry needs the user to revoke it first " +
   `(${SHARE_LINK_SETTINGS_PATH}). ` +
   "A link keeps opening the file it was made for: a rebuilt file delivered again with share_file is a NEW card, so a link made for an earlier card keeps serving that earlier file until it expires or is revoked — say so when you link the new card (the result lists the conversation's other active links). " +
-  "Only files you delivered with share_file — never a file the user attached, a screenshot card or an image shown inline. " +
+  "Only files you delivered with share_file — never a file the user attached, a screenshot card, an image shown inline or an HTML page (.html: it stays with its owner). " +
   "You cannot make a link to the CONVERSATION itself: if the user wants to share the conversation, point them to the 대화 공유 button in the chat header (a read-only link they make themselves).";
 
 /**

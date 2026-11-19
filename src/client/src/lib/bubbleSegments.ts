@@ -5,7 +5,7 @@
 // messages (claudeAgent's file-output wrappers) and client-side on live
 // arrivals (chat.ts "file" event), both as "text length so far".
 
-import { cardSlideAttachments } from "../../../shared/shareLinks";
+import { cardHasRenders, cardSlideAttachments } from "../../../shared/shareLinks";
 import type { MessageAttachment } from "./types";
 
 /** One render unit: a text slice, then the cards anchored at its end. */
@@ -31,13 +31,16 @@ export interface BubbleSegment {
  * there are any, and only then the unstamped ones (messages from before
  * `parentId` existed). Never both — the deck-review loop publishes unstamped
  * hidden canvas renders in the same turn as the deck, and mixing them in showed
- * every slide twice.
+ * every slide twice. And the unstamped ones only for a card that can have
+ * renders at all (`cardHasRenders`): a Markdown or CSV card next to an image
+ * the answer placed by address (published hidden) has no slides — taking that
+ * image for one opened the card's own tab instead of the 파일 tab, showing it.
  */
 export function panelSlides(
   attachments: MessageAttachment[] | undefined,
   parent: MessageAttachment,
 ): MessageAttachment[] {
-  return cardSlideAttachments(attachments, parent.id);
+  return cardSlideAttachments(attachments, parent.id, cardHasRenders(parent));
 }
 
 export function segmentAttachments(

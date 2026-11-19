@@ -3733,10 +3733,10 @@ export function createChatRouter({
         attachmentContentDisposition(downloadName, `file.${resolved.ext}`),
       );
       res.setHeader("X-Content-Type-Options", "nosniff");
-      // An SVG (a stored card from the removed Craft apps) can carry script:
-      // always a download, and sandboxed with no fetches even if something
-      // renders it directly.
-      if (resolved.ext === "svg") {
+      // An SVG (a stored card from the removed Craft apps) and an HTML page
+      // (share_file) can carry script: always a download, and sandboxed with
+      // no fetches even if something renders it directly.
+      if (resolved.ext === "svg" || resolved.ext === "html") {
         res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox");
       }
       res.setHeader("Cache-Control", "private, max-age=31536000, immutable");

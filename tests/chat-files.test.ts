@@ -55,6 +55,24 @@ describe("chatFiles", () => {
       expect(fs.readFileSync(resolved!.path).equals(PPTX_BYTES)).toBe(true);
     });
 
+    it("stores a .html page as a text/html card (a share link never serves one)", () => {
+      const ws = workspace();
+      const page = "<!DOCTYPE html><html><body><h1>보고서</h1><script>alert(1)</script></body></html>";
+      fs.writeFileSync(path.join(ws, "report.html"), page);
+
+      const result = publishWorkspaceFile(config(), "conv-html", "report.html", [ws], "분기 보고서");
+      expect("attachment" in result).toBe(true);
+      if (!("attachment" in result)) return;
+      expect(result.attachment).toMatchObject({ kind: "file", mediaType: "text/html", name: "분기 보고서.html" });
+      // The bytes are stored as written: nothing here renders them.
+      const resolved = resolveStoredFile(config(), "conv-html", result.attachment.id);
+      expect(resolved).toMatchObject({ ext: "html", mediaType: "text/html" });
+      expect(fs.readFileSync(resolved!.path, "utf8")).toBe(page);
+      // `.htm` is not a share_file type.
+      fs.writeFileSync(path.join(ws, "old.htm"), page);
+      expect(publishWorkspaceFile(config(), "conv-html", "old.htm", [ws])).toEqual({ error: "UNSUPPORTED" });
+    });
+
     it("returns the realpath it read and the SHA-256 of the stored bytes", () => {
       const ws = workspace();
       fs.mkdirSync(path.join(ws, "q3-review"));

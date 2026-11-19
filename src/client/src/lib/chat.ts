@@ -8,6 +8,8 @@ import { consumeSse, type SseFrame } from "./sse";
 import { ensureNotificationPermission, osNotify } from "./notifications";
 import { appState, newId, notify, readState, updateState, type ClientState } from "./state";
 import { isDrawioAttachment } from "./drawioViewer";
+import { isHtmlCard } from "../../../shared/shareLinks";
+import { workspaceDocumentExtension, workspacePreviewKind } from "../../../shared/workspaceFiles";
 import { WORKSPACE_TAB, neighborTab, resolveSideTab, sameTab, tabKey } from "./sidePanel";
 import { removeConversationWidgetState } from "./widgetState";
 import { forgetConversationDraft, setPaneRewindDraft, stashPaneDraft, takeDraft } from "./chatDrafts";
@@ -2058,25 +2060,34 @@ function handleSseEvent(paneId: string, frame: SseFrame): void {
             // (it's stamped after the emit), so this never overwrites one.
             pane.liveAttachments.push({ ...data.attachment, anchor: pane.liveText.length });
           }
-          // A live .drawio share opens as a side-panel tab by itself, ONCE: a
-          // replayed frame (reconnect, return to the running conversation)
-          // never re-opens a tab the viewer closed. Single-pane layout only —
-          // a split pane's file cards stay downloads. Other formats keep
-          // click-to-open via the file card.
+          // A live .drawio or .html share opens in the side panel by itself,
+          // ONCE: a replayed frame (reconnect, return to the running
+          // conversation) never re-opens a tab the viewer closed. Single-pane
+          // layout only — a split pane's file cards stay downloads. Other
+          // formats keep click-to-open via the file card.
           const fresh = freshSideFrame(pane, pane.liveRunId, frame.id);
+          const drawio = isDrawioAttachment(data.attachment);
+          // Where its card would open it (`openSharedFile`): the 파일 tab at
+          // the file — only while the viewer has that tab open (a tab they
+          // closed is not reopened for them), and without taking the
+          // keyboard from the composer. Else a diagram opens as the card's
+          // own tab, as before; a page has no such tab to draw it (the 파일
+          // tab is the one place that does), so only its card shows.
+          const path = data.attachment.workspacePath;
+          const inWorkspace =
+            Boolean(path) && pane.workspaceTab === true && opensInWorkspaceTab(state, data.attachment, []);
+          // A page past the tab's preview cap would open on "too large": its card waits for a press instead.
+          const page =
+            isHtmlCard(data.attachment) &&
+            inWorkspace &&
+            workspacePreviewKind((path ?? "").slice((path ?? "").lastIndexOf("/") + 1), data.attachment.size ?? 0) === "html";
           if (
             fresh &&
             !data.attachment.hidden &&
-            isDrawioAttachment(data.attachment) &&
+            (drawio || page) &&
             state.chatPanes.length === 1
           ) {
             const current = resolveSideTab(pane);
-            // Where its card would open it (`openSharedFile`): the 파일 tab at
-            // the file — only while the viewer has that tab open (a tab they
-            // closed is not reopened for them), and without taking the
-            // keyboard from the composer. Else the card's own tab, as before.
-            const path = data.attachment.workspacePath;
-            const inWorkspace = Boolean(path) && pane.workspaceTab === true && opensInWorkspaceTab(state, data.attachment, []);
             if (inWorkspace && path) {
               pane.workspaceReveal = {
                 path,
@@ -3239,25 +3250,52 @@ function putFileTab(pane: ChatPane, tab: PaneFileTab): void {
 }
 
 /**
+ * A card whose pages the 파일 tab renders itself, from the file as it is now:
+ * a pdf or a docx within the tab's size cap. The card's own renders are the
+ * same converter's output taken when it was shared, so nothing is lost by
+ * going to the tab — unlike a deck (the converter's exact slides) or an xlsx
+ * (the tab has no preview for one).
+ */
+function tabRendersPages(attachment: MessageAttachment): boolean {
+  const path = attachment.workspacePath ?? "";
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const ext = workspaceDocumentExtension(name);
+  return Boolean(ext) && ext !== "pptx" && workspacePreviewKind(name, attachment.size ?? 0) === "document";
+}
+
+/**
  * Where a shared file's card opens: in the 파일 tab, AT the file — the one
  * place that draws every format the app can draw (markdown, html, csv, json,
  * images, documents, diagrams) — when the card recorded where its file sat and
- * the deployment has the tab. A card that carries its OWN slide renders (a
- * deck: the converter's exact pages, which the workspace could only
- * approximate, and not on every server) keeps its own tab, and so does a card
- * with no recorded place (an older card, a deployment without the tab).
+ * the deployment has the tab. A card that carries slide renders the tab cannot
+ * match (a deck: the converter's exact pages, which the workspace could only
+ * approximate, and not on every server; an xlsx: no preview there) keeps its
+ * own tab, and so does a card with no recorded place (an older card, a
+ * deployment without the tab). A pdf or docx goes to the tab although its card
+ * has renders (`tabRendersPages`); they stay the fallback for a file that is gone.
  */
 export function opensInWorkspaceTab(
   state: Pick<ClientState, "bootstrap">,
   attachment: MessageAttachment,
   slides: MessageAttachment[],
 ): boolean {
-  return Boolean(state.bootstrap?.workspaceFiles && attachment.workspacePath && slides.length === 0);
+  return Boolean(
+    state.bootstrap?.workspaceFiles &&
+      attachment.workspacePath &&
+      (slides.length === 0 || tabRendersPages(attachment)),
+  );
 }
 
 /** The card's copy is shown because its file is no longer where it was shared from (`openSharedFile`'s fallback). */
 export const SHARED_FILE_GONE_NOTICE =
   "작업 폴더에서 이 파일을 찾지 못했습니다. 전달한 뒤에 옮겨졌거나 지워졌을 수 있어, 전달한 시점의 사본을 보여줍니다.";
+
+/**
+ * The card's copy is shown because the 파일 tab could not render the file as it is now (a document whose
+ * conversion failed): the pages taken when it was shared are still on the card — the viewer's own press.
+ */
+export const SHARED_FILE_PREVIEW_FAILED_NOTICE =
+  "작업 폴더의 파일로는 미리보기를 만들지 못해, 전달한 시점의 사본을 보여줍니다.";
 
 /**
  * A file-card click: the file as it is NOW, opened in the 파일 tab

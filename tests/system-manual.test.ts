@@ -82,6 +82,10 @@ describe("official system manual", () => {
     expect(readSystemManual("browser-operations").text).toContain("CLOSES the staging tab for you");
     expect(readSystemManual("browser-operations").text).not.toContain("No stored secret is enabled");
     expect(readSystemManual("canvas-operations").text).toContain("Reserve `svg`/`html` for bespoke visuals");
+    expect(readSystemManual("canvas-operations").text).toContain(
+      "A page you already SAVED AS A FILE (`.html` in your working directory) is not a canvas: deliver the file with `mcp__file_output__share_file`",
+    );
+    expect(readSystemManual("files-canvas").text).toContain("An HTML page (.html) is the one delivered file that gets no link");
     expect(readSystemManual("canvas-operations").text).toContain("Double-quote every node/edge label");
   });
 

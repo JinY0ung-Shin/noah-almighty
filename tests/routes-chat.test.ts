@@ -869,6 +869,14 @@ describe("chat-stream request validation", () => {
     expect(svg.headers["content-type"]).toContain("image/svg+xml");
     expect(svg.headers["content-disposition"]).toContain("attachment;");
     expect(svg.headers["content-security-policy"]).toContain("sandbox");
+    // A page the avatar delivered (share_file .html): a download, never rendered in-origin.
+    fs.writeFileSync(path.join(dir, "page-1.html"), "<!DOCTYPE html><script>alert(1)</script>");
+    const page = await owner.get("/api/conversations/conv-craft/files/page-1?name=x.pdf").expect(200);
+    expect(page.headers["content-type"]).toContain("text/html");
+    expect(page.headers["content-disposition"]).toContain("attachment;");
+    expect(page.headers["content-disposition"]).toContain(".html");
+    expect(page.headers["x-content-type-options"]).toBe("nosniff");
+    expect(page.headers["content-security-policy"]).toContain("sandbox");
     expect((await owner.get("/api/conversations/conv-craft/files/pc-1").expect(200)).headers["content-type"]).toContain(
       "application/vnd.photocraft",
     );

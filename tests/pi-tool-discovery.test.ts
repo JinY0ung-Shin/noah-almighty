@@ -337,6 +337,7 @@ describe("pi catalog text", () => {
     expect(find("browser/clipboard").description).toContain("NEVER tell the user to add Noah's origin to the browser-control allowlist");
     expect(find("browser/click_at").description).toContain("may require the user's explicit confirmation");
     expect(find("canvas/show").description).toContain("it is sanitized away");
+    expect(find("canvas/show").description).toContain("A .html FILE you saved goes to `mcp__file_output__share_file`, not here.");
     expect(find("canvas/show").description).toContain("On this runtime the tool NEVER waits");
     for (const [key, sentence] of Object.entries(PI_DISCOVERY_SENTENCES)) expect(find(key).description!.endsWith(` ${sentence}`)).toBe(true);
   });

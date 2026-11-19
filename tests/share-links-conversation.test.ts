@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import { chatFilesDir } from "../src/server/chatFiles.js";
 import { chatImagesDir } from "../src/server/chatImages.js";
+import { pickShareLinkCard } from "../src/server/shareLinks.js";
 import { closeRun, openRun } from "../src/server/agent/runRegistry.js";
 import type { Store } from "../src/server/store.js";
 import type { AgentResponse, MessageAttachment } from "../src/server/types.js";
@@ -15,6 +16,7 @@ import {
   type ShareLinkSummary,
   type ShareViewMessage,
   type ShareViewPayload,
+  HTML_MEDIA_TYPE,
 } from "../src/shared/shareLinks.js";
 import { signup, withTempDir } from "./helpers.js";
 
@@ -406,6 +408,49 @@ describe("conversation share links — what a recipient gets", () => {
     for (const id of [upload.id, shot.id, hiddenFile.id, later.id, crypto.randomUUID()]) {
       await viewer.agent.get(`${base}/files/${id}`).expect(404);
     }
+  });
+
+  it("never exports an HTML page: no file link, no avatar link, and only a name inside a shared conversation", async () => {
+    const t = boot();
+    const owner = await newUser(t.app, "owner");
+    const viewer = await newUser(t.app, "viewer");
+    const cid = "conv-html";
+    t.store.touchConversation(owner.id, cid, owner.id, "페이지");
+    t.store.addMessage(cid, { role: "user", content: "보고서 페이지 만들어 줘" });
+    // What share_file stores for a .html file.
+    const pageId = crypto.randomUUID();
+    fs.mkdirSync(chatFilesDir(t.config, cid), { recursive: true });
+    fs.writeFileSync(path.join(chatFilesDir(t.config, cid), `${pageId}.html`), "<!DOCTYPE html><script>alert(1)</script>");
+    const page: MessageAttachment = { id: pageId, kind: "file", mediaType: HTML_MEDIA_TYPE, name: "보고서.html", size: 40 };
+    const report = file(t, cid, "pdf", { name: "보고서.pdf" });
+    t.store.addMessage(cid, { role: "assistant", content: "", response: answer("여기"), attachments: [page, report] });
+
+    // The owner still downloads their own page.
+    await owner.agent.get(`/api/conversations/${cid}/files/${pageId}`).expect(200);
+    // The card's link button has no route behind it for a page; the pdf next to it links as before.
+    const refused = await owner.agent.post(`/api/conversations/${cid}/files/${pageId}/share-links`).send({}).expect(400);
+    expect(refused.body.error).toBe("이 파일은 공유 링크를 만들 수 없습니다.");
+    await owner.agent.post(`/api/conversations/${cid}/files/${report.id}/share-links`).send({}).expect(201);
+    expect(linkRows(t.store)).toBe(1);
+
+    // The avatar's tool: the page is refused by id and is never the "most recent file" it picks.
+    const picked = pickShareLinkCard([[page, report]], pageId);
+    expect(picked).toHaveProperty("error");
+    expect((picked as { error: string }).error).toContain("an HTML page cannot be linked");
+    expect((picked as { error: string }).error).not.toContain(pageId);
+    expect(pickShareLinkCard([[page, report]])).toEqual({ card: report, attachments: [page, report] });
+    expect(pickShareLinkCard([[page]])).toHaveProperty("error");
+
+    // A conversation shared WITH its files: the page shows as a name, with no way to its bytes.
+    const link = (await createLink(owner.agent, cid, { includeFiles: true }).expect(201)).body.link as ShareLinkSummary;
+    const payload = (await open(viewer.agent, tokenOf(link.url)).expect(200)).body as ShareViewPayload;
+    const cards = payload.conversation!.messages[1].attachments;
+    expect(cards.map((att) => [att.name, Boolean(att.url)])).toEqual([
+      ["보고서.html", false],
+      ["보고서.pdf", true],
+    ]);
+    await viewer.agent.get(`${ticketBase(cards[1].url!)}/files/${pageId}`).expect(404);
+    await viewer.agent.get(`/api/conversations/${cid}/files/${pageId}`).expect(404);
   });
 
   it("names the avatar that answered in a colleague's thread, and dies when that avatar goes out of reach", async () => {

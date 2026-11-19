@@ -114,6 +114,39 @@ describe("panelSlides", () => {
     expect(panelSlides([card, legacy], card)).toEqual([legacy]);
   });
 
+  // An image the answer's text places by address is published hidden and
+  // unstamped. Next to a card that can have no renders of its own it is not a
+  // slide: taking it for one opened the card's own tab — showing that image —
+  // instead of the 파일 tab.
+  it("gives a card that can have no renders no slides, whatever hidden images its message holds", () => {
+    const embedded = slide("img");
+    for (const [name, mediaType] of [
+      ["notes.md", "text/markdown"],
+      ["data.csv", "text/csv"],
+      ["memo.txt", "text/plain"],
+      ["page.html", "text/html"],
+      ["all.zip", "application/zip"],
+      ["구조.drawio", "application/vnd.jgraph.mxfile"],
+    ]) {
+      const card = att(name, { name, mediaType });
+      expect(panelSlides([card, embedded], card), name).toEqual([]);
+    }
+    // A document the server renders pages for, and a screenshot card, keep the legacy rule.
+    for (const mediaType of [
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/pdf",
+      "image/png",
+    ]) {
+      const card = att("card", { mediaType });
+      expect(panelSlides([card, embedded], card), mediaType).toEqual([embedded]);
+    }
+    // Stamped renders are the card's own whatever its type.
+    const md = att("md", { mediaType: "text/markdown" });
+    expect(panelSlides([md, slide("s", "md"), embedded], md)).toEqual([slide("s", "md")]);
+  });
+
   // The pre-share-links rule took stamped AND unstamped hidden images together.
   // The deck-review loop (SKILL §11) publishes its canvas renders as unstamped
   // hidden images in the SAME turn as the deck, so the old rule showed every

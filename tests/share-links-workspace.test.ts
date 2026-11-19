@@ -12,7 +12,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { createApp, createServices } from "../src/server/app.js";
 import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
-import { SHAREABLE_EXTENSIONS } from "../src/server/chatFiles.js";
+import { LINK_SHAREABLE_EXTENSIONS, SHAREABLE_EXTENSIONS, isShareFileExtension } from "../src/server/chatFiles.js";
 import { shareFilesDir } from "../src/server/shareFiles.js";
 import type { Store } from "../src/server/store.js";
 import {
@@ -20,6 +20,8 @@ import {
   isShareableFileName,
   isShareableWorkspacePath,
   SHAREABLE_FILE_EXTENSIONS,
+  HTML_MEDIA_TYPE,
+  isHtmlCard,
   SHARE_LINK_GONE_MESSAGE,
   type ShareLinkSummary,
   type ShareViewPayload,
@@ -107,8 +109,18 @@ function snapshot(root: string): Record<string, string> {
 }
 
 describe("the shared type list", () => {
-  it("is exactly what share_file publishes", () => {
-    expect([...SHAREABLE_FILE_EXTENSIONS].sort()).toEqual([...SHAREABLE_EXTENSIONS].sort());
+  it("is what share_file publishes, minus an HTML page", () => {
+    expect([...SHAREABLE_FILE_EXTENSIONS].sort()).toEqual([...LINK_SHAREABLE_EXTENSIONS].sort());
+    // share_file delivers a .html page (its owner reads it in the 파일 tab); a link never exports one.
+    expect(SHAREABLE_EXTENSIONS).toContain("html");
+    expect(LINK_SHAREABLE_EXTENSIONS).not.toContain("html");
+    expect([...LINK_SHAREABLE_EXTENSIONS, "html"].sort()).toEqual([...SHAREABLE_EXTENSIONS].sort());
+    expect(isShareFileExtension("html")).toBe(false);
+    expect(isShareFileExtension("pdf")).toBe(true);
+    const page = { id: "h1", kind: "file", mediaType: HTML_MEDIA_TYPE, name: "보고서.html" } as const;
+    expect(isHtmlCard(page)).toBe(true);
+    expect(isShareableFileCard(page)).toBe(false);
+    expect(isHtmlCard({ kind: "file", mediaType: "text/markdown" })).toBe(false);
     expect(isShareableFileName("보고서.PDF")).toBe(true);
     expect(isShareableFileName("notes.md")).toBe(true);
     for (const name of ["script.py", "page.html", "그림.png", "pdf", ".pdf", "archive.tar.gz"]) {

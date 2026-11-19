@@ -591,9 +591,10 @@ describe("loadConverterPreviews", () => {
 describe("share_file — converter-aware description and result notes", () => {
   const LEGACY_DESCRIPTION =
     "Hand a generated document to the user as a DOWNLOAD CARD in the chat. " +
-    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, or draw.io diagram (.drawio). " +
+    "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, HTML page (.html), or draw.io diagram (.drawio). " +
     "For PPTX/DOCX/XLSX/PDF the server AUTOMATICALLY renders page previews into the card's side panel — do NOT render or publish slide images yourself for delivery. " +
     "A shared .drawio file renders as an INTERACTIVE diagram in that same panel (client-side) — never export a diagram to PNG just to deliver it. " +
+    "A page you SAVED AS A FILE (.html) is delivered here too: the app draws it for the user from the card (a static page of up to 1 MB — scripts never run, links don't open; a larger one is a download only). Do NOT also paste that page into `mcp__canvas__show`: the user would get the same page in two places. " +
     "Pass the local file path from your working directory; never paste a local path or file:// URL into Markdown, because the browser cannot reach your filesystem and there is NO Bash workaround for delivering files. " +
     "The file must be inside the run's working directory or scratch workspace, at most 30 MB, and its content must match its extension. A turn can share at most 3 files.";
   const CONVERTER_SENTENCE =
@@ -759,6 +760,39 @@ describe("share_file — converter-aware description and result notes", () => {
     );
     expect(diagram.content[0].text).toBe(
       'The file "flow.drawio" is now available to the user as a download card (attachment id: d-1). The card\'s side panel renders the diagram interactively — do not publish separate preview images.' +
+        TAIL,
+    );
+    // A page: the app draws it from the card — the avatar is told not to copy it into a canvas.
+    const page = async (): Promise<FileOutputResult> => ({
+      behavior: "shown",
+      attachment: { id: "h-1", kind: "file", mediaType: "text/html", name: "report.html", size: 10, workspacePath: "c/c1/report.html" },
+      url: "/api/conversations/c1/files/h-1",
+      previews: 0,
+    });
+    // ...and is told the truth when the app will NOT draw it: no recorded place, or a page past the preview cap.
+    for (const attachment of [
+      { id: "h-2", kind: "file" as const, mediaType: "text/html", name: "report.html", size: 10 },
+      { id: "h-2", kind: "file" as const, mediaType: "text/html", name: "report.html", size: 3 * 1024 * 1024, workspacePath: "c/c1/report.html" },
+    ]) {
+      const undrawn = await callTool(
+        buildFileOutputTools({
+          showFile: unusedShow,
+          shareFile: async () => ({ behavior: "shown", attachment, url: "/api/conversations/c1/files/h-2", previews: 0 }),
+          deckConverterInstalled: true,
+        }),
+        "share_file",
+        { path: "report.html" },
+      );
+      expect(undrawn.content[0].text).toContain("This page is a DOWNLOAD ONLY: the app does not draw it for the user (it draws a page of up to 1 MB)");
+      expect(undrawn.content[0].text).not.toContain("The app draws the page");
+    }
+    const shared = await callTool(
+      buildFileOutputTools({ showFile: unusedShow, shareFile: page, deckConverterInstalled: true }),
+      "share_file",
+      { path: "report.html" },
+    );
+    expect(shared.content[0].text).toBe(
+      'The file "report.html" is now available to the user as a download card (attachment id: h-1). The app draws the page for the user in the side panel (static: scripts never run, links don\'t open) — do not also show it with mcp__canvas__show.' +
         TAIL,
     );
     const plain = async (): Promise<FileOutputResult> => ({

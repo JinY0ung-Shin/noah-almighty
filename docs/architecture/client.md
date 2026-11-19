@@ -547,7 +547,11 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   the server could find; `FileTab` disables its button with a title instead).
 - **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
   otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas
-  renders in the same turn as the deck, and mixing them showed every slide twice).
+  renders in the same turn as the deck, and mixing them showed every slide twice). **The unstamped ones count
+  only for a card that can HAVE renders** (`cardHasRenders`: pptx/docx/xlsx/pdf, a screenshot card;
+  2026-11-19): an image the answer's text places by address is published hidden and unstamped, and next to a
+  Markdown/CSV/HTML card it was taken for that card's slide — the card then opened its own tab, showing that
+  image, instead of the 파일 tab.
 - **A canvas WITH controls always takes the side panel** (`handleCanvas` → `revealSideTab` with `force`),
   so a review form is never hidden behind the deck tab the owner is reading; the deck's tab stays open
   beside it.
@@ -684,11 +688,18 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   format with "미리보기를 제공하지 않습니다", while the 파일 tab draws markdown, html, csv, json, images, documents and
   diagrams. So a card click (`controller.openFilePreview` → `openSharedFile`) goes there whenever it can
   (`opensInWorkspaceTab`: `bootstrap.workspaceFiles` AND the card recorded its place, `workspacePath`, AND it has no
-  slides of its own): `showWorkspaceTab` + a one-shot ask `workspaceReveal = { path, nonce, open: true, fallback }`.
+  slides of its own — or they are pages the tab renders itself, `tabRendersPages`: a pdf or docx within the tab's
+  size cap, 2026-11-19, user decision: "파일 브라우저 안에서 보이도록 통일"; the card's renders stay the fallback
+  for a gone file, and the tab's first render of a document takes seconds where the card's stored pages were
+  instant; when the tab cannot render it at all — a failed or unavailable conversion, a file grown past the cap —
+  the empty state offers 전달한 시점의 미리보기 보기, the viewer's press, which opens the card's tab with
+  `SHARED_FILE_PREVIEW_FAILED_NOTICE`: `WorkspaceTree`'s `cardCopy`, set only by a card ask whose fallback HAS
+  slides, cleared by any other open): `showWorkspaceTab` + a one-shot ask `workspaceReveal = { path, nonce, open: true, fallback }`.
   The tree unfolds down to the file exactly as for 폴더에서 보기 below and then OPENS it (`showFile`); 목록 goes back
   to its row. **What it shows is the file as it is NOW, not the copy taken at the share.** Kept on the card's own
   tab: a deck (its slides are the converter's exact pages — the workspace could only show LibreOffice's
-  approximation, and only where the server has it; 공유 링크 exports the card's copy), a card without a place
+  approximation, and only where the server has it; 공유 링크 exports the card's copy), an xlsx with page renders
+  (the tab has no preview for one), a card without a place
   (stored before `workspacePath`, the `local` runtime), a deployment without the tab; split view still downloads.
   **A file that is gone from the workspace falls back to the card's copy** (`workspaceFileGone` →
   `openFileTab(…, SHARED_FILE_GONE_NOTICE)`): the card's tab opens and says why above the preview
@@ -696,11 +707,20 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   share** (the one tab that opens by itself) follows the same rule only while the viewer HAS the 파일 tab open — a
   tab they closed is never reopened for them — as a `quiet` ask: the file opens without moving keyboard focus out
   of the composer (`quietOpen`), through `revealSideTab` like any tab the avatar shows; otherwise its own tab, as
-  before. `WorkspaceTree` is `memo`'d and takes the ask as an object: it is a NEW object per ask and never changed
+  before. **A live `.html` share opens by itself the same way (2026-11-19)** — a page the avatar saved as a file is
+  delivered with share_file (`text/html`, `isHtmlCard`) instead of being copied into an `html` canvas, so the
+  user no longer meets one page in a canvas tab AND in the 파일 tab — but ONLY into the open 파일 tab: with the
+  tab closed (or no recorded place, or a page past the tab's 1 MiB text-preview cap) nothing opens and the card
+  waits for a press, because the card's own tab cannot draw a page (`FileTab` draws slides and `.drawio` only). The frame is the canvas's own
+  (`CanvasHtmlFrame`), so a page looks the same in both. `WorkspaceTree` is `memo`'d and takes the ask as an object: it is a NEW object per ask and never changed
   afterwards (`takeWorkspaceReveal` replaces it with `undefined`), so it does not defeat the memo. Checked in
   Chromium against mocked routes (2026-11-14): a `.md` card → the heading and bold text drawn in the 파일 tab with
   목록 focused and no tab of the card's own; back → its row focused; a gone file → the card's tab with the line and
-  다운로드; a card without a place → its own tab, nothing said. Tests: `tests/react-workspace-tab.test.tsx` ("a file
+  다운로드; a card without a place → its own tab, nothing said. Checked again in Chromium against a real server
+  with the tab (pi runtime, seeded workspace, 2026-11-19): an `.html` card → the page drawn in the tab's frame with
+  its script NOT run and no 공유 링크 anywhere for it; a `.md` card whose answer also holds a hidden image → the tab;
+  a `.pdf` card with a stamped page render → the tab's own page image; the same pdf gone → the card's tab with the
+  line and its stored page. The live `.html` open is covered by unit tests only. Tests: `tests/react-workspace-tab.test.tsx` ("a file
   card opening its file…"), `tests/client-chat.test.ts` (the two live `.drawio` cases), `tests/react-file-tab.test.tsx`.
 - **A shared file's card points INTO the 파일 tab (폴더에서 보기, 2026-11-14) — the viewer's press, never the
   avatar's.** (Since the bullet above, the button matters for the cards that KEEP their own tab — decks.) A `share_file` card that recorded its place (`MessageAttachment.workspacePath`, server side:

@@ -78,7 +78,7 @@ which check owner/teammate trust themselves.
     a name only; the files the avatar delivered are downloadable only if you tick that. Recipients cannot
     continue the conversation;
   - **a file of your workspace** — **공유 링크** on a file opened in the chat's 파일 tab (the types the
-    avatar can deliver: pptx, docx, xlsx, zip, pdf, csv, md, txt, drawio; up to 30 MB; never a document you
+    avatar can deliver, except an HTML page: pptx, docx, xlsx, zip, pdf, csv, md, txt, drawio; up to 30 MB; never a document you
     attached, under `uploads/`). Noah takes a copy at that moment and the link serves the copy, so later
     changes to the file never reach the recipient.
 

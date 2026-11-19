@@ -143,7 +143,7 @@ These are the invariants the project is built around. New work should reinforce 
   is stored, the token never rides a URL path, every recipient call re-runs full validity, and every
   invalid state is ONE 404 (never 401 — the client logs out on 401). A DOCUMENT the user attached is never
   exported (on a DRM fleet it is a decrypted copy): not as a card, not from the workspace's `uploads/`, and
-  inside a shared conversation only as a name. The avatar mints only a FILE link, only on explicit
+  inside a shared conversation only as a name; neither is an HTML page (a download would run its scripts). The avatar mints only a FILE link, only on explicit
   request in an interactive own-avatar chat; **a conversation link is a person's press, never a tool.**
   **What of a stored message a recipient gets is decided in ONE place (`sharedConversationMessages`): a
   new message field is not shared until it is added there** — never the tool activity or the reasoning.
@@ -197,10 +197,12 @@ These are the invariants the project is built around. New work should reinforce 
   never from a workspace path. **A new preview kind goes through a sanitizer, its own script-less frame, or
   that copy-then-convert path.** A `share_file` card records where its file sat, and a press on the card
   opens the file IN the tab — the one place that draws a file, as it is NOW; a deck keeps its own tab (its
-  exact slides), and a file gone from the workspace falls back to the card's copy, which says so. 공유 링크
+  exact slides; an xlsx too — the tab has no preview for one), and a file gone from the workspace falls back
+  to the card's copy, which says so. A page the avatar saved as a `.html` FILE is delivered as a card like any
+  file (never also copied into a canvas: one page, one place). 공유 링크
   on an opened file shares Noah's own COPY of it (above) — the tab still never writes the workspace. The
-  avatar never opens, selects or learns of the tab (a live `.drawio` opens there by the client's own rule,
-  only while the viewer has the tab open). → `pi-runtime.md`, `client.md`.
+  avatar never opens, selects or learns of the tab (a live `.drawio` or `.html` opens there by the client's
+  own rule, only while the viewer has the tab open). → `pi-runtime.md`, `client.md`.
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

@@ -17,13 +17,18 @@
 
   | kind | exports | made by | what it stores |
   |---|---|---|---|
-  | `file` | one download card the avatar delivered with share_file (any share_file type); a PPTX deck also shows its stamped slide renders | the card's 공유 링크 button, or the avatar's `create_share_link` | nothing — a live reference to the card |
+  | `file` | one download card the avatar delivered with share_file (any share_file type but an HTML page); a PPTX deck also shows its stamped slide renders | the card's 공유 링크 button, or the avatar's `create_share_link` | nothing — a live reference to the card |
   | `conversation` | the conversation READ-ONLY up to the last message stored when the owner pressed | the pane header's 대화 공유 button ONLY (no avatar tool, in any run) | nothing — the anchor message id |
   | `workspace_file` | a COPY of one file of the owner's own sandbox workspace, taken when they pressed | the 파일 tab's 공유 링크 on an opened file | the copy, under `<dataDir>/share-files/<link id>/` |
 
-- **File cards** (`isShareableFileCard`: a visible `kind:"file"` card that is not `uploaded` and not an
-  image card) whose bytes still resolve as a type share_file publishes (`resolveShareableFile` →
-  `isShareFileExtension`). So a file the USER attached (on a DRM fleet: a decrypted copy), a browser
+- **File cards** (`isShareableFileCard`: a visible `kind:"file"` card that is not `uploaded`, not an
+  image card and not an HTML page) whose bytes still resolve as a type a link serves (`resolveShareableFile` →
+  `isShareFileExtension`: what share_file publishes MINUS `.html`, `FILE_TYPES[ext].link === false`).
+  **An HTML page is never exported (2026-11-19)**: share_file delivers one (its owner reads it in the 파일 tab,
+  script-less), but a link hands the recipient the BYTES, and a downloaded page opens in their browser with
+  its scripts running — so the card has no 공유 링크, the 파일 tab offers none for a `.html`
+  (`SHAREABLE_FILE_EXTENSIONS`, held equal to the server's `LINK_SHAREABLE_EXTENSIONS` by a test), a
+  conversation link shows the card as a name only, and `create_share_link` refuses it. So a file the USER attached (on a DRM fleet: a decrypted copy), a browser
   screenshot card and a legacy Craft-app card are never linkable — all three are refused at creation, and
   a screenshot or legacy card is also never SERVED whatever a row names (the type check runs on every
   call; the `uploaded` check runs at creation only — an upload shares its types with share_file). The same

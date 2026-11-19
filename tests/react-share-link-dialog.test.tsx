@@ -216,7 +216,7 @@ describe("ShareLinkDialog", () => {
     // What the link shows and leaves out is said BEFORE the press.
     expect(
       within(card).getByText(
-        "지금까지의 대화만 공유됩니다. 이후에 이어지는 대화는 포함되지 않습니다. 도구 실행 기록과 생각 과정은 공유되지 않습니다. 직접 첨부한 문서는 이름만 보이고 내려받을 수 없으며, 첨부한 이미지는 대화와 함께 보입니다.",
+        "지금까지의 대화만 공유됩니다. 이후에 이어지는 대화는 포함되지 않습니다. 도구 실행 기록과 생각 과정은 공유되지 않습니다. 직접 첨부한 문서와 아바타가 만든 HTML 페이지는 이름만 보이고 내려받을 수 없으며, 첨부한 이미지는 대화와 함께 보입니다.",
       ),
     ).toBeTruthy();
     expect(

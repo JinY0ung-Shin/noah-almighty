@@ -462,8 +462,11 @@
 ## Generated-file delivery + PPTX deck pipeline (`share_file`, hidden publishes)
 - **`chatFiles.ts` mirrors `chatImages.ts` for agent-GENERATED documents** (the only way IN is a user's
   document attachment, above): `mcp__file_output__share_file` → `onShareFile` (routes/chat.ts) → `publishWorkspaceFile`
-  (same realpath+roots containment; extension allowlist pptx/docx/xlsx/zip/pdf/csv/md/txt/drawio with
-  magic-byte checks for the container formats; 30 MB cap) → bytes at
+  (same realpath+roots containment; extension allowlist pptx/docx/xlsx/zip/pdf/csv/md/txt/drawio/html with
+  magic-byte checks for the container formats; 30 MB cap; `.html`, 2026-11-19: the owner reads the page in the
+  파일 tab, the download carries the `sandbox` CSP like a legacy SVG, no share link ever exports it — `share-links.md` —
+  and the tool result says "download only" when the client will not draw it: no recorded place, or over the tab's
+  1 MiB preview cap) → bytes at
   `dataDir/chat-files/<conversationId>/<id>.<ext>`, metadata on `messages.attachments_json` as
   `kind:"file"` (+`size`). Download route `GET /api/conversations/:id/files/:fileId` is owner-scoped and
   ALWAYS `Content-Disposition: attachment` (never inline; `?name=` only picks the sanitized save-dialog

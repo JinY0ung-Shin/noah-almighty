@@ -24,9 +24,9 @@ export function isShareLinkKind(value: unknown): value is ShareLinkKind {
 }
 
 /**
- * The file types a link serves — exactly what share_file publishes (the server
- * keeps the table: `chatFiles.ts` FILE_TYPES / `SHAREABLE_EXTENSIONS`; a test
- * holds the two equal). The
+ * The file types a link serves — what share_file publishes, minus an HTML page
+ * ({@link HTML_MEDIA_TYPE}). The server keeps the table (`chatFiles.ts`
+ * FILE_TYPES / `LINK_SHAREABLE_EXTENSIONS`; a test holds the two equal). The
  * 파일 tab offers 공유 링크 only for these.
  */
 export const SHAREABLE_FILE_EXTENSIONS = ["pptx", "docx", "xlsx", "zip", "pdf", "csv", "md", "txt", "drawio"] as const;
@@ -82,6 +82,20 @@ export const SHARE_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export const PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
+/**
+ * A page the avatar delivered as a `.html` file (share_file). Its owner reads
+ * it in the chat's 파일 tab, drawn script-less in a sandboxed frame. It is the
+ * one share_file type a link NEVER exports: a link hands the recipient the
+ * bytes as a download, and a downloaded page opens in their browser with its
+ * scripts running — nothing the owner saw would tell them so.
+ */
+export const HTML_MEDIA_TYPE = "text/html";
+
+/** Whether a card is an HTML page ({@link HTML_MEDIA_TYPE}). */
+export function isHtmlCard(att: { kind?: string; mediaType?: string }): boolean {
+  return att.kind === "file" && att.mediaType === HTML_MEDIA_TYPE;
+}
+
 /** One message shared by the server's 404 and the viewer's dead-link state. */
 export const SHARE_LINK_GONE_MESSAGE = "공유 링크가 만료되었거나 삭제되었습니다.";
 
@@ -122,8 +136,9 @@ export interface ShareCardLike {
  * their own message (`uploaded`, see `src/shared/chatDocuments.ts`: a link
  * exports what the avatar made, not something the user sent in — on a DRM
  * fleet that is a decrypted copy), and never an image card (a browser
- * screenshot the bridge auto-shared; share_file itself never makes one). The
- * server additionally requires the stored bytes to be a share_file type.
+ * screenshot the bridge auto-shared; share_file itself never makes one), and
+ * never an HTML page ({@link HTML_MEDIA_TYPE}). The server additionally
+ * requires the stored bytes to be a type a link serves.
  */
 export function isShareableFileCard(att: ShareCardLike): boolean {
   // A stored row is not shape-checked: a card without a media type is not linkable, never a throw.
@@ -132,7 +147,8 @@ export function isShareableFileCard(att: ShareCardLike): boolean {
     !att.hidden &&
     !att.uploaded &&
     typeof att.mediaType === "string" &&
-    !att.mediaType.startsWith("image/")
+    !att.mediaType.startsWith("image/") &&
+    att.mediaType !== HTML_MEDIA_TYPE
   );
 }
 
@@ -311,15 +327,37 @@ export function shareSlideAttachments<
     .slice(0, MAX_SHARE_LINK_SLIDES);
 }
 
+/** The document types the server renders page previews for (`deckRender.ts` `PREVIEWABLE_EXTENSIONS`). */
+const PAGE_RENDER_MEDIA_TYPES: readonly string[] = [
+  PPTX_MEDIA_TYPE,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/pdf",
+];
+
+/**
+ * Whether a card is of a kind that HAS renders of its own: a document the
+ * server rasterizes into pages, or a screenshot card (its copy). A Markdown,
+ * CSV, text, HTML, zip or draw.io card never has any — a hidden image in its
+ * message is something else (an image the answer's text places by address).
+ */
+export function cardHasRenders(card: { mediaType?: string }): boolean {
+  const type = typeof card.mediaType === "string" ? card.mediaType : "";
+  return type.startsWith("image/") || PAGE_RENDER_MEDIA_TYPES.includes(type);
+}
+
 /**
  * The slide renders the OWNER's file-preview panel shows for a card: the
  * renders stamped with its id when there are any; otherwise (messages from
- * before `parentId` existed) every unstamped hidden image of the message.
+ * before `parentId` existed) every unstamped hidden image of the message —
+ * only with `legacy`, which the caller sets for a card that can have renders
+ * at all ({@link cardHasRenders}).
  */
 export function cardSlideAttachments<
   T extends { kind: string; hidden?: boolean; parentId?: string },
->(attachments: readonly T[] | undefined, cardId: string): T[] {
+>(attachments: readonly T[] | undefined, cardId: string, legacy = true): T[] {
   const hidden = (attachments ?? []).filter((att) => att.kind === "image" && Boolean(att.hidden));
   const stamped = hidden.filter((att) => att.parentId === cardId);
-  return stamped.length > 0 ? stamped : hidden.filter((att) => !att.parentId);
+  if (stamped.length > 0) return stamped;
+  return legacy ? hidden.filter((att) => !att.parentId) : [];
 }

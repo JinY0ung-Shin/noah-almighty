@@ -9,6 +9,7 @@ import SidePanel from "../src/client/src/components/SidePanel";
 import WorkspaceTab from "../src/client/src/components/WorkspaceTab";
 import {
   SHARED_FILE_GONE_NOTICE,
+  SHARED_FILE_PREVIEW_FAILED_NOTICE,
   closeWorkspaceTab,
   newChat,
   openSharedFile,
@@ -20,6 +21,7 @@ import {
 import { WORKSPACE_TAB, hasSideTabs, resolveSideTab, sideTabs } from "../src/client/src/lib/sidePanel";
 import { readState, replaceState, updateState } from "../src/client/src/lib/state";
 import type { WorkspaceEntry, WorkspaceListing } from "../src/shared/workspaceFiles";
+import { WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES } from "../src/shared/workspaceFiles";
 
 const PRISTINE = structuredClone(readState());
 const CONVERSATION = "11111111-1111-4111-8111-111111111111";
@@ -593,11 +595,22 @@ describe("a file card opening its file in the 파일 tab (a card click)", () => 
     replaceState({ ...structuredClone(PRISTINE), ...withTab, chatPanes: [pane(over)] as any, activePaneId: "p1" });
   }
 
-  it("goes to the 파일 tab only for a card with a recorded place and no slides of its own", () => {
+  it("goes to the 파일 tab for a card with a recorded place, unless its slides are ones the tab cannot match", () => {
     const slide: any = { id: "s1", kind: "image", hidden: true };
     expect(opensInWorkspaceTab(withTab, card("data.csv"), [])).toBe(true);
+    expect(opensInWorkspaceTab(withTab, card("page.html"), [])).toBe(true);
     // A deck keeps its own tab: its slides are the converter's exact pages.
     expect(opensInWorkspaceTab(withTab, card("deck.pptx"), [slide])).toBe(false);
+    // So does a spreadsheet: the tab has no preview for one.
+    expect(opensInWorkspaceTab(withTab, card("표.xlsx"), [slide])).toBe(false);
+    // A pdf or docx goes to the tab although its card has page renders — the tab renders the same pages.
+    expect(opensInWorkspaceTab(withTab, card("보고서.pdf"), [slide])).toBe(true);
+    expect(opensInWorkspaceTab(withTab, card("문서.DOCX"), [slide])).toBe(true);
+    // ...unless it is past the tab's size cap (the tab would only offer the download).
+    expect(opensInWorkspaceTab(withTab, card("큰 문서.pdf", { size: WORKSPACE_DOCUMENT_PREVIEW_MAX_BYTES + 1 }), [slide])).toBe(false);
+    // The place decides, not the display name the card was given.
+    expect(opensInWorkspaceTab(withTab, card("보고서.pdf", { workspacePath: "c/x/deck.pptx" }), [slide])).toBe(false);
+    expect(opensInWorkspaceTab(withTab, card("보고서.pdf", { workspacePath: undefined }), [slide])).toBe(false);
     // An older card (no place), and a deployment without the tab.
     expect(opensInWorkspaceTab(withTab, card("data.csv", { workspacePath: undefined }), [])).toBe(false);
     expect(opensInWorkspaceTab({ bootstrap: { workspaceFiles: false } as any }, card("data.csv"), [])).toBe(false);
@@ -626,6 +639,14 @@ describe("a file card opening its file in the 파일 tab (a card click)", () => 
     const old = card("old.md", { workspacePath: undefined });
     act(() => openSharedFile("p1", old, []));
     expect(readState().chatPanes[0].sideTab).toEqual({ kind: "file", id: old.id });
+
+    // A pdf card: the 파일 tab, with the card's own page renders kept as the fallback for a file that is gone.
+    const pdf = card("보고서.pdf");
+    act(() => openSharedFile("p1", pdf, [slide]));
+    state = readState();
+    expect(state.chatPanes[0].sideTab).toEqual(WORKSPACE_TAB);
+    expect(state.chatPanes[0].workspaceReveal).toMatchObject({ path: pdf.workspacePath, open: true, fallback: { attachment: pdf, slides: [slide] } });
+    expect((state.chatPanes[0].fileTabs ?? []).some((tab) => tab.attachment.id === pdf.id)).toBe(false);
   });
 
   it("opens the file's preview there — drawn by the tab — with the tree unfolded behind it", async () => {
@@ -656,6 +677,31 @@ describe("a file card opening its file in the 파일 tab (a card click)", () => 
     expect(SHARED_FILE_GONE_NOTICE).toContain("전달한 시점의 사본을 보여줍니다");
     // Nothing is said in the 파일 tab itself: the viewer is not there any more.
     expect(document.querySelector(".workspace-tab [role=status]")).toBeNull();
+  });
+
+  it("a pdf card the tab cannot render still reaches the pages on the card — by the viewer's press", async () => {
+    seed();
+    folders[`c/${CONVERSATION}`].entries.push(file("보고서.pdf", 500));
+    previewAnswers = [{ status: "failed", reason: "RENDER_FAILED" }];
+    const slide: any = { id: "s1", kind: "image", hidden: true, parentId: "att-보고서.pdf" };
+    const pdf = card("보고서.pdf", { mediaType: "application/pdf", size: 500 });
+    act(() => openSharedFile("p1", pdf, [slide]));
+    render(<SidePanel pane={readState().chatPanes[0]} />);
+    expect(await screen.findByText(/미리보기를 만들지 못했습니다/)).toBeTruthy();
+    // Nothing switched by itself: the tab says why, and offers the copy.
+    expect(readState().chatPanes[0].fileTabs).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "전달한 시점의 미리보기 보기" }));
+    expect(readState().chatPanes[0].fileTabs).toEqual([{ attachment: pdf, slides: [slide], notice: SHARED_FILE_PREVIEW_FAILED_NOTICE }]);
+    expect(readState().chatPanes[0].sideTab).toEqual({ kind: "file", id: pdf.id });
+    expect(SHARED_FILE_PREVIEW_FAILED_NOTICE).toContain("전달한 시점의 사본을 보여줍니다");
+  });
+
+  it("offers no card copy for a file opened from the tree, or from a card with no pages of its own", async () => {
+    previewAnswers = [{ status: "failed", reason: "RENDER_FAILED" }];
+    render(<WorkspaceTab pane={pane()} active />);
+    fireEvent.click(await screen.findByRole("button", { name: "deck.pptx" }));
+    expect(await screen.findByText(/미리보기를 만들지 못했습니다/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "전달한 시점의 미리보기 보기" })).toBeNull();
   });
 
   it("a quiet ask (a live .drawio share) opens the file without taking the keyboard", async () => {

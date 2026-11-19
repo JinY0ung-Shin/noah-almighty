@@ -67,6 +67,10 @@ describe("canvas content types (`widget` and `vega` are retired)", () => {
     for (const type of ["'markdown' (rich text)", "'mermaid' (a flow/sequence/graph diagram, or a simple chart as `xychart-beta` / `pie`", "'svg' (an inline <svg>", "or 'html' (a static page"]) {
       expect(show.description).toContain(type);
     }
+    // A page that exists as a FILE is delivered, not copied into a canvas (one page, one place).
+    expect(show.description).toContain(
+      "A page you already SAVED AS A FILE (.html) is NOT shown here: deliver that file with `mcp__file_output__share_file` and the app draws it from the card",
+    );
     expect(show.description).toContain("it is sanitized away");
     expect(show.description).toContain("On this runtime the tool NEVER waits");
     expect(show.description).toContain("use the built-in AskUserQuestion tool instead");
