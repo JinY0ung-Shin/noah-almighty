@@ -784,6 +784,18 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
+- **Process mining (pi `9f579dd`) is in the stack but OFF: nothing of Noah's starts it.** pi's `mining` service
+  has the compose profile `mining`, so `docker compose up` — and `scripts/deploy.sh` — never run it; it runs
+  only when an OPERATOR adds pi's daily cron line (`docker compose run --rm -T mining`, pi's
+  `docs/OPERATIONS.md`). Running it is the operator's decision about every user's conversations: it reads pi's
+  stored sessions (Noah's chats) read-only, sends each idle session's successful tool calls — name and the
+  first 300 characters of the arguments, after masking secret-SHAPED text — to the default LLM, and writes a
+  report that lists work per user. The report is shown to Noah admins on the panel's 대화 기록 page
+  (`GET /admin/api/mining/report`, behind the same Noah-admin check as the rest of `/admin`; `{"report":null}`
+  until a run). The gateway mounts the new `mining-data` volume read-only, so an upgrade recreates the gateway
+  — `up` does that. Noah's code, prompts and both metacognition surfaces know nothing of it. Seen on a real
+  stack: an empty run, the route's three answers and the page (`98-mining-report.mjs`; → `build-run-verify.md`);
+  NOT seen: a run that reads a session.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,
@@ -885,6 +897,14 @@ Noah needs from the STACK.
   no `memory` server in pi's broker. **Not seen there:** an owner actually moved (cutover, tools, mirror,
   rollback) — the boot stack has no git host with a knowledge repository; that path rests on the tests
   against the hand-written double (`tests/helpers/fakeMemory.ts`).
+- **The service's search is BM25 since pi `1d4a1fe` (2026-11-19) — it no longer ranks like the clone's
+  `rankBrainNotes`.** Title/aliases, tags and the whole note are scored separately and weighted 5·3·1 (so
+  title > tag > body still holds), an English word matches only as a WHOLE word (`deploy` does not find
+  `deployment`; the clone ranker's substring match does), Korean is cut into two-character pieces (`결함을`
+  finds `결함이`), scores are decimals, and a query with no letter or digit in it is refused with 400
+  `invalid_query` — Noah answers such a query itself as no hit and never sends it (`hasSearchWord`,
+  `personalVault.ts`; → `repo-knowledge.md` "Search: what differs"). Seen through Noah's built client in the
+  boot test at pi `9f579dd` (`97-memory-search.mjs`; → `build-run-verify.md`).
 - **Not sized:** the service's volume, its backup and its limits (10,000 notes / 256 MiB per wiki) are pi's
   and the operator's. Noah backs up nothing of it: the only other copy of a moved vault is its repository
   mirror.

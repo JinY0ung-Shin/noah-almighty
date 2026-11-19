@@ -12,7 +12,8 @@ const ROOT = process.cwd();
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 /** pi-gateway's compose (pinned commit): its services, its networks, and every `${VAR}` it reads. */
-const PI_SERVICES = ["sandbox-image", "egress-proxy", "jaeger", "sandboxd", "mcp-broker", "memory", "gateway"];
+// `mining` (pi 9f579dd) has the compose profile `mining`: `up` never starts it — a cron line the operator adds does.
+const PI_SERVICES = ["sandbox-image", "egress-proxy", "jaeger", "sandboxd", "mcp-broker", "memory", "gateway", "mining"];
 const PI_NETWORKS = ["edge", "control", "broker-egress", "proxy-egress"];
 const PI_COMPOSE_VARIABLES = [
   "APT_MIRROR_URL",

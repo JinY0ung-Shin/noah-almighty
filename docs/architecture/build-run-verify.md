@@ -573,6 +573,57 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   broker's %-encoded-path fix (`6551a29`) asked directly — pi's tests; an upgrade of an EXISTING deployment
   (`setup-host.sh` making Noah's key copy on a host that already has secrets — this run starts from nothing).
   After the run: Noah 264 MiB, gateway 194 MiB, broker 151 MiB, memory 77 MiB (37 MiB in the first run).
+  **pi `9f579dd` (2026-11-19, six commits since `60f4b59`: the memory service's note search ranks with BM25 and
+  cuts Korean into two-character pieces — `1d4a1fe`, which also moves `mcp_search`'s tokenizer and BM25 into
+  `packages/shared`; saving LLM settings refuses a `contextWindow` over 1,048,576 or a `maxTokens` larger than
+  its `contextWindow` — `36ffeea`; a search benchmark outside `vitest run` — `8668a99`; process mining, a
+  `mining` compose service (profile `mining`, run by a daily cron, never by `up`) that summarises stored sessions
+  with the default LLM into task types — `417ebc6`, `8427ed1` — and a 프로세스 마이닝 section on the panel's 대화
+  기록 page that shows its last report from a `mining-data` volume the gateway mounts read-only — `9f579dd`. pi's
+  commits ran typecheck, vitest and the admin build; none started a stack, the new page was never opened in a
+  browser, mining was never run against an LLM server):** `~/.noah-work/boot-test-2026-11-19b`, Noah `e75a47a`.
+  A first run, `…-19a` with pi `8668a99`, passed every step too; pi's three mining commits were pushed after it,
+  so it was run again and only the second run is named here. Every step passed: `10-accounts` 6/6,
+  `21-admin-proxy` 11/11, `24-llm-no-falcon-tier` 3/3, `23-admin-ui-assets` 3/3, `30-documents` 30/30,
+  `31-documents-extra` 21/21, `32-second-user-own` 3/3, `50-subagent` 9/9, `55-systemone` 25/25,
+  `65-shell-step-verdicts` 33/33, `71-tracing-turn` 25/25, `75-trace-stats` 37/37, `25-admin-ui-real` 48/48,
+  `85-workspace-files` 26/26, `86-mcp-files` 20/20, `87-mcp-file-args` 19/19, `88-plugin-refresh` 23/23,
+  `90-pi-validation` 22/22, `92-grep-glob` 10/10, `93-tool-call-limit` 23/23, `94-turn-timings` 13/13,
+  `80-context-usage` 19/19, `96-memory` 29/29, `95-final-state` 1/1 (no error-level line in any service's log)
+  — the same counts as at `60f4b59`, so the LLM settings the run saves (a 131,072 window) pass pi's new check
+  and `mcp_search` finds what it found (`55-systemone`'s BM25 searches, `90-`). Two checks are new, one for
+  each thing pi changed. **`97-memory-search.mjs` (10/10)** runs Noah's BUILT client
+  (`dist/server/memory/memoryClient.js`, what a moved owner's search uses) inside Noah's container, with Noah's
+  env and key file, against the stack's service, for a throwaway owner with five notes. Seen: `결함을` finds the
+  note that says `결함이 있는지`; `deploy` finds nothing while `deployment` finds the note titled `Deployment
+  checklist`; `github` finds `GitHub`; `릴리스` returns its three notes as title (15.63…), tag (7.73…), body
+  (0.99…) — the scores are decimals now and every hit passed the client's shape check; a query no note matches
+  answers `{"hits":[],"unscanned":0}`; **`?!` is refused** — Noah's client throws `MemoryRefusedError` 400
+  `invalid_query` with `the query has no words to look for`, as for a blank query. The wiki was deleted
+  afterwards. **`98-mining-report.mjs` (14/14)**: after `up` no mining container exists and the gateway's mounts
+  read `/mining=false` (read-only); `GET /admin/api/mining/report` through Noah's proxy answers `200
+  {"report":null}` to a Noah admin, 403 `forbidden` (`Noah 관리자만 사용할 수 있습니다.`) to a member and 403
+  `noah_session_required` without a session; ONE `docker compose run --rm -T mining` in Noah's project exits 0
+  in about 1.4 s next to the running gateway, prints `# 프로세스 마이닝 보고서 … 끝까지 읽은 세션 0개, 실패 0개,
+  남은 대상 0개 … 모델: fake-model`, leaves no container, and leaves `report.md` and `mining.db` in the volume as
+  uid 10001 mode 0600; the route then answers that report byte for byte (still 403 for the member) and the
+  gateway logged no error; in Chromium, through the proxy, the 대화 기록 page shows the 프로세스 마이닝 section and
+  보고서 보기 opens a window with the report's text — no page error, failed request or CSP violation.
+  **Changed in Noah next to this bump** (not in the tree this run exported, and not something this stack
+  exercises): `MemoryVault.search` kept only a BLANK query from the service, which was the service's whole rule
+  before; a query with no letter or digit is now answered as no hit without being sent (`hasSearchWord`), and
+  `repo-knowledge.md` "Search: what differs from `rankBrainNotes`" lists the new differences.
+  **NOT seen:** the search of an owner actually MOVED and the text a model reads for it (the stack has no
+  knowledge repository; that path rests on Noah's tests against the double, whose ranking is still the old
+  count); pi's new refusals when LLM settings are saved (no step saves an over-large window — pi's test); the
+  service's speed on a large wiki (pi's benchmark on its own machine: about 0.8 s for 2,000 notes of 1 KiB,
+  0.16 s for ten of 512 KiB); `mcp_search`'s scores compared number by number with the old code. **Of mining,
+  nothing past an empty run:** it reads only sessions idle for 30 minutes and this stack's are minutes old, so
+  it read none and called no LLM — what it sends to the LLM (a session's successful tool calls, each with the
+  first 300 characters of its arguments, after pi's masking of secret-shaped text), the masking itself, labels,
+  flows and a report that names users and their work are pi's tests only, against no real model; so are a
+  second run over an existing `mining.db` and the gateway stopped while mining runs. After the run: Noah
+  279 MiB, gateway 267 MiB, broker 159 MiB, memory 38 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

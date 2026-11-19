@@ -69,6 +69,8 @@ checks_stage() {
   extra 94-turn-timings          Q-turn-timings.log            node 94-turn-timings.mjs
   extra 80-context-usage         X-context-usage.log           node 80-context-usage.mjs
   extra 96-memory                M-memory.log                  node 96-memory.mjs
+  extra 97-memory-search         S-memory-search.log           node 97-memory-search.mjs
+  extra 98-mining-report         N-mining-report.log           node 98-mining-report.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
