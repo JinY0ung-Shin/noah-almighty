@@ -8,7 +8,7 @@ import { memoryClientFor } from "../memory/memoryClient.js";
 import { withVaultWriteLock } from "../personalVault.js";
 import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
-import { deletePiUserWorkspace } from "../agent/pi/piWorkspace.js";
+import { deletePiUserWorkspace, piUserKey } from "../agent/pi/piWorkspace.js";
 import { deleteWorkspacePreviewsForUser } from "../workspacePreviews.js";
 import { sweepShareLinkCopies } from "../shareLinks.js";
 import { piRepoCopyStateDir } from "../agent/pi/piRepoCopy.js";
@@ -43,6 +43,20 @@ import {
 import { registerAdminEgressRoutes } from "./adminEgress.js";
 
 // ---- Admin -----------------------------------------------------------
+/** The longest shown name on pi's panel, in code points. */
+const PI_PANEL_SHOWN_NAME_MAX = 40;
+
+/**
+ * How a user is named on pi-gateway's admin panel: `@login` first, then the
+ * shown name without control or format characters (a bidi override could
+ * reorder the label), whitespace folded, cut to {@link PI_PANEL_SHOWN_NAME_MAX}.
+ */
+export function piPanelUserName(username: string, displayName: string | null | undefined): string {
+  const shown = [...(displayName ?? "").replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, " ").replace(/\s+/g, " ").trim()];
+  const cut = shown.length > PI_PANEL_SHOWN_NAME_MAX ? `${shown.slice(0, PI_PANEL_SHOWN_NAME_MAX).join("")}…` : shown.join("");
+  return cut && cut !== username ? `@${username} ${cut}` : `@${username}`;
+}
+
 export function createAdminRouter(deps: RouterDeps): Router {
   const { config, store, observedModel, auditAs } = deps;
   const router = Router();
@@ -165,6 +179,26 @@ export function createAdminRouter(deps: RouterDeps): Router {
 
   router.get("/api/admin/users", requireAuth(store), requireAdmin, (_req, res) => {
     res.json({ users: store.listUsers() });
+  });
+
+  // Who the ids are that pi-gateway's admin panel shows: pi knows a user only as
+  // the Noah user id it is sent. Read by Noah's own script on that page
+  // (`routes/piAdminProxy.ts`, `/pi-admin-names.js`) — the name as people see it
+  // and the login name, nothing else of the account. `key` is the name pi gives
+  // that user's sandbox and workspace folder (`u-<hash of the id>`), which its
+  // sandbox table shows instead of the id. The LOGIN name leads and the shown
+  // name is cut: a shown name is free text its owner picks, and one written to
+  // look like someone else's label must not push the real login name out of a
+  // cell that clips.
+  router.get("/api/admin/pi-user-names", requireAuth(store), requireAdmin, (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      users: store.listUsers().map((user) => ({
+        id: user.id,
+        key: piUserKey(user.id),
+        name: piPanelUserName(user.username, user.displayName),
+      })),
+    });
   });
 
   router.get("/api/admin/users/:id", requireAuth(store), requireAdmin, (req: AuthenticatedRequest, res) => {

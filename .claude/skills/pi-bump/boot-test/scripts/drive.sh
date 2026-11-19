@@ -71,6 +71,8 @@ checks_stage() {
   extra 96-memory                M-memory.log                  node 96-memory.mjs
   extra 97-memory-search         S-memory-search.log           node 97-memory-search.mjs
   extra 98-mining-report         N-mining-report.log           node 98-mining-report.mjs
+  # Noah's own addition to pi's page (the names of the users pi shows by id): after the steps that made turns.
+  extra 26-admin-user-names      U-admin-user-names.log        node 26-admin-user-names.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh

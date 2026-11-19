@@ -1,0 +1,9 @@
+/* Noah's addition to pi-gateway's admin panel (see pi-admin-names.js): the Noah
+   name of a user pi shows by id, drawn BEFORE the id — a cell that clips its
+   text keeps the name and cuts the UUID. The id itself stays, as pi wrote it. */
+[data-noah-user]::before {
+  content: attr(data-noah-user) " · ";
+  font-family: Pretendard, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-weight: 600;
+  letter-spacing: normal;
+}

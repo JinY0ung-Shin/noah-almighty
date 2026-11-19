@@ -958,6 +958,30 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   `/admin/api` response keeps its content type only when inert (JSON, SSE, `text/plain`, `image/*`); anything else
   (`text/javascript` above all, which Noah's `script-src 'self'` would run) is relayed as
   `application/octet-stream`, always with `nosniff`. pi's page assets (`/admin/assets/*`) keep theirs.
+- **Who a user id is (2026-11-19)** — pi knows a user only as what Noah sends it: `user` = the Noah user id (a
+  UUID; it also names the sandbox and the session, so it cannot become a name). pi's panel therefore lists people
+  by UUID (사용자별 토큰, 진행 중인 턴, 대화 기록, 요청, the mining report) and sandboxes by `u-<hash of the id>`.
+  Noah adds ONE thing to pi's page DOCUMENT — a 200 UTF-8 `text/html` answer of a non-API GET, uncompressed
+  (a page load, a GET that accepts `text/html`, goes out without `Accept-Encoding`; assets and API calls keep
+  the browser's): two tags before the first `</head>`, cut into pi's BYTES, that load Noah's own static
+  `/pi-admin-names.js` and `/pi-admin-names.css` (`src/client/public/`; pi's CSP `script-src 'self'` allows a
+  same-origin file). A document without a `</head>`, in another charset, compressed or over 1 MiB goes out byte
+  for byte; an API answer is NEVER touched (pi's UI sends its `user` values back — cancel, history filter). The
+  script asks `GET /api/admin/pi-user-names` (Noah admins only: `{ id, key: piUserKey(id), name }` — `name` is
+  `@login` FIRST, then the shown name without control/format characters and cut to 40 code points
+  (`piPanelUserName`): a shown name is free text, and one written to look like someone else's label must not
+  push the real login name out of a cell that clips) and sets `data-noah-user` on an element whose own SHORT text (at most
+  120 characters; never inside `pre`, `code`, a textarea or editable text) holds a known id, a known sandbox key
+  standing alone, or a consultation principal (`consult-…` → 아바타 상담 (임시 샌드박스)); the stylesheet draws
+  the name BEFORE the id (`::before`), so a cell that clips keeps the name. No text node or element of pi's
+  Preact tree is changed or added, the marks follow pi's redraws (a `MutationObserver`, at most one scan of
+  the page per 120 ms; attributes are not watched), an id nobody was named for asks Noah again (at most once a
+  minute — someone approved since), and until Noah has answered with at least one name NOTHING is marked: the
+  panel is exactly pi's. **It rests on pi showing an id
+  as the text of an element** — a pi UI change can hide the names (never break the panel): the boot test's
+  `26-admin-user-names.mjs` looks at pi's real page in Chromium (seen at pi `9f579dd`: the status tables, the
+  sandbox table, the 대화 기록 list and one session, pi's 10-second refresh, no CSP violation). Tests:
+  `tests/pi-admin-proxy.test.ts`, `tests/react-pi-admin-names.test.tsx`.
 - **Audit** — every forwarded write AND every API read except pi's known config/global reads (`UNAUDITED_READS`:
   session, status — polled every 10 s —, llm, tools, mcp/servers, history/retention, marketplaces, plugins,
   plugin-settings, chat/options, prompts, prompt-deployments) is an audit row `pi_admin_proxy` with `METHOD path`

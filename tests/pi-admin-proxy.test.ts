@@ -2,12 +2,15 @@ import fs from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import zlib from "node:zlib";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, createServices, type AppServices } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { PI_ADMIN_PROXY_TIMEOUTS } from "../src/server/routes/piAdminProxy.js";
+import { piPanelUserName } from "../src/server/routes/admin.js";
 import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
 import { signup, withTempDir } from "./helpers.js";
 
 // Covers src/server/routes/piAdminProxy.ts (pi-gateway's admin panel at /admin
@@ -21,6 +24,21 @@ const getTempDir = withTempDir("pi-admin-proxy", () => {
 
 const ADMIN_KEY = "pi-admin-key-123";
 const PI_CSP = "default-src 'self'; frame-ancestors 'none'";
+/** pi's page document, as its build writes it (a head, the app root, one module script). */
+const PI_PAGE = `<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>pi-gateway 관리</title>
+    <script type="module" crossorigin src="/admin/assets/index-abc.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
+`;
+/** What Noah adds before pi's `</head>` (routes/piAdminProxy.ts). */
+const NOAH_ADDITION = '<link rel="stylesheet" href="/pi-admin-names.css"><script src="/pi-admin-names.js" defer></script>';
 
 interface Seen {
   method: string;
@@ -85,6 +103,31 @@ beforeEach(async () => {
       if (type) {
         res.writeHead(200, { "content-type": type });
         res.end("alert(1)");
+        return;
+      }
+      // pi's page document in other shapes (see "adds the names of pi's users…").
+      const pages: Record<string, { headers: Record<string, string>; body: string | Buffer }> = {
+        "/admin/page": {
+          headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": PI_CSP, "cache-control": "no-cache", etag: '"pi-1"' },
+          body: PI_PAGE,
+        },
+        "/admin/page-upper": { headers: { "content-type": "Text/HTML" }, body: "<HTML><HEAD><TITLE>pi</TITLE></HEAD ><BODY>한글</BODY></HTML>" },
+        "/admin/page-gzip": { headers: { "content-type": "text/html; charset=utf-8", "content-encoding": "gzip" }, body: zlib.gzipSync(PI_PAGE) },
+        "/admin/page-latin": { headers: { "content-type": "text/html; charset=iso-8859-1" }, body: PI_PAGE },
+        "/admin/page-big": { headers: { "content-type": "text/html; charset=utf-8" }, body: `${"<!-- x -->".repeat(110_000)}${PI_PAGE}` },
+        "/admin/api/page": { headers: { "content-type": "text/html; charset=utf-8" }, body: PI_PAGE },
+        // Spellings pi's router would still take for the API (case, a doubled slash, an encoded letter).
+        "/admin/API/page": { headers: { "content-type": "text/html; charset=utf-8" }, body: PI_PAGE },
+        "/admin//api/page": { headers: { "content-type": "text/html; charset=utf-8" }, body: PI_PAGE },
+        "/admin/%61pi/page": { headers: { "content-type": "text/html; charset=utf-8" }, body: PI_PAGE },
+        // A declared length (pi's own page is sent this way), and bytes that are not valid UTF-8.
+        "/admin/page-length": { headers: { "content-type": "text/html; charset=utf-8", "content-length": String(Buffer.byteLength(PI_PAGE)) }, body: PI_PAGE },
+        "/admin/page-bytes": { headers: { "content-type": "text/html" }, body: Buffer.concat([Buffer.from("<head>"), Buffer.from([0xff, 0xfe, 0x80]), Buffer.from("</head><body>x")]) },
+      };
+      const page = pages[req.url?.split("?")[0] ?? ""];
+      if (page) {
+        res.writeHead(req.url === "/admin/page?status=503" ? 503 : 200, page.headers);
+        res.end(page.body);
         return;
       }
       if (req.url === "/admin/api/typed/none") {
@@ -155,6 +198,27 @@ async function rawRequest(
   }
 }
 
+/** One GET with the target sent byte for byte: the answer's content type and body. */
+async function rawBody(app: ReturnType<typeof createApp>, target: string, headers: Record<string, string>): Promise<{ type: string; body: string }> {
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port, method: "GET", path: target, headers });
+      req.on("response", (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ type: String(res.headers["content-type"] ?? ""), body: Buffer.concat(chunks).toString("utf8") }));
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+
 async function users(app: ReturnType<typeof createApp>) {
   const admin = request.agent(app);
   await signup(admin, "boss").expect(201); // the first signup is the admin
@@ -212,6 +276,109 @@ describe("pi admin panel proxy (/admin)", () => {
     // Noah's pages keep Noah's CSP.
     const noah = await admin.get("/api/me");
     expect(noah.headers["content-security-policy"]).toContain("object-src 'none'");
+  });
+
+  it("adds the names of pi's users to pi's page DOCUMENT — two tags before </head>, nothing else changed", async () => {
+    const { app } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin } = await users(app);
+    const res = await admin.get("/admin/page").set("accept-encoding", "gzip, br").expect(200);
+    // pi's document, byte for byte, with Noah's two tags right before its </head>.
+    expect(res.text).toBe(PI_PAGE.replace("  </head>", `  ${NOAH_ADDITION}</head>`));
+    expect(res.text.split(NOAH_ADDITION)).toHaveLength(2);
+    expect(Number(res.headers["content-length"])).toBe(Buffer.byteLength(res.text, "utf8"));
+    // pi's own headers still decide what the page may do; the validator of pi's bytes is gone.
+    expect(res.headers["content-security-policy"]).toBe(PI_CSP);
+    expect(res.headers["cache-control"]).toBe("no-cache");
+    expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(res.headers.etag).toBeUndefined();
+    // A page load (it asks for HTML) is asked for uncompressed, so the document can be read…
+    await admin.get("/admin/page").set("accept", "text/html,application/xhtml+xml").set("accept-encoding", "gzip, br").expect(200);
+    expect(seen.at(-1)!.headers["accept-encoding"]).toBeUndefined();
+    // …an asset and an API call keep the browser's own header.
+    await admin.get("/admin/assets/app.js").set("accept", "*/*").set("accept-encoding", "gzip").expect(200);
+    expect(seen.at(-1)!.headers["accept-encoding"]).toBe("gzip");
+    await admin.get("/admin/api/session").set("accept", "text/html").set("accept-encoding", "gzip").expect(200);
+    expect(seen.at(-1)!.headers["accept-encoding"]).toBe("gzip");
+
+    // pi declared a length: the answer carries the new one, whole.
+    const sized = await admin.get("/admin/page-length").expect(200);
+    expect(sized.text).toBe(PI_PAGE.replace("  </head>", `  ${NOAH_ADDITION}</head>`));
+    expect(Number(sized.headers["content-length"])).toBe(Buffer.byteLength(sized.text, "utf8"));
+    // pi's bytes are never decoded and re-encoded: what is not valid UTF-8 comes out as it went in.
+    const bytes = await admin.get("/admin/page-bytes").buffer(true).parse((r, done) => {
+      const chunks: Buffer[] = [];
+      r.on("data", (c: Buffer) => chunks.push(c));
+      r.on("end", () => done(null, Buffer.concat(chunks)));
+    });
+    expect((bytes.body as Buffer).equals(Buffer.concat([Buffer.from("<head>"), Buffer.from([0xff, 0xfe, 0x80]), Buffer.from(`${NOAH_ADDITION}</head><body>x`)]))).toBe(true);
+
+    // Any spelling of the closing tag and the content type.
+    const upper = await admin.get("/admin/page-upper").expect(200);
+    expect(upper.text).toBe(`<HTML><HEAD><TITLE>pi</TITLE>${NOAH_ADDITION}</HEAD ><BODY>한글</BODY></HTML>`);
+
+    // Left exactly as pi sent it: a document without a head, one Noah cannot read as UTF-8 text,
+    // one far larger than pi's page, an error page, and everything that is not the page document.
+    expect((await admin.get("/admin/").expect(200)).text).toBe("<!doctype html><title>pi</title>");
+    for (const untouched of ["/admin/page-latin", "/admin/page-big", "/admin/page?status=503"]) {
+      const kept = await admin.get(untouched);
+      expect(kept.text, untouched).not.toContain("pi-admin-names");
+      expect(kept.text, untouched).toContain("</head>");
+    }
+    expect((await admin.get("/admin/page-big").expect(200)).text).toHaveLength(110_000 * 10 + PI_PAGE.length);
+    // Compressed bytes are relayed as they are (the client inflates them): still pi's page, nothing added.
+    const gzip = await admin.get("/admin/page-gzip").expect(200);
+    expect(gzip.headers["content-encoding"]).toBe("gzip");
+    expect(gzip.text).toBe(PI_PAGE);
+    const script = await admin.get("/admin/assets/app.js").expect(200);
+    expect(script.text).toBe("alert(1)");
+    // An API answer is never a page: not added to, and not relayed as HTML either.
+    const api = await admin.get("/admin/api/page").buffer(true).parse((r, done) => {
+      const chunks: Buffer[] = [];
+      r.on("data", (c: Buffer) => chunks.push(c));
+      r.on("end", () => done(null, Buffer.concat(chunks)));
+    });
+    expect(api.headers["content-type"]).toBe("application/octet-stream");
+    expect((api.body as Buffer).toString("utf8")).toBe(PI_PAGE);
+    // …in every spelling pi's router would take for the API.
+    for (const spelling of ["/admin/API/page", "/admin//api/page", "/admin/%61pi/page"]) {
+      const status = await rawBody(app, spelling, { cookie: (await adminCookie(app)).join("; ") });
+      expect(status.body, spelling).toBe(PI_PAGE);
+      expect(status.type, spelling).toBe("application/octet-stream");
+    }
+    // A HEAD of the page has no body to add to.
+    await admin.head("/admin/page").expect(200);
+  });
+
+  it("tells pi's page who its user ids are — admins only, the shown name and the login name", async () => {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY });
+    const { admin, member } = await users(app);
+    const boss = services.store.getUserByUsername("boss")!;
+    const other = services.store.getUserByUsername("member")!;
+    services.store.updateProfile(other.id, { displayName: "김민수" });
+    const res = await admin.get("/api/admin/pi-user-names").expect(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    const byId = new Map((res.body.users as { id: string; name: string }[]).map((user) => [user.id, user]));
+    // The login name leads: it is the one part of the label its owner cannot choose.
+    expect(byId.get(other.id)).toEqual({ id: other.id, key: piUserKey(other.id), name: "@member 김민수" });
+    expect(piUserKey(other.id)).toMatch(/^u-[0-9a-f]{24}$/);
+    // Exactly the id, pi's sandbox key for it and the name: nothing else of the account.
+    expect(Object.keys(byId.get(boss.id)!).sort()).toEqual(["id", "key", "name"]);
+    expect(byId.get(boss.id)!.name.startsWith("@boss")).toBe(true);
+    await member.get("/api/admin/pi-user-names").expect(403);
+    await request(app).get("/api/admin/pi-user-names").expect(401);
+
+    // A shown name is free text: one written to look like someone else's label stays behind the real login
+    // name and is cut, and what could reorder or break the line is dropped.
+    expect(piPanelUserName("minsu", "minsu")).toBe("@minsu");
+    expect(piPanelUserName("minsu", "")).toBe("@minsu");
+    expect(piPanelUserName("minsu", null)).toBe("@minsu");
+    const spoof = piPanelUserName("mallory", `김영희 (@younghee) · 1111-2222 ${"x".repeat(200)}`);
+    expect(spoof.startsWith("@mallory 김영희 (@younghee)")).toBe(true);
+    expect([...spoof]).toHaveLength("@mallory ".length + 40 + 1);
+    expect(spoof.endsWith("…")).toBe(true);
+    expect(piPanelUserName("minsu", "김\u202e민\u0000수\n\t 님")).toBe("@minsu 김 민 수 님");
+    // Cut by code point, never through a surrogate pair.
+    expect(piPanelUserName("minsu", "😀".repeat(60))).toBe(`@minsu ${"😀".repeat(40)}…`);
   });
 
   it("refuses a cross-origin or header-less mutating call, forwards a same-origin one intact and audits it", async () => {

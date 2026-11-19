@@ -78,13 +78,14 @@ is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit sta
 text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `9f579dd`:
 
 ```
-10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 3/3
+10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 5/5
 30-documents 30/30 · 31-documents-extra 21/21 · 32-second-user-own 3/3 · 50-subagent 9/9 · 55-systemone 25/25
 65-shell-step-verdicts 33/33   (judges the steps that only print: 05, 20, 04, 22, 40, 60)
 71-tracing-turn 25/25 · 75-trace-stats 37/37 · 25-admin-ui-real 48/48 · 85-workspace-files 26/26
 86-mcp-files 20/20 · 87-mcp-file-args 19/19 · 88-plugin-refresh 23/23
 90-pi-validation 22/22 · 92-grep-glob 10/10 · 93-tool-call-limit 23/23 · 94-turn-timings 13/13
 80-context-usage 19/19 · 96-memory 29/29 · 97-memory-search 10/10 · 98-mining-report 14/14
+26-admin-user-names 17/17      (Noah's names on pi's panel — a pi UI change that hides them fails here)
 95-final-state 1/1             (no error-level line in any service's log; prints memory)
 ```
 

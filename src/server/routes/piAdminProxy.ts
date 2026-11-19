@@ -53,6 +53,16 @@ import { sameOrigin, type RouterDeps } from "./_shared.js";
  *   SSE, plain text, images); anything else — a `.js` labelled `text/javascript`
  *   above all, which `script-src 'self'` would run — goes out as
  *   `application/octet-stream`, always with `nosniff`.
+ * - pi knows a user only as the id Noah sends it (`user` = the Noah user id, a
+ *   UUID), so its tables name people by UUID. Noah adds ONE thing to pi's page
+ *   DOCUMENT — never to an API answer, whose `user` values pi's UI sends back:
+ *   two tags before `</head>` that load Noah's own static script and stylesheet
+ *   (`/pi-admin-names.js|css`, `src/client/public/`). The script asks Noah who
+ *   the ids are (`GET /api/admin/pi-user-names`, admins only) and marks an
+ *   element that shows one with `data-noah-user`; the stylesheet draws the name
+ *   before the id. Display only: no text of pi's is changed, and a failure of
+ *   either leaves pi's panel exactly as it is. pi's CSP (`script-src 'self'`)
+ *   allows it because the files are served from Noah's origin.
  *
  * Settings pi-setup re-applies on every `docker compose up` (Noah's prompt
  * `noah`, its MCP registrations, the disabled pi tools) are overwritten there:
@@ -97,6 +107,63 @@ const DROPPED_RESPONSE_HEADERS = new Set([
   "upgrade",
   "set-cookie",
 ]);
+
+/**
+ * What Noah adds to pi's page document, before `</head>`: the names of the
+ * users pi shows by id (see the module comment). Static files of Noah's own.
+ */
+const PAGE_ADDITION = '<link rel="stylesheet" href="/pi-admin-names.css"><script src="/pi-admin-names.js" defer></script>';
+/** A page document larger than this is relayed as it is (pi's is under 2 KiB). */
+const MAX_PAGE_DOCUMENT_BYTES = 1024 * 1024;
+
+/** pi's answer is its page document, in a form Noah can add to: 200, UTF-8 HTML, not compressed. */
+function isPageDocument(piRes: http.IncomingMessage): boolean {
+  if (piRes.statusCode !== 200) return false;
+  const type = String(piRes.headers["content-type"] ?? "");
+  if (!/^\s*text\/html\s*(?:;|$)/i.test(type)) return false;
+  const charset = /charset\s*=\s*"?([^";\s]+)/i.exec(type)?.[1];
+  if (charset && !/^utf-?8$/i.test(charset)) return false;
+  const encoding = String(piRes.headers["content-encoding"] ?? "identity").trim().toLowerCase();
+  return encoding === "" || encoding === "identity";
+}
+
+/**
+ * Relay pi's page document with {@link PAGE_ADDITION} before its first
+ * `</head>`. Everything else goes out as pi's own BYTES (the place is found and
+ * cut in the buffer, never through a decoded string), and a document without a
+ * `</head>`, or larger than the cap, goes out byte for byte.
+ */
+function relayPageDocument(piRes: http.IncomingMessage, res: Response): void {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  const onData = (chunk: Buffer) => {
+    chunks.push(chunk);
+    size += chunk.length;
+    if (size <= MAX_PAGE_DOCUMENT_BYTES) return;
+    // Not a page Noah knows: hand over what was read and stream the rest untouched.
+    piRes.off("data", onData);
+    piRes.off("end", onEnd);
+    res.flushHeaders();
+    for (const part of chunks) res.write(part);
+    chunks.length = 0;
+    piRes.pipe(res);
+  };
+  const onEnd = () => {
+    const original = Buffer.concat(chunks);
+    // latin1 maps one byte to one character, so the index IS the byte offset (the tag is ASCII).
+    const at = original.toString("latin1").search(/<\/head\s*>/i);
+    const body = at < 0 ? original : Buffer.concat([original.subarray(0, at), Buffer.from(PAGE_ADDITION, "utf8"), original.subarray(at)]);
+    // The validators and the length are of pi's bytes, not of these.
+    res.removeHeader("etag");
+    res.removeHeader("last-modified");
+    res.removeHeader("transfer-encoding");
+    res.setHeader("content-length", String(body.length));
+    res.end(body);
+  };
+  piRes.on("data", onData);
+  piRes.on("end", onEnd);
+  piRes.on("error", () => res.destroy());
+}
 
 const DISABLED_PAGE = `<!doctype html><html lang="ko"><meta charset="utf-8"><title>pi-gateway 관리</title>
 <body style="font-family:sans-serif;padding:2rem"><h1>pi-gateway 관리 화면을 열 수 없습니다</h1>
@@ -358,6 +425,9 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       const users = [...target.searchParams.getAll("user"), ...(bodyUser ? [bodyUser] : [])].join(",");
       const auditDetail = `${req.method} ${routed.slice(0, 256)}${users ? ` (user=${users.slice(0, 128)})` : ""}`;
       const headers = forwardedRequestHeaders(req, adminKey);
+      // The page document is read here (`relayPageDocument`): ask for it as it is, not compressed.
+      // Only a page load asks for HTML; pi's assets keep the browser's own header.
+      if (!api && req.method === "GET" && (req.get("accept") ?? "").includes("text/html")) delete headers["accept-encoding"];
       if (body) headers["content-length"] = String(body.length);
       const client = target.protocol === "https:" ? https : http;
       const request = client.request(target, { method: req.method, headers });
@@ -385,6 +455,10 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
           const type = piRes.headers["content-type"];
           if (!type || !INERT_API_CONTENT_TYPE.test(type)) res.setHeader("content-type", "application/octet-stream");
           res.setHeader("x-content-type-options", "nosniff");
+        }
+        if (!api && req.method === "GET" && isPageDocument(piRes)) {
+          relayPageDocument(piRes, res);
+          return;
         }
         res.flushHeaders();
         piRes.pipe(res);
