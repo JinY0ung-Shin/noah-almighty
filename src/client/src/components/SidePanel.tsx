@@ -24,6 +24,8 @@ export interface SidePanelProps {
   pane: ChatPane;
   /** 공유 링크 on a deck tab → ChatView's single dialog (FileTab explains why). */
   onShare?: (attachment: MessageAttachment) => void;
+  /** 공유 링크 on a file opened in the 파일 tab → the same dialog. */
+  onShareWorkspaceFile?: (file: { path: string; name: string }) => void;
 }
 
 const WIDTH_MIN = 300;
@@ -84,7 +86,7 @@ function startsFolded(): boolean {
   return typeof window !== "undefined" && (window.matchMedia?.("(max-width: 860px)").matches ?? false);
 }
 
-export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) {
+export default function SidePanel({ pane, onShare = () => {}, onShareWorkspaceFile }: SidePanelProps) {
   // Read before the first render, not after the mount: an expand request that
   // arrives with the panel's first tab must find the stored state already
   // applied. One width for every tab (the canvas key, so a width dragged
@@ -348,7 +350,7 @@ export default function SidePanel({ pane, onShare = () => {} }: SidePanelProps) 
               ) : tab.kind === "file" ? (
                 <FileTab pane={pane} file={tab.file} active={shown} onShare={onShare} />
               ) : (
-                <WorkspaceTab pane={pane} active={shown} />
+                <WorkspaceTab pane={pane} active={shown} onShare={onShareWorkspaceFile} />
               )}
             </div>
           );

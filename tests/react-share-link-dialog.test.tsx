@@ -33,10 +33,14 @@ const DECK: MessageAttachment = { id: "file-1", kind: "file", mediaType: PPTX_ME
 function summary(over: Partial<ShareLinkSummary> = {}): ShareLinkSummary {
   return {
     id: "link-1",
+    kind: "file",
     conversationId: "conv-1",
     conversationTitle: "보고서 만들기",
     fileId: "file-1",
+    sourcePath: "",
     fileName: "분기 보고.pptx",
+    messageCount: 0,
+    includesFiles: false,
     slideCount: 3,
     createdAt: new Date(2026, 9, 1, 9, 0).toISOString(),
     expiresAt: new Date(2026, 9, 8, 9, 0).toISOString(),
@@ -83,7 +87,7 @@ function stubFetch(routes: Routes = {}): void {
       };
       calls.push(call);
       if (url.startsWith("/api/me/share-links?")) return (routes.list ?? (() => json([])))();
-      if (call.method === "POST" && url.endsWith("/share-links")) {
+      if (call.method === "POST" && (url.endsWith("/share-links") || url === "/api/me/share-links/workspace")) {
         return (routes.create ?? (() => json({ link: summary({ viewCount: 0 }), created: true }, 201)))(call);
       }
       if (call.method === "DELETE" && url.startsWith("/api/me/share-links/")) {
@@ -171,7 +175,7 @@ describe("ShareLinkDialog", () => {
     expect(radios.map((radio) => radio.getAttribute("aria-checked"))).toEqual(["false", "true", "false"]);
     expect(
       within(card).getByText(
-        "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
+        "링크를 받은 Noah 사용자는 누구나 로그인하면 파일을 내려받을 수 있습니다. PPT 파일은 슬라이드도 볼 수 있고, 파일에 발표자 노트가 포함됩니다.",
       ),
     ).toBeTruthy();
   });
@@ -197,6 +201,86 @@ describe("ShareLinkDialog", () => {
     const select = vi.spyOn(input, "select");
     fireEvent.focus(input);
     expect(select).toHaveBeenCalled();
+  });
+
+  it("without a card it is the CONVERSATION's link: says what is shared, offers the file choice, posts it", async () => {
+    const conversationLink = summary({ id: "link-c", kind: "conversation", fileId: "", fileName: "분기 실적 정리", viewCount: 0, messageCount: 6, includesFiles: true });
+    stubFetch({ create: () => json({ link: conversationLink, created: true }, 201) });
+    replaceState({ user: { id: "owner-1" } as any, bootstrap: { signupMode: "closed" } as BootstrapInfo });
+    render(<ShareLinkDialog conversationId="conv-1" conversationTitle="분기 실적 정리" />);
+    const card = screen.getByRole("dialog", { name: "대화 공유 링크" });
+    expect(within(card).getByText("분기 실적 정리")).toBeTruthy();
+    // Its own link only: asked by kind, never by a file id.
+    expect(await within(card).findByRole("radiogroup", { name: "유효 기간" })).toBeTruthy();
+    expect(calls[0]).toMatchObject({ url: "/api/me/share-links?conversationId=conv-1&kind=conversation", method: "GET" });
+    // What the link shows and leaves out is said BEFORE the press.
+    expect(
+      within(card).getByText(
+        "지금까지의 대화만 공유됩니다. 이후에 이어지는 대화는 포함되지 않습니다. 도구 실행 기록과 생각 과정은 공유되지 않습니다. 직접 첨부한 문서는 이름만 보이고 내려받을 수 없으며, 첨부한 이미지는 대화와 함께 보입니다.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(card).getByText("링크를 받은 Noah 사용자는 누구나 로그인하면 이 대화를 읽을 수 있습니다. 읽기만 할 수 있고, 이어서 대화할 수는 없습니다."),
+    ).toBeTruthy();
+    const files = within(card).getByRole("checkbox", { name: "아바타가 만들어 준 파일도 내려받을 수 있게 하기" }) as HTMLInputElement;
+    expect(files.checked).toBe(false);
+    fireEvent.click(files);
+    fireEvent.click(within(card).getByRole("radio", { name: "1일" }));
+    fireEvent.click(within(card).getByRole("button", { name: "공유 링크 만들기" }));
+
+    expect(await within(card).findByLabelText("링크 주소")).toBeTruthy();
+    const post = calls.find((call) => call.method === "POST")!;
+    expect(post.url).toBe("/api/conversations/conv-1/share-links");
+    expect(post.body).toEqual({ expiresInDays: 1, includeFiles: true });
+    expect(within(card).getByText(/메시지 6개까지 공유 중 · 아바타가 만든 파일 포함/)).toBeTruthy();
+    expect(
+      within(card).getByText("이후 대화를 포함하거나 파일 포함 여부·유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요."),
+    ).toBeTruthy();
+  });
+
+  it("for a file of the workspace it shares the copy taken now: asks by path, posts the path, says so", async () => {
+    const workspaceLink = summary({
+      id: "link-w",
+      kind: "workspace_file",
+      conversationId: "",
+      conversationTitle: null,
+      fileId: "",
+      sourcePath: "c/conv-1/보고서.pdf",
+      fileName: "보고서.pdf",
+      viewCount: 0,
+    });
+    stubFetch({ create: () => json({ link: workspaceLink, created: true }, 201) });
+    replaceState({ user: { id: "owner-1" } as any, bootstrap: { signupMode: "closed" } as BootstrapInfo });
+    render(<ShareLinkDialog conversationId="" workspaceFile={{ path: "c/conv-1/보고서.pdf", name: "보고서.pdf" }} />);
+    const card = dialog();
+    expect(within(card).getByText("보고서.pdf")).toBeTruthy();
+    expect(await within(card).findByRole("radiogroup", { name: "유효 기간" })).toBeTruthy();
+    expect(calls[0]).toMatchObject({
+      url: `/api/me/share-links?${new URLSearchParams({ kind: "workspace_file", path: "c/conv-1/보고서.pdf" })}`,
+      method: "GET",
+    });
+    expect(
+      within(card).getByText("지금 이 파일의 사본이 공유됩니다. 이후에 작업 폴더의 파일이 바뀌거나 지워져도 링크의 파일은 그대로입니다."),
+    ).toBeTruthy();
+    // No conversation choice here.
+    expect(within(card).queryByRole("checkbox")).toBeNull();
+    fireEvent.click(within(card).getByRole("button", { name: "공유 링크 만들기" }));
+
+    expect(await within(card).findByLabelText("링크 주소")).toBeTruthy();
+    const post = calls.find((call) => call.method === "POST")!;
+    expect(post.url).toBe("/api/me/share-links/workspace");
+    expect(post.body).toEqual({ path: "c/conv-1/보고서.pdf", expiresInDays: 7 });
+    expect(within(card).getByText(/에 만든 사본을 보여 줍니다\. 바뀐 파일을 공유하거나 유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요\./)).toBeTruthy();
+  });
+
+  it("ignores a file link of the same conversation when it is the conversation's dialog", async () => {
+    // A server that did not narrow by kind: the card's link must not show as the conversation's.
+    stubFetch({ list: () => json([summary()]) });
+    replaceState({ user: { id: "owner-1" } as any, bootstrap: { signupMode: "closed" } as BootstrapInfo });
+    render(<ShareLinkDialog conversationId="conv-1" conversationTitle="분기 실적 정리" />);
+    const card = screen.getByRole("dialog", { name: "대화 공유 링크" });
+    expect(await within(card).findByRole("button", { name: "공유 링크 만들기" })).toBeTruthy();
+    expect(within(card).queryByLabelText("링크 주소")).toBeNull();
   });
 
   it("says so when the create call hands back the link that already existed", async () => {
@@ -350,7 +434,7 @@ describe("ShareLinkDialog", () => {
     openDialog({ signupMode: "approval" });
     expect(
       await within(dialog()).findByText(
-        "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
+        "링크를 받은 Noah 사용자는 누구나 로그인하면 파일을 내려받을 수 있습니다. PPT 파일은 슬라이드도 볼 수 있고, 파일에 발표자 노트가 포함됩니다.",
       ),
     ).toBeTruthy();
   });

@@ -49,7 +49,7 @@ const viewLabels: Record<ViewName, string> = {
   skills: "스킬 배우기",
   settings: "내 아바타",
   admin: "관리자",
-  share: "공유된 PPT",
+  share: "공유 자료",
   uiGallery: "인라인 UI 갤러리",
 };
 

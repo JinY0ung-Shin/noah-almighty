@@ -195,8 +195,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   avatar_api_key_revoke: "외부 작업 API 키 폐기",
   avatar_api_task_accept: "외부 작업 접수",
   avatar_api_task: "외부 작업 실행",
-  share_link_create: "PPT 공유 링크 생성",
-  share_link_revoke: "PPT 공유 링크 해제",
+  share_link_create: "공유 링크 생성",
+  share_link_revoke: "공유 링크 해제",
   chat: "대화",
 };
 const AUDIT_STATUS_LABELS: Record<string, string> = {

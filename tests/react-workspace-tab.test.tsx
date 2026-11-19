@@ -202,6 +202,29 @@ describe("WorkspaceTab", () => {
     expect(link.getAttribute("download")).toBe("deck.pptx");
   });
 
+  it("offers 공유 링크 on an opened file of a type a link serves, and hands its path up — never for other types", async () => {
+    const onShare = vi.fn();
+    render(<WorkspaceTab pane={pane()} active onShare={onShare} />);
+    fireEvent.click(await screen.findByRole("button", { name: "notes.md" }));
+    fireEvent.click(await screen.findByRole("button", { name: "공유 링크" }));
+    expect(onShare).toHaveBeenCalledWith({ path: "notes.md", name: "notes.md" });
+    // Pressing it reads nothing more and writes nothing: the dialog does the asking.
+    expect(requests.filter((request) => !request.startsWith("/api/me/workspace"))).toEqual([]);
+
+    // An .html page is not a type share_file publishes: no button.
+    fireEvent.click(screen.getByRole("button", { name: /목록/ }));
+    fireEvent.click(screen.getByRole("button", { name: "report.html" }));
+    await screen.findByRole("link", { name: "다운로드" });
+    expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
+  });
+
+  it("has no 공유 링크 where nothing would open the dialog", async () => {
+    render(<WorkspaceTab pane={pane()} active />);
+    fireEvent.click(await screen.findByRole("button", { name: "notes.md" }));
+    await screen.findByRole("link", { name: "다운로드" });
+    expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
+  });
+
   it("draws Markdown through the sanitizer and comes back to the same tree", async () => {
     const { container } = render(<WorkspaceTab pane={pane()} active />);
     fireEvent.click(await screen.findByRole("button", { name: "notes.md" }));

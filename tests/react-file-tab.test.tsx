@@ -209,9 +209,20 @@ describe("FileTab 공유 링크", () => {
     expect((screen.getByRole("button", { name: "공유 링크" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("is absent for other file types", () => {
+  it("is offered for any file the avatar delivered, not only a deck", () => {
     const pdf: MessageAttachment = { id: "file-2", kind: "file", mediaType: "application/pdf", name: "보고.pdf" };
     render(<FileTab {...tabProps(pdf)} />);
-    expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
+    expect(screen.getByRole("button", { name: "공유 링크" })).toBeTruthy();
+  });
+
+  it("is absent for a file the user attached, a screenshot card and an image tab", () => {
+    const upload: MessageAttachment = { id: "file-3", kind: "file", mediaType: "application/pdf", name: "내 문서.pdf", uploaded: true };
+    const shot: MessageAttachment = { id: "file-4", kind: "file", mediaType: "image/png", name: "스크린샷.png" };
+    const image: MessageAttachment = { id: "img-1", kind: "image", mediaType: "image/png", name: "그림.png" };
+    for (const att of [upload, shot, image]) {
+      const { unmount } = render(<FileTab {...tabProps(att)} />);
+      expect(screen.queryByRole("button", { name: "공유 링크" })).toBeNull();
+      unmount();
+    }
   });
 });

@@ -81,7 +81,7 @@ import {
   createOrReuseShareLink,
   otherActiveShareLinks,
   pickShareLinkCard,
-  resolveShareableDeck,
+  resolveShareableFile,
   SHARE_LINK_CAP_ERROR,
   SHARE_LINK_UNAVAILABLE_ERROR,
   SHARE_LINK_UNSHOWABLE_ERROR,
@@ -3005,7 +3005,7 @@ export async function executeChatTurn(
               ...(deckSidecar ? { deckSidecar } : {}),
             };
           },
-          // create_share_link: a login-required link to one PPTX card, made
+          // create_share_link: a login-required link to one file card, made
           // (or reused) for the owner who asked for it in THIS turn. Absent =
           // runCapabilities never registers the tool (see shareLinkTurn above).
           ...(shareLinkTurn
@@ -3035,10 +3035,10 @@ export async function executeChatTurn(
                   if ("error" in picked) {
                     return { ok: false, error: picked.error };
                   }
-                  if (!resolveShareableDeck(config, conversationId, picked.card.id)) {
+                  if (!resolveShareableFile(config, conversationId, picked.card.id)) {
                     return {
                       ok: false,
-                      error: `The file behind "${picked.card.name ?? picked.card.id}" is no longer available; deliver the deck again with share_file, then create the link.`,
+                      error: `The file behind "${picked.card.name ?? picked.card.id}" is no longer available; deliver the file again with share_file, then create the link.`,
                     };
                   }
                   const outcome = createOrReuseShareLink(

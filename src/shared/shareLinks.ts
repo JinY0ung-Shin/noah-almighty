@@ -1,8 +1,59 @@
-// Share links: a login-required, expiring, revocable link to ONE generated PPTX
-// deck — a chat download card plus the slide renders stamped with its id. This
-// module is the contract the server routes, the client (dialog, settings list,
+// Share links: a login-required, expiring, revocable link to ONE thing its
+// owner chose to export:
+// - "file": a file the avatar delivered — a chat download card (any type
+//   share_file publishes); a PPTX deck also shows the slide renders stamped
+//   with its id;
+// - "conversation": a conversation, READ-ONLY, up to the last message stored
+//   when the link was made (later messages never show) — the text of both
+//   sides and the visible images; never the tool activity, the reasoning, a
+//   file the user attached, or anything hidden. The avatar-delivered file
+//   cards in that range are downloadable only when the owner said so.
+// - "workspace_file": a file of the owner's own sandbox workspace, shared from
+//   the chat's 파일 tab — a COPY Noah took at that moment (a workspace file
+//   keeps changing; the link never does). To whoever opens it, it is a file.
+// This module is the contract the server routes, the client (dialog, settings list,
 // viewer) and the avatar's `create_share_link` tool share. Import-free leaf: it
 // is bundled into the browser, so it must not import anything.
+
+/** What a link exports. */
+export const SHARE_LINK_KINDS = ["file", "conversation", "workspace_file"] as const;
+export type ShareLinkKind = (typeof SHARE_LINK_KINDS)[number];
+
+export function isShareLinkKind(value: unknown): value is ShareLinkKind {
+  return (SHARE_LINK_KINDS as readonly unknown[]).includes(value);
+}
+
+/**
+ * The file types a link serves — exactly what share_file publishes (the server
+ * keeps the table: `chatFiles.ts` FILE_TYPES / `SHAREABLE_EXTENSIONS`; a test
+ * holds the two equal). The
+ * 파일 tab offers 공유 링크 only for these.
+ */
+export const SHAREABLE_FILE_EXTENSIONS = ["pptx", "docx", "xlsx", "zip", "pdf", "csv", "md", "txt", "drawio"] as const;
+
+/** Whether a file of this name is a type a link serves (by its extension, any case). */
+export function isShareableFileName(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 && (SHAREABLE_FILE_EXTENSIONS as readonly string[]).includes(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * The workspace folder pi writes a user's ATTACHED documents into
+ * (`/workspace/uploads/<name>`, `src/shared/chatDocuments.ts`). A link never
+ * exports what the user sent in — the same rule as an `uploaded` card — so
+ * nothing below it is shareable from the 파일 tab.
+ */
+export const WORKSPACE_UPLOADS_FOLDER = "uploads";
+
+/**
+ * Whether the 파일 tab may offer 공유 링크 for the file at `path` (its own
+ * path grammar: plain segments joined by "/"): a type a link serves, and not a
+ * document the user attached. The server applies the same rule.
+ */
+export function isShareableWorkspacePath(path: string): boolean {
+  const segments = path.split("/");
+  return segments[0] !== WORKSPACE_UPLOADS_FOLDER && isShareableFileName(segments[segments.length - 1] ?? "");
+}
 
 /** Expiry choices offered when a link is created (days). */
 export const SHARE_LINK_EXPIRY_DAYS = [1, 7, 30] as const;
@@ -57,25 +108,62 @@ export function shareHashRoute(token: string): string {
   return `#/share/${token}`;
 }
 
+/** The attachment fields the card rules read. */
+export interface ShareCardLike {
+  kind: string;
+  mediaType: string;
+  hidden?: boolean;
+  uploaded?: boolean;
+}
+
 /**
- * A visible PPTX download card the AVATAR delivered (never a hidden render,
- * never a screenshot card, never a .pptx the user attached to their own
- * message — `uploaded`, see `src/shared/chatDocuments.ts`: a share link exports
- * a generated deck, not something the user sent in).
+ * A visible download card the AVATAR delivered with share_file — what a share
+ * link may export. Never a hidden render, never a file the user attached to
+ * their own message (`uploaded`, see `src/shared/chatDocuments.ts`: a link
+ * exports what the avatar made, not something the user sent in — on a DRM
+ * fleet that is a decrypted copy), and never an image card (a browser
+ * screenshot the bridge auto-shared; share_file itself never makes one). The
+ * server additionally requires the stored bytes to be a share_file type.
  */
-export function isPptxCard(att: { kind: string; mediaType: string; hidden?: boolean; uploaded?: boolean }): boolean {
-  return att.kind === "file" && !att.hidden && !att.uploaded && att.mediaType === PPTX_MEDIA_TYPE;
+export function isShareableFileCard(att: ShareCardLike): boolean {
+  // A stored row is not shape-checked: a card without a media type is not linkable, never a throw.
+  return (
+    att.kind === "file" &&
+    !att.hidden &&
+    !att.uploaded &&
+    typeof att.mediaType === "string" &&
+    !att.mediaType.startsWith("image/")
+  );
+}
+
+/**
+ * A shareable card that is a PPTX deck — the one kind whose link also shows
+ * slide renders (and whose side-panel tab is the deck tab).
+ */
+export function isPptxCard(att: ShareCardLike): boolean {
+  return isShareableFileCard(att) && att.mediaType === PPTX_MEDIA_TYPE;
 }
 
 /** What the owner sees for one of their links (settings list, the file card's dialog). */
 export interface ShareLinkSummary {
   id: string;
+  /** Absent on a response from before conversation links = "file". */
+  kind: ShareLinkKind;
+  /** "" on a workspace-file link (it belongs to no conversation). */
   conversationId: string;
-  /** The conversation's title at list time (null when it has none) — where the deck came from. */
+  /** The conversation's title at list time (null when it has none) — where the file came from. */
   conversationTitle: string | null;
+  /** The card's id; "" on a conversation or workspace-file link. */
   fileId: string;
+  /** Workspace-file links: where the file sat in the owner's workspace when the copy was taken ("" otherwise). */
+  sourcePath: string;
+  /** The file's name; on a conversation link the conversation's title when the link was made. */
   fileName: string;
-  /** Slide renders the link shows (0 = download-only: the deck had no stamped previews). */
+  /** Conversation links: messages (both sides) the link shows now. 0 on a file link. */
+  messageCount: number;
+  /** Conversation links: whether the files the avatar delivered in that range can be downloaded. */
+  includesFiles: boolean;
+  /** Slide renders the link shows (0 = download-only: not a deck, or a deck with no stamped previews). */
   slideCount: number;
   createdAt: string;
   expiresAt: string;
@@ -91,7 +179,7 @@ export interface ShareLinkSummary {
   url: string | null;
 }
 
-/** `POST …/share-links`: `created` is false when an active link for that file already existed. */
+/** `POST …/share-links`: `created` is false when an active link for that target already existed. */
 export interface ShareLinkCreateResult {
   link: ShareLinkSummary;
   created: boolean;
@@ -117,8 +205,83 @@ export interface ShareOpenRequest {
   refresh?: boolean;
 }
 
-/** What a signed-in recipient's viewer receives for a valid link (`POST /api/share/open`). */
+/** One attachment of a shared conversation's message, as the recipient's viewer draws it. */
+export interface ShareViewAttachment {
+  id: string;
+  /** A visible image, or a file card. Nothing else is ever sent. */
+  kind: "image" | "file";
+  name: string;
+  mediaType: string;
+  /** File cards: size in bytes. */
+  size?: number;
+  caption?: string;
+  /** Images: the stored pixel size (a layout hint). */
+  width?: number;
+  height?: number;
+  /** Offset into the message text where the card sits; absent = after the text. */
+  anchor?: number;
+  /**
+   * Same-origin URL bound to the viewer for a short time: the image, or the
+   * file's download. Absent on a file the link does not serve — a file the
+   * user attached, a screenshot card, or any file when the owner shared the
+   * conversation without its files: the card then shows the name only.
+   */
+  url?: string;
+}
+
+/** One message of a shared conversation. */
+export interface ShareViewMessage {
+  id: string;
+  role: "user" | "assistant";
+  /** "steer": sent while the avatar was answering. "consultation": a teammate avatar's answer (`speaker`). */
+  kind?: "steer" | "consultation";
+  /** Consultation rows: the consulted avatar's display name. */
+  speaker?: string;
+  /** The message text — an answer's Markdown (inline UI tags included), a user's plain text. */
+  content: string;
+  createdAt: string;
+  /** True when the answer is a stored run error. */
+  errored?: boolean;
+  attachments: ShareViewAttachment[];
+}
+
+/** The conversation a `kind: "conversation"` link shows. */
+export interface ShareViewConversation {
+  /**
+   * The conversation's id — only so the viewer can tell which image addresses
+   * in an answer's inline UI are this conversation's own (it re-points those to
+   * the link's ticket URLs). It opens nothing: every conversation route is the
+   * owner's alone.
+   */
+  conversationId: string;
+  /**
+   * `/api/share/t/<ticket>/images/` — an image of this conversation by its id,
+   * for the images an answer's own text places (the server serves exactly
+   * those, and the visible ones).
+   */
+  imageBase: string;
+  /** Display name of the avatar that answered. */
+  avatarName: string;
+  messages: ShareViewMessage[];
+  /** Whether the avatar-delivered files in range carry a download `url`. */
+  includesFiles: boolean;
+}
+
+/**
+ * What a signed-in recipient's viewer receives for a valid link
+ * (`POST /api/share/open`). ONE flat shape for both kinds: a conversation link
+ * fills `fileName` with the conversation's title, sends no slides and no
+ * download, and adds `conversation`.
+ */
 export interface ShareViewPayload {
+  /**
+   * What the recipient is looking at: a file (a card's or a workspace copy's —
+   * the same to them) or a conversation. Absent on a response from before
+   * conversation links = "file".
+   */
+  kind: "file" | "conversation";
+  /** The shared conversation — on a `kind: "conversation"` link only. */
+  conversation?: ShareViewConversation;
   fileName: string;
   /** Display name of the person who created the link. */
   ownerName: string;
@@ -126,9 +289,9 @@ export interface ShareViewPayload {
   ownerUsername: string;
   createdAt: string;
   expiresAt: string;
-  /** Empty = download-only (the deck had no stamped previews). */
+  /** Empty = download-only (not a deck, or a deck with no stamped previews). */
   slides: ShareViewSlide[];
-  /** Same-origin download URL of the .pptx, bound to the viewer for a short time. */
+  /** Same-origin download URL of the file, bound to the viewer for a short time. */
   downloadUrl: string;
   /** Previews are capped at {@link MAX_SHARE_LINK_SLIDES}; true when the cap was reached. */
   previewCapped: boolean;

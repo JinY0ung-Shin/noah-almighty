@@ -1,25 +1,33 @@
 import { Router, type RequestHandler, type Response } from "express";
 import { requireAuth, type AuthenticatedRequest } from "../auth.js";
 import { getActiveRunForConversation } from "../agent/runRegistry.js";
-import { resolveStoredFile } from "../chatFiles.js";
+import { isShareFileExtension, resolveStoredFile } from "../chatFiles.js";
 import { createRateLimiter } from "../rateLimit.js";
 import {
+  createOrReuseConversationShareLink,
   createOrReuseShareLink,
+  createOrReuseWorkspaceShareLink,
   listShareLinkSummaries,
   openShareLink,
-  resolveShareableDeck,
+  resolveShareConversationFile,
+  resolveShareConversationImage,
   resolveShareSlide,
   resolveTicketLink,
+  revokeShareLink,
   shareableThread,
   shareDownloadName,
+  sweepShareLinkCopies,
 } from "../shareLinks.js";
+import { parseWorkspacePath } from "../../shared/workspaceFiles.js";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
-  isPptxCard,
+  isShareableFileCard,
   isShareLinkExpiryDays,
+  isShareLinkKind,
   MAX_ACTIVE_SHARE_LINKS,
-  PPTX_MEDIA_TYPE,
+  SHAREABLE_FILE_EXTENSIONS,
   SHARE_LINK_GONE_MESSAGE,
+  type ShareLinkExpiryDays,
 } from "../../shared/shareLinks.js";
 import {
   apiError,
@@ -30,15 +38,18 @@ import {
 } from "./_shared.js";
 
 /**
- * PPT share links over HTTP (the service is ../shareLinks.ts; the contract is
+ * Share links over HTTP (the service is ../shareLinks.ts; the contract is
  * src/shared/shareLinks.ts).
  *
- * - Owner routes (create / list / revoke): session only (`requireAuth`), the
- *   conversation owner acts; foreign or missing resources are one 404 with no
- *   existence leak.
+ * - Owner routes (create a file link / a conversation link / a link to a file
+ *   of their own workspace; list; revoke): session only (`requireAuth`), the
+ *   owner acts; foreign or missing resources are one 404 with no existence
+ *   leak. A workspace file is addressed by its path in the CALLER's own
+ *   sandbox — there is no id that selects another user's files.
  * - Recipient routes: ANY signed-in user holding the link. The token never
- *   rides a URL path — the viewer posts it to `/api/share/open` — and the
- *   slide/download URLs carry a short-lived ticket bound to the viewer. Every
+ *   rides a URL path — the viewer posts it to `/api/share/open` — and every
+ *   asset URL (a deck's slides and download; a conversation's images and
+ *   files) carries a short-lived ticket bound to the viewer. Every
  *   invalid state answers 404 `SHARE_LINK_GONE_MESSAGE`, never 401: the client
  *   logs a signed-in user out on any 401.
  *
@@ -49,6 +60,9 @@ import {
 export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): Router {
   const router = Router();
   const deps = { config, store };
+  // Boot: the copies of workspace-file links that ended while the server was
+  // down (expired, or their rows removed) are not kept.
+  sweepShareLinkCopies(deps);
 
   const noStore: RequestHandler = (_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
@@ -134,7 +148,80 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
     );
   };
 
+  const CAP_MESSAGE = `공유 링크는 최대 ${MAX_ACTIVE_SHARE_LINKS}개까지 만들 수 있습니다. 내 아바타 → 권한·연결 → 공유 링크에서 쓰지 않는 링크를 해제한 뒤 다시 시도해 주세요.`;
+
+  /** The body's `expiresInDays` (absent = the default), or null after answering 400. */
+  const expiryOf = (req: AuthenticatedRequest, res: Response): ShareLinkExpiryDays | null => {
+    const rawDays = req.body?.expiresInDays;
+    const expiresInDays = rawDays === undefined || rawDays === null ? DEFAULT_SHARE_LINK_EXPIRY_DAYS : rawDays;
+    if (!isShareLinkExpiryDays(expiresInDays)) {
+      apiError(res, 400, "유효 기간은 1일, 7일, 30일 중에서 선택해 주세요.");
+      return null;
+    }
+    return expiresInDays;
+  };
+
   // ---- Owner --------------------------------------------------------------
+
+  // A link to the CONVERSATION itself, read-only, as it stands now: its anchor
+  // is the last stored message, so what is said later never shows. Only this
+  // route makes one — a human's press; the avatar has no tool for it.
+  router.post(
+    "/api/conversations/:conversationId/share-links",
+    noStore,
+    requireAuth(store),
+    (req: AuthenticatedRequest, res) => {
+      const ownerUserId = req.user!.id;
+      const { conversationId } = req.params;
+      const expiresInDays = expiryOf(req, res);
+      if (!expiresInDays) return;
+      const includeFiles = req.body?.includeFiles;
+      if (includeFiles !== undefined && typeof includeFiles !== "boolean") {
+        apiError(res, 400, "파일 포함 여부가 올바르지 않습니다.");
+        return;
+      }
+      // Not the owner, no such conversation, or a thread that cannot share — the SAME 404.
+      if (!shareableThread(store, ownerUserId, conversationId)) {
+        apiError(res, 404, "대화를 찾을 수 없습니다.");
+        return;
+      }
+      // A running turn's rows are stored only when it ends: a link made now
+      // would stop in the middle of an exchange.
+      if (getActiveRunForConversation(ownerUserId, conversationId)) {
+        apiError(res, 409, "응답이 끝난 뒤에 공유 링크를 만들 수 있습니다.");
+        return;
+      }
+      const outcome = createOrReuseConversationShareLink(deps, {
+        ownerUserId,
+        conversationId,
+        includeFiles: includeFiles === true,
+        expiresInDays,
+        origin: requestOrigin(req),
+      });
+      if (outcome.kind === "unavailable") {
+        apiError(res, 404, "대화를 찾을 수 없습니다.");
+        return;
+      }
+      if (outcome.kind === "empty") {
+        apiError(res, 400, "아직 공유할 메시지가 없습니다.");
+        return;
+      }
+      if (outcome.kind === "cap") {
+        apiError(res, 409, CAP_MESSAGE);
+        return;
+      }
+      const created = outcome.kind === "created";
+      if (created) {
+        // Ids and counts only — a conversation's title is its owner's words.
+        auditAs(
+          req,
+          "share_link_create",
+          `link ${outcome.link.id} conversation ${conversationId} ${outcome.link.messageCount} messages${outcome.link.includesFiles ? " with files" : ""} ${expiresInDays}d`,
+        );
+      }
+      res.status(created ? 201 : 200).json({ link: outcome.link, created });
+    },
+  );
 
   router.post(
     "/api/conversations/:conversationId/files/:fileId/share-links",
@@ -143,12 +230,8 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
     (req: AuthenticatedRequest, res) => {
       const ownerUserId = req.user!.id;
       const { conversationId, fileId } = req.params;
-      const rawDays = req.body?.expiresInDays;
-      const expiresInDays = rawDays === undefined || rawDays === null ? DEFAULT_SHARE_LINK_EXPIRY_DAYS : rawDays;
-      if (!isShareLinkExpiryDays(expiresInDays)) {
-        apiError(res, 400, "유효 기간은 1일, 7일, 30일 중에서 선택해 주세요.");
-        return;
-      }
+      const expiresInDays = expiryOf(req, res);
+      if (!expiresInDays) return;
       // Not the owner, no such conversation, or a thread that cannot share (a
       // colleague thread whose avatar is out of reach) — all the SAME 404.
       if (!shareableThread(store, ownerUserId, conversationId)) {
@@ -170,13 +253,20 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
         return;
       }
       const card = attachments.find((att) => att.id === fileId && att.kind === "file")!;
-      if (!isPptxCard(card)) {
-        apiError(res, 400, "PPTX 파일만 공유 링크를 만들 수 있습니다.");
+      if (card.uploaded) {
+        apiError(res, 400, "직접 첨부한 파일은 공유 링크를 만들 수 없습니다.");
         return;
       }
-      if (!resolveShareableDeck(config, conversationId, fileId)) {
-        // A pptx card whose bytes are gone (or were never a .pptx on disk).
+      const stored = resolveStoredFile(config, conversationId, fileId);
+      if (!stored) {
+        // A card whose bytes are gone.
         apiError(res, 404, "파일을 찾을 수 없습니다.");
+        return;
+      }
+      // A screenshot card, or stored bytes of a type share_file does not
+      // publish (a legacy card): the file exists, but a link never serves it.
+      if (!isShareableFileCard(card) || !isShareFileExtension(stored.ext)) {
+        apiError(res, 400, "이 파일은 공유 링크를 만들 수 없습니다.");
         return;
       }
       const outcome = createOrReuseShareLink(deps, {
@@ -192,11 +282,7 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
         return;
       }
       if (outcome.kind === "cap") {
-        apiError(
-          res,
-          409,
-          `공유 링크는 최대 ${MAX_ACTIVE_SHARE_LINKS}개까지 만들 수 있습니다. 내 아바타 → 권한·연결 → 공유 링크에서 쓰지 않는 링크를 해제한 뒤 다시 시도해 주세요.`,
-        );
+        apiError(res, 409, CAP_MESSAGE);
         return;
       }
       const created = outcome.kind === "created";
@@ -207,26 +293,88 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
     },
   );
 
+  // A link to ONE file of the caller's own sandbox workspace (the 파일 tab's
+  // 공유 링크). Noah copies the bytes as they are now and the link serves that
+  // copy — the workspace is never written, and a link never reads it again.
+  const WORKSPACE_REFUSALS: Record<string, [number, string]> = {
+    UNAVAILABLE: [404, "이 서버에서는 작업 폴더를 볼 수 없습니다."],
+    NOT_FOUND: [404, "파일을 찾을 수 없습니다."],
+    EMPTY: [400, "빈 파일은 공유할 수 없습니다."],
+    TOO_LARGE: [413, "공유하기에는 너무 큰 파일입니다. 30MB 이하의 파일만 공유할 수 있습니다."],
+    UPLOADED: [400, "직접 첨부한 파일은 공유 링크를 만들 수 없습니다."],
+    UNSUPPORTED: [
+      400,
+      `이 형식의 파일은 공유 링크를 만들 수 없습니다. 공유할 수 있는 형식: ${SHAREABLE_FILE_EXTENSIONS.join(", ")}`,
+    ],
+    READ_FAILED: [500, "파일을 읽지 못했습니다. 잠시 후 다시 시도해 주세요."],
+  };
+  router.post("/api/me/share-links/workspace", noStore, requireAuth(store), (req: AuthenticatedRequest, res) => {
+    const expiresInDays = expiryOf(req, res);
+    if (!expiresInDays) return;
+    const segments = parseWorkspacePath(req.body?.path);
+    if (!segments || segments.length === 0) {
+      apiError(res, 400, "경로가 올바르지 않습니다.");
+      return;
+    }
+    const outcome = createOrReuseWorkspaceShareLink(deps, {
+      ownerUserId: req.user!.id,
+      segments,
+      expiresInDays,
+      origin: requestOrigin(req),
+    });
+    if (outcome.kind === "refused") {
+      const [status, message] = WORKSPACE_REFUSALS[outcome.reason];
+      apiError(res, status, message);
+      return;
+    }
+    if (outcome.kind === "cap") {
+      apiError(res, 409, CAP_MESSAGE);
+      return;
+    }
+    const created = outcome.kind === "created";
+    if (created) {
+      auditAs(req, "share_link_create", `link ${outcome.link.id} workspace "${outcome.link.fileName}" ${expiresInDays}d`);
+    }
+    res.status(created ? 201 : 200).json({ link: outcome.link, created });
+  });
+
   router.get("/api/me/share-links", noStore, requireAuth(store), (req: AuthenticatedRequest, res) => {
     const conversationId = safeString(req.query.conversationId);
     const fileId = safeString(req.query.fileId);
+    // `kind` narrows to one kind of link (a conversation link has no file id to
+    // filter on); `path` to the link of one workspace file.
+    const kind = safeString(req.query.kind);
+    const sourcePath = (parseWorkspacePath(req.query.path) ?? []).join("/");
     res.json(
       listShareLinkSummaries(
         deps,
         req.user!.id,
-        { ...(conversationId ? { conversationId } : {}), ...(fileId ? { fileId } : {}) },
+        {
+          ...(conversationId ? { conversationId } : {}),
+          ...(fileId ? { fileId } : {}),
+          ...(isShareLinkKind(kind) ? { kind } : {}),
+          ...(sourcePath ? { sourcePath } : {}),
+        },
         requestOrigin(req),
       ),
     );
   });
 
   router.delete("/api/me/share-links/:id", noStore, requireAuth(store), (req: AuthenticatedRequest, res) => {
-    const removed = store.revokeShareLink(req.user!.id, req.params.id);
+    const removed = revokeShareLink(deps, req.user!.id, req.params.id);
     if (!removed) {
       apiError(res, 404, "공유 링크를 찾을 수 없습니다.");
       return;
     }
-    auditAs(req, "share_link_revoke", `link ${removed.id} "${removed.fileName}"`);
+    auditAs(
+      req,
+      "share_link_revoke",
+      removed.kind === "conversation"
+        ? `link ${removed.id} conversation ${removed.conversationId}`
+        : removed.kind === "workspace_file"
+          ? `link ${removed.id} workspace "${removed.fileName}"`
+          : `link ${removed.id} "${removed.fileName}"`,
+    );
     res.status(204).end();
   });
 
@@ -264,14 +412,60 @@ export function createShareLinksRouter({ config, store, auditAs }: RouterDeps): 
     shareLimiter,
     (req: AuthenticatedRequest, res) => {
       const valid = resolveTicketLink(deps, req.params.ticket, req.user!.id);
-      if (!valid) {
+      // A conversation link has no download of its own.
+      if (!valid || valid.kind !== "file") {
         gone(res);
         return;
       }
-      sendShareFile(res, valid.deck.path, {
-        "Content-Type": PPTX_MEDIA_TYPE,
-        // Re-normalized (stored so already): the saved file ends in .pptx whatever the row holds.
-        "Content-Disposition": attachmentContentDisposition(shareDownloadName(valid.link.fileName), "file.pptx"),
+      const { file, link } = valid;
+      sendShareFile(res, file.path, {
+        "Content-Type": file.mediaType,
+        // Always a download, never inline — like the owner's own download
+        // route. Re-normalized (stored so already): the saved file ends in the
+        // extension of the bytes served, whatever the row holds.
+        "Content-Disposition": attachmentContentDisposition(
+          shareDownloadName(link.fileName, file.ext),
+          `file.${file.ext}`,
+        ),
+      });
+    },
+  );
+
+  // One image of a shared conversation: a visible image of a message in the
+  // link's range (or a hidden one that message's own text places).
+  router.get(
+    "/api/share/t/:ticket/images/:imageId",
+    noStore,
+    requireAuth(store),
+    shareLimiter,
+    (req: AuthenticatedRequest, res) => {
+      const valid = resolveTicketLink(deps, req.params.ticket, req.user!.id);
+      const image = valid ? resolveShareConversationImage(deps, valid, req.params.imageId) : null;
+      if (!image) {
+        gone(res);
+        return;
+      }
+      sendShareFile(res, image.path, { "Content-Type": image.mediaType });
+    },
+  );
+
+  // One file of a shared conversation — only on a link its owner shared WITH
+  // the files, only a card the avatar delivered. Always a download.
+  router.get(
+    "/api/share/t/:ticket/files/:fileId",
+    noStore,
+    requireAuth(store),
+    shareLimiter,
+    (req: AuthenticatedRequest, res) => {
+      const valid = resolveTicketLink(deps, req.params.ticket, req.user!.id);
+      const served = valid ? resolveShareConversationFile(deps, valid, req.params.fileId) : null;
+      if (!served) {
+        gone(res);
+        return;
+      }
+      sendShareFile(res, served.file.path, {
+        "Content-Type": served.file.mediaType,
+        "Content-Disposition": attachmentContentDisposition(served.name, `file.${served.file.ext}`),
       });
     },
   );

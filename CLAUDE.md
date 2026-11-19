@@ -136,11 +136,19 @@ These are the invariants the project is built around. New work should reinforce 
   and redacted. → `pi-runtime.md`.
 
 ### Features with a fixed shape
-- **A PPT share link is a human-initiated EXPORT of ONE deck card — never reach, trust or conversation
-  access.** Login-required, expiring, revocable, PPTX-only; only a salted hash is stored, the token never
-  rides a URL path, every recipient call re-runs full validity, and every invalid state is ONE 404 (never
-  401 — the client logs out on 401). The avatar mints one only on explicit request in an interactive own-avatar
-  chat. → `share-links.md`.
+- **A share link is a human-initiated EXPORT of ONE thing — never reach or trust, and nothing beyond what
+  was chosen.** Three kinds: a file the avatar delivered (a card), a conversation READ-ONLY up to the
+  message that was last when the owner pressed (nothing said later ever shows), a COPY of one file of the
+  owner's own workspace (never the workspace path). Login-required, expiring, revocable; only a salted hash
+  is stored, the token never rides a URL path, every recipient call re-runs full validity, and every
+  invalid state is ONE 404 (never 401 — the client logs out on 401). A DOCUMENT the user attached is never
+  exported (on a DRM fleet it is a decrypted copy): not as a card, not from the workspace's `uploads/`, and
+  inside a shared conversation only as a name. The avatar mints only a FILE link, only on explicit
+  request in an interactive own-avatar chat; **a conversation link is a person's press, never a tool.**
+  **What of a stored message a recipient gets is decided in ONE place (`sharedConversationMessages`): a
+  new message field is not shared until it is added there** — never the tool activity or the reasoning.
+  The recipient's viewer draws that text as someone ELSE's (inline `style` dropped, nothing sent or kept).
+  A new message-deleting path also runs `deleteConversationShareLinksWithoutAnchor`. → `share-links.md`.
 - **New decks are HTML converted SHELL-side in the sandbox, bounded by the converter itself** (never an
   MCP tool — Noah's container holds the DB and every secret); share_file previews are hash-bound to the
   .pptx. Toolchain state is the operator's `PI_DECK_SANDBOX` flag, never a host probe, reported with the
@@ -189,7 +197,8 @@ These are the invariants the project is built around. New work should reinforce 
   never from a workspace path. **A new preview kind goes through a sanitizer, its own script-less frame, or
   that copy-then-convert path.** A `share_file` card records where its file sat, and a press on the card
   opens the file IN the tab — the one place that draws a file, as it is NOW; a deck keeps its own tab (its
-  exact slides), and a file gone from the workspace falls back to the card's copy, which says so. The
+  exact slides), and a file gone from the workspace falls back to the card's copy, which says so. 공유 링크
+  on an opened file shares Noah's own COPY of it (above) — the tab still never writes the workspace. The
   avatar never opens, selects or learns of the tab (a live `.drawio` opens there by the client's own rule,
   only while the viewer has the tab open). → `pi-runtime.md`, `client.md`.
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner

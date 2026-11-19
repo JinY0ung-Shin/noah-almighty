@@ -458,7 +458,7 @@ transient dismissals never persist the per-browser preference; the card has NO a
 the avatar add); and only the avatar's own changes animate — a tool-end claim diffed on the next
 applied load, never the poll or the viewer's own edits.
 
-## Share hash view (`#/share/<token>`) and the deck-card link controls
+## Share hash view (`#/share/<token>`) and the link controls
 Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **The first view only a link opens** (`views/ShareView.tsx`; not in the rail). `state.shareToken` holds
   the token and `currentRoute()` writes it back — load-bearing, because every run-stream `open` frame
@@ -469,8 +469,27 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
 - **The state comes from the HTTP STATUS, via `openShareLink` (`lib/shareLinks.ts`)**: only a 404 is a dead
   link; a timeout, 5xx or 429 is 다시 시도 (never tell a recipient a live link expired). `lib/api.ts` errors
   carry `ApiError.status` for exactly this. A token failing `SHARE_TOKEN_RE` never reaches fetch.
-- **Payload strings are the deck author's** — rendered as text only (no `dangerouslySetInnerHTML`/markdown), and only
+- **A file link's payload strings are the file author's** — rendered as text only (no `dangerouslySetInnerHTML`/markdown), and only
   normalized same-origin `/api/share/…` paths become an `<img>` or the download (`isShareAssetUrl`).
+- **A conversation link is drawn by `components/SharedConversation.tsx` with the chat's own pieces**
+  (2026-11-19): the cached, sanitized Markdown (`renderMarkdownCached` + `enhanceMarkdown`), the bubble
+  markup and global classes (`.message`/`.bubble`/`.md`/`.msg-file-card`), `segmentAttachments` for where
+  cards sit, `ZoomableImage` for images, and — for an answer with component tags — `AnswerUi` in its
+  PREVIEW mode (`outbox`: nothing is sent, kept or reported; a control that would send shows a line
+  saying it cannot). The viewer is NOT the conversation's owner, so **nothing there may point at a
+  conversation route**: images and files come from the payload's ticket URLs, an address an answer's text
+  wrote for its own conversation's image is re-pointed at `conversation.imageBase` (a string replace on the
+  sanitized html; `AnswerUi`'s `imageSrc` prop → `buildAnswerItems` for an inline `<image>`), and the
+  user's side is named after the sharer, never "나" (and the avatar's side "<name> 아바타": with one's own
+  avatar both are the same person's name). No composer, copy/edit/regenerate, activity or reasoning card —
+  the server never sends those. **Every Markdown block goes through `sharedHtml` last**: inline `style=""`
+  is dropped (someone else's text must not position itself over the app) and the conversation's own image
+  addresses are re-pointed — for an inline-UI answer through `AnswerUi`'s `mdHtml` prop. Its tickets are
+  renewed while it is on screen (lazy images and file downloads have no single press to renew on, unlike
+  a deck's 발표 모드 / 다운로드): every `SHARE_TICKET_REFRESH_MS`, again after `SHARE_TICKET_RETRY_MS` when
+  a renewal failed, and at once when the tab becomes visible with stale tickets; a renewed `imageSrc`
+  invalidates `AnswerUi`'s evaluated blocks (`AnswerViewCache.imageSrc`) so an inline `<image>` does not
+  keep a lapsed address.
 - **Viewer tickets live `SHARE_TICKET_TTL_MINUTES` (30)**: a viewer open ≥ 25 minutes re-opens the link
   with `refresh: true` before presenting, downloading or retrying a render (a refresh is not a counted view).
 - **크게 보기 is ONE viewer for everything the app fits into a narrow column (2026-11-17).**
@@ -504,7 +523,10 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   so they surface on the first view change); `handleSessionExpired` keeps a `#/share/` hash — and only that
   one — so the deck reopens right after the next login.
 - **`ShareLinkDialog` never calls `confirmAction` or `notify`.** ChatView owns the ONE instance — the chat
-  card's link button and the deck tab's 공유 링크 (`FileTab`'s `onShare` callback) both open it there,
+  card's link button, a file tab's 공유 링크 (`FileTab`'s `onShare` callback), the 파일 tab's 공유 링크 on an
+  opened file (`WorkspaceTab`'s `onShare` — handed to its memoized tree as ONE stable function reading the
+  latest through a ref, so the tree is not rebuilt per streamed token) and the pane header's 대화 공유 all
+  open it there,
   because a tab unmounts when it is closed (and the side panel with its last tab) and would take an open
   dialog with it, mid-create included. It is a portaled Modal (mounted inside the
   chat view, a fixed overlay would sit in that view's stacking contexts), and a portaled modal inerts
@@ -521,7 +543,7 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   button's content, `aria-label` and `title` once per 1.2 s window and restores them EXACTLY (an attribute
   the button lacked is removed again), so a second click cannot make the check icon permanent and a
   text-named button never keeps "복사됨" as its name; the dialog's 복사 is named `공유 링크 복사`.
-- **Link controls appear on PPTX cards only**, and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
+- **Link controls appear on the cards a link may export** (`isShareableFileCard`: any file the avatar delivered — never one the user attached, never a screenshot card), and the chat card's `link` button only on PERSISTED cards (a live card has no stored message
   the server could find; `FileTab` disables its button with a title instead).
 - **`panelSlides` IS the shared `cardSlideAttachments`**: the card's stamped renders when there are any,
   otherwise the legacy unstamped ones — never both (the deck-review loop publishes unstamped hidden canvas

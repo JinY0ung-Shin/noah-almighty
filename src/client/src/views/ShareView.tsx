@@ -1,17 +1,29 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import SharedConversation from "../components/SharedConversation";
 import SlidePresenter from "../components/SlidePresenter";
 import { useAppState } from "../lib/hooks";
 import { goView } from "../lib/nav";
 import { readState, updateState } from "../lib/state";
-import { openShareLink, shareOwnerLine, shareTicketsStale, type ShareOpenResult } from "../lib/shareLinks";
+import {
+  openShareLink,
+  SHARE_TICKET_REFRESH_MS,
+  SHARE_TICKET_RETRY_MS,
+  shareOwnerLine,
+  shareTicketsStale,
+  type ShareOpenResult,
+} from "../lib/shareLinks";
 import { SHARE_LINK_GONE_MESSAGE } from "../../../shared/shareLinks";
 import type { ShareViewPayload } from "../lib/types";
 import "./ShareView.css";
 
-// The recipient's viewer for a PPTX share link (#/share/<token>). Any
-// signed-in user may open a valid link; it grants reading ONE deck — its
-// renders and the .pptx — and nothing else. Every payload string is the deck
-// author's (file name, slide titles), so it is rendered as plain text only.
+// The recipient's viewer for a share link (#/share/<token>). Any signed-in
+// user may open a valid link; it grants reading ONE thing and nothing else:
+// - a file link: the download, and a deck's slide renders. Every payload
+//   string is the file author's (file name, slide titles), so it is rendered
+//   as plain text only;
+// - a conversation link: the conversation, read-only, up to where it stood
+//   when it was shared (components/SharedConversation.tsx draws it with the
+//   chat's own sanitized renderers).
 
 type Phase = "loading" | "ready" | "gone" | "error";
 
@@ -151,6 +163,40 @@ export default function ShareView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // A conversation's images load as they scroll into view and its files are
+  // downloaded whenever the reader gets to them — there is no single press to
+  // renew the tickets on, as a deck's 발표 모드 / 다운로드 have. So while one
+  // is on screen its tickets are renewed before they lapse: on a timer, sooner
+  // again after a renewal that failed, and at once when the tab comes back
+  // (a timer does not run through a sleeping laptop).
+  const showsConversation = phase === "ready" && payload?.kind === "conversation";
+  useEffect(() => {
+    if (!showsConversation) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const schedule = (delay: number): void => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void renew(), delay);
+    };
+    const renew = async (): Promise<void> => {
+      const renewed = await refreshTickets();
+      // A dead link has left this state (the effect is torn down); anything else tries again soon.
+      if (!stopped) schedule(renewed ? SHARE_TICKET_REFRESH_MS : SHARE_TICKET_RETRY_MS);
+    };
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible" && shareTicketsStale(loadedAt.current)) void renew();
+    };
+    schedule(SHARE_TICKET_REFRESH_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // `refreshTickets` reads only refs and setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showsConversation]);
+
   useEffect(
     () => () => {
       // Drop any answer still in flight: it belongs to a view that is gone.
@@ -193,6 +239,17 @@ export default function ShareView() {
             다시 시도
           </button>
         </div>
+      </Fragment>
+    );
+  } else if (payload?.kind === "conversation" && payload.conversation) {
+    body = (
+      <Fragment key="conversation">
+        {refreshError ? (
+          <div className="warn-box share-note" role="alert">
+            {refreshError}
+          </div>
+        ) : null}
+        <SharedConversation conversation={payload.conversation} ownerName={payload.ownerName || payload.ownerUsername} />
       </Fragment>
     );
   } else if (payload) {
@@ -260,7 +317,7 @@ export default function ShareView() {
     <>
       <header className="view-header cmp-share-view">
         <div className="title">
-          <h1>{payload ? payload.fileName : "공유된 PPT"}</h1>
+          <h1>{payload ? payload.fileName : "공유 자료"}</h1>
           {/* Not a <p>: narrow layouts hide `.view-header .title p`, and who shared
               the deck is the recipient's only provenance signal. */}
           {payload ? <span className="share-meta">{shareOwnerLine(payload)}</span> : null}

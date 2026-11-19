@@ -21,10 +21,14 @@ const TOKEN = `${"Ab3_-".repeat(8)}xyz`;
 function summary(over: Partial<ShareLinkSummary> = {}): ShareLinkSummary {
   return {
     id: "link-1",
+    kind: "file",
     conversationId: "conv-1",
     conversationTitle: "보고서 만들기",
     fileId: "file-1",
+    sourcePath: "",
     fileName: "분기 보고.pptx",
+    messageCount: 0,
+    includesFiles: false,
     slideCount: 3,
     createdAt: new Date(2026, 9, 1, 9, 0).toISOString(),
     expiresAt: new Date(2026, 9, 8, 9, 0).toISOString(),
@@ -125,6 +129,34 @@ describe("SettingsShareLinks", () => {
         Boolean(el?.matches("p.muted") && el.textContent?.includes("링크를 받은 Noah 사용자는 누구나 로그인하면")),
       ),
     ).toBeTruthy();
+  });
+
+  it("tells the three kinds apart: a card's file, a conversation, a copy of a workspace file", async () => {
+    stubFetch(() =>
+      json([
+        summary(),
+        summary({ id: "link-c", kind: "conversation", fileId: "", fileName: "옛 제목", conversationTitle: "분기 실적 정리", messageCount: 6, includesFiles: true }),
+        summary({
+          id: "link-w",
+          kind: "workspace_file",
+          conversationId: "",
+          conversationTitle: null,
+          fileId: "",
+          fileName: "보고서.pdf",
+          sourcePath: "c/conv-1/보고서.pdf",
+        }),
+      ]),
+    );
+    render(<SettingsShareLinks active />);
+    const card = (await screen.findByText("분기 보고.pptx")).closest(".secret-row") as HTMLElement;
+    expect(within(card).getByText("보고서 만들기")).toBeTruthy();
+    // A conversation link is named by the conversation's CURRENT title.
+    const conversation = screen.getByText("분기 실적 정리").closest(".secret-row") as HTMLElement;
+    expect(within(conversation).getByText("대화 · 메시지 6개 · 파일 포함")).toBeTruthy();
+    expect(within(conversation).getByRole("button", { name: "공유 링크 해제: 분기 실적 정리" })).toBeTruthy();
+    const workspace = screen.getByText("보고서.pdf").closest(".secret-row") as HTMLElement;
+    expect(within(workspace).getByText("작업 폴더의 사본 · /workspace/c/conv-1/보고서.pdf")).toBeTruthy();
+    expect(screen.getByText(/채팅과 파일 탭에서 만든 파일·대화 공유 링크입니다\./)).toBeTruthy();
   });
 
   it("copies a live link's absolute address, and offers no copy for an expired one", async () => {

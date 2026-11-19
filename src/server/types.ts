@@ -767,7 +767,7 @@ export interface MessageAttachment {
    * (`share_file`). Its bytes sit in the same chat-files store, so the download
    * route and every deletion cascade treat it like any file card; a regenerate
    * or edit re-sends it to the model, and a share link never picks it
-   * (`isPptxCard`). `name` is the exact file name the sandbox copy has
+   * (`isShareableFileCard`). `name` is the exact file name the sandbox copy has
    * (`/workspace/uploads/<name>`).
    */
   uploaded?: boolean;

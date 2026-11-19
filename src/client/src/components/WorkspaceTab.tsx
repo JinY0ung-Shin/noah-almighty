@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import CanvasHtmlFrame from "./CanvasHtmlFrame";
 import DrawioDiagram from "./DrawioDiagram";
 import Icon from "./Icon";
@@ -30,6 +30,7 @@ import {
   type WorkspaceListing,
   type WorkspacePreviewKind,
 } from "../../../shared/workspaceFiles";
+import { isShareableWorkspacePath } from "../../../shared/shareLinks";
 import type { ChatPane } from "../lib/types";
 import "./WorkspaceTab.css";
 
@@ -65,6 +66,13 @@ export interface WorkspaceTabProps {
   pane: ChatPane;
   /** This tab is the one the panel shows. */
   active?: boolean;
+  /**
+   * 공유 링크 on the opened file → ChatView's single share-link dialog. The tab
+   * itself still only reads: the server copies the file when the viewer presses
+   * 만들기 there, and the link serves that copy, never the workspace. Absent =
+   * no button.
+   */
+  onShare?: (file: { path: string; name: string }) => void;
 }
 
 interface FolderState {
@@ -121,7 +129,7 @@ function entryLabel(entry: WorkspaceEntry): string {
   return workspaceDisplayName(entry.name);
 }
 
-export default function WorkspaceTab({ pane, active = false }: WorkspaceTabProps) {
+export default function WorkspaceTab({ pane, active = false, onShare }: WorkspaceTabProps) {
   // How many panes have an avatar answering right now — ANY pane, not only the
   // one the panel serves: the workspace is the user's, and in split view a pane
   // that is not the active one writes into it just the same (its files land in
@@ -130,10 +138,15 @@ export default function WorkspaceTab({ pane, active = false }: WorkspaceTabProps
     useAppState().chatPanes.filter((item) => item.streaming).length,
     pane.streaming ? 1 : 0, // a pane the store does not hold (a test, a pane being replaced)
   );
+  // The share callback is a new function on every render of the chat view;
+  // the tree gets ONE that never changes and reads the latest through a ref.
+  const share = useLatest(onShare);
+  const shareFile = useCallback((file: { path: string; name: string }) => share.current?.(file), [share]);
   // The pane is store state, published again on every streamed token: only the
   // primitives the tree needs go down, so a long listing is not rebuilt per token.
   return (
     <WorkspaceTree
+      onShare={onShare ? shareFile : null}
       paneId={pane.id}
       conversationId={pane.conversationId}
       answering={answering}
@@ -155,6 +168,7 @@ function parentOf(path: string): string {
 }
 
 const WorkspaceTree = memo(function WorkspaceTree({
+  onShare,
   paneId,
   conversationId,
   answering,
@@ -163,6 +177,8 @@ const WorkspaceTree = memo(function WorkspaceTree({
   revealNonce,
   revealAsk,
 }: {
+  /** 공유 링크 on the opened file (a stable function), or null: no button. */
+  onShare: ((file: { path: string; name: string }) => void) | null;
   paneId: string;
   conversationId: string;
   /** Panes whose avatar is answering right now (any pane of the split). */
@@ -760,6 +776,18 @@ const WorkspaceTree = memo(function WorkspaceTree({
               <button className="canvas-tool-btn" type="button" onClick={() => void onRefresh()}>
                 새로고침
               </button>
+              {/* Only the types a link serves (what share_file publishes) and never a document the
+                  viewer attached (`uploads/`); the server applies the same rule and judges the bytes. */}
+              {onShare && isShareableWorkspacePath(opened.path) ? (
+                <button
+                  className="canvas-tool-btn"
+                  type="button"
+                  title="지금 이 파일의 사본을 다른 사람이 열 수 있는 링크로 공유"
+                  onClick={() => onShare({ path: opened.path, name: opened.entry.name })}
+                >
+                  공유 링크
+                </button>
+              ) : null}
               <a
                 className="canvas-tool-btn"
                 href={workspaceFileUrl(opened.path)}

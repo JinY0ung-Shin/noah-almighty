@@ -8,9 +8,10 @@ import {
   absoluteShareUrl,
   listShareLinks,
   revokeShareLink,
-  SHARE_AUDIENCE_NOTE,
+  SHARE_LIST_AUDIENCE_NOTE,
   shareDateLabel,
   shareDateTimeLabel,
+  shareLinkLabel,
 } from "../lib/shareLinks";
 import type { ShareLinkSummary } from "../lib/types";
 import "./SettingsShareLinks.css";
@@ -19,9 +20,9 @@ export interface SettingsShareLinksProps {
   active?: boolean;
 }
 
-const audience = SHARE_AUDIENCE_NOTE;
+const audience = SHARE_LIST_AUDIENCE_NOTE;
 
-// 권한·연결 → 공유 링크: every PPTX share link the owner made, active and
+// 권한·연결 → 공유 링크: every share link the owner made, active and
 // recently lapsed. Unlike the file card's dialog this card is NOT a modal, so
 // the app-root confirmAction and toasts are safe to use here.
 export default function SettingsShareLinks({ active = false }: SettingsShareLinksProps) {
@@ -72,7 +73,7 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
   async function revoke(link: ShareLinkSummary): Promise<void> {
     if (busyRef.current) return;
     const confirmed = await confirmAction(
-      `"${link.fileName}" 공유 링크를 해제할까요?\n해제하면 링크를 받은 사람도 더 이상 열 수 없습니다.`,
+      `"${shareLinkLabel(link)}" 공유 링크를 해제할까요?\n해제하면 링크를 받은 사람도 더 이상 열 수 없습니다.`,
       { title: "공유 링크 해제", confirmLabel: "해제", tone: "danger" },
     );
     if (!confirmed) return;
@@ -114,7 +115,7 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
         <div>
           <h3>공유 링크</h3>
           <p className="muted">
-            채팅에서 만든 PPT 공유 링크입니다. {audience}{" "}
+            채팅과 파일 탭에서 만든 파일·대화 공유 링크입니다. {audience}{" "}
             쓰지 않는 링크는 해제하세요. 활성 링크는 최대 {MAX_ACTIVE_SHARE_LINKS}개까지 만들 수 있습니다.
           </p>
         </div>
@@ -133,8 +134,14 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
           links.map((link) => (
             <div className="secret-row share-link-row" key={link.id}>
               <div className="share-link-main">
-                <strong className="share-link-name">{link.fileName}</strong>
-                <span className="muted share-link-source">{link.conversationTitle || "제목 없는 대화"}</span>
+                <strong className="share-link-name">{shareLinkLabel(link)}</strong>
+                <span className="muted share-link-source">
+                  {link.kind === "conversation"
+                    ? `대화 · 메시지 ${link.messageCount}개 · ${link.includesFiles ? "파일 포함" : "파일 제외"}`
+                    : link.kind === "workspace_file"
+                      ? `작업 폴더의 사본 · /workspace/${link.sourcePath}`
+                      : link.conversationTitle || "제목 없는 대화"}
+                </span>
                 <span className="muted share-link-dates">
                   {shareDateLabel(link.createdAt)} 만듦 ·{" "}
                   {link.expired
@@ -149,7 +156,7 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
                   <button
                     className="linkish small"
                     type="button"
-                    aria-label={`공유 링크 복사: ${link.fileName}`}
+                    aria-label={`공유 링크 복사: ${shareLinkLabel(link)}`}
                     onClick={(event) => copy(event, link)}
                   >
                     복사
@@ -160,7 +167,7 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
                     className="linkish small"
                     type="button"
                     disabled={busy}
-                    aria-label={`만료된 공유 링크 삭제: ${link.fileName}`}
+                    aria-label={`만료된 공유 링크 삭제: ${shareLinkLabel(link)}`}
                     onClick={() => void removeExpired(link)}
                   >
                     삭제
@@ -170,7 +177,7 @@ export default function SettingsShareLinks({ active = false }: SettingsShareLink
                     className="linkish small danger"
                     type="button"
                     disabled={busy}
-                    aria-label={`공유 링크 해제: ${link.fileName}`}
+                    aria-label={`공유 링크 해제: ${shareLinkLabel(link)}`}
                     onClick={() => void revoke(link)}
                   >
                     해제

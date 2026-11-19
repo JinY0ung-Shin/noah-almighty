@@ -66,13 +66,24 @@ which check owner/teammate trust themselves.
   card whose side panel shows the converter's exact slide renders. Existing decks and user
   templates are edited in place with python-pptx and previewed approximately by LibreOffice. Mechanics:
   [`docs/architecture/pptx-converter.md`](docs/architecture/pptx-converter.md).
-- **PPT share links (공유 링크)**: the owner of a conversation can turn a generated deck's download card
-  into a login-required link — with **공유 링크** next to the card, or by asking their own avatar for a
-  link in a chat with it. Anyone signed in to Noah who has the link can page through the slide renders,
-  present them full screen and download the `.pptx` (speaker notes included) until the link expires:
-  1, 7 (default) or 30 days, fixed at creation. Links are revocable any time under **내 아바타 → 권한·연결
-  → 공유 링크**. A link exports one file — it grants no
-  access to the conversation or the avatar. Mechanics:
+- **Share links (공유 링크)**: a login-required link to ONE thing its owner chose to export. Anyone signed
+  in to Noah who has the link can open it until it expires — 1, 7 (default) or 30 days, fixed at creation —
+  and the owner revokes it any time under **내 아바타 → 권한·연결 → 공유 링크**. Three things can be shared:
+  - **a file the avatar delivered** — **공유 링크** next to its download card, or by asking your own avatar
+    for a link in a chat with it. Recipients download the file; a PPTX deck also shows its slide renders,
+    full-screen presenting included (the `.pptx` carries the speaker notes);
+  - **a conversation, read-only** — **대화 공유** in the chat header. The link shows the conversation as it
+    stood when you pressed (what is said later never shows): the text of both sides and the images shown.
+    The tool activity and the avatar's reasoning are never part of it; a document you attached shows as
+    a name only; the files the avatar delivered are downloadable only if you tick that. Recipients cannot
+    continue the conversation;
+  - **a file of your workspace** — **공유 링크** on a file opened in the chat's 파일 tab (the types the
+    avatar can deliver: pptx, docx, xlsx, zip, pdf, csv, md, txt, drawio; up to 30 MB; never a document you
+    attached, under `uploads/`). Noah takes a copy at that moment and the link serves the copy, so later
+    changes to the file never reach the recipient.
+
+  A link grants nothing beyond what it exports — no access to the avatar, and none to the conversation
+  unless the conversation is what was shared. Mechanics:
   [`docs/architecture/share-links.md`](docs/architecture/share-links.md).
 - **Document attachments (문서 첨부)**: in a chat with **your own avatar** you can attach documents to a
   message — `pdf`, `docx`, `xlsx`, `pptx`, `csv`, `txt`, `md`, `json` — and the avatar reads them in its

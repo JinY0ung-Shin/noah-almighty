@@ -825,6 +825,17 @@ const SHARE_LINK_EXPIRY_PHRASE = SHARE_LINK_EXPIRY_DAYS.map((days) =>
   .replace(/, (?=[^,]*$)/, " or ");
 
 /**
+ * Every share-link line ends with this: a link to the CONVERSATION is never the
+ * avatar's to make (no tool builds one, in any run) — the person presses 대화
+ * 공유 — and what such a link does and does not show, so the avatar can answer
+ * "what will they see?" without guessing.
+ */
+const CONVERSATION_LINK_NOTE =
+  ". A link to the CONVERSATION itself is made only by the person, with the 대화 공유 button in the chat header — you have no tool for it: " +
+  "it shows the conversation read-only up to the moment it was made (later messages never show) — the text of both sides and the images shown — " +
+  "never the tool activity or your reasoning; a document the user attached shows as a name only (an image they attached is shown), and the files you delivered are downloadable only if they tick that";
+
+/**
  * describe_system's share-link line for the OWNER block — the runtime mirror of
  * the prompt's shareLinkSection, keyed on the same `shareLinksEnabled`. When
  * available it carries the audience/expiry/revoke facts the prompt leaves to
@@ -837,10 +848,11 @@ function ownerShareLinkLine(ctx: SystemToolsContext): string {
   if (ctx.shareLinksEnabled) {
     return (
       `${SHARE_LINK_LINE_PREFIX}AVAILABLE in this run — create one ONLY when the user explicitly asks for a link (a plain '공유해 줘' about a file means share_file). ` +
-      "A link opens ONE PPTX download card of this conversation — its slide renders plus the .pptx download, speaker notes included — for ANYONE signed in to Noah who has it (any approved teammate, not only the people the owner meant)" +
+      "A link opens ONE download card of this conversation (a file delivered with share_file) — the file as a download, and for a PPTX deck its slide renders too, speaker notes included in the .pptx — for ANYONE signed in to Noah who has it (any approved teammate, not only the people the owner meant)" +
       `. It expires after ${SHARE_LINK_EXPIRY_PHRASE} days, fixed at creation. ` +
-      "Each delivered deck card has at most one active link (asking again for that card returns it); a rebuilt deck re-delivered with share_file is a NEW card, and an earlier link keeps serving the earlier file until it expires or is revoked — say so when you link the new card. " +
-      `The owner revokes links any time in ${SHARE_LINK_SETTINGS_PATH} or with the 공유 링크 button next to the file card`
+      "Each delivered file card has at most one active link (asking again for that card returns it); a rebuilt file re-delivered with share_file is a NEW card, and an earlier link keeps serving the earlier file until it expires or is revoked — say so when you link the new card. " +
+      `The owner revokes links any time in ${SHARE_LINK_SETTINGS_PATH} or with the 공유 링크 button next to the file card` +
+      CONVERSATION_LINK_NOTE
     );
   }
   const reason = ctx.externalTaskApi
@@ -852,7 +864,8 @@ function ownerShareLinkLine(ctx: SystemToolsContext): string {
         : "this chat turn did not offer it";
   return (
     `${SHARE_LINK_LINE_PREFIX}NOT available in this run — ${reason}. ` +
-    `If the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card (PPTX cards only; links are managed in ${SHARE_LINK_SETTINGS_PATH})`
+    `If the user wants a link other people can open, point them to the 공유 링크 button next to the file's card (files delivered with share_file only; links are managed in ${SHARE_LINK_SETTINGS_PATH})` +
+    CONVERSATION_LINK_NOTE
   );
 }
 
@@ -865,8 +878,9 @@ function nonOwnerShareLinkLine(ctx: SystemToolsContext): string {
   return (
     `${SHARE_LINK_LINE_PREFIX}not available to you here — only the owner's own avatar creates links, in a chat the owner is having with it. ` +
     (ctx.fileOutputEnabled
-      ? "The person you are talking to owns THIS conversation, so they can make one for a PPTX deck here with the 공유 링크 button next to its file card."
-      : "No file card can be shared from this run.")
+      ? "The person you are talking to owns THIS conversation, so they can make one for a file delivered here with the 공유 링크 button next to its card"
+      : "No file card can be shared from this run") +
+    CONVERSATION_LINK_NOTE
   );
 }
 

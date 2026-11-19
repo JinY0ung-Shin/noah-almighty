@@ -290,7 +290,7 @@ export function setDocumentTitle(): void {
     // From state, not set by the view: this subscriber rewrites the title on
     // EVERY store emission (the knowledge poll included), so a title the view
     // wrote to document.title directly would be gone within a minute.
-    share: state.shareTitle || "공유된 PPT",
+    share: state.shareTitle || "공유 자료",
     uiGallery: "인라인 UI 갤러리",
   };
   document.title = `${titles[state.view] || "Noah Almighty"} · Noah Almighty`;

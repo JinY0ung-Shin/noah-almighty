@@ -97,6 +97,19 @@ export interface AnswerUiProps {
    * is kept in this browser or reported. null in a chat.
    */
   outbox?: ((message: string) => void) | null;
+  /**
+   * Where an image of this conversation is read from instead of the
+   * conversation's own route — a share link's viewer, which may only read
+   * through its link. A new function (renewed ticket addresses) draws the
+   * answer's images again from it.
+   */
+  imageSrc?: ((imageId: string) => string) | null;
+  /**
+   * The same viewer's last word on every Markdown block's html (already
+   * sanitized): what someone ELSE wrote must not style itself over the app, and
+   * an image address the text wrote for its own conversation is re-pointed.
+   */
+  mdHtml?: ((html: string) => string) | null;
 }
 
 /** The props the view reads later than the render that passed them. */
@@ -108,6 +121,8 @@ interface Current {
   messageId: string | null;
   latest: boolean;
   outbox: ((message: string) => void) | null;
+  imageSrc: ((imageId: string) => string) | null;
+  mdHtml: ((html: string) => string) | null;
 }
 
 /** What the view asks of the component that draws it. */
@@ -272,7 +287,16 @@ function createAnswerView(first: Current, surface: Surface) {
     const before = p;
     p = next;
     locked = next.pane.streaming;
-    if (ran && next.text === before.text && next.streaming === before.streaming && !changed(before.atts, next.atts) && tick === seenTick) return;
+    if (
+      ran &&
+      next.text === before.text &&
+      next.streaming === before.streaming &&
+      next.imageSrc === before.imageSrc &&
+      !changed(before.atts, next.atts) &&
+      tick === seenTick
+    ) {
+      return;
+    }
     update(next.text, next.streaming, next.atts, tick);
   }
 
@@ -304,7 +328,7 @@ function createAnswerView(first: Current, surface: Surface) {
     }
     const items: AnswerItem[] = doc.failed
       ? [{ kind: "md", key: "/0", s: 0, e: nextText.length, text: nextText }]
-      : buildAnswerItems(doc, createRootEnv(doc, values, rt, host), rt, values, cache, { conversationId, svgNs: viewId });
+      : buildAnswerItems(doc, createRootEnv(doc, values, rt, host), rt, values, cache, { conversationId, svgNs: viewId, imageSrc: p.imageSrc });
     pieces = answerPieces(items, nextText.length, nextAtts, nextStreaming ? doc.pending : null);
     const drawn: VNode[] = [];
     for (const item of items) if (item.kind === "ui") for (const node of item.nodes) drawn.push(node);
@@ -337,7 +361,9 @@ function createAnswerView(first: Current, surface: Surface) {
       renderer = createStreamMarkdown();
       renderers.set(key, renderer);
     }
-    return renderer.render(source, { heal });
+    const rendered = renderer.render(source, { heal });
+    const mdHtml = p.mdHtml;
+    return mdHtml ? rendered.map((block) => ({ ...block, html: mdHtml(block.html) })) : rendered;
   }
   function forgetRenderers(current: AnswerPiece[]): void {
     if (renderers.size <= current.length) return;
@@ -608,12 +634,14 @@ export default function AnswerUi({
   caret = false,
   cards = undefined,
   outbox = null,
+  imageSrc = null,
+  mdHtml = null,
 }: AnswerUiProps) {
   const [, redraw] = useReducer((n: number) => n + 1, 0);
   const [notice, setNotice] = useState("");
   const dark = useStore(theme) === "dark";
 
-  const current: Current = { pane, text, atts, streaming, messageId, latest, outbox };
+  const current: Current = { pane, text, atts, streaming, messageId, latest, outbox, imageSrc, mdHtml };
   // Made once, with the props the component is mounted with: what the browser
   // kept for this answer (or the live bubble handed over) is read here, before
   // anything is drawn.

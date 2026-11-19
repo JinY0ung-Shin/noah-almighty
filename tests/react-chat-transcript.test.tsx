@@ -808,12 +808,22 @@ describe("ChatView transcript · 공유 링크 beside a deck card", () => {
     expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
   });
 
-  it("leaves other file cards exactly as they were", () => {
+  it("puts the control beside ANY file the avatar delivered, not only a deck", () => {
     const pdf = { id: "pdf-1", kind: "file", mediaType: "application/pdf", name: "보고.pdf", anchor: 0 };
     replaceState({ avatars: [], chatPanes: [pane([deckMessage([pdf])])], activePaneId: "pane-1" });
     const { container } = render(<ChatView />);
+    expect(container.querySelector(".msg-file-share > .msg-file-card")?.textContent).toContain("보고.pdf");
+    expect(screen.getByRole("button", { name: "공유 링크: 보고.pdf" })).toBeTruthy();
+  });
+
+  it("leaves a screenshot card and a file the user attached exactly as they were", () => {
+    const shot = { id: "shot-1", kind: "file", mediaType: "image/png", name: "스크린샷.png", anchor: 0 };
+    const upload = { id: "up-1", kind: "file", mediaType: "application/pdf", name: "내 문서.pdf", uploaded: true, anchor: 0 };
+    replaceState({ avatars: [], chatPanes: [pane([deckMessage([shot, upload])])], activePaneId: "pane-1" });
+    const { container } = render(<ChatView />);
     expect(container.querySelector(".msg-file-share")).toBeNull();
-    expect(container.querySelector(".msg-images > .msg-file-card")?.textContent).toContain("보고.pdf");
+    expect(screen.queryByRole("button", { name: /^공유 링크/ })).toBeNull();
+    expect(container.querySelectorAll(".msg-images > .msg-file-card")).toHaveLength(2);
   });
 
   it("marks a card as the 'opens in the 파일 tab' feature's home only when a click goes there", () => {

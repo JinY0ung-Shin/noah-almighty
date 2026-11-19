@@ -189,6 +189,22 @@ export default function ChatView() {
                     >
                       새 대화
                     </button>{" "}
+                    {/* 대화 공유, as in the single pane's header — an icon here: a split pane's head is narrow. */}
+                    {item.messages.length ? (
+                      <button
+                        className="msg-act"
+                        type="button"
+                        aria-label="대화 공유"
+                        title={item.streaming ? "응답이 끝난 뒤 만들 수 있습니다." : "이 대화를 읽기 전용 링크로 공유"}
+                        disabled={item.streaming}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          ctx.openConversationShareDialog(item);
+                        }}
+                      >
+                        <Icon name="link" />
+                      </button>
+                    ) : null}{" "}
                     <button
                       className="msg-act"
                       type="button"
@@ -211,7 +227,7 @@ export default function ChatView() {
           {/* Same side panel as the single-pane branch, for the ACTIVE pane:
               without it a canvas created while split is invisible until the
               user is back to one pane. */}
-          {hasSideTabs(pane) ? <SidePanel pane={pane} onShare={(att) => ctx.openShareDialog(pane, att)} /> : null}
+          {hasSideTabs(pane) ? <SidePanel pane={pane} onShare={(att) => ctx.openShareDialog(pane, att)} onShareWorkspaceFile={ctx.openWorkspaceShareDialog} /> : null}
         </div>
       </Fragment>
     );
@@ -247,6 +263,20 @@ export default function ChatView() {
             </div>{" "}
             <div className="chat-head-actions">
               {splitControls(ctx)} {workspaceButton(ctx)}{" "}
+              {/* 대화 공유: a read-only link to this conversation as it stands. Only
+                  once something is stored, and never mid-answer (the turn's rows
+                  are stored when it ends). */}
+              {pane.messages.length ? (
+                <button
+                  className="ghost-sm"
+                  type="button"
+                  disabled={pane.streaming}
+                  title={pane.streaming ? "응답이 끝난 뒤 만들 수 있습니다." : "이 대화를 읽기 전용 링크로 공유"}
+                  onClick={() => ctx.openConversationShareDialog(pane)}
+                >
+                  대화 공유
+                </button>
+              ) : null}{" "}
               <button className="ghost-sm" type="button" onClick={() => newChat(pane.id, { force: true })}>
                 새 대화
               </button>
@@ -255,7 +285,7 @@ export default function ChatView() {
           <PaneTranscript ctx={ctx} item={pane} /> <Composer ctx={ctx} item={pane} compact={false} index={0} />{" "}
           {fileDropOverlay(ctx, pane, paneTakesDocuments(pane, state))} <PromptModal paneId={pane.id} />
         </section>{" "}
-        {hasSideTabs(pane) ? <SidePanel pane={pane} onShare={(att) => ctx.openShareDialog(pane, att)} /> : null}
+        {hasSideTabs(pane) ? <SidePanel pane={pane} onShare={(att) => ctx.openShareDialog(pane, att)} onShareWorkspaceFile={ctx.openWorkspaceShareDialog} /> : null}
       </div>
     );
   }
@@ -269,6 +299,8 @@ export default function ChatView() {
             key="share-link"
             conversationId={ctx.shareTarget.conversationId}
             attachment={ctx.shareTarget.attachment}
+            workspaceFile={ctx.shareTarget.workspaceFile}
+            conversationTitle={ctx.shareTarget.conversationTitle}
             onClose={ctx.closeShareDialog}
           />
         ) : null}

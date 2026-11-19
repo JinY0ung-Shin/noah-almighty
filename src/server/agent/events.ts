@@ -73,15 +73,15 @@ export interface ShareFileRequest {
 }
 
 /**
- * `create_share_link`: make (or reuse) a login-required share link for a PPTX
+ * `create_share_link`: make (or reuse) a login-required share link for a file
  * card this conversation holds — one shared with share_file this turn or an
  * earlier one. See `src/shared/shareLinks.ts` for the link contract.
  */
 export interface ShareLinkRequest {
   /**
    * The card's attachment id (share_file's result names it). Omitted = the
-   * conversation's most recent PPTX card (this turn first); when that is
-   * ambiguous the result lists the decks by name and id.
+   * conversation's most recent shareable file card (this turn first); when that is
+   * ambiguous the result lists the files by name and id.
    */
   attachmentId?: string;
   /** One of SHARE_LINK_EXPIRY_DAYS; undefined = the default (7). */
@@ -715,7 +715,7 @@ export interface AgentEvents {
    */
   onShareFile?: (request: ShareFileRequest) => Promise<FileOutputResult>;
   /**
-   * Make (or reuse) a share link for a PPTX card of this conversation. The chat
+   * Make (or reuse) a share link for a file card of this conversation. The chat
    * route supplies it ONLY on an interactive turn of the owner's own avatar (never
    * external-task-API or unattended turns) and
    * re-checks that inside; `runCapabilities.ts` registers `create_share_link` only when it

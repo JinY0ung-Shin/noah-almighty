@@ -30,7 +30,7 @@ import {
 import { chatFilesDir, deleteChatFileAttachments, deleteConversationFiles, resolveStoredFile, SHAREABLE_EXTENSIONS } from "../src/server/chatFiles.js";
 import { MAX_CHAT_IMAGES_PER_MESSAGE, MAX_CHAT_IMAGE_BYTES } from "../src/server/chatImages.js";
 import { PI_MAX_REQUEST_BYTES } from "../src/server/agent/pi/responsesClient.js";
-import { isPptxCard, PPTX_MEDIA_TYPE } from "../src/shared/shareLinks.js";
+import { isPptxCard, isShareableFileCard, PPTX_MEDIA_TYPE } from "../src/shared/shareLinks.js";
 import type { AppConfig } from "../src/server/types.js";
 import { withTempDir } from "./helpers.js";
 
@@ -341,6 +341,8 @@ describe("the document file store", () => {
     const [upload] = saveChatDocuments(config(), "conv-1", decoded("내 발표.pptx", PPTX)).attachments;
     expect(upload!.mediaType).toBe(PPTX_MEDIA_TYPE);
     expect(isPptxCard(upload!)).toBe(false);
+    expect(isShareableFileCard(upload!)).toBe(false);
     expect(isPptxCard({ ...upload!, uploaded: undefined })).toBe(true);
+    expect(isShareableFileCard({ ...upload!, uploaded: undefined })).toBe(true);
   });
 });

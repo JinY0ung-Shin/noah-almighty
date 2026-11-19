@@ -215,7 +215,9 @@
 
 ### Deletion cascades (rules)
 - **A new message-deleting path cascades like `applyConversationRewind`:** the dropped rows' attachments (minus the
-  ones a kept row carries), their staged workspace copies, per-card share links, and canvases from the anchor time.
+  ones a kept row carries), their staged workspace copies, per-card share links, the conversation share
+  links whose last shared message it took (`deleteConversationShareLinksWithoutAnchor`), and canvases from
+  the anchor time.
 - **A new conversation-deleting path** calls `deleteShareLinksForConversation` next to the canvas cascade
   ([`server-core.md`](server-core.md)) AND `deleteConversationWorkspaceCopies` (the server-written
   `attachments/`/`captures/`/`confluence/` copies in the sandbox folder die with what they mirror).
@@ -353,9 +355,9 @@
   folder, not a per-conversation one): kept between conversations, replaced by a later upload of the same
   name, and never written or deleted by Noah — deleting the message or the conversation leaves it (a rewind
   cuts history, never the world), and user delete removes it with the whole sandbox workspace.
-- **A share link never picks an upload:** `isPptxCard` (`src/shared/shareLinks.ts`) excludes
-  `uploaded` cards, so neither the 공유 링크 button, the route nor `create_share_link` exports a .pptx the
-  user sent in.
+- **A share link never picks an upload:** `isShareableFileCard` (`src/shared/shareLinks.ts`) excludes
+  `uploaded` cards, so neither the 공유 링크 button, the route nor `create_share_link` exports a file the
+  user sent in — and a shared CONVERSATION shows such a file as a name only, never a download.
 - **Regenerate / edit re-send the anchor row's documents** (`readChatDocuments` — only `uploaded` file
   attachments whose stored name and extension still match), so pi writes `/workspace/uploads/<name>` again
   with the stored bytes; a missing stored copy is skipped and logged, like `readChatImages`. A document-only
@@ -556,7 +558,7 @@
   their file cards are deleted, so a canvas that embedded their slide images loses them — accepted (the new
   run re-renders and re-shows); the canvases themselves roll back to the anchor time.
 - **`create_share_link` (the agent path):** on interactive own-avatar owner turns only, the chat route's
-  `onShareLink` makes or reuses a login-required share link for a PPTX card (this turn's `shownAttachments`
+  `onShareLink` makes or reuses a login-required share link for a file card (this turn's `shownAttachments`
   first, then persisted messages). Its refusal for a segment no owner message started keyed on a
   finalized visible turn, which only the retired background phase produced (a steer follow-up turn is never
   finalized early), and every ok result names the conversation's other active links (`otherActiveLinks` — a link never follows a rebuild).

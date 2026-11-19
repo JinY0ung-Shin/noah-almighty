@@ -32,6 +32,10 @@ import {
   shareDateTimeLabel,
   shareOwnerLine,
   shareTicketsStale,
+  createConversationShareLink,
+  createWorkspaceShareLink,
+  shareLinkLabel,
+  shareLinkMatches,
 } from "../src/client/src/lib/shareLinks.js";
 import { SHARE_LINK_GONE_MESSAGE, SHARE_TICKET_TTL_MINUTES, shareLinkPath } from "../src/shared/shareLinks.js";
 import type { ChatPane, ShareLinkSummary, ShareViewPayload } from "../src/client/src/lib/types.js";
@@ -59,6 +63,7 @@ function jsonRes(data: unknown, status = 200) {
 
 function payload(over: Partial<ShareViewPayload> = {}): ShareViewPayload {
   return {
+    kind: "file",
     fileName: "분기 보고.pptx",
     ownerName: "김민수",
     ownerUsername: "minsu",
@@ -77,10 +82,14 @@ function payload(over: Partial<ShareViewPayload> = {}): ShareViewPayload {
 function summary(over: Partial<ShareLinkSummary> = {}): ShareLinkSummary {
   return {
     id: "link-1",
+    kind: "file",
     conversationId: "conv-1",
     conversationTitle: "보고서 만들기",
     fileId: "file-1",
+    sourcePath: "",
     fileName: "분기 보고.pptx",
+    messageCount: 0,
+    includesFiles: false,
     slideCount: 2,
     createdAt: new Date(2026, 9, 1, 9, 0).toISOString(),
     expiresAt: new Date(2026, 9, 8, 9, 0).toISOString(),
@@ -236,7 +245,8 @@ describe("sanitizeSharePayload", () => {
       previewCapped: 1,
     } as unknown as ShareViewPayload);
     expect(clean).toEqual({
-      fileName: "공유된 PPT",
+      kind: "file",
+      fileName: "공유된 파일",
       ownerName: "",
       ownerUsername: "",
       createdAt: "",
@@ -246,6 +256,73 @@ describe("sanitizeSharePayload", () => {
       previewCapped: true,
     });
     expect(sanitizeSharePayload(null).slides).toEqual([]);
+    // A response from before conversation links carries no kind: it is a file link.
+    expect(sanitizeSharePayload({ ...payload(), kind: undefined } as unknown as ShareViewPayload).kind).toBe("file");
+  });
+
+  it("keeps a shared conversation's text, and only the images and files that point at a share route", () => {
+    const clean = sanitizeSharePayload({
+      kind: "conversation",
+      fileName: "분기 실적 정리",
+      ownerName: "김민수",
+      ownerUsername: "minsu",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      expiresAt: "2026-10-08T00:00:00.000Z",
+      // A conversation link has no deck: whatever rides here is dropped.
+      slides: [{ index: 1, url: "/api/share/t/tk/slides/1", alt: "x" }],
+      downloadUrl: "/api/share/t/tk/download",
+      previewCapped: true,
+      conversation: {
+        conversationId: "conv-1",
+        imageBase: "/api/share/t/tk/images/",
+        avatarName: "노아",
+        includesFiles: 1,
+        messages: [
+          { id: "m1", role: "user", content: "질문", createdAt: "2026-10-01T00:00:00.000Z", attachments: null },
+          {
+            id: "m2",
+            role: "assistant",
+            content: "**답**",
+            createdAt: "2026-10-01T00:01:00.000Z",
+            errored: "yes",
+            attachments: [
+              { id: "a1", kind: "image", name: "차트.png", mediaType: "image/png", url: "/api/share/t/tk/images/a1", width: 640, height: 480, anchor: 2 },
+              // An image must come from the link; a file without a URL is a name.
+              { id: "a2", kind: "image", name: "밖.png", mediaType: "image/png", url: "/api/conversations/conv-1/images/a2" },
+              { id: "a3", kind: "file", name: "보고.pptx", mediaType: "x", size: 2048 },
+              { id: "a4", kind: "file", name: "밖.pdf", mediaType: "x", url: "https://evil.example/x" },
+              { id: "a5", kind: "team_brain", name: "", mediaType: "x" },
+            ],
+          },
+          { id: "m3", role: "user", kind: "consultation", speaker: "김민수", content: "상담 결과", createdAt: "", attachments: [] },
+          { id: "m4", role: "system", content: "시스템", createdAt: "", attachments: [] },
+        ],
+      },
+    } as unknown as ShareViewPayload);
+    expect(clean).toMatchObject({ kind: "conversation", fileName: "분기 실적 정리", slides: [], downloadUrl: "", previewCapped: false });
+    expect(clean.conversation).toEqual({
+      conversationId: "conv-1",
+      imageBase: "/api/share/t/tk/images/",
+      avatarName: "노아",
+      includesFiles: false,
+      messages: [
+        { id: "m1", role: "user", content: "질문", createdAt: "2026-10-01T00:00:00.000Z", attachments: [] },
+        {
+          id: "m2",
+          role: "assistant",
+          content: "**답**",
+          createdAt: "2026-10-01T00:01:00.000Z",
+          attachments: [
+            { id: "a1", kind: "image", name: "차트.png", mediaType: "image/png", width: 640, height: 480, anchor: 2, url: "/api/share/t/tk/images/a1" },
+            { id: "a3", kind: "file", name: "보고.pptx", mediaType: "x", size: 2048 },
+            { id: "a4", kind: "file", name: "밖.pdf", mediaType: "x" },
+          ],
+        },
+        { id: "m3", role: "user", kind: "consultation", speaker: "김민수", content: "상담 결과", createdAt: "", attachments: [] },
+      ],
+    });
+    // A conversation payload without its conversation is not one.
+    expect(sanitizeSharePayload({ ...payload(), kind: "conversation" } as ShareViewPayload).kind).toBe("file");
   });
 });
 
@@ -268,7 +345,7 @@ describe("display rules", () => {
   it("tells the audience the truth about who can open it and speaker notes", () => {
     // Open sign-up is retired (single team): only an approved Noah user can.
     expect(SHARE_AUDIENCE_NOTE).toBe(
-      "링크를 받은 Noah 사용자는 누구나 로그인하면 슬라이드를 보고 파일을 내려받을 수 있습니다. 파일에는 발표자 노트도 포함됩니다.",
+      "링크를 받은 Noah 사용자는 누구나 로그인하면 파일을 내려받을 수 있습니다. PPT 파일은 슬라이드도 볼 수 있고, 파일에 발표자 노트가 포함됩니다.",
     );
   });
 
@@ -326,6 +403,66 @@ describe("owner API calls", () => {
     expect(JSON.parse(String(init.body))).toEqual({ expiresInDays: 30 });
     await createShareLink("c", "f");
     expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))).toEqual({ expiresInDays: 7 });
+  });
+
+  it("lists and creates a CONVERSATION link: its own filter, the file choice in the body", async () => {
+    const conversationLink = summary({ id: "c1", kind: "conversation", fileId: "", fileName: "분기 실적", messageCount: 4, includesFiles: true });
+    const fetchMock = useFetch((url) =>
+      url.startsWith("/api/me/share-links?")
+        ? // An older server's row carries no kind and no counts: it reads as a file link.
+          jsonRes([conversationLink, { ...summary({ id: "f1" }), kind: undefined, messageCount: undefined, includesFiles: undefined }])
+        : jsonRes({ link: conversationLink, created: true }, 201),
+    );
+    const filter = { conversationId: "conv 1", kind: "conversation" } as const;
+    const links = await listShareLinks(filter);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/me/share-links?conversationId=conv+1&kind=conversation");
+    expect(links.map((l) => [l.id, l.kind, l.messageCount, l.includesFiles])).toEqual([
+      ["c1", "conversation", 4, true],
+      ["f1", "file", 0, false],
+    ]);
+    // The dialog keeps only its own target's link, whatever the server narrowed.
+    expect(links.filter((l) => shareLinkMatches(l, { conversationId: "conv-1", kind: "conversation" })).map((l) => l.id)).toEqual(["c1"]);
+    expect(links.filter((l) => shareLinkMatches(l, { conversationId: "conv-1", fileId: "file-1" })).map((l) => l.id)).toEqual(["f1"]);
+    expect(links.filter((l) => shareLinkMatches(l, { conversationId: "other", kind: "conversation" }))).toEqual([]);
+
+    await expect(createConversationShareLink("conv/1", { expiresInDays: 1, includeFiles: true })).resolves.toEqual({
+      link: conversationLink,
+      created: true,
+    });
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe("/api/conversations/conv%2F1/share-links");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ expiresInDays: 1, includeFiles: true });
+    await createConversationShareLink("c");
+    expect(JSON.parse(String((fetchMock.mock.calls[2] as [string, RequestInit])[1].body))).toEqual({ expiresInDays: 7, includeFiles: false });
+
+    // What each kind is called in a list that holds both.
+    expect(shareLinkLabel(summary())).toBe("분기 보고.pptx");
+    expect(shareLinkLabel(summary({ kind: "conversation", fileName: "옛 제목", conversationTitle: "새 제목" }))).toBe("새 제목");
+    expect(shareLinkLabel(summary({ kind: "conversation", fileName: "옛 제목", conversationTitle: null }))).toBe("옛 제목");
+  });
+
+  it("lists and creates a WORKSPACE-FILE link by the file's path", async () => {
+    const workspaceLink = summary({ id: "w1", kind: "workspace_file", conversationId: "", fileId: "", fileName: "보고서.pdf", sourcePath: "c/conv 1/보고서.pdf" });
+    const fetchMock = useFetch((url) =>
+      url.startsWith("/api/me/share-links?") ? jsonRes([workspaceLink, summary({ id: "f1" })]) : jsonRes({ link: workspaceLink, created: true }, 201),
+    );
+    const filter = { kind: "workspace_file", sourcePath: "c/conv 1/보고서.pdf" } as const;
+    const links = await listShareLinks(filter);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `/api/me/share-links?${new URLSearchParams({ kind: "workspace_file", path: "c/conv 1/보고서.pdf" })}`,
+    );
+    expect(links.filter((l) => shareLinkMatches(l, filter)).map((l) => l.id)).toEqual(["w1"]);
+    expect(links.filter((l) => shareLinkMatches(l, { kind: "workspace_file", sourcePath: "other.pdf" }))).toEqual([]);
+    // A row from a server without the field reads as "no path".
+    expect((await listShareLinks()).every((l) => typeof l.sourcePath === "string")).toBe(true);
+
+    await expect(createWorkspaceShareLink("c/conv 1/보고서.pdf", 30)).resolves.toEqual({ link: workspaceLink, created: true });
+    const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(url).toBe("/api/me/share-links/workspace");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({ path: "c/conv 1/보고서.pdf", expiresInDays: 30 });
+    expect(shareLinkLabel(workspaceLink)).toBe("보고서.pdf");
   });
 
   it("revokes by id, treating an already-gone link as revoked", async () => {
@@ -392,7 +529,7 @@ describe("share route", () => {
   it("titles the tab with the deck's file name, from state", () => {
     replaceState({ user: { id: "u" } as any, view: "share", shareTitle: "" });
     setDocumentTitle();
-    expect(document.title).toBe("공유된 PPT · Noah Almighty");
+    expect(document.title).toBe("공유 자료 · Noah Almighty");
     replaceState({ shareTitle: "분기 보고.pptx" });
     setDocumentTitle();
     expect(document.title).toBe("분기 보고.pptx · Noah Almighty");

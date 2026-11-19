@@ -40,3 +40,15 @@
 .share-link-confirm:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) .routine-modal-actions-right {
   justify-content: flex-end;
 }
+/* A conversation link's one choice: a checkbox row, its label wrapping beside the box. */
+.share-link-files:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.share-link-files:is(.cmp-share-link-dialog, .cmp-share-link-dialog *) input {
+  flex: none;
+  margin-top: 0.2em;
+}

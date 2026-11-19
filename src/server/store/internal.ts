@@ -590,8 +590,11 @@ export class StoreBase {
         created_at TEXT,
         PRIMARY KEY (owner_user_id, skill_name)
       );
-      -- PPT SHARE LINKS: a login-required, expiring, revocable link to ONE
-      -- generated .pptx download card (see src/shared/shareLinks.ts). A LIVE
+      -- SHARE LINKS: a login-required, expiring, revocable link to ONE thing
+      -- the owner chose to export (see src/shared/shareLinks.ts): a file card
+      -- the avatar delivered, or — the columns added in migrate(): kind,
+      -- through_message_id, include_files — a conversation up to a fixed
+      -- message. A LIVE
       -- reference, never a byte snapshot: every recipient call re-validates the
       -- row against the conversation, the owner and the file on disk
       -- (src/server/shareLinks.ts). Only the token's SHA-256 is stored — the
@@ -958,6 +961,25 @@ export class StoreBase {
     // trail is what keeps those copies matched to the row until their next
     // update rewrites the marker. NULL (and anything unparseable) reads as [].
     this.addColumnIfMissing("shared_skills", "previous_names", "TEXT");
+    // SHARE LINK KINDS (src/shared/shareLinks.ts). `kind` NULL/'file' = a link
+    // to ONE file card (every row from before the column). 'conversation' = a
+    // link to the conversation's messages UP TO `through_message_id` (the last
+    // stored row when the owner pressed; nothing is copied, later rows never
+    // show, and the link dies with that row); `include_files` = 1 lets it also
+    // serve the avatar-delivered file cards inside that range. Such a row keeps
+    // `file_id` '' and `file_name` = the conversation's title at creation. A
+    // build from before these columns reads it as a file link whose file does
+    // not resolve — the one 404 — so a rollback fails closed.
+    this.addColumnIfMissing("share_links", "kind", "TEXT DEFAULT 'file'");
+    this.addColumnIfMissing("share_links", "through_message_id", "TEXT");
+    this.addColumnIfMissing("share_links", "include_files", "INTEGER DEFAULT 0");
+    // 'workspace_file' = a link to Noah's own COPY of one file of the owner's
+    // sandbox workspace (the 파일 tab's 공유 링크), kept under
+    // <dataDir>/share-files/<link id>/ and removed with the row
+    // (src/server/shareFiles.ts). `source_path` is where the file sat when the
+    // copy was taken — the owner's label, and what "one active link per file"
+    // is keyed on; `conversation_id` and `file_id` are ''.
+    this.addColumnIfMissing("share_links", "source_path", "TEXT");
     // Team brain schema v1 (LLM wiki): a source's intake answers (JSON
     // TeamBrainIntake) and a compiled changeset (JSON TeamBrainChangeset).
     // NULL = none (legacy rows; decoded defensively).
@@ -1630,8 +1652,13 @@ export interface StoreBase {
   deleteCanvasArtifactsForConversation(conversationId: string): void;
   /** Sibling of the canvas cascade at EVERY conversation-deleting site (store/shareLinks.ts). */
   deleteShareLinksForConversation(conversationId: string): void;
-  /** The links of specific deck cards — the rewind/regenerate cascade (store/shareLinks.ts). */
+  /** The links of specific file cards — the rewind/regenerate cascade (store/shareLinks.ts). */
   deleteShareLinksForFiles(conversationId: string, fileIds: readonly string[]): void;
+  /**
+   * The conversation links whose last shared message is gone — next to EVERY
+   * path that deletes some of a conversation's messages (store/shareLinks.ts).
+   */
+  deleteConversationShareLinksWithoutAnchor(conversationId: string): void;
   countOpenKnowledgeRequests(avatarUserId: string): number;
   /** deleteUser cascade (store/teamBrain.ts). */
   deleteTeamBrainProposalsForUser(userId: string): void;

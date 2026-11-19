@@ -6,13 +6,20 @@ import { cx, useLatest } from "../lib/hooks";
 import {
   absoluteShareUrl,
   activeShareLink,
+  createConversationShareLink,
   createShareLink,
+  createWorkspaceShareLink,
   latestExpiredShareLink,
   listShareLinks,
   revokeShareLink,
   SHARE_AUDIENCE_NOTE,
+  SHARE_CONVERSATION_AUDIENCE_NOTE,
+  SHARE_CONVERSATION_SCOPE_NOTE,
+  SHARE_WORKSPACE_SCOPE_NOTE,
   shareDateLabel,
   shareDateTimeLabel,
+  shareLinkMatches,
+  type ShareLinkFilter,
 } from "../lib/shareLinks";
 import {
   DEFAULT_SHARE_LINK_EXPIRY_DAYS,
@@ -22,9 +29,12 @@ import {
 import type { MessageAttachment, ShareLinkSummary } from "../lib/types";
 import "./ShareLinkDialog.css";
 
-// Create / show / revoke the share link of ONE deck card. ChatView owns the
-// one instance (the card's link button and the deck's side-panel tab's 공유
-// 링크 both open it there). It is a portaled Modal (mounted inside the chat view,
+// Create / show / revoke ONE share link: a file card's (`attachment`), a file
+// of the viewer's own workspace (`workspaceFile`, the 파일 tab — a copy taken
+// when they press), or — with neither — the link of the CONVERSATION itself,
+// read-only, as it stands when the owner presses. ChatView owns the one
+// instance (the card's link button, the side panel's 공유 링크 buttons and the
+// pane header's 대화 공유 all open it there). It is a portaled Modal (mounted inside the chat view,
 // a fixed overlay would otherwise sit in that view's stacking contexts), and
 // a portaled modal inerts everything else under <body>, App's
 // ConfirmationDialog and Toasts included. So this dialog NEVER calls
@@ -32,13 +42,17 @@ import "./ShareLinkDialog.css";
 // revoke confirms inline and every error renders inside the card.
 export interface ShareLinkDialogProps {
   conversationId: string;
-  attachment: Pick<MessageAttachment, "id" | "name">;
+  /** The file card whose link this is. */
+  attachment?: Pick<MessageAttachment, "id" | "name">;
+  /** A file of the viewer's own workspace (its path in the 파일 tab's grammar). Neither = the conversation itself. */
+  workspaceFile?: { path: string; name: string };
+  /** A conversation link: the conversation's title, shown under the heading. */
+  conversationTitle?: string;
   onClose?: () => void;
 }
 
 type Phase = "loading" | "load-error" | "none" | "active";
 
-const audience = SHARE_AUDIENCE_NOTE;
 
 function selectAll(event: SyntheticEvent<HTMLInputElement>): void {
   event.currentTarget.select();
@@ -48,11 +62,22 @@ function expiryLabel(days: ShareLinkExpiryDays): string {
   return days === DEFAULT_SHARE_LINK_EXPIRY_DAYS ? `${days}일(기본)` : `${days}일`;
 }
 
-export default function ShareLinkDialog({ conversationId, attachment, onClose }: ShareLinkDialogProps) {
+export default function ShareLinkDialog({
+  conversationId,
+  attachment,
+  workspaceFile,
+  conversationTitle,
+  onClose,
+}: ShareLinkDialogProps) {
   const [uid] = useState(() => Math.random().toString(36).slice(2, 8));
   const titleId = `share-link-title-${uid}`;
   const expiryLabelId = `share-link-expiry-${uid}`;
   const confirmTextId = `share-link-confirm-${uid}`;
+  // What this dialog is about is fixed while it is open.
+  const forConversation = !attachment && !workspaceFile;
+  const audience = forConversation ? SHARE_CONVERSATION_AUDIENCE_NOTE : SHARE_AUDIENCE_NOTE;
+  /** A conversation link: also let the files the avatar delivered be downloaded. */
+  const [includeFiles, setIncludeFiles] = useState(false);
 
   const [phase, setPhase] = useState<Phase>("loading");
   // `link` and `busy` are also read by handlers that may run before the next
@@ -74,7 +99,14 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
   const closeButton = useRef<HTMLButtonElement | null>(null);
   const revokeButton = useRef<HTMLButtonElement | null>(null);
   const cancelButton = useRef<HTMLButtonElement | null>(null);
-  const card = useLatest({ conversationId, fileId: attachment.id });
+  const target = useLatest<ShareLinkFilter>(
+    workspaceFile
+      ? { kind: "workspace_file", sourcePath: workspaceFile.path }
+      : attachment
+        ? { conversationId, fileId: attachment.id }
+        : { conversationId, kind: "conversation" },
+  );
+  const options = useLatest({ expiry, includeFiles });
 
   function setLink(next: ShareLinkSummary | null): void {
     linkRef.current = next;
@@ -86,7 +118,11 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
     setBusyState(next);
   }
 
-  const fileName = attachment.name || "파일";
+  const subject = workspaceFile
+    ? workspaceFile.name || "파일"
+    : attachment
+      ? attachment.name || "파일"
+      : conversationTitle || "제목 없는 대화";
   const linkUrl = link?.url ? absoluteShareUrl(link.url) : "";
 
   useEffect(() => {
@@ -99,10 +135,8 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
     setPhase("loading");
     setError("");
     try {
-      const { conversationId: cid, fileId } = card.current;
-      const links = (await listShareLinks({ conversationId: cid, fileId })).filter(
-        (item) => item.conversationId === card.current.conversationId && item.fileId === card.current.fileId,
-      );
+      const filter = target.current;
+      const links = (await listShareLinks(filter)).filter((item) => shareLinkMatches(item, filter));
       const active = activeShareLink(links);
       setLink(active);
       setLastExpiredAt(latestExpiredShareLink(links)?.expiresAt ?? "");
@@ -120,7 +154,16 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
     setError("");
     setRevoked(false);
     try {
-      const result = await createShareLink(card.current.conversationId, card.current.fileId, expiry);
+      const filter = target.current;
+      const result =
+        "sourcePath" in filter
+          ? await createWorkspaceShareLink(filter.sourcePath, options.current.expiry)
+          : "fileId" in filter
+            ? await createShareLink(filter.conversationId, filter.fileId, options.current.expiry)
+            : await createConversationShareLink(filter.conversationId, {
+                expiresInDays: options.current.expiry,
+                includeFiles: options.current.includeFiles,
+              });
       // Settle BEFORE the commit that mounts the active footer. A button that
       // mounts disabled starts at the disabled opacity and fades in (the
       // global button transition), so 공유 해제 first read as unavailable —
@@ -260,6 +303,21 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
             ))}
           </div>
         </div>
+        {forConversation ? (
+          <>
+            <label className="share-link-files">
+              <input
+                type="checkbox"
+                checked={includeFiles}
+                disabled={busy}
+                onChange={(event) => setIncludeFiles(event.currentTarget.checked)}
+              />{" "}
+              <span>아바타가 만들어 준 파일도 내려받을 수 있게 하기</span>
+            </label>
+            <p className="muted">{SHARE_CONVERSATION_SCOPE_NOTE}</p>
+          </>
+        ) : null}
+        {workspaceFile ? <p className="muted">{SHARE_WORKSPACE_SCOPE_NOTE}</p> : null}
         <p className="muted">{audience}</p>
       </Fragment>
     );
@@ -297,8 +355,20 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
         <p className="muted">
           {shareDateTimeLabel(link.expiresAt)}까지 · 조회 {link.viewCount}회
         </p>
+        {forConversation ? (
+          <p className="muted">
+            메시지 {link.messageCount}개까지 공유 중 · {link.includesFiles ? "아바타가 만든 파일 포함" : "파일 제외"}. 이 링크를 만든
+            뒤의 대화는 보이지 않습니다.
+          </p>
+        ) : null}
         <p className="muted">{audience}</p>
-        <p className="muted">유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요.</p>
+        <p className="muted">
+          {forConversation
+            ? "이후 대화를 포함하거나 파일 포함 여부·유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요."
+            : workspaceFile
+              ? `이 링크는 ${shareDateTimeLabel(link.createdAt)}에 만든 사본을 보여 줍니다. 바뀐 파일을 공유하거나 유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요.`
+              : "유효 기간을 바꾸려면 공유를 해제하고 새로 만드세요."}
+        </p>
       </Fragment>
     );
   } else {
@@ -313,8 +383,8 @@ export default function ShareLinkDialog({ conversationId, attachment, onClose }:
       closeDisabled={busy}
       onClose={close}
     >
-      <h2 id={titleId}>공유 링크</h2>
-      <p className="muted share-link-file">{fileName}</p>
+      <h2 id={titleId}>{forConversation ? "대화 공유 링크" : "공유 링크"}</h2>
+      <p className="muted share-link-file">{subject}</p>
 
       {body}
 

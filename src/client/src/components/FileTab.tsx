@@ -5,7 +5,7 @@ import { copyText } from "../lib/dom";
 import { formatFileSize } from "../lib/format";
 import { getGraphViewer, isDrawioAttachment, loadGraphViewer } from "../lib/drawioViewer";
 import { useAppState, useLatest } from "../lib/hooks";
-import { isPptxCard } from "../../../shared/shareLinks";
+import { isShareableFileCard } from "../../../shared/shareLinks";
 import type { ChatPane, MessageAttachment, PaneFileTab } from "../lib/types";
 import { knownImageSize } from "./ReservedImage";
 import ZoomableImage from "./ZoomableImage";
@@ -52,8 +52,9 @@ export default function FileTab({ pane, file, active = false, onShare = () => {}
   const attachment = file.attachment;
   const slides = file.slides ?? [];
   const name = attachment.name || "파일";
-  // 공유 링크: PPTX decks only.
-  const shareable = isPptxCard(attachment);
+  // 공유 링크: a download card the avatar delivered (never an image tab or a
+  // file the user attached).
+  const shareable = isShareableFileCard(attachment);
   // A card still streaming has no persisted message the server can find yet.
   const shareLive = Boolean(pane.streaming && (pane.liveAttachments ?? []).some((att) => att.id === attachment.id));
 

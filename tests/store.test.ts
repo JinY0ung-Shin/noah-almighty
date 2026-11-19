@@ -2053,6 +2053,11 @@ describe("store share_links migration (PPT share links)", () => {
       "expires_at",
       "view_count",
       "last_viewed_at",
+      // The link kinds (2026-11-19), added through addColumnIfMissing.
+      "kind",
+      "through_message_id",
+      "include_files",
+      "source_path",
     ]);
     const indexes = (dbOf(second).prepare("PRAGMA index_list(share_links)").all() as { name: string }[]).map((i) => i.name);
     expect(indexes).toEqual(expect.arrayContaining(["idx_share_links_owner", "idx_share_links_conversation"]));
@@ -2072,6 +2077,78 @@ describe("store share_links migration (PPT share links)", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     });
     expect(created).toMatchObject({ status: "created", link: { slideIds: ["s1", "s2"], viewCount: 0, conversationTitle: "hi" } });
+    second.close();
+  });
+
+  it("adds the link-kind columns to a share_links table from before them, and reads its rows as file links", () => {
+    // An existing deployment already HAS the table (the PPT-only shape) with
+    // live links in it: the kinds must arrive as columns, never a rebuild.
+    const dataDir = path.join(tempDir, "share-kind-migration");
+    const open = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "sl" }).store;
+    const first = open();
+    const owner = first.createUser({ username: "slkinds", displayName: "Owner", password: "password123" });
+    first.touchConversation(owner.id, "conv-1", owner.id, "hi");
+    dbOf(first).exec(`
+      DROP TABLE share_links;
+      CREATE TABLE share_links (
+        id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, conversation_id TEXT NOT NULL, file_id TEXT NOT NULL,
+        file_name TEXT NOT NULL, slide_ids_json TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, token_salt TEXT NOT NULL,
+        created_at TEXT NOT NULL, expires_at TEXT NOT NULL, view_count INTEGER NOT NULL DEFAULT 0, last_viewed_at TEXT
+      );
+    `);
+    dbOf(first)
+      .prepare(
+        `INSERT INTO share_links (id, owner_user_id, conversation_id, file_id, file_name, slide_ids_json, token_hash, token_salt, created_at, expires_at, view_count)
+         VALUES (?, ?, 'conv-1', 'file-1', 'deck.pptx', '["s1"]', ?, ?, ?, ?, 3)`,
+      )
+      .run("33333333-3333-4333-8333-333333333333", owner.id, "c".repeat(64), "s".repeat(22), new Date().toISOString(), new Date(Date.now() + 60_000).toISOString());
+    first.close();
+
+    const second = open();
+    const [link] = second.listShareLinks(owner.id);
+    expect(link).toMatchObject({
+      id: "33333333-3333-4333-8333-333333333333",
+      kind: "file",
+      fileId: "file-1",
+      slideIds: ["s1"],
+      viewCount: 3,
+      throughMessageId: null,
+      includeFiles: false,
+      messageCount: 0,
+      sourcePath: "",
+    });
+    // The old row is still the active link of its card: creating again reuses it.
+    const again = second.createShareLink({
+      id: "44444444-4444-4444-8444-444444444444",
+      ownerUserId: owner.id,
+      conversationId: "conv-1",
+      fileId: "file-1",
+      fileName: "deck.pptx",
+      slideIds: [],
+      tokenHash: "d".repeat(64),
+      tokenSalt: "s".repeat(22),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(again).toMatchObject({ status: "reused", link: { id: "33333333-3333-4333-8333-333333333333" } });
+    // And a conversation link of the same conversation is its own target.
+    second.addMessage("conv-1", { role: "user", content: "hi" });
+    const conversationLink = second.createShareLink({
+      id: "55555555-5555-4555-8555-555555555555",
+      kind: "conversation",
+      ownerUserId: owner.id,
+      conversationId: "conv-1",
+      fileId: "",
+      fileName: "hi",
+      slideIds: [],
+      throughMessageId: second.lastMessageId(owner.id, "conv-1")!,
+      includeFiles: true,
+      tokenHash: "e".repeat(64),
+      tokenSalt: "s".repeat(22),
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(conversationLink).toMatchObject({ status: "created", link: { kind: "conversation", includeFiles: true, messageCount: 1 } });
     second.close();
   });
 

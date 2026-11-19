@@ -1,0 +1,14 @@
+/* SharedConversation's own styles, scoped to .cmp-shared-conversation. The
+   bubbles themselves are the chat's (global .message / .bubble / .md rules). */
+.shared-conversation-note:is(.cmp-shared-conversation, .cmp-shared-conversation *) {
+  width: min(100%, var(--transcript-max));
+  margin: 0 auto var(--s-4);
+}
+/* A file the link does not serve: a card that states it, not a control. */
+.shared-file-unavailable:is(.cmp-shared-conversation, .cmp-shared-conversation *) {
+  cursor: default;
+  opacity: 0.75;
+}
+.shared-file-unavailable:is(.cmp-shared-conversation, .cmp-shared-conversation *):hover {
+  border-color: var(--line);
+}

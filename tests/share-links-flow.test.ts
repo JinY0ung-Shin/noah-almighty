@@ -139,7 +139,7 @@ afterEach(async () => {
 const FIXTURE_DECK = path.join(__dirname, "fixtures", "deck-preview", "mini");
 const TOOL_LINE = "Share links: `create_share_link`, ONLY if the user asks for a link.";
 const REDIRECT =
-  "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
+  "Share links for a file card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the file's card.";
 
 async function boot() {
   services = createServices({
@@ -322,7 +322,7 @@ describe("share links end to end (chat route → runPiAgent → /mcp → tool �
     expect(own!.instructions).toContain(TOOL_LINE);
     expect(own!.instructions).not.toContain(REDIRECT);
     // The owner's call reached the ROUTE's onShareLink (it found no deck card).
-    expect(results[0]!.content[0]?.text).toContain("This conversation has no PPTX deck to share yet");
+    expect(results[0]!.content[0]?.text).toContain("This conversation has no file a link can be made for yet");
     expect(colleagueRun!.instructions).not.toContain(TOOL_LINE);
     expect(colleagueRun!.instructions).toContain(REDIRECT);
     expect(results[1]).toMatchObject({ isError: true });

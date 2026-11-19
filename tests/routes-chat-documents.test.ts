@@ -377,7 +377,7 @@ describe("POST /api/chat/stream — document attachments (files)", () => {
     const [upload] = uploads(store.listMessages(id, "conv-share").find((m) => m.role === "user")!.attachments);
     expect(upload!.mediaType).toBe(PPTX_MEDIA_TYPE);
     const res = await agent.post(`/api/conversations/conv-share/files/${upload!.id}/share-links`).send({ expiresInDays: 7 }).expect(400);
-    expect(res.body.error).toBe("PPTX 파일만 공유 링크를 만들 수 있습니다.");
+    expect(res.body.error).toBe("직접 첨부한 파일은 공유 링크를 만들 수 없습니다.");
     expect((await agent.get("/api/me/share-links").expect(200)).body).toEqual([]);
   });
 });

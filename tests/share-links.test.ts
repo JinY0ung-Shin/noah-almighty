@@ -245,20 +245,36 @@ describe("share links — owner create / reuse / list / revoke", () => {
     }
   });
 
-  it("refuses non-PPTX cards and answers one 404 for strangers, unknown files and conversations", async () => {
+  it("links any file the avatar delivered: a PDF card is download-only, served as a PDF under its own name", async () => {
+    const t = boot();
+    const owner = await newUser(t.app, "owner");
+    const viewer = await newUser(t.app, "viewer");
+    // The seeded message also carries hidden renders stamped with the card id;
+    // a link shows slides for whatever card they are stamped with.
+    const pdf = seedDeck(t, owner.id, "conv-pdf", { kind: "pdf", slides: 0 });
+    const link = (await create(owner.agent, "conv-pdf", pdf.card.id).expect(201)).body.link as ShareLinkSummary;
+    expect(link).toMatchObject({ fileName: "보고서.pdf", slideCount: 0 });
+
+    const payload = (await open(viewer.agent, tokenOf(link.url)).expect(200)).body as ShareViewPayload;
+    expect(payload).toMatchObject({ fileName: "보고서.pdf", slides: [], previewCapped: false });
+    const res = await viewer.agent.get(payload.downloadUrl).buffer(true).parse(binary).expect(200);
+    expect(res.headers["content-type"]).toBe("application/pdf");
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain(encodeURIComponent("보고서.pdf"));
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(Buffer.compare(res.body as Buffer, PDF)).toBe(0);
+  });
+
+  it("refuses screenshot cards and answers one 404 for strangers, unknown files and conversations", async () => {
     const t = boot();
     const owner = await newUser(t.app, "owner");
     const stranger = await newUser(t.app, "stranger");
     const deck = seedDeck(t, owner.id, "conv-deck");
-    const pdf = seedDeck(t, owner.id, "conv-pdf", { kind: "pdf" });
     const shot = seedDeck(t, owner.id, "conv-shot", { kind: "screenshot" });
 
-    for (const [cid, fileId] of [
-      ["conv-pdf", pdf.card.id],
-      ["conv-shot", shot.card.id],
-    ] as const) {
-      const res = await create(owner.agent, cid, fileId).expect(400);
-      expect(res.body.error).toBe("PPTX 파일만 공유 링크를 만들 수 있습니다.");
+    {
+      const res = await create(owner.agent, "conv-shot", shot.card.id).expect(400);
+      expect(res.body.error).toBe("이 파일은 공유 링크를 만들 수 없습니다.");
     }
     // A hidden render is not a card either.
     await create(owner.agent, "conv-deck", deck.slides[0].id).expect(404);
@@ -991,14 +1007,17 @@ describe("share links — service units", () => {
     expect(verifyShareTicket(SECRET, `${ticket}x`, link, "viewer-1", now)).toBe(false);
   });
 
-  it("picks the card an avatar means: this turn first, the latest deck, or an explicit id", () => {
+  it("picks the card an avatar means: this turn first, the latest file, or an explicit id", () => {
     const deck = (name: string): MessageAttachment => ({ id: crypto.randomUUID(), kind: "file", mediaType: PPTX_MEDIA_TYPE, name });
     const render = (parentId: string): MessageAttachment => ({ id: crypto.randomUUID(), kind: "image", mediaType: "image/png", hidden: true, parentId });
     const pdf: MessageAttachment = { id: crypto.randomUUID(), kind: "file", mediaType: "application/pdf", name: "보고서.pdf" };
     const older = deck("초안.pptx");
     const draft = deck("리뷰.pptx");
     const final = deck("리뷰.pptx");
-    const thisTurn = [draft, render(draft.id), final, render(final.id), pdf];
+    const shot: MessageAttachment = { id: crypto.randomUUID(), kind: "file", mediaType: "image/png", name: "스크린샷.png" };
+    const upload: MessageAttachment = { id: crypto.randomUUID(), kind: "file", mediaType: "application/pdf", name: "내 문서.pdf", uploaded: true };
+    // A screenshot card and a file the user attached never count as a file to link.
+    const thisTurn = [draft, render(draft.id), final, render(final.id), shot, upload];
     const persisted = [[older, render(older.id)]];
 
     // The latest batch holds ONE deck (re-shared twice): its latest card.
@@ -1016,13 +1035,19 @@ describe("share links — service units", () => {
     expect(ambiguous).toContain("pass attachmentId");
     expect(ambiguous).toContain(`"영업.pptx" (attachment id: ${two[0].id})`);
     expect(ambiguous).toContain(`"인사.pptx" (attachment id: ${two[1].id})`);
-    // Not a deck / not here / not an id / nothing at all.
-    expect(errorOf(pickShareLinkCard([thisTurn], pdf.id))).toContain('only be created for PPTX decks, and "보고서.pdf" is not one');
+    // Any file the avatar delivered is linkable — a PDF alone is picked, by default or by id.
+    expect(pickShareLinkCard([[pdf], thisTurn])).toEqual({ card: pdf, attachments: [pdf] });
+    expect(pickShareLinkCard([thisTurn, [pdf]], pdf.id)).toEqual({ card: pdf, attachments: [pdf] });
+    // A deck and a PDF delivered together are two different files: ask.
+    expect(errorOf(pickShareLinkCard([[final, pdf]]))).toContain(`"보고서.pdf" (attachment id: ${pdf.id})`);
+    // Not linkable / not here / not an id / nothing at all.
+    expect(errorOf(pickShareLinkCard([thisTurn], shot.id))).toContain('files you delivered with share_file, and "스크린샷.png" is not one');
+    expect(errorOf(pickShareLinkCard([thisTurn], upload.id))).toContain('files you delivered with share_file, and "내 문서.pdf" is not one');
     // A hidden render's id is not a card id.
     expect(errorOf(pickShareLinkCard([thisTurn], thisTurn[1].id))).toContain("No file card with attachment id");
     expect(errorOf(pickShareLinkCard([thisTurn], crypto.randomUUID()))).toContain(`"리뷰.pptx" (attachment id: ${final.id})`);
     expect(errorOf(pickShareLinkCard([thisTurn], "../../etc"))).toContain("not a valid attachment id");
-    expect(errorOf(pickShareLinkCard([[pdf]]))).toContain("no PPTX deck to share yet");
+    expect(errorOf(pickShareLinkCard([[shot, upload]]))).toContain("no file a link can be made for yet");
   });
 });
 

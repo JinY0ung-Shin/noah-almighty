@@ -318,16 +318,19 @@ describe("official system manual", () => {
 
   it("documents the share-link exception to conversation-scoped artifacts without claiming availability", () => {
     const page = readSystemManual("files-canvas").text;
-    expect(page).toContain("Artifacts are scoped to their conversation, with one exception: a share link for a PPTX download card.");
-    expect(page).toContain("speaker notes included");
+    expect(page).toContain("Artifacts are scoped to their conversation, with one exception: a share link for a download card (a file delivered with share_file).");
+    expect(page).toContain("the .pptx includes the speaker notes");
     expect(page).toContain("1, 7 or 30 days, 7 by default, fixed at creation");
     // One active link per delivered CARD: a rebuilt deck delivered again is a
     // new card, and the earlier link keeps its earlier file (finding agent-1).
-    expect(page).toContain("Each delivered deck card has at most one active link, and a link keeps opening the file it was made for");
+    expect(page).toContain("Each delivered file card has at most one active link, and a link keeps opening the file it was made for");
     expect(page).toContain(
-      "a rebuilt deck delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked",
+      "a rebuilt file delivered again is a new card, so sharing it takes a new link, while the earlier link keeps showing the earlier version until it expires or is revoked",
     );
     expect(page).not.toContain("a deck has at most one active link");
+    // The conversation itself: the owner's own press, never the avatar's tool.
+    expect(page).toContain("The conversation itself can be shared too, but only by its owner's own press: 대화 공유 in the chat header");
+    expect(page).toContain("The avatar has no tool for a conversation link, so it points the user to that button.");
     expect(page).toContain("It is a human-initiated export, like downloading the file and forwarding it");
     expect(page).toContain("내 아바타 → 권한·연결 → 공유 링크");
     // Availability stays a runtime fact, never a manual claim.

@@ -563,7 +563,7 @@ function fileOutputSection(request: AgentRequest): string | null {
 }
 
 /**
- * Share links for share_file's PPTX cards, in one of two forms:
+ * Share links for share_file's download cards, in one of two forms:
  * - TOOL LINE (`request.shareLinksEnabled`, stamped from runCapabilities'
  *   `shareLinkToolActive`): deliberately one short sentence — the trigger, the
  *   audience and the security rules live in the tool description and its
@@ -571,6 +571,10 @@ function fileOutputSection(request: AgentRequest): string | null {
  *   (tests/system-manual.test.ts budgets it).
  * - REDIRECT: every other run that can deliver files, so the avatar neither
  *   denies the feature nor improvises one — the 공유 링크 button on the card.
+ * The redirect also says where a link to the CONVERSATION comes from: the
+ * person's own 대화 공유 button — the avatar has no tool for it, in any run.
+ * The tool line has no room for that (the prompt budget); on a run with the
+ * tool, its description carries the same sentence.
  * Mirrored by describe_system's share-link line (both read the same boolean).
  */
 function shareLinkSection(request: AgentRequest): string | null {
@@ -578,7 +582,7 @@ function shareLinkSection(request: AgentRequest): string | null {
     return "Share links: `create_share_link`, ONLY if the user asks for a link.";
   }
   if (!request.fileOutputEnabled) return null;
-  return "Share links for a PPTX card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the deck's file card.";
+  return "Share links for a file card cannot be created in this run; if the user wants a link other people can open, point them to the 공유 링크 button next to the file's card. A link to the conversation itself is their own 대화 공유 button in the chat header.";
 }
 
 /**

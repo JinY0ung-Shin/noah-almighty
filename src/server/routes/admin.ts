@@ -10,6 +10,7 @@ import { sanitizeName } from "../marketplace.js";
 import { deleteConversationWorkspaceCopies, workspaceDirFor } from "../workspace.js";
 import { deletePiUserWorkspace } from "../agent/pi/piWorkspace.js";
 import { deleteWorkspacePreviewsForUser } from "../workspacePreviews.js";
+import { sweepShareLinkCopies } from "../shareLinks.js";
 import { piRepoCopyStateDir } from "../agent/pi/piRepoCopy.js";
 import { knownHostsPath } from "../sshTrust.js";
 import { deleteConversationImages } from "../chatImages.js";
@@ -251,6 +252,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
         fs.rmSync(piRepoCopyStateDir(config, req.params.id), { recursive: true, force: true });
         // The 파일 tab's rendered document pages (an expiring cache, per user).
         deleteWorkspacePreviewsForUser(config, req.params.id);
+        // The copies behind the workspace-file share links they made (their rows went with the user).
+        sweepShareLinkCopies({ config, store });
         const avatarsDir = avatarDir(config);
         if (fs.existsSync(avatarsDir)) {
           for (const f of fs.readdirSync(avatarsDir)) {

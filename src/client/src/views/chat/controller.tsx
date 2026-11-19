@@ -87,7 +87,7 @@ import {
   type McpToolGroupId,
 } from "../../../../shared/mcpToolGroups";
 import { TOUR_SCENARIOS, type TourScenario } from "../../../../shared/tourScenarios";
-import { isPptxCard } from "../../../../shared/shareLinks";
+import { isShareableFileCard } from "../../../../shared/shareLinks";
 import { isImeComposing } from "../../lib/ime";
 
 /* ------------------------------------------------------------------ */
@@ -397,9 +397,10 @@ export function fileSrc(conversationId: string, att: MessageAttachment): string 
   return att.name ? `${base}?name=${encodeURIComponent(att.name)}` : base;
 }
 
-// 공유 링크 beside a deck card: PPTX decks only.
+// 공유 링크 beside a file card: any file the avatar delivered (never one the
+// user attached, never a screenshot card).
 export function canShareCard(att: MessageAttachment): boolean {
-  return isPptxCard(att);
+  return isShareableFileCard(att);
 }
 
 /* ---- slash autocomplete ---- */
@@ -639,7 +640,13 @@ interface Instance {
 }
 
 export type SplitOption = { id: string; alias?: string; displayName?: string; username?: string };
-export type ShareTarget = { conversationId: string; attachment: MessageAttachment };
+/** What the share-link dialog is open for: a file card, a file of the viewer's workspace, or (neither) the conversation itself. */
+export type ShareTarget = {
+  conversationId: string;
+  attachment?: MessageAttachment;
+  workspaceFile?: { path: string; name: string };
+  conversationTitle?: string;
+};
 export type CardsRenderer = (pane: ChatPane, atts: MessageAttachment[], source: MessageAttachment[] | undefined) => ReactNode;
 
 export function useChatController() {
@@ -1136,6 +1143,18 @@ export function useChatController() {
     setShareTarget({ conversationId: item.conversationId, attachment: att });
   }
 
+  // 파일 tab → 공유 링크: a file of the viewer's own workspace, as it is now.
+  function openWorkspaceShareDialog(file: { path: string; name: string }): void {
+    setShareTarget({ conversationId: "", workspaceFile: file });
+  }
+
+  // 대화 공유: the link of the pane's conversation itself, as it stands now.
+  function openConversationShareDialog(item: ChatPane): void {
+    if (!item.conversationId) return;
+    const title = readState().conversations.find((c) => c.id === item.conversationId)?.title ?? "";
+    setShareTarget({ conversationId: item.conversationId, conversationTitle: title });
+  }
+
   function closeShareDialog(): void {
     setShareTarget(null);
   }
@@ -1597,6 +1616,8 @@ export function useChatController() {
     onRewindEditKeydown,
     openFilePreview,
     openShareDialog,
+    openConversationShareDialog,
+    openWorkspaceShareDialog,
     closeShareDialog,
     shareTarget,
     AnswerUi,

@@ -363,6 +363,8 @@ function inlinePieces(children: TNode[], env: Env, rt: Runtime, out: InlinePiece
 // an <image> may only show an image of THIS conversation. Evaluation is
 // synchronous, so one module variable serves the whole walk.
 let viewConversationId: string | null = null;
+// Where that conversation's images are read from when not its own route (see buildAnswerItems).
+let viewImageSrc: ((imageId: string) => string) | null = null;
 // The id namespace of this view's drawings (see buildAnswerItems).
 let viewSvgNs = "wg";
 
@@ -403,7 +405,11 @@ function renderEl(node: ElNode, env: Env, rt: Runtime, key: string): VNode {
     if (!ref || !viewConversationId || ref.conversationId !== viewConversationId) {
       return errorNode(key, node, NODE_ERROR, "src: the image belongs to another conversation — a widget can only show images of the conversation it is in");
     }
-    props.src = `/api/conversations/${encodeURIComponent(ref.conversationId)}/images/${encodeURIComponent(ref.imageId)}`;
+    // A shared conversation's viewer cannot read the conversation's own
+    // routes: it supplies the address of the same image under its link.
+    props.src = viewImageSrc
+      ? viewImageSrc(ref.imageId)
+      : `/api/conversations/${encodeURIComponent(ref.conversationId)}/images/${encodeURIComponent(ref.imageId)}`;
   }
   if (spec.child === "svg") {
     // Ids are namespaced per view AND per node, so two drawings — of one widget,
@@ -634,11 +640,13 @@ export interface AnswerViewCache {
   /** What every block's result depends on besides its own source. */
   scope: string;
   values: Record<string, unknown> | null;
+  /** The image source the kept blocks were evaluated with (their `<image>` addresses came from it). */
+  imageSrc: ((imageId: string) => string) | null;
   blocks: Map<string, VNode[]>;
 }
 
 export function createAnswerViewCache(): AnswerViewCache {
-  return { scope: "", values: null, blocks: new Map() };
+  return { scope: "", values: null, imageSrc: null, blocks: new Map() };
 }
 
 /**
@@ -661,15 +669,24 @@ export function buildAnswerItems(
   rt: Runtime,
   values: Record<string, unknown>,
   cache: AnswerViewCache,
-  options: { conversationId?: string | null; svgNs?: string } = {},
+  options: {
+    conversationId?: string | null;
+    svgNs?: string;
+    /** Where an image of THIS conversation is read from instead of the conversation's own route (a share link's viewer). */
+    imageSrc?: ((imageId: string) => string) | null;
+  } = {},
 ): AnswerItem[] {
   viewConversationId = options.conversationId || null;
+  viewImageSrc = options.imageSrc || null;
   viewSvgNs = options.svgNs || "wg";
   // A `{@const}` or state declared LATER can change what an earlier block shows.
   const scope = doc.states.map((st) => st.sig).join("\u0001") + "\u0002" + doc.nodes.flatMap((n) => (n.t === "const" ? [n.sig] : [])).join("\u0001");
-  if (cache.scope !== scope || cache.values !== values) {
+  // …and so can a new image source: a share link's viewer renews its ticket
+  // addresses, and a kept block would go on pointing at the lapsed ones.
+  if (cache.scope !== scope || cache.values !== values || cache.imageSrc !== viewImageSrc) {
     cache.scope = scope;
     cache.values = values;
+    cache.imageSrc = viewImageSrc;
     cache.blocks = new Map();
   }
   const kept = new Map<string, VNode[]>();
@@ -722,6 +739,7 @@ export function buildAnswerItems(
     }
   } finally {
     viewConversationId = null;
+    viewImageSrc = null;
     viewSvgNs = "wg";
   }
   cache.blocks = kept;

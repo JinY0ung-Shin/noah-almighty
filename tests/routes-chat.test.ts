@@ -4516,7 +4516,7 @@ describe("create_share_link host callback (onShareLink)", () => {
     expect(store.listShareLinks(ownerId)).toHaveLength(1);
   });
 
-  it("refuses non-PPTX cards, foreign ids, bad input, ambiguity and a conversation without a deck", async () => {
+  it("links a non-deck file, and refuses foreign ids, bad input, ambiguity and a conversation without a file", async () => {
     const { store, app, config } = boot();
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "refuseowner").expect(201)).body.user.id as string;
@@ -4544,19 +4544,20 @@ describe("create_share_link host callback (onShareLink)", () => {
     };
     await owner.post("/api/chat/stream").send({ avatarId: ownerId, conversationId: "conv-refuse", message: "링크" }).expect(200);
 
-    expect(errorOf(results.none)).toContain("no PPTX deck to share yet");
-    expect(errorOf(results.pdf)).toContain('only be created for PPTX decks, and "보고서.pdf" is not one');
-    expect(errorOf(results.onlyPdf)).toContain("no PPTX deck to share yet");
+    expect(errorOf(results.none)).toContain("no file a link can be made for yet");
+    // A PDF the avatar delivered is linkable, by id or as the most recent file (the same link).
+    expect(ok(results.pdf)).toMatchObject({ created: true, fileName: "보고서.pdf", slideCount: 0 });
+    expect(ok(results.onlyPdf)).toMatchObject({ created: false, url: ok(results.pdf).url });
     expect(errorOf(results.foreign)).toContain(`No file card with attachment id ${foreignId}`);
     expect(errorOf(results.badId)).toContain("not a valid attachment id");
     expect(errorOf(results.badExpiry)).toBe("expiresInDays must be 1, 7 or 30.");
-    expect(errorOf(results.ambiguous)).toContain("Several different decks");
+    expect(errorOf(results.ambiguous)).toContain("Several different files");
     expect(errorOf(results.ambiguous)).toContain('"영업.pptx"');
     expect(errorOf(results.ambiguous)).toContain('"인사.pptx"');
-    // Nothing was created — for this owner or the foreign deck's.
-    expect(store.listShareLinks(ownerId)).toEqual([]);
+    // Only the PDF's link was created — nothing for the refused calls or the foreign deck.
+    expect(store.listShareLinks(ownerId).map((link) => link.fileName)).toEqual(["보고서.pdf"]);
     expect(store.listShareLinks(otherId)).toEqual([]);
-    expect(store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create")).toEqual([]);
+    expect(store.listAudit(ownerId, true).filter((a) => a.action === "share_link_create")).toHaveLength(1);
   });
 
   it("keeps every card's link on its own file, and names the conversation's other active links on each result", async () => {

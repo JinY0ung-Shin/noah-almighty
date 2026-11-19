@@ -550,6 +550,90 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return null;
     }
 
+    /** The conversation's title, or null: not the owner's, or it has none. */
+    getConversationTitle(ownerId: string, conversationId: string): string | null {
+      const row = this.db
+        .prepare("SELECT title FROM conversations WHERE id = ? AND owner_user_id = ?")
+        .get(conversationId, ownerId) as { title: string | null } | undefined;
+      return row?.title || null;
+    }
+
+    /**
+     * The id of the conversation's LAST stored user/assistant row (insertion
+     * order), or null: not the owner's, or nothing stored yet. What a
+     * conversation share link takes as its anchor.
+     */
+    lastMessageId(ownerId: string, conversationId: string): string | null {
+      if (!this.ownsConversation(ownerId, conversationId)) {
+        return null;
+      }
+      const row = this.db
+        .prepare(
+          "SELECT id FROM messages WHERE conversation_id = ? AND role IN ('user', 'assistant') ORDER BY rowid DESC LIMIT 1",
+        )
+        .get(conversationId) as { id: string } | undefined;
+      return row?.id ?? null;
+    }
+
+    /**
+     * The conversation's messages up to and INCLUDING `throughMessageId`
+     * (insertion order) — the range a conversation share link shows. Null when
+     * the conversation is not the owner's or that row is no longer in it (the
+     * link is then dead: it never falls back to "everything").
+     */
+    listMessagesThrough(
+      ownerId: string,
+      conversationId: string,
+      throughMessageId: string,
+    ): StoredMessage[] | null {
+      const rows = this.listMessages(ownerId, conversationId);
+      const index = rows.findIndex((message) => message.id === throughMessageId);
+      return index < 0 ? null : rows.slice(0, index + 1);
+    }
+
+    /**
+     * One attachment of a message at or before `throughMessageId`, by id — what
+     * a conversation share link may serve bytes for. `instr` only narrows the
+     * rows (never LIKE: `_` is a wildcard and SAFE_ID admits it); the match is
+     * EXACT on the parsed entry. Null when the anchor row is gone, or no row in
+     * range carries that attachment. `text` is what that message shows (an
+     * answer's text, a user's content) — a hidden image is part of the
+     * conversation only when the text itself places it.
+     */
+    findAttachmentThrough(
+      conversationId: string,
+      throughMessageId: string,
+      attachmentId: string,
+    ): { attachment: MessageAttachment; role: StoredMessage["role"]; text: string } | null {
+      const rows = this.db
+        .prepare(
+          `SELECT role, content, response_json, attachments_json FROM messages
+            WHERE conversation_id = ? AND attachments_json IS NOT NULL AND instr(attachments_json, ?) > 0
+              AND rowid <= (SELECT a.rowid FROM messages a WHERE a.id = ? AND a.conversation_id = ?)
+            ORDER BY rowid ASC`,
+        )
+        .all(conversationId, attachmentId, throughMessageId, conversationId) as {
+        role: string;
+        content: string | null;
+        response_json: string | null;
+        attachments_json: string | null;
+      }[];
+      for (const row of rows) {
+        const attachment = (this.parseAttachmentsJson(row.attachments_json) ?? []).find(
+          (att) => Boolean(att) && typeof att === "object" && att.id === attachmentId,
+        );
+        if (attachment) {
+          const response = this.parseResponseJson(row.response_json);
+          return {
+            attachment,
+            role: row.role as StoredMessage["role"],
+            text: response?.text || response?.summary || row.content || "",
+          };
+        }
+      }
+      return null;
+    }
+
     listMessages(ownerId: string, conversationId: string): StoredMessage[] {
       if (!this.ownsConversation(ownerId, conversationId)) {
         return [];
@@ -675,6 +759,8 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
             "(SELECT id FROM messages WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?)",
         )
         .run(conversationId, conversationId, MAX_ROUTINE_RUN_RECORDS * 2);
+      // A conversation link whose last shared row was just pruned has no range left.
+      this.deleteConversationShareLinksWithoutAnchor(conversationId);
     }
 
     /**
@@ -1250,6 +1336,9 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
               .map((att) => att.id),
           ),
         );
+        // A conversation link shows the rows up to its anchor: once the cut
+        // takes the anchor, that range is no longer what the owner shared.
+        this.deleteConversationShareLinksWithoutAnchor(conversationId);
         // A team-brain card nobody pressed dies with its message; an applied
         // one stays (a rewind cuts history, never the world).
         this.cancelTeamBrainDrafts(

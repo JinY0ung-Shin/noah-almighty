@@ -98,6 +98,30 @@ const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[] }> = {
 };
 
 /**
+ * Whether `ext` (lowercase, no dot) is a type share_file publishes — the only
+ * stored bytes a share link serves (`shareLinks.ts`): never a screenshot card,
+ * a legacy Craft-app card or a type only a user's own attachment can have.
+ */
+export function isShareFileExtension(ext: string): boolean {
+  return Object.hasOwn(FILE_TYPES, ext);
+}
+
+/**
+ * The media type of a share_file type, or null when `ext` is not one. With
+ * `bytes`, the content check share_file applies runs too (OOXML containers are
+ * zip, a pdf starts `%PDF`): null for a mislabeled file riding an innocuous
+ * extension.
+ */
+export function shareFileMediaType(ext: string, bytes?: Buffer): string | null {
+  if (!isShareFileExtension(ext)) return null;
+  const fileType = FILE_TYPES[ext];
+  if (bytes && fileType.magic && !fileType.magic.some((prefix) => bytes.subarray(0, prefix.length).equals(prefix))) {
+    return null;
+  }
+  return fileType.mediaType;
+}
+
+/**
  * Image extensions the DOWNLOAD route may serve, written ONLY by the
  * browser-screenshot auto-share (`publishBrowserScreenshot`). Deliberately NOT
  * in {@link FILE_TYPES}: share_file keeps routing images through show_file

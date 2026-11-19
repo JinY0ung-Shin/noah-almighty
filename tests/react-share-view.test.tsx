@@ -9,7 +9,7 @@
 //    browser leaves fullscreen (Esc there never reaches the page);
 //  - a colleague arriving from a link is told why the login screen appeared,
 //    and the welcome / what's-new modals wait until they leave the deck.
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "../src/client/src/App";
@@ -62,6 +62,7 @@ function slidesOf(count: number, ticket = "tk"): ShareViewSlide[] {
 
 function payload(over: Partial<ShareViewPayload> = {}): ShareViewPayload {
   return {
+    kind: "file",
     fileName: "분기 보고.pptx",
     ownerName: "김민수",
     ownerUsername: "minsu",
@@ -188,13 +189,134 @@ afterEach(async () => {
 /* viewer states                                                       */
 /* ------------------------------------------------------------------ */
 
+describe("ShareView · a shared conversation", () => {
+  function conversationPayload(): ShareViewPayload {
+    return payload({
+      kind: "conversation",
+      fileName: "분기 실적 정리",
+      slides: [],
+      downloadUrl: "",
+      conversation: {
+        conversationId: "conv-1",
+        imageBase: "/api/share/t/tk/images/",
+        avatarName: "노아",
+        includesFiles: true,
+        messages: [
+          {
+            id: "m1",
+            role: "user",
+            content: "분기 실적 <b>정리</b>해 줘",
+            createdAt: new Date(2026, 9, 1, 9, 0).toISOString(),
+            attachments: [{ id: "u1", kind: "file", name: "내 문서.pdf", mediaType: "application/pdf", size: 2048 }],
+          },
+          {
+            id: "m2",
+            role: "assistant",
+            content: "**정리**했습니다.\n\n![차트](/api/conversations/conv-1/images/placed-1)",
+            createdAt: new Date(2026, 9, 1, 9, 1).toISOString(),
+            attachments: [
+              { id: "i1", kind: "image", name: "차트.png", mediaType: "image/png", caption: "매출 추이", url: "/api/share/t/tk/images/i1" },
+              { id: "f1", kind: "file", name: "보고.pptx", mediaType: "x", size: 4096, url: "/api/share/t/tk/files/f1" },
+            ],
+          },
+          { id: "m3", role: "user", kind: "consultation", speaker: "이영희", content: "상담 결과입니다", createdAt: "", attachments: [] },
+          { id: "m4", role: "user", kind: "steer", content: "하나 더", createdAt: "", attachments: [] },
+          { id: "m5", role: "assistant", content: "실행 중 오류가 났습니다.", createdAt: "", errored: true, attachments: [] },
+        ],
+      },
+    });
+  }
+
+  it("draws the conversation read-only: both sides by name, the answer's Markdown, images and files from the link", async () => {
+    stubFetch({ open: () => json(conversationPayload()) });
+    const { container } = openViewer();
+    expect(await screen.findByRole("heading", { level: 1, name: "분기 실적 정리" })).toBeTruthy();
+    expect(container.querySelector(".share-meta")?.textContent).toBe("김민수 (@minsu)님이 공유 · 10월 8일 09:05까지");
+    // No deck controls, no composer, no message actions.
+    expect(screen.queryByRole("button", { name: "발표 모드" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "다운로드" })).toBeNull();
+    expect(container.querySelector("textarea, .msg-actions, .composer")).toBeNull();
+    expect(screen.getByText(/읽기 전용으로 공유된 대화입니다\. 도구 실행 기록과 생각 과정은 포함되지 않습니다\./)).toBeTruthy();
+
+    const rows = [...container.querySelectorAll(".transcript-inner > .message")];
+    expect(rows.map((row) => row.className)).toEqual([
+      "message user",
+      "message assistant",
+      "message consultation",
+      "message user",
+      "message assistant",
+    ]);
+    // The reader is someone else: the user's side carries the sharer's name, never "나".
+    // …and the avatar's side says it is an avatar: with one's own avatar both names are the same person's.
+    expect(rows.map((row) => row.querySelector(".msg-role > span")?.textContent)).toEqual(["김민수", "노아 아바타", "이영희", "김민수", "노아 아바타"]);
+    expect(rows[2].querySelector(".steer-badge")?.textContent).toBe("팀원 상담 결과");
+    expect(rows[3].querySelector(".steer-badge")?.textContent).toBe("응답 중 전달");
+    expect(rows[4].querySelector(".bubble")?.classList.contains("errored")).toBe(true);
+
+    // A user's words are text, never markup.
+    const userBubble = rows[0].querySelector(".bubble")!;
+    expect(userBubble.textContent).toContain("분기 실적 <b>정리</b>해 줘");
+    expect(userBubble.querySelector("b")).toBeNull();
+    // A file the link does not serve is a name, not a control.
+    const upload = userBubble.querySelector(".msg-file-card")!;
+    expect(upload.tagName).toBe("DIV");
+    expect(upload.textContent).toContain("내 문서.pdf");
+    expect(upload.textContent).toContain("공유에 포함되지 않음");
+
+    // The answer is the chat's Markdown; an address its text wrote for the
+    // conversation's own image is re-pointed at the link.
+    const answer = rows[1].querySelector(".bubble")!;
+    expect(answer.querySelector(".md strong")?.textContent).toBe("정리");
+    expect(answer.querySelector(".md img")?.getAttribute("src")).toBe("/api/share/t/tk/images/placed-1");
+    expect(answer.innerHTML).not.toContain("/api/conversations/");
+    const shown = answer.querySelector(".msg-image-item img") as HTMLImageElement;
+    expect(shown.getAttribute("src")).toBe("/api/share/t/tk/images/i1");
+    expect(shown.alt).toBe("매출 추이");
+    expect(within(answer as HTMLElement).getByRole("button", { name: "매출 추이 크게 보기" })).toBeTruthy();
+    const file = within(answer as HTMLElement).getByRole("link", { name: /보고\.pptx/ }) as HTMLAnchorElement;
+    expect(file.getAttribute("href")).toBe("/api/share/t/tk/files/f1");
+    expect(file.getAttribute("download")).toBe("보고.pptx");
+    expect(file.textContent).toContain("내려받기");
+    expect(document.title).toBe("분기 실적 정리 · Noah Almighty");
+  });
+
+  it("drops inline style from what someone else wrote: shared text cannot position itself over the app", async () => {
+    const shared = conversationPayload();
+    shared.conversation!.messages = [
+      {
+        id: "m1",
+        role: "assistant",
+        content: '<div style="position:fixed;inset:0;z-index:99999;background:#fff">세션이 만료되었습니다 <a href="https://evil.example/login">다시 로그인</a></div>\n\n일반 **본문**',
+        createdAt: "",
+        attachments: [],
+      },
+    ];
+    stubFetch({ open: () => json(shared) });
+    const { container } = openViewer();
+    expect(await screen.findByText(/세션이 만료되었습니다/)).toBeTruthy();
+    const bubble = container.querySelector(".message.assistant .bubble")!;
+    expect(bubble.querySelector("[style]")).toBeNull();
+    expect(bubble.innerHTML).not.toContain("position:fixed");
+    // The text itself stays, as ordinary content of the bubble.
+    expect(bubble.querySelector(".md strong")?.textContent).toBe("본문");
+  });
+
+  it("says when the conversation was shared without its files", async () => {
+    const shared = conversationPayload();
+    shared.conversation!.includesFiles = false;
+    stubFetch({ open: () => json(shared) });
+    openViewer();
+    expect(await screen.findByText(/대화 속 파일은 공유되지 않았습니다\./)).toBeTruthy();
+  });
+});
+
 describe("ShareView", () => {
   it("renders the deck: title, provenance, actions and a lazy slide list", async () => {
     stubFetch();
     const { container } = openViewer();
     // Loading first, under the generic title.
     expect(screen.getByText("공유 자료를 불러오는 중…")).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("공유된 PPT");
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("공유 자료");
 
     expect(await screen.findByRole("heading", { level: 1, name: "분기 보고.pptx" })).toBeTruthy();
     expect(screen.getByText("김민수 (@minsu)님이 공유 · 10월 8일 09:05까지")).toBeTruthy();
