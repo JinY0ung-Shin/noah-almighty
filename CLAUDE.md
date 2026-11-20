@@ -67,6 +67,12 @@ These are the invariants the project is built around. New work should reinforce 
   → `chat-sse-media.md` ("Deletion cascades").
 
 ### Runtime and execution boundary
+- **DIRECTION (user, 2026-11-20 — not built yet): pi owns the HARNESS, Noah owns the CONVERSATION.** What an
+  agent knows and can do (memory, both brains, skills, tools, prompts, their policies) is to live in
+  pi-gateway; Noah keeps the conversation with people (chat, cards, avatars, sharing, the browser bridge).
+  **Place a new capability by that test.** Until a step lands, every brain / memory invariant below holds as
+  written. Decided steps (one OIDC login for both, `memory` as the only vault home with local-git history
+  and no external git sync, brain tools and the team brain in pi) → `pi-runtime.md` ("Direction").
 - **pi-gateway is the ONLY agent runtime; Noah is the BFF and the gatekeeper.** The Claude Agent SDK
   runner is retired (`AGENT_RUNTIME` = `pi` | `local` stub). Every run executes in ONE pi sandbox
   principal — whoever the run executes AS; a consultation gets a fresh throwaway sandbox (never the

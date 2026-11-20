@@ -10,6 +10,65 @@ deterministic stub for tests and the e2e harness, which also replays scripted `d
 included) stops the boot. No
 pi-gateway code is changed — everything pi lacks is a Noah-side degrade, stated on BOTH metacognition surfaces.
 
+## Direction: pi owns the harness (user decisions, 2026-11-20 — NOT built yet)
+
+**Everything below this section describes the code as it is.** This section is the decided target; until a
+step lands, the invariants in `CLAUDE.md` and in these pages hold as written.
+
+- **The boundary.** pi-gateway becomes the team's harness-management system: *what an agent knows and what it
+  can do* — memory and both brains, skills, tools, prompts, and the policies over them. Noah keeps *the
+  conversation with people* — chat, cards, avatars and personas, sharing, the browser bridge. A capability that
+  could live on either side is placed by that test. pi's "nothing left to take away" principle stays: it
+  decides how small a harness capability is built, not whether a needed one belongs in pi.
+- **Why identity alone was not the answer.** pi knows only the `user` of a request. In a colleague chat
+  (`user` = the colleague, the brain = the avatar owner's, read-only), a consultation (`user` =
+  `consult-…`) and a shared account (a teammate writes the owner's brain) the run's `user` is NOT the owner of
+  the brain it must open — and a login system only confirms who the `user` is. So: **Noah states per request
+  whose brain a run may open and with which access; pi enforces it**, and a session without that statement
+  gets no memory tools (otherwise a colleague's own memory opens under a persona its owner wrote).
+- **Identity (step 2): OIDC only — ONE login path** for Noah and pi, not built-in login next to it. A bundled
+  Keycloak is the issuer now; a corporate IdP later by changing the issuer (or by Keycloak federating AD /
+  LDAP / SAML) — neither app ever talks to AD directly. Constraints the design must keep:
+  - a token carries the EXISTING Noah user id — pi's workspaces (`u-<sha256(user)>`) and memory wikis are
+    keyed by it, so a new subject id would orphan every one of them;
+  - logged in is never trusted: signup approval stays the trust gate (a corporate IdP lets every employee
+    log in; the retired `open` signup mode must not come back through it);
+  - runs nobody is present for (routines, the task API, consultations) have no user token — Noah calls pi as a
+    service account and names the user, as the service key does today;
+  - a suspension bites at once (short-lived tokens, and Noah keeps its own per-request check).
+  Keycloak takes login, the admin role (pi's admin screen then needs no key proxy) and the approved-teammate
+  group; per-avatar relations (visibility, shared account, ownership) and run-kind limits stay Noah's.
+- **Personal brain (steps 1 and 3).** The one deployment (the user's company server — there is no other)
+  has every owner on home `memory` (reported 2026-11-20). `memory` becomes the ONLY home, for every user and
+  without a connected knowledge repository (a wiki is created by its first write; the starter notes need a
+  seed that is not the repository template). The git mirror, the deletion ledger, the cutover / rollback and
+  the `repo` home path are retired. History is a LOCAL git inside pi, one repository per wiki, one commit per
+  change naming who made it; nothing is pushed to an external git. **pi's memory volume is then the only
+  copy — its backup is an operator duty**, and the memory → repository rollback is gone. Copies already in
+  users' repositories stay as last written. Then the brain tools themselves move to pi (step 3).
+  **"A brain without a repository" is NOT built on Noah's repo tools — it arrives WITH step 3** (user,
+  2026-11-20): the brain is tied to the repository by structure, not by a few gates (notes are written only
+  through `mcp__repo__*`, a `personal_vaults` row needs a source repository, the starter notes ride
+  `create_repo`, the screens key on `user.knowledgeRepo`, and the prompt, manual and seven bundled skills
+  describe capture as "repo write + commit"), so cutting it in step 1 would be built and reworded twice.
+  Until step 3 the brain is shown only to users who have it set up — as today, a connected knowledge
+  repository — and step 1 keeps the one path that gives a newly connected repository's owner a vault in pi.
+  After step 3 a repository's `wiki/` folder is plain repository files again.
+- **Team brain (step 4) moves to pi too:** the vault with its history (the existing local git repository
+  moves as it is), the read tools, the schema and policy validation (whoever holds the original must enforce
+  them), a draft → commit pair where a commit needs a PERSON's token, and the admins' policy in pi's admin
+  screen. Noah keeps the chat card, the press report to the avatar and the personal-note promotion. The
+  push-only backup to the internal git host is retired with the rest of the external git sync. What must
+  survive the move: the model only drafts; one press by the drafter per card; no delete; a page changed since
+  it was read is refused; wiki text reaches an avatar marked as untrusted; the move goes through
+  `retirementGate()` and quarantine; retired names stay reserved.
+- **Order:** (0) pi's memory service keeps history in a local git → (1) the retirements in Noah (mirror,
+  deletion ledger, migration, the `repo` home's dead branches) → (2) Keycloak + OIDC, Noah first, then pi →
+  (3) personal brain tools in pi, and with them a brain without a repository → (4) team brain in pi. 1 and 2
+  are independent; 3 needs 1 (and can start on the service key, switching the identity check to tokens
+  later); 4 needs 2. **0 comes before 1 (user, 2026-11-20): the mirror is not dropped until pi keeps
+  history**, so there is never a time with neither a second copy nor a history.
+
 ## Run classes and the sandbox principal
 
 `runAgentStream` (`agent/index.ts`) sends every non-`local` run to `runPiAgent`. The sandbox principal is
