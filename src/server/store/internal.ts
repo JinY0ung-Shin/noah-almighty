@@ -20,14 +20,13 @@ const SESSION_DAYS = 14;
 
 /**
  * How recently `users.last_seen_at` must have been stamped for a user to count
- * as present. Every authenticated request refreshes that column, and an open tab
- * polls once a minute while VISIBLE (`startKnowledgeWatch` on the client), so the
- * floor is 2+ minutes: the window must clear one missed tick.
+ * as present. Every authenticated request refreshes that column EXCEPT the client's
+ * background polls (`X-Noah-Background`), which prove nothing about a person; a real
+ * input (key, click, scroll, touch) pings `/api/me/activity` at most once a minute
+ * (`startKnowledgeWatch` on the client). So an open but untouched tab ages out.
  *
  * At an hour this deliberately reads as "around recently", NOT "at the screen
- * now": someone who closed the tab 59 minutes ago still counts, and the client's
- * visibility gate stops being load-bearing (one visible moment in the hour is
- * enough). That is the intended trade — a 3-minute window made the badge flicker
+ * now": someone who closed the tab 59 minutes ago still counts. That is the intended trade — a 3-minute window made the badge flicker
  * to zero whenever people switched tabs. It still differs from
  * `AdminStats.activeSessions`, which counts 14-DAY login cookies and so never
  * decays within a workday. Callers must surface the window (see

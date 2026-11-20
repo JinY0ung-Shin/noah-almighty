@@ -979,12 +979,13 @@ screens show what it says and ask before each step that changes where notes live
   there works live and silently vanishes on reload — add it to `AgentActivity` (`server/types.ts`) and the
   sanitizer together, with a round-trip assertion in `tests/routes-chat.test.ts` (`name` is the
   worked example).
-- **Admin presence badge: the client poll interval bounds the server window from BELOW.**
-  `users.last_seen_at` is stamped by EVERY authenticated request, and `startKnowledgeWatch`
-  (`lib/loaders.ts`) is what keeps it warm for an idle-but-open tab — it polls once a minute and ONLY while
-  `document.hidden` is false. `PRESENCE_WINDOW_MS` (`store/internal.ts`) must therefore stay above that
-  interval with room for one missed tick, so ~2 min is the floor; shortening the window below it, or
-  lengthening the poll interval, makes the badge flicker to zero for people who are right there.
+- **Admin presence badge counts REAL INPUT, never the poll (2026-11-20, user choice: an open but untouched tab
+  must not show as present forever).** `users.last_seen_at` is stamped by `getUserBySessionToken` for every
+  authenticated request EXCEPT one carrying `X-Noah-Background: 1`, which `api()` (`lib/api.ts`,
+  `BACKGROUND_POLL_PATHS`: exact GETs of the once-a-minute tick — knowledge requests, notifications, notice,
+  todos, presence) adds by itself. A key / click / scroll / touch (`onUserActivity`, `lib/loaders.ts`, visible tab
+  only, at most once a minute) posts `/api/me/activity` (204), which stamps. **A new periodic poll joins
+  `BACKGROUND_POLL_PATHS`, or it silently keeps every open tab "present".** Writes are never background.
 - **The window is currently 1 hour, which means "around recently", NOT "at the screen now."** At that width
   the visibility gate stops being load-bearing (one visible moment in the hour is enough) and someone who
   closed the tab 59 minutes ago still counts. It was widened from 3 min deliberately — 3 min emptied the

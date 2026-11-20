@@ -185,9 +185,8 @@ export async function refreshAdminPresence(): Promise<void> {
 
 // Poll while the tab is visible (cheap once/min) and refresh the moment the owner
 // returns to the tab, so a colleague's new question surfaces without a reload.
-// This same tick is what keeps `users.last_seen_at` warm for an idle-but-open
-// tab, which is exactly what the presence window above is measured against —
-// so presence rides along here instead of adding a second timer.
+// The tick's own requests are marked background (`api.ts`) and do NOT stamp
+// `users.last_seen_at`: an idle-but-open tab must age out of the presence badge.
 let knowledgeWatchTimer: number | null = null;
 function onKnowledgeVisible(): void {
   if (!document.hidden) {
@@ -208,8 +207,25 @@ function clearKnowledgeWatch(): void {
     knowledgeWatchTimer = null;
   }
   document.removeEventListener("visibilitychange", onKnowledgeVisible);
+  for (const type of ACTIVITY_EVENTS) document.removeEventListener(type, onUserActivity, true);
+  lastActivityPingAt = 0;
   lastAnnouncedRequestCount = 0;
   lastAnnouncedNotificationCount = 0;
+}
+// Presence = a real input. The poll above sends `X-Noah-Background` and does not count; a key, click,
+// scroll or touch does, via this ping (at most once a minute, only while the tab is visible).
+// Passive + capture so it never touches the page's own handlers.
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+const ACTIVITY_PING_MS = 60_000;
+let lastActivityPingAt = 0;
+function onUserActivity(): void {
+  if (document.hidden) return;
+  const at = Date.now();
+  if (at - lastActivityPingAt < ACTIVITY_PING_MS) return;
+  lastActivityPingAt = at;
+  api("/api/me/activity", { method: "POST" }).catch(() => {
+    /* a missed ping only ages the badge; the next input retries */
+  });
 }
 export function startKnowledgeWatch(): void {
   // NOT stopKnowledgeWatch(): its account reset would wipe what boot already
@@ -217,6 +233,7 @@ export function startKnowledgeWatch(): void {
   clearKnowledgeWatch();
   knowledgeWatchTimer = window.setInterval(onKnowledgeVisible, 60000);
   document.addEventListener("visibilitychange", onKnowledgeVisible);
+  for (const type of ACTIVITY_EVENTS) document.addEventListener(type, onUserActivity, { capture: true, passive: true });
   // Knowledge/notification counts arrive with loadInboxData at boot; presence has
   // no such loader, so seed it here instead of leaving the badge blank for a minute.
   // The 할 일 list (rail badge + chat overlay) is seeded the same way.

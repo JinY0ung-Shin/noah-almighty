@@ -907,6 +907,29 @@ describe("loaders", () => {
     expect(removeListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
   });
 
+  it("marks the poll's GETs as background and pings /api/me/activity on a real input, at most once a minute", async () => {
+    const fetchFn = useFetch(() => jsonRes({ requests: [], notifications: [] }));
+    const headerOf = (n: number) => (fetchFn.mock.calls[n]?.[1] as RequestInit | undefined)?.headers as Record<string, string>;
+    replaceState({ user: { id: "u1", roles: ["member"] } as never });
+    await refreshKnowledgeStatus();
+    await refreshNotificationStatus();
+    expect(headerOf(0)["X-Noah-Background"]).toBe("1");
+    expect(headerOf(1)["X-Noah-Background"]).toBe("1");
+    // a write to a polled path, or any other GET, is a person's act
+    await api("/api/me/knowledge/requests", { method: "POST" });
+    expect(headerOf(2)["X-Noah-Background"]).toBeUndefined();
+
+    fetchFn.mockClear();
+    startKnowledgeWatch();
+    fetchFn.mockClear(); // the seed requests of startKnowledgeWatch itself
+    document.dispatchEvent(new Event("keydown"));
+    document.dispatchEvent(new Event("pointerdown")); // within the minute: no second ping
+    const pings = fetchFn.mock.calls.filter((c) => c[0] === "/api/me/activity");
+    expect(pings).toHaveLength(1);
+    expect((pings[0][1] as RequestInit).method).toBe("POST");
+    stopKnowledgeWatch();
+  });
+
   it("loadRoutinesData / loadAdminOverview populate their slices", async () => {
     useFetch((url) => {
       if (url === "/api/me/routines") return jsonRes({ routines: [{ id: "rt" }] });

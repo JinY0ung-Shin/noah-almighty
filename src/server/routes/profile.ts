@@ -130,6 +130,13 @@ export function createProfileRouter({ config, store, auditAs }: RouterDeps): Rou
     },
   );
 
+  // "Someone is at the screen": the client sends this (at most once a minute) after a real input —
+  // key, click, scroll. requireAuth stamps `last_seen_at`; background polls do not (they send
+  // `X-Noah-Background`), so an open but untouched tab ages out of the admin presence badge.
+  router.post("/api/me/activity", requireAuth(store), (_req, res) => {
+    res.status(204).end();
+  });
+
   // 관리자 공지 for THIS user: the notice in force, or null (none, hidden, or
   // already closed by them). The client polls it with its once-a-minute tick.
   router.get("/api/me/notice", requireAuth(store), (req: AuthenticatedRequest, res) => {

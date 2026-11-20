@@ -116,9 +116,14 @@ export function sessionTokenFromRequest(req: Request): string | undefined {
 
 // ---- Middleware ---------------------------------------------------------
 
+/** Sent by the client on its periodic polls: valid session, but nobody is known to be at the screen. */
+export const BACKGROUND_REQUEST_HEADER = "x-noah-background";
+
 export function requireAuth(store: Store) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-    const user = store.getUserBySessionToken(sessionTokenFromRequest(req));
+    // A poll the client marks as background does not count as presence (see `BACKGROUND_REQUEST_HEADER`).
+    const touch = req.get(BACKGROUND_REQUEST_HEADER) !== "1";
+    const user = store.getUserBySessionToken(sessionTokenFromRequest(req), { touch });
     if (!user) {
       logger.warn({ method: req.method, path: req.path }, "auth rejected");
       res.status(401).json({ error: "Authentication required" });

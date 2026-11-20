@@ -343,7 +343,11 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return token;
     }
 
-    getUserBySessionToken(token: string | undefined): User | null {
+    /**
+     * `touch: false` is a BACKGROUND request (the client's once-a-minute poll): it proves the
+     * session is valid but not that anyone is at the screen, so it must not move `last_seen_at`.
+     */
+    getUserBySessionToken(token: string | undefined, opts: { touch?: boolean } = {}): User | null {
       if (!token) {
         return null;
       }
@@ -368,9 +372,11 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         this.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(row.id);
         return null;
       }
-      this.db
-        .prepare("UPDATE users SET last_seen_at = ? WHERE id = ?")
-        .run(current, row.id);
+      if (opts.touch !== false) {
+        this.db
+          .prepare("UPDATE users SET last_seen_at = ? WHERE id = ?")
+          .run(current, row.id);
+      }
       return this.toUser(row);
     }
 

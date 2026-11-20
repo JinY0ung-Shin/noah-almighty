@@ -1105,6 +1105,42 @@ describe("noah-almighty platform", () => {
     ]);
   });
 
+  it("counts a real input as presence but not a background poll", async () => {
+    const services = createServices({ dataDir: path.join(tempDir, "presence-bg"), agentRuntime: "local", sessionSecret: "presence-bg" });
+    const app = createApp(services);
+    const admin = request.agent(app);
+    await signup(admin, "boss").expect(201);
+    const member = request.agent(app);
+    await signup(member, "member-user").expect(201);
+
+    // Age the member's stamp out of the window, as if their tab sat untouched for two hours.
+    const db = (services.store as unknown as { db: { prepare(sql: string): { run(...p: unknown[]): unknown } } }).db;
+    const setSeen = (username: string, minutesAgo: number) =>
+      db.prepare("UPDATE users SET last_seen_at = ? WHERE username = ?").run(new Date(Date.now() - minutesAgo * 60_000).toISOString(), username);
+    const present = async () =>
+      (await admin.get("/api/admin/presence").set("X-Noah-Background", "1").expect(200)).body.presence.users.map((u: { username: string }) => u.username);
+
+    setSeen("member-user", 120);
+    expect(await present()).toEqual(["boss"]);
+
+    // The once-a-minute polls (marked background) do not bring them back...
+    await member.get("/api/me/notifications").set("X-Noah-Background", "1").expect(200);
+    await member.get("/api/me/todos").set("X-Noah-Background", "1").expect(200);
+    expect(await present()).toEqual(["boss"]);
+
+    // ...a real input does,
+    await member.post("/api/me/activity").expect(204);
+    expect((await present()).sort()).toEqual(["boss", "member-user"]);
+
+    // and so does any ordinary request that is not marked background.
+    setSeen("member-user", 120);
+    await member.get("/api/me/notifications").expect(200);
+    expect((await present()).sort()).toEqual(["boss", "member-user"]);
+
+    // A background request still needs a valid session.
+    await request(app).post("/api/me/activity").expect(401);
+  });
+
   it("no longer serves the removed claude setup-token endpoints", async () => {
     const app = testApp();
     const { agent: admin } = await newUser(app, "boss"); // first → admin

@@ -44,11 +44,29 @@ export function sessionExpiredError(): ApiError {
   return new ApiError("세션이 만료되었습니다. 다시 로그인해 주세요.", 401);
 }
 
+/**
+ * Periodic polls: they say nothing about whether anyone is at the screen, so the server must not
+ * count them as presence (`X-Noah-Background`). A real input sends `/api/me/activity` instead.
+ * Exact GET paths only — a write is always a person's act.
+ */
+const BACKGROUND_POLL_PATHS = new Set([
+  "/api/me/knowledge/requests",
+  "/api/me/notifications",
+  "/api/me/notice",
+  "/api/me/todos",
+  "/api/admin/presence",
+]);
+
 export async function api<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+  const background = (options.method ?? "GET").toUpperCase() === "GET" && BACKGROUND_POLL_PATHS.has(path);
   let response: Response;
   try {
     response = await fetch(path, {
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(background ? { "X-Noah-Background": "1" } : {}),
+        ...(options.headers || {}),
+      },
       credentials: "same-origin",
       signal:
         options.signal ??
