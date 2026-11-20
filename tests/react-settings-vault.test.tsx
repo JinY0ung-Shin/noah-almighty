@@ -167,7 +167,7 @@ describe("outages", () => {
     vault = { serviceConfigured: false, service: null };
     await open();
     expect(alertText()).toBe(
-      "이 서버에 메모리 서비스가 연결되어 있지 않습니다. 브레인 노트를 읽거나 쓸 수 없습니다. 관리자에게 알려 주세요. 노트는 메모리 서비스에 그대로 있습니다.",
+      "이 서버에 메모리 서비스가 연결되어 있지 않습니다. 브레인 노트를 읽거나 쓸 수 없습니다. 관리자에게 알려 주세요.",
     );
     // Where the notes are kept is still said, under the outage.
     expect(block()!.textContent).toContain(KEPT);

@@ -962,6 +962,19 @@ describe("mcp__brain__*: the personal brain is read from the memory service", ()
     expect(txt(outside)).toBe("get_note only reads notes under `wiki/`. Use mcp__repo__read_file for other paths.");
   });
 
+  it("an empty vault whose repository import is still pending says so, and never sends the avatar to build a skeleton", async () => {
+    const m = setup("brain-import-pending");
+    m.store.setVaultImport(m.ownerId, "import");
+    const pending = await callTool(brain(m), "search", { query: "배포", scope: "personal" });
+    expect(pending.isError).toBe(true);
+    expect(txt(pending)).toContain("Noah is still importing the notes of the connected knowledge repository");
+    expect(txt(pending)).toContain("Do NOT run `brain-migrate`");
+    expect(txt(pending)).not.toContain("run the `brain-migrate` skill ONCE");
+    // Once the import is over, an empty vault is the ordinary empty vault again.
+    m.store.clearVaultImport(m.ownerId);
+    expect(txt(await callTool(brain(m), "search", { query: "배포", scope: "personal" }))).toContain("run the `brain-migrate` skill ONCE");
+  });
+
   it("an empty vault may be lost data, not a repository to migrate — and the clone's files never stand in for it", async () => {
     // No note under wiki/ or raw/ in the service. That is either a vault nobody wrote yet or a service that
     // lost its data — the answer must not send the avatar off to recreate notes that existed.

@@ -110,7 +110,7 @@ function withService(s: Setup) {
 const lineOf = (report: string, label: string) => report.split("\n").find((line) => line.startsWith(`- ${label}:`)) ?? "";
 
 /** The lines describe_system can say about a vault; everything else in a report is not about it. */
-const VAULT_LABELS = ["Personal vault", "Memory service", "Vault copy in the repository"];
+const VAULT_LABELS = ["Personal vault", "Memory service", "Vault copy in the repository", "Repository import"];
 const vaultLines = (report: string) => report.split("\n").filter((line) => VAULT_LABELS.some((label) => line.startsWith(`- ${label}:`)));
 
 const NOTES = "the repository-root `CLAUDE.md` and every `.md` note under `wiki/` and `raw/`";
@@ -214,6 +214,17 @@ describe("the frozen prompt states the one home and save-on-write, nothing live"
 });
 
 describe("describe_system states where the vault is and whether the service answers", () => {
+  it("a repository import that is still pending is one more line — and gone when it is over", async () => {
+    const s = setup("describe-import");
+    withService(s);
+    s.store.setVaultImport(s.owner.id, "check");
+    const line = lineOf(await describeSystem(s), "Repository import");
+    expect(line).toContain("PENDING — Noah is still importing the notes of the connected knowledge repository into this vault");
+    expect(line).toContain("do not run `brain-migrate` or rebuild notes meanwhile");
+    s.store.clearVaultImport(s.owner.id);
+    expect(lineOf(await describeSystem(s), "Repository import")).toBe("");
+  });
+
   it("with a repository: the vault line, then the live memory-service line — and no line about a copy", async () => {
     const s = setup("describe");
     const fake = withService(s);

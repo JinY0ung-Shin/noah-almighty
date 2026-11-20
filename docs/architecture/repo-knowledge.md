@@ -465,18 +465,28 @@ the ONE path that brings them in — and the only thing that ever reads those fi
   the owner as pending `check` and queues a look. A DISCONNECTED repository ends whatever was pending. A new
   repository is judged afresh: an import that had begun for the previous one is not continued.
   `resumeVaultImports` (boot, `index.ts`) queues every import an earlier process left pending, and takes
-  over the never-moved owners of the retirement boot (below).
-- **Only into an EMPTY vault.** The look (`check`) imports nothing when the owner's wiki already holds a
-  vault note (`vault_not_empty`): a repository that still carries the copies the retired mirror wrote must
-  never bring back a note its owner deleted since. The repository's notes then simply stay in the repository.
+  over the never-moved owners (below).
+- **A newly connected repository: only into an EMPTY vault.** The look (`check`) imports nothing when the
+  owner's wiki already holds a vault note (`vault_not_empty`): a repository that still carries the copies the
+  retired mirror wrote must never bring back a note its owner deleted since. The repository's notes then
+  simply stay in the repository.
+- **A never-moved owner: straight to `import`.** For an owner whose notes were never moved into the service
+  the repository IS the vault, so their import is not a look that a note in the service could call off (an
+  avatar may have built a `brain-migrate` skeleton on the empty brain first): it creates whatever is missing.
 - **Never overwrites.** The import creates (`put` without a hash) the notes the service does not hold; a
-  note that exists — also one written meanwhile, `exists` — is left as it is.
+  note that exists — also one written meanwhile, `exists` — is left as it is. One whose text differs from
+  the repository's file is named in the outcome and the log (`differs`).
+- **About ONE repository.** An attempt re-reads the connected repository and branch before it advances or
+  clears the pending state and before every note it creates; when they changed while it ran it stops
+  (`repo_changed`) and leaves the state to the attempt the change queued. Notes it had already created stay.
 - **Resumable** (`store/personalVault.ts`: app_config key `personal_vault_imports`, JSON
   `{ userId: "check" | "import" }`): `check` = the repository has not been looked at; `import` = the look
   said yes and the import began, so every repository note the service does not hold yet is still to be
   created. An attempt that cannot finish (`retry`: no memory service configured, the clone could not be
-  synced, the service unavailable) leaves the stage as it is; an attempt that ends (`imported`, or `nothing`:
-  no user, no repository, vault not empty, no notes) clears it.
+  synced, the service unavailable) leaves the stage as it is and — except for `not_configured` — is tried
+  again by a timer: after 60 s, then doubling up to 30 min, at most 6 rounds per process (`retryLater`; a
+  round re-queues everyone still pending), after which it waits for the next boot. An attempt that ends
+  (`imported`, or `nothing`: no user, no repository, vault not empty, no notes) clears it.
 - **What one attempt does** (`runVaultImport`, never throws): inside the owner's vault write queue it lists
   the wiki, then — inside the clone's repo lock — syncs the clone (`ensureCloneLocked`) and scans its working
   tree for vault paths without following a link at any folder or file (`scanRepoNotes`, `O_NOFOLLOW`), then
@@ -486,8 +496,16 @@ the ONE path that brings them in — and the only thing that ever reads those fi
 - **A repository file is never changed or deleted** — imported or skipped, it stays in the repository,
   where nothing updates it any more.
 - **One import at a time per app instance**, in the background (`enqueue`; tests wait with
-  `whenVaultImportsIdle`). Nothing is audited and no screen shows a pending import: the log line is its
-  record (`module: "vault-import"`).
+  `whenVaultImportsIdle`). Nothing is audited and no screen shows a pending import; the AVATAR hears of it:
+  a personal `mcp__brain__search` of an empty vault answers `VAULT_IMPORT_PENDING` instead of `NO_VAULT`
+  while the owner is pending ("do NOT run `brain-migrate`"), and the owner's `describe_system` carries a
+  `Repository import: PENDING` line. The log line is the record (`module: "vault-import"`; `warn` when
+  something was skipped).
+- **A commit never carries a vault path.** `commitAndPush` (`knowledgeRepo.ts`) passes
+  `leaveOut: isPersonalVaultPath` to `commitAndPushClone` (`repoGitCore.ts`): after `git add -A`, staged
+  changes at vault-note paths are taken out of the index again (the files stay as they are), so what the
+  retired mirror left uncommitted in a clone, or a repository's own notes that were edited there, never
+  rides a skill commit into the repository. Only such changes = nothing to commit.
 
 ### Search: what differs from the team brain's `rankBrainNotes`
 `MemoryVault.search` asks the service with prefix `wiki` and drops `wiki/index.md`, `wiki/log.md` and
@@ -568,19 +586,30 @@ The 2,000-note scan cap and its `unscanned` report are the same on both sides.
   `create_repo` seeded, a leftover an earlier rollback could not delete — and a newly connected repository's
   notes are not imported at all; there is no merge and no screen that offers one.
 - **A write that lands before a pending look ends it.** `check` judges emptiness when it RUNS: a note
-  written while the look was still pending (the service was up but the repository could not be synced, or
-  the avatar built the `brain-migrate` skeleton on a `NO_VAULT` answer) makes the vault non-empty, and the
-  repository's notes are then not imported.
+  written through a tool while the look of a NEWLY CONNECTED repository was still pending makes the vault
+  non-empty, and the repository's notes are then not imported. (The avatar is told not to build a skeleton
+  meanwhile — `VAULT_IMPORT_PENDING` — but the frozen prompt of an older conversation still names
+  `brain-migrate` for `NO_VAULT`.)
 - **A resumed import does not ask again.** Stage `import` creates every repository note the service does not
   hold, without a second look at whether the vault is empty — also a note the owner deleted between the
   attempt that failed and the one that finished.
+- **A never-moved owner's import can mix two sources.** It never overwrites, so a note that already sits in
+  the service at the same path — a skeleton built meanwhile, or a stale copy an old rollback could not
+  delete — wins over the repository's file (logged as `differs`), and a note only that stale copy holds
+  stays. Nothing quarantines such a leftover any more.
+- **A change at a vault path stays dirty in the clone.** It is never committed (above) and never dropped,
+  so it can keep git from switching the clone to another branch — then the import ends `retry`
+  (`sync_failed`) and the tools keep serving the previous branch's repository files. Commits the mirror made
+  but could not push ARE pushed by the next commit, and can conflict with a direct edit in the repository
+  (`REBASE_CONFLICT`, settled by hand).
 - **The import reads the clone as the sync left it — on the connected branch.** A clone that could not
   switch branches (uncommitted repository files in the way — `alignBranch` keeps it) is NOT scanned: the
   attempt ends `retry` (`sync_failed`), so the previous branch's notes are never taken for the connected
   one's. What is not checked: that the clone is at that branch's remote tip — unpushed local commits and
   uncommitted changes of the connected branch are scanned as they are.
-- **A pending import waits for the next boot.** No timer retries a `retry` outcome; only a boot
-  (`resumeVaultImports`) or the owner's next repository change looks again. Nothing shows it meanwhile.
+- **A pending import gives up for the process after its retry rounds** (about an hour and a half in all);
+  then only a boot (`resumeVaultImports`) or the owner's next repository change looks again. No screen shows
+  it — the avatar's `describe_system` line does.
 - **A file that is not UTF-8, moved onto a vault path.** A repo file → note move reads the file as text
   (`readFile`, utf8), so bytes that are not UTF-8 are not preserved in the note; the import skips such a
   file (`not_utf8`), the move does not.
@@ -606,13 +635,17 @@ routes `GET /api/admin/personal-vaults`, `POST /api/admin/personal-vaults/dry-ru
 `…/:userId/rollback`, `POST /api/me/personal-vault/mirror-recheck`, `…/mirror-confirm`; the admin screen 개인
 브레인 이전 and the copy state of the settings card; `AgentRequest.vaultHome`.
 
-**What an upgrade does** (`store/internal.ts` `migrate()`, behind `retirementGate()` — the full database
-backup first; a failed backup holds the step until a later boot's backup works; `retirementBackup.ts` lists
-the two tables and the setting as retired data): it drops both tables and the setting key. Before the drop it
-records the owners who had a repository connected but NO row — never moved, so their notes are still only in
-the repository — under the app_config key `personal_vault_import_stragglers`; the same boot's
-`resumeVaultImports` takes that list ONCE (`takeVaultImportStragglers`, logged) and looks at each repository
-like a newly connected one. No note is deleted anywhere: the service's wikis and the repositories are
+**What an upgrade does** (`store/internal.ts` `migrate()`). ABOVE `retirementGate()` — this build reads
+every vault from the service whether or not the backup worked — and ONCE per database
+(`recordUnmovedVaultOwners`; the marker `retired:personal_vault_repo_home`, read by existence, so a later boot
+never records again, also after an older build re-created the table empty): the owners whose notes are still
+only in their repository are recorded under the app_config key `personal_vault_import_stragglers` — everyone
+with a repository connected and no `personal_vaults` row, or, in a database from before that table existed,
+everyone with a repository connected. A new database has no users yet and only gets the marker. The same
+boot's `resumeVaultImports` takes that list ONCE (`takeVaultImportStragglers`, logged), records each owner as
+pending `import` and queues them. BEHIND the gate (the full database backup first; a failed backup holds the
+step until a later boot's backup works; `retirementBackup.ts` lists the two tables and the setting as retired
+data): both tables and the setting key are dropped. No note is deleted anywhere: the service's wikis and the repositories are
 untouched, the copies the mirror pushed stay in users' repositories and stop updating, and the quarantine
 folders an earlier rollback left (`retired/<stamp>/personal-vault-leftover/`) stay where they are.
 

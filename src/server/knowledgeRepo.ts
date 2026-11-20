@@ -6,6 +6,7 @@ import logger from "./logger.js";
 import { gitAuthConfig, marketplaceCloneUrl, pathExists, sanitizeName, serverGitEnv } from "./marketplace.js";
 import { tokenForGitUrl, type GitTokenSet } from "./gitCredentials.js";
 import { withRepoLock } from "./gitMutex.js";
+import { isPersonalVaultPath } from "./personalVault.js";
 import {
   git,
   currentBranch,
@@ -679,6 +680,9 @@ export async function commitAndPush(
       identity,
       log: { userId: ctx.userId, repo: ctx.repo },
       pushedMessage: "knowledge repo pushed",
+      // Vault notes live in the memory service: a commit of the knowledge repository never carries a change
+      // at a vault path (a copy the retired mirror left uncommitted, a repository's own notes not imported yet).
+      leaveOut: isPersonalVaultPath,
     }),
   );
 }

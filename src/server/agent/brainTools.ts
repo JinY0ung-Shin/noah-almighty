@@ -76,6 +76,14 @@ const NO_REPO =
 const NO_VAULT =
   "Your second brain holds no `wiki/` note (it lives in the memory service, not in the repository). If nothing was ever captured, run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing notes), then capture notes with the `brain-ingest` skill and retry. If notes existed before, do NOT recreate them: the memory service may have lost its data — tell the owner to report it to an admin. Do not use Bash — use the repo tools.";
 
+/**
+ * The vault is empty because the notes of the connected repository are still
+ * on their way in (`vaultImport.ts`): starting a skeleton now would stand in
+ * the way of the owner's own notes.
+ */
+export const VAULT_IMPORT_PENDING =
+  "Your second brain holds no `wiki/` note YET: Noah is still importing the notes of the connected knowledge repository into it (this starts when a repository is connected, and is tried again by itself after a failure). Nothing is lost. Do NOT run `brain-migrate` and do not write a vault skeleton or any note now — tell the user the brain is being imported, and try again in a few minutes.";
+
 /** What a `get_note` of a vault note that is not there answers (the clone words a missing file as an invalid path). */
 const NO_SUCH_NOTE =
   "No such note in your second brain. Check the path with mcp__brain__search or mcp__repo__list_files.";
@@ -244,7 +252,7 @@ export function buildBrainTools(store: Store, ctx: BrainToolsContext) {
     const vault = memoryVault();
     try {
       const result = await vault.search(args.query, args.limit);
-      if (result.kind === "no_vault") return text(NO_VAULT, true);
+      if (result.kind === "no_vault") return text(ctx.avatarUserId in store.listVaultImports() ? VAULT_IMPORT_PENDING : NO_VAULT, true);
       // A vault larger than one search covers: say so on a hit AND on a miss.
       const partial = unscannedNote(result.unscanned, "personal");
       if (result.hits.length === 0) {

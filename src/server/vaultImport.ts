@@ -8,19 +8,25 @@
  * brings them in:
  *
  * - WHEN: a knowledge repository or its branch is connected or changed
- *   ({@link onKnowledgeRepoChanged}), and — once, at the boot that retired the
- *   vault tables — for every owner who had a repository but was never moved
- *   ({@link resumeVaultImports}).
- * - ONLY INTO AN EMPTY VAULT: the look (`check`) imports nothing when the
- *   owner's wiki already holds a vault note. A repository that still carries
- *   the copies the retired mirror wrote must never bring back a note its owner
- *   deleted since.
+ *   ({@link onKnowledgeRepoChanged}), and — once, at the first boot of a build
+ *   without the `repo` home — for every owner who had a repository but was
+ *   never moved ({@link resumeVaultImports}).
+ * - A NEWLY CONNECTED REPOSITORY ONLY INTO AN EMPTY VAULT: its look (`check`)
+ *   imports nothing when the owner's wiki already holds a vault note. A
+ *   repository that still carries the copies the retired mirror wrote must
+ *   never bring back a note its owner deleted since. A never-moved owner starts
+ *   at `import` instead: their repository IS their vault.
  * - NEVER OVERWRITES: an import creates the notes the service does not hold;
- *   a note that exists is left as it is.
- * - RESUMABLE: what is pending is kept in the store (`check` → `import`), so an
- *   outage or a restart half-way is picked up at the next boot. A repository
- *   file is never changed or deleted; whatever could not be imported stays in
- *   the repository and is named in the log.
+ *   a note that exists is left as it is (one that differs from the
+ *   repository's file is named in the log).
+ * - ABOUT ONE REPOSITORY: an attempt that finds the connected repository or
+ *   branch changed while it ran stops and leaves the pending state to the
+ *   attempt the change queued.
+ * - RESUMABLE: what is pending is kept in the store (`check` → `import`), an
+ *   attempt that could not finish is tried again a few times with growing
+ *   pauses, and whatever is still pending is picked up at the next boot. A
+ *   repository file is never changed or deleted; whatever could not be
+ *   imported stays in the repository and is named in the log.
  */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -38,9 +44,12 @@ import type { AppConfig } from "./types.js";
 const importLogger = logger.child({ module: "vault-import" });
 
 export type VaultImportOutcome =
-  /** Nothing to do, and nothing is pending any more. */
-  | { kind: "nothing"; reason: "not_pending" | "no_user" | "no_repo" | "vault_not_empty" | "no_notes" }
-  /** Done. `skipped` = repository files at vault paths the service could not take; they stay in the repository. */
+  /** Nothing to do. Nothing is pending any more — except after `repo_changed`, where the pending state is the new repository's. */
+  | { kind: "nothing"; reason: "not_pending" | "no_user" | "no_repo" | "vault_not_empty" | "no_notes" | "repo_changed" }
+  /**
+   * Done. `skipped` = repository files at vault paths that are not in the vault: the service could not take
+   * them, or (`differs`) the vault already holds a different note at that path. They stay in the repository.
+   */
   | { kind: "imported"; created: number; skipped: { path: string; reason: string }[] }
   /** Could not be finished now; it stays pending for the next boot. */
   | { kind: "retry"; reason: "not_configured" | "sync_failed" | "memory_unavailable" };
@@ -146,9 +155,17 @@ export function runVaultImport(store: Store, config: AppConfig, userId: string):
     if (!ctx) return over("no_repo");
     const client = memoryClientFor(store, config);
     if (!client) return { kind: "retry", reason: "not_configured" };
+    // The repository this attempt is about. A change while it runs queues its own attempt (`onKnowledgeRepoChanged`
+    // resets the stage), so from then on the pending state is not this attempt's to advance or clear.
+    const changed = (): boolean => {
+      const now = store.getKnowledgeRepo(userId);
+      return now.repo !== ctx.repo || now.branch !== ctx.branch;
+    };
+    const repoChanged: VaultImportOutcome = { kind: "nothing", reason: "repo_changed" };
 
     try {
       const held = new Set((await client.list(userId)).map((entry) => entry.path).filter(isPersonalVaultPath));
+      if (changed()) return repoChanged;
       if (stage === "check" && held.size > 0) {
         importLogger.info(
           { userId, repo: ctx.repo, held: held.size },
@@ -172,13 +189,20 @@ export function runVaultImport(store: Store, config: AppConfig, userId: string):
         importLogger.warn({ userId, repo: ctx.repo, error: scrubGitError(error) }, "vault import: the repository could not be read; it stays pending");
         return { kind: "retry", reason: "sync_failed" };
       }
+      if (changed()) return repoChanged;
       if (scan.notes.length === 0) return over("no_notes");
       if (stage === "check") store.setVaultImport(userId, "import");
 
       const skipped = [...scan.skipped];
       let created = 0;
       for (const note of scan.notes) {
-        if (held.has(note.path)) continue;
+        if (changed()) return repoChanged;
+        if (held.has(note.path)) {
+          // Never overwritten — but a note that differs from the repository's file is worth a line in the log.
+          const current = await client.read(userId, note.path);
+          if (current && current.content !== note.text) skipped.push({ path: note.path, reason: "differs" });
+          continue;
+        }
         try {
           await client.put(userId, note.path, note.text);
           created += 1;
@@ -188,8 +212,9 @@ export function runVaultImport(store: Store, config: AppConfig, userId: string):
           if (error.code !== MEMORY_REFUSAL.exists) skipped.push({ path: note.path, reason: error.code });
         }
       }
+      if (changed()) return repoChanged;
       store.clearVaultImport(userId);
-      importLogger.info(
+      importLogger[skipped.length > 0 ? "warn" : "info"](
         { userId, repo: ctx.repo, created, skipped },
         "vault import: the repository's own notes were imported into the owner's vault (repository files are unchanged; skipped ones stay there)",
       );
@@ -207,17 +232,70 @@ export function runVaultImport(store: Store, config: AppConfig, userId: string):
 
 // ---- When it runs --------------------------------------------------------------
 
-const tails = new WeakMap<Store, Promise<unknown>>();
+/**
+ * An attempt that could not finish (the service or the repository could not be
+ * reached) is tried again after a pause that doubles, a bounded number of
+ * times; after that it waits for the next boot. `not_configured` is not
+ * retried: a server without a memory service will not grow one while it runs.
+ */
+const retry = { delayMs: 60_000, maxDelayMs: 30 * 60_000, attempts: 6 };
+
+/** Tests: shorten the pauses, or turn the retries off (`attempts: 0`). No argument = the defaults. */
+export function setVaultImportRetryForTests(options: { delayMs?: number; attempts?: number } = {}): void {
+  retry.delayMs = options.delayMs ?? 60_000;
+  retry.attempts = options.attempts ?? 6;
+}
+
+interface ImportQueue {
+  tail: Promise<unknown>;
+  /** How many retry rounds ran since the last attempt that did not ask for one. */
+  round: number;
+  timer: NodeJS.Timeout | null;
+}
+
+const queues = new WeakMap<Store, ImportQueue>();
+
+function queueOf(store: Store): ImportQueue {
+  let queue = queues.get(store);
+  if (!queue) {
+    queue = { tail: Promise.resolve(), round: 0, timer: null };
+    queues.set(store, queue);
+  }
+  return queue;
+}
+
+/** One more round later, for whatever is still pending then. The timer never keeps the process alive. */
+function retryLater(store: Store, config: AppConfig): void {
+  const queue = queueOf(store);
+  if (queue.timer || queue.round >= retry.attempts) return;
+  const delay = Math.min(retry.delayMs * 2 ** queue.round, retry.maxDelayMs);
+  queue.round += 1;
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    try {
+      for (const userId of Object.keys(store.listVaultImports()).sort()) enqueue(store, config, userId);
+    } catch {
+      // The store was closed: nothing is pending any more for this process.
+    }
+  }, delay);
+  queue.timer.unref();
+}
 
 /** One import at a time per app instance, in the background. */
 function enqueue(store: Store, config: AppConfig, userId: string): void {
-  const run = (tails.get(store) ?? Promise.resolve()).then(() => runVaultImport(store, config, userId)).catch(() => undefined);
-  tails.set(store, run);
+  const queue = queueOf(store);
+  queue.tail = queue.tail
+    .then(() => runVaultImport(store, config, userId))
+    .then((outcome) => {
+      if (outcome.kind === "retry" && outcome.reason !== "not_configured") retryLater(store, config);
+      else if (outcome.kind !== "retry") queue.round = 0;
+    })
+    .catch(() => undefined);
 }
 
 /** Resolves when every import queued so far has finished (tests). */
 export async function whenVaultImportsIdle(store: Store): Promise<void> {
-  await (tails.get(store) ?? Promise.resolve());
+  await queueOf(store).tail;
 }
 
 /**
@@ -231,7 +309,8 @@ export function onKnowledgeRepoChanged(store: Store, config: AppConfig, userId: 
       store.clearVaultImport(userId);
       return;
     }
-    // A new repository is judged afresh: an import that had begun for the previous one is not continued.
+    // A new repository is judged afresh: an import that had begun for the previous one is not continued, and
+    // one that is running right now stops by itself (it sees the change).
     store.setVaultImport(userId, "check");
     enqueue(store, config, userId);
   } catch (error) {
@@ -241,9 +320,9 @@ export function onKnowledgeRepoChanged(store: Store, config: AppConfig, userId: 
 
 /**
  * Boot: continue what an earlier process left pending, and — once, at the
- * boot that retired the vault tables — look at every owner who had a
- * repository connected but was never moved into the memory service. Returns
- * how many imports were queued.
+ * first boot of a build without the `repo` home — import the repository notes
+ * of every owner who had a repository connected but was never moved into the
+ * memory service. Returns how many imports were queued.
  */
 export function resumeVaultImports(store: Store, config: AppConfig): number {
   try {
@@ -251,7 +330,7 @@ export function resumeVaultImports(store: Store, config: AppConfig): number {
     if (unmoved.length > 0) {
       importLogger.warn(
         { users: unmoved },
-        "vault import: these owners had a repository connected but their notes were never moved into the memory service; each repository is looked at now",
+        "vault import: these owners had a repository connected but their notes were never moved into the memory service; each repository's notes are imported now",
       );
     }
     const pending = Object.keys(store.listVaultImports()).sort();

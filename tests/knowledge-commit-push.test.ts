@@ -104,16 +104,34 @@ describe("knowledge repository commit and push", () => {
     expect(fs.existsSync(path.join(s.clone, ".git", "rebase-apply"))).toBe(false);
   });
 
-  it("a conflict is never settled for the local side, whatever the path — a brain-note path included", async () => {
-    const s = setup("conflict-vault-path");
+  it("never carries a change at a vault-note path: those notes live in the memory service", async () => {
+    const s = setup("vault-paths-left-out");
     await ensureClone(s.ctx);
-    s.write("wiki/concepts/deploy.md", "v1");
-    expect(await commitAndPush(s.ctx, "v1", identity)).toBe(true);
+    // What the retired mirror may have left in a clone, or a repository's own notes: changes at vault paths.
+    s.externalPush("wiki/concepts/deploy.md", "the repository's own note");
+    await ensureClone(s.ctx);
+    s.write("wiki/concepts/deploy.md", "an uncommitted copy");
+    s.write("raw/2026-11-01.md", "an untracked copy");
+    s.write("CLAUDE.md", "an untracked copy");
 
-    s.write("wiki/concepts/deploy.md", "local edit");
-    s.externalPush("wiki/concepts/deploy.md", "external edit");
-    await expect(commitAndPush(s.ctx, "local", identity)).rejects.toThrow("REBASE_CONFLICT:wiki/concepts/deploy.md");
-    expect(execFileSync("git", ["-C", s.ctx.repo, "show", "main:wiki/concepts/deploy.md"]).toString()).toBe("external edit");
+    // Alone, they are nothing to commit…
+    expect(await commitAndPush(s.ctx, "nothing of mine", identity)).toBe(false);
+    expect(s.remoteSubjects()).not.toContain("nothing of mine");
+
+    // …and next to a real change they stay out of the commit, in the tree as they were.
+    s.write("skills/demo/SKILL.md", "# demo");
+    s.write("wiki/diagram.png", "a repository file under wiki/");
+    expect(await commitAndPush(s.ctx, "add demo skill", identity)).toBe(true);
+    const pushed = execFileSync("git", ["-C", s.ctx.repo, "show", "--name-only", "--pretty=", "main"]).toString().trim().split("\n").sort();
+    expect(pushed).toEqual(["skills/demo/SKILL.md", "wiki/diagram.png"]);
+    expect(execFileSync("git", ["-C", s.ctx.repo, "show", "main:wiki/concepts/deploy.md"]).toString()).toBe("the repository's own note");
+    expect(fs.readFileSync(path.join(s.clone, "wiki/concepts/deploy.md"), "utf8")).toBe("an uncommitted copy");
+    expect(fs.readFileSync(path.join(s.clone, "raw/2026-11-01.md"), "utf8")).toBe("an untracked copy");
+    expect(s.cloneGit("status", "--porcelain", "--untracked-files=all").split("\n").filter(Boolean).map((line) => line.slice(3)).sort()).toEqual([
+      "CLAUDE.md",
+      "raw/2026-11-01.md",
+      "wiki/concepts/deploy.md",
+    ]);
   });
 
   it("pushes commits stacked by an earlier failed push, on a clean tree", async () => {

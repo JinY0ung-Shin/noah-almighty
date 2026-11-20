@@ -240,11 +240,11 @@ These are the invariants the project is built around. New work should reinforce 
   of the brain. **A new tool path that changes a vault note goes through `withVaultWrite`; a new reader
   through `memoryVaultFor`.** **A service failure — or a server without the service — is an ERROR on every
   surface, never "no notes"** and never a fallback to the clone. → `repo-knowledge.md` ("Personal vault").
-- **A repository's own notes enter the vault ONLY through the one-time import, and only into an EMPTY
-  vault** (when a repository or branch is connected). It never overwrites a note and never changes a
-  repository file — a repository still carrying old copies must not bring back what its owner deleted. **A
-  new need to read a repository's vault files goes into that import, never into a second path.**
-  → `repo-knowledge.md` ("Importing a repository's own notes").
+- **A repository's own notes enter the vault ONLY through the one-time import; a newly connected
+  repository's only into an EMPTY vault.** It never overwrites a note and never changes a repository file —
+  a repository still carrying old copies must not bring back what its owner deleted — and a knowledge-repo
+  commit never carries a change at a vault path. **A new need to read a repository's vault files goes into
+  that import, never into a second path.** → `repo-knowledge.md` ("Importing a repository's own notes").
 - **Noah is the memory service's only caller, and the service's volume is the ONLY copy — OPERATOR rules the
   code does not enforce.** Noah calls it directly with the owner Noah decided (never a model argument), so
   every gate stays Noah's; the service must NOT be registered on pi's MCP page (ungated memory tools in every

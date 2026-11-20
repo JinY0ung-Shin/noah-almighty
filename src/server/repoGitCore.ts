@@ -63,6 +63,29 @@ export async function originUrl(repoRoot: string): Promise<string | null> {
   }
 }
 
+/** Path arguments per git command (argv has a size limit; a path is at most a few hundred bytes). */
+const PATHS_PER_COMMAND = 100;
+
+/**
+ * Take every staged path that satisfies `leaveOut` out of the index again —
+ * back to what HEAD holds, or out of the index altogether in a repository
+ * without a commit. The working tree is not touched. Paths go to git as
+ * literal pathspecs, exactly as on disk (`-z`: no quoting of non-ASCII names).
+ */
+async function unstage(repoRoot: string, leaveOut: (path: string) => boolean): Promise<void> {
+  const { stdout } = await git(repoRoot, ["diff", "--cached", "--name-only", "-z", "--no-renames"]);
+  const paths = stdout.split("\0").filter((file) => file && leaveOut(file));
+  if (paths.length === 0) return;
+  const hasHead = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
+    () => true,
+    () => false,
+  );
+  for (let i = 0; i < paths.length; i += PATHS_PER_COMMAND) {
+    const chunk = paths.slice(i, i + PATHS_PER_COMMAND);
+    await git(repoRoot, ["--literal-pathspecs", ...(hasHead ? ["reset", "-q", "HEAD"] : ["rm", "--cached", "-q", "-f"]), "--", ...chunk]);
+  }
+}
+
 /**
  * The clone's current branch name, or null when detached (`HEAD`) or on error.
  * Identical to the inline `currentBranch` each repo module used.
@@ -75,25 +98,6 @@ export async function currentBranch(repoRoot: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/**
- * Relative paths with uncommitted changes, parsed from `git status --porcelain`.
- *
- * CRITICAL: the porcelain flag is parameterized so each caller keeps its CURRENT
- * behavior — knowledge/group repos use plain `--porcelain`, the user-registered
- * git repos use `--porcelain -uall` (list untracked files individually). This is
- * a deferred breaking item; do NOT unify the flags here.
- */
-export async function dirtyPaths(
-  repoRoot: string,
-  extraStatusArgs: string[] = [],
-): Promise<string[]> {
-  const { stdout } = await git(repoRoot, ["status", "--porcelain", ...extraStatusArgs]);
-  return stdout
-    .split("\n")
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
 }
 
 /**
@@ -230,6 +234,16 @@ export async function commitAndPushClone(
     identity: { name: string; email: string };
     log: Record<string, unknown>;
     pushedMessage: string;
+    /**
+     * Paths this commit must NOT carry, whatever the working tree holds there:
+     * a staged change at such a path is taken out of the index again before the
+     * commit (the file itself is left as it is). The knowledge repository uses
+     * it for vault-note paths — the notes live in the memory service, so a
+     * change at such a path in the clone is nobody's to push (what the retired
+     * mirror left behind, or a repository's own notes waiting for the import).
+     * Absent = everything `git add -A` staged is committed.
+     */
+    leaveOut?: (path: string) => boolean;
   },
 ): Promise<boolean> {
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
@@ -244,7 +258,12 @@ export async function commitAndPushClone(
   // runtime-only edit never gets committed/pushed. MUST run before `git add -A`.
   await restoreTrackedMcpJson(repoRoot);
   await git(repoRoot, ["add", "-A"]);
-  const hasChanges = (await dirtyPaths(repoRoot)).length > 0;
+  if (options.leaveOut) await unstage(repoRoot, options.leaveOut);
+  // What the commit would record — not merely "the tree is dirty": a path left out above is still dirty.
+  const hasChanges = await git(repoRoot, ["diff", "--cached", "--quiet"]).then(
+    () => false,
+    () => true,
+  );
   const branch = safePushBranch(options.branch || (await currentBranch(repoRoot)) || "HEAD");
   if (hasChanges) {
     // commitMsg is the value of `-m` (a discrete argv element), so it's never

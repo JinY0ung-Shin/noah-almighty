@@ -46,8 +46,8 @@ are described as code where they live ("Memory service" below, [`repo-knowledge.
   wiki, one commit per change naming who made it; nothing is pushed to an external git. **pi's memory volume
   is the only copy — its backup is an operator duty**, and there is no way back to a repository home. Copies
   already in users' repositories stay as last written and are never updated. A repository's own notes enter
-  a vault only through the one-time import into an EMPTY vault (when a repository or branch is connected,
-  and once at the retirement boot for owners who were never moved).
+  a vault only through the one-time import: into an EMPTY vault when a repository or branch is connected,
+  and once — creating what is missing — for owners who were never moved, at the first boot of this build.
   **Still ahead (step 3): the brain tools themselves move to pi, and with them a brain without a
   repository** (user, 2026-11-20). Until then the brain is tied to the repository by structure, not by a few
   gates: notes are written only through `mcp__repo__*`, the starter notes ride `create_repo`, the screens key

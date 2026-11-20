@@ -246,14 +246,22 @@ export interface RoutineJobRow {
 export const SIGNUP_MODE_KEY = "signup_mode";
 
 /**
- * app_config key written ONLY by migrate() when it retires the personal-vault
- * tables (2026-11-20): the user ids that had a knowledge repository connected
- * but no `personal_vaults` row — owners whose notes were never moved into the
- * memory service. JSON string[]. The boot step `resumeVaultImports`
- * (vaultImport.ts) takes the list (and deletes the key) and looks at each
- * owner's repository once.
+ * app_config key written ONLY by migrate(), once, at the first boot of a build
+ * in which the memory service is the personal vault's only home (2026-11-20):
+ * the user ids that had a knowledge repository connected but whose notes were
+ * never moved into the memory service — no `personal_vaults` row, or a
+ * database from before that table existed. JSON string[]. The boot step
+ * `resumeVaultImports` (vaultImport.ts) takes the list (and deletes the key)
+ * and imports each owner's repository notes.
  */
 export const PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY = "personal_vault_import_stragglers";
+
+/**
+ * app_config marker (read by EXISTENCE): the never-moved owners above were
+ * recorded. Set at that same first boot, so a later boot — also one after an
+ * older build re-created the retired tables empty — never records again.
+ */
+export const PERSONAL_VAULT_REPO_HOME_RETIRED_KEY = "retired:personal_vault_repo_home";
 
 /**
  * app_config key: the ONE 관리자 공지 (JSON `AdminNoticeSetting`, see
@@ -962,6 +970,11 @@ export class StoreBase {
     // non-member until a backup succeeds. It deletes nothing; only the group
     // table drops below wait for the gate.
     this.migrateSingleTeam();
+    // Also ABOVE the gate, for the same reason: this build already reads every
+    // owner's vault from the memory service, so the owners whose notes are still
+    // only in their repository must be handed to the import now, backup or not.
+    // It deletes nothing.
+    this.recordUnmovedVaultOwners();
     // Everything below DELETES what a retired feature left. It runs only once
     // the pre-retirement DB backup exists (or nothing here needed one); a failed
     // backup leaves it all in place until a later boot's backup succeeds.
@@ -975,22 +988,9 @@ export class StoreBase {
     // decision): the `repo` home, the git mirror, the deletion ledger and the
     // migration between the homes are retired. Drop the home/mirror table, the
     // ledger and the migration's target setting. Nothing creates or writes them
-    // any more — keep all three names reserved. An owner with a repository
-    // connected but NO row was never moved: their notes are still only in the
-    // repository, so their ids are handed to the boot's one-time import
-    // (vaultImport.ts) BEFORE the table that tells them apart is gone. No note
-    // is deleted here: the service's wikis and the repositories are untouched.
-    if (this.tableExists("personal_vaults")) {
-      const unmoved = this.db
-        .prepare(
-          "SELECT id FROM users WHERE knowledge_repo IS NOT NULL AND knowledge_repo != '' " +
-            "AND id NOT IN (SELECT user_id FROM personal_vaults) ORDER BY id",
-        )
-        .all() as { id: string }[];
-      if (unmoved.length > 0) {
-        this.writeAppConfigRaw(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY, JSON.stringify(unmoved.map((row) => row.id)));
-      }
-    }
+    // any more — keep all three names reserved. (Who was never moved was read
+    // from the table above the gate, `recordUnmovedVaultOwners`.) No note is
+    // deleted here: the service's wikis and the repositories are untouched.
     this.db.exec("DROP TABLE IF EXISTS personal_vault_deletes");
     this.db.exec("DROP TABLE IF EXISTS personal_vaults");
     this.db.prepare("DELETE FROM app_config WHERE key = ?").run("personal_vault_mode");
@@ -1061,6 +1061,25 @@ export class StoreBase {
         this.db.exec(`DROP TABLE IF EXISTS ${table}`);
       }
     }
+  }
+
+  /**
+   * Once per database: record the owners whose vault notes are still only in
+   * their knowledge repository — a repository connected and no
+   * `personal_vaults` row, or (a database from before that table) everyone
+   * with a repository — for the boot's import (`vaultImport.ts`), then stamp
+   * the marker. A new database has no users yet, so it only gets the marker.
+   */
+  private recordUnmovedVaultOwners(): void {
+    if (this.singleTeamConfigRowExists(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY)) return;
+    const moved = this.tableExists("personal_vaults") ? " AND id NOT IN (SELECT user_id FROM personal_vaults)" : "";
+    const unmoved = this.db
+      .prepare(`SELECT id FROM users WHERE knowledge_repo IS NOT NULL AND knowledge_repo != ''${moved} ORDER BY id`)
+      .all() as { id: string }[];
+    if (unmoved.length > 0) {
+      this.writeAppConfigRaw(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY, JSON.stringify(unmoved.map((row) => row.id)));
+    }
+    this.writeAppConfigRaw(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY, now());
   }
 
   /** Whether an `app_config` row exists (markers are read by EXISTENCE). */

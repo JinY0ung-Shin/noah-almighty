@@ -1,13 +1,19 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServices } from "../src/server/app.js";
 import { ensureClone, knowledgeClonePath, knowledgeRepoContextFor } from "../src/server/knowledgeRepo.js";
 import { MemoryUnavailableError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { VAULT_NOTE_MAX_BYTES } from "../src/server/personalVault.js";
 import { PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY } from "../src/server/store/internal.js";
-import { onKnowledgeRepoChanged, resumeVaultImports, runVaultImport, whenVaultImportsIdle } from "../src/server/vaultImport.js";
+import {
+  onKnowledgeRepoChanged,
+  resumeVaultImports,
+  runVaultImport,
+  setVaultImportRetryForTests,
+  whenVaultImportsIdle,
+} from "../src/server/vaultImport.js";
 import { createFakeMemoryClient, type FakeMemoryClient } from "./helpers/fakeMemory.js";
 import { makeBareRemote, withTempDir } from "./helpers.js";
 
@@ -55,7 +61,10 @@ function seedRemote(name: string, files: Files, prepare?: (seed: string) => void
 }
 
 const booted: Services[] = [];
+// No retry timer unless a test asks for one: a pending import then waits for `resumeVaultImports`.
+beforeEach(() => setVaultImportRetryForTests({ attempts: 0 }));
 afterEach(async () => {
+  setVaultImportRetryForTests({ attempts: 0 });
   for (const { store } of booted.splice(0)) await whenVaultImportsIdle(store);
 });
 
@@ -161,6 +170,23 @@ describe("a newly connected repository", () => {
     ]);
   });
 
+  it("an attempt that finds the repository changed under it leaves the pending state to the new repository's attempt", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "first", { "skills/x/SKILL.md": "no notes here\n" });
+    const second = seedRemote("second", VAULT);
+    // While the first attempt waits for the service, the owner connects another repository.
+    s.fake.beforeNext("list", () => {
+      s.store.setKnowledgeRepo(s.ownerId, second, "main");
+      onKnowledgeRepoChanged(s.store, s.config, s.ownerId);
+    });
+    s.store.setVaultImport(s.ownerId, "check");
+    expect(await runVaultImport(s.store, s.config, s.ownerId)).toEqual({ kind: "nothing", reason: "repo_changed" });
+    // The first attempt cleared nothing: the second repository's look is still pending, and runs.
+    await whenVaultImportsIdle(s.store);
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
+    expect(s.store.listVaultImports()).toEqual({});
+  });
+
   it("a repository that was disconnected ends whatever was pending", () => {
     const s = setup();
     s.store.setVaultImport(s.ownerId, "import");
@@ -215,9 +241,23 @@ describe("an import that could not be finished", () => {
 
     // The vault is no longer empty, but an import that BEGAN is continued — without touching what is there.
     const outcome = await runVaultImport(s.store, s.config, s.ownerId);
-    expect(outcome).toMatchObject({ kind: "imported", created: Object.keys(VAULT).length - arrivedCount, skipped: [] });
+    expect(outcome).toMatchObject({
+      kind: "imported",
+      created: Object.keys(VAULT).length - arrivedCount,
+      skipped: [{ path: arrived!, reason: "differs" }],
+    });
     expect(s.fake.dump(s.ownerId)).toEqual({ ...VAULT, [arrived!]: "rewritten by the owner" });
     expect(s.store.listVaultImports()).toEqual({});
+  });
+
+  it("is tried again by itself after a pause, without a restart", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    setVaultImportRetryForTests({ delayMs: 10, attempts: 3 });
+    s.fake.failNext(new MemoryUnavailableError());
+    onKnowledgeRepoChanged(s.store, s.config, s.ownerId);
+    await vi.waitFor(() => expect(s.store.listVaultImports()).toEqual({}), { timeout: 20_000, interval: 20 });
+    expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
   });
 
   it("stays pending when the repository cannot be read", async () => {
@@ -259,23 +299,41 @@ describe("an import that could not be finished", () => {
   });
 });
 
-describe("the boot that retired the vault tables", () => {
-  it("looks once at every owner who had a repository but was never moved: an empty vault gets the notes, another is left alone", async () => {
+describe("the first boot without the repo home", () => {
+  it("imports the repository notes of every owner who was never moved — also into a vault that is not empty, overwriting nothing", async () => {
     const s = setup();
     const kept = addUser(s, "kept");
     connect(s, s.ownerId, "unmoved", VAULT);
     connect(s, kept, "kept", VAULT);
+    // An avatar built a skeleton on the empty brain before the import ran (or an old copy was left behind).
     s.fake.seed(kept, "wiki/own.md", "already in the service");
-    // What migrate() leaves when it drops the tables.
+    s.fake.seed(kept, "wiki/index.md", "# A different index\n");
+    // What migrate() leaves at that boot.
     s.store.setAppSecret(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY, JSON.stringify([kept, s.ownerId]));
 
     expect(resumeVaultImports(s.store, s.config)).toBe(2);
+    expect(s.store.listVaultImports()).toEqual({ [s.ownerId]: "import", [kept]: "import" });
     await whenVaultImportsIdle(s.store);
     expect(s.fake.dump(s.ownerId)).toEqual(VAULT);
-    expect(s.fake.dump(kept)).toEqual({ "wiki/own.md": "already in the service" });
+    // Their repository IS their vault, so the import is not called off: what is missing is created, and the
+    // note that is already there — different from the repository's — is left as it is.
+    expect(s.fake.dump(kept)).toEqual({ ...VAULT, "wiki/own.md": "already in the service", "wiki/index.md": "# A different index\n" });
     expect(s.store.listVaultImports()).toEqual({});
     // Handed over once: a later boot has nobody to look at.
     expect(s.store.getAppSecret(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY)).toBeNull();
     expect(resumeVaultImports(s.store, s.config)).toBe(0);
+  });
+
+  it("names a note the vault holds with different text in its outcome", async () => {
+    const s = setup();
+    connect(s, s.ownerId, "brain", VAULT);
+    s.fake.seed(s.ownerId, "wiki/index.md", "# A different index\n");
+    s.fake.seed(s.ownerId, "CLAUDE.md", VAULT["CLAUDE.md"] as string);
+    s.store.setVaultImport(s.ownerId, "import");
+    expect(await runVaultImport(s.store, s.config, s.ownerId)).toEqual({
+      kind: "imported",
+      created: 2,
+      skipped: [{ path: "wiki/index.md", reason: "differs" }],
+    });
   });
 });

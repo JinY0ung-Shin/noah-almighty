@@ -24,8 +24,8 @@
 #                 service (Noah's server must be its only caller); SANDBOX_EGRESS_ALLOW names neither Noah
 #                 nor the memory service
 #
-# What it does NOT do: back up the memory service's volume. Every personal brain lives there (notes and their
-# history, nowhere else) — backing it up is the operator's own job.
+# What it does NOT do by itself: back up the memory service's volume. Every personal brain lives there (notes
+# and their history, nowhere else) — pass --backup, or keep that volume in your own backups.
 # Values from .env and the secret files are never printed.
 set -euo pipefail
 
@@ -253,6 +253,7 @@ fi
 cat <<'NEXT'
 
 remember: every personal brain (notes and their history) lives ONLY in the memory service's volume (memory-data).
-Nothing copies it anywhere — put that volume in your backups. How full each brain is: 관리자 → 시스템 → 개인 브레인 사용량.
+Nothing copies it anywhere — run this script with --backup, or keep that volume in your own backups.
+How full each brain is: 관리자 → 시스템 → 개인 브레인 사용량.
 NEXT
 [ "$problems" -eq 0 ]

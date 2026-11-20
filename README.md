@@ -489,17 +489,16 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
      their notes. The copy in their repository **stays as last pushed and is never updated again** — Noah
      no longer writes, reads or deletes it. It is an old copy, not the brain; a note edited or added there
      in git does not reach the brain.
-  4. **Users who were never moved** (their notes are still only in their repository): the first boot looks
-     at each of their repositories once, in the background, and imports the notes into the memory service —
-     **only if that user's brain there holds no note yet**, never overwriting, and without changing a
-     repository file. The boot log names them (`vault import: these owners had a repository connected but
-     their notes were never moved…`) and each result (`…were imported into the owner's vault`, or `…already
-     holds notes, so nothing is imported`). A user whose brain in the service is NOT empty — a leftover of an
-     earlier move — keeps what the service holds; their repository's notes stay in the repository. If the
-     memory service or the repository cannot be reached, that user's import stays pending and is tried again
-     at the next restart — until it has run their brain is empty, and a note written into it meanwhile means
-     the repository's notes are no longer imported (the brain is not empty any more). Check the log after
-     the first boot.
+  4. **Users who were never moved** (their notes are still only in their repository — also every user with a
+     repository when you upgrade from a release that had no memory service for brains): the first boot
+     imports the notes of each of their repositories into the memory service, in the background — creating
+     what is missing, never overwriting a note that is already there, and without changing a repository
+     file. The boot log names them (`vault import: these owners had a repository connected but their notes
+     were never moved…`) and each result (`…were imported into the owner's vault`; a note that was skipped,
+     or that the service already held with different text, is listed there). If the memory service or the
+     repository cannot be reached, that user's import stays pending: it is tried again by itself for about
+     an hour and a half, then at the next restart. Until it has run their brain looks empty or incomplete
+     (the avatar is told so and does not rebuild it). Check the log after the first boot.
   5. **Connecting a repository later** works the same way: when a user connects a repository (or changes its
      branch) that already holds brain notes, Noah imports them once — only into a brain that is still empty.
   6. **Back up the `memory-data` volume.** It is now the ONLY copy of every brain — the notes and their

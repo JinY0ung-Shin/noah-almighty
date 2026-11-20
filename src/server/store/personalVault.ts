@@ -56,10 +56,12 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
     }
 
     /**
-     * The owners migrate() found with a repository but no vault row when it
-     * retired the vault tables — handed over ONCE: the list is returned and its
-     * key deleted, each owner recorded as a pending `check` first (an import
-     * that already began is left as it is).
+     * The owners migrate() found with a repository whose notes were never
+     * moved into the memory service — handed over ONCE: the list is returned
+     * and its key deleted, each owner recorded as a pending `import` first.
+     * NOT a `check`: for these owners the repository IS the vault, so a note
+     * that reached the service meanwhile (a skeleton an avatar built on an
+     * empty brain) must not cancel the import — it creates what is missing.
      */
     takeVaultImportStragglers(): string[] {
       const raw = this.getAppSecret(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY);
@@ -72,7 +74,7 @@ export function withPersonalVault<TBase extends Constructor<StoreBase>>(Base: TB
         ids = [];
       }
       const imports = this.listVaultImports();
-      for (const id of ids) imports[id] ??= "check";
+      for (const id of ids) imports[id] = "import";
       if (ids.length > 0) this.setAppSecret(PERSONAL_VAULT_IMPORTS_KEY, JSON.stringify(imports));
       this.deleteAppSecret(PERSONAL_VAULT_IMPORT_STRAGGLERS_KEY);
       return ids;

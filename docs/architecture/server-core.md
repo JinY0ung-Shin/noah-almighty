@@ -393,10 +393,12 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     both tables and the key are in `RETIRED_TABLES` / `RETIRED_APP_CONFIG_KEYS`, so that boot's backup is
     taken first and a failed backup holds the step. It deletes NO note and moves no file: the service's wikis
     and the users' repositories are untouched, and the quarantine folders an earlier vault rollback left
-    (`retired/<stamp>/personal-vault-leftover/`) stay. Before the drop it records the owners who had a
-    repository connected but no `personal_vaults` row (never moved — their notes are still only in the
-    repository) under `personal_vault_import_stragglers`; the boot's `resumeVaultImports` (`vaultImport.ts`,
-    called from `index.ts`) takes that list once and looks at each repository like a newly connected one.
+    (`retired/<stamp>/personal-vault-leftover/`) stay. ABOVE the gate, once per database (marker
+    `retired:personal_vault_repo_home`), it records the owners whose notes are still only in their
+    repository — a repository connected and no `personal_vaults` row, or everyone with a repository in a
+    database from before that table — under `personal_vault_import_stragglers`; the boot's
+    `resumeVaultImports` (`vaultImport.ts`, called from `index.ts`) takes that list once and imports each
+    repository's notes (creating what is missing, overwriting nothing).
     The table, column, setting and route names, the mirror's hold states and `AgentRequest.vaultHome` are
     reserved forever → [`repo-knowledge.md`](repo-knowledge.md) ("Retired 2026-11-20"). Tests:
     `tests/personal-vault.test.ts`, `tests/vault-import.test.ts`, `tests/routes-personal-vault.test.ts`.

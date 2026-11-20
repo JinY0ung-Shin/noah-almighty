@@ -19,6 +19,7 @@ import {
   type MemoryVault,
   type MemoryVaultWriter,
 } from "../src/server/personalVault.js";
+import { PERSONAL_VAULT_REPO_HOME_RETIRED_KEY } from "../src/server/store/internal.js";
 import { createFakeMemoryClient, fakeMemoryHash, type FakeMemoryClient } from "./helpers/fakeMemory.js";
 import { withTempDir } from "./helpers.js";
 
@@ -199,6 +200,8 @@ describe("personal vault store: pending repository imports", () => {
     `);
     db.prepare("INSERT INTO personal_vaults (user_id, migrated_at, source_repo, mirror_dirty) VALUES (?, ?, ?, 1)").run(moved, "2026-11-18T00:00:00.000Z", "moved/brain");
     db.prepare("INSERT INTO personal_vault_deletes (user_id, path, created_at) VALUES (?, ?, ?)").run(moved, "wiki/gone.md", "2026-11-18T00:00:00.000Z");
+    // That build never stamped the marker this build's first boot leaves.
+    db.prepare("DELETE FROM app_config WHERE key = ?").run(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY);
     db.close();
 
     // The boot backs the database up first, then drops both tables.
@@ -208,10 +211,10 @@ describe("personal vault store: pending repository imports", () => {
     const backup = new Database(path.join(dataDir, "backups", backups[0]!), { readonly: true });
     expect(tables(backup).sort()).toEqual(["personal_vault_deletes", "personal_vaults"]);
     backup.close();
-    // The owner with a repository and no row is handed to the import as a pending look — the moved one and
-    // the one without a repository are not.
+    // The owner with a repository and no row is handed to the import, which starts at `import` (their
+    // repository IS their vault) — the moved one and the one without a repository are not.
     expect(second.store.takeVaultImportStragglers()).toEqual([unmoved]);
-    expect(second.store.listVaultImports()).toEqual({ [unmoved]: "check" });
+    expect(second.store.listVaultImports()).toEqual({ [unmoved]: "import" });
     expect(second.store.takeVaultImportStragglers()).toEqual([]);
     void noRepo;
     second.store.close();
@@ -223,8 +226,50 @@ describe("personal vault store: pending repository imports", () => {
     const third = boot();
     expect(fs.readdirSync(path.join(dataDir, "backups")).filter((name) => name.startsWith("pre-retire-"))).toHaveLength(1);
     expect(third.store.takeVaultImportStragglers()).toEqual([]);
-    expect(third.store.listVaultImports()).toEqual({ [unmoved]: "check" });
+    expect(third.store.listVaultImports()).toEqual({ [unmoved]: "import" });
     third.store.close();
+  });
+
+  it("a database from before the vault tables existed hands over EVERY owner with a repository, once", () => {
+    const dataDir = path.join(getTempDir(), "older-release");
+    const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    const first = boot();
+    const dbPath = first.config.dbPath;
+    const a = first.store.createUser({ username: "a", displayName: "A", password: "password123" }).id;
+    const b = first.store.createUser({ username: "b", displayName: "B", password: "password123" }).id;
+    first.store.createUser({ username: "norepo", displayName: "No repo", password: "password123" });
+    first.store.setKnowledgeRepo(a, "a/brain", "main");
+    first.store.setKnowledgeRepo(b, "b/brain", "main");
+    first.store.close();
+    // That release had neither the tables nor the marker.
+    const db = new Database(dbPath);
+    db.prepare("DELETE FROM app_config WHERE key = ?").run(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY);
+    db.close();
+
+    const second = boot();
+    expect(second.store.takeVaultImportStragglers().sort()).toEqual([a, b].sort());
+    second.store.close();
+
+    // An older build booted in between re-creates the table, empty: nobody is handed over a second time.
+    const again = new Database(dbPath);
+    again.exec("CREATE TABLE personal_vaults (user_id TEXT PRIMARY KEY, migrated_at TEXT NOT NULL, source_repo TEXT NOT NULL)");
+    again.close();
+    const third = boot();
+    expect(third.store.takeVaultImportStragglers()).toEqual([]);
+    third.store.close();
+  });
+
+  it("a new database hands nobody over, also once it has users with repositories", () => {
+    const dataDir = path.join(getTempDir(), "new-install");
+    const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    const first = boot();
+    const user = first.store.createUser({ username: "new", displayName: "New", password: "password123" }).id;
+    first.store.setKnowledgeRepo(user, "new/brain", "main");
+    expect(first.store.takeVaultImportStragglers()).toEqual([]);
+    first.store.close();
+    const second = boot();
+    expect(second.store.takeVaultImportStragglers()).toEqual([]);
+    second.store.close();
   });
 });
 

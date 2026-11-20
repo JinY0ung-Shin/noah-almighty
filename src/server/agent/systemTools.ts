@@ -217,6 +217,11 @@ async function personalVaultLines(store: Store, ctx: SystemToolsContext, state: 
   return [
     `- Personal vault: in Noah's memory service — ${VAULT_NOTES_PHRASE} are stored there, not in the git repository. The same tools and paths apply (\`mcp__repo__*\` reads and writes them, \`mcp__brain__*\` recalls them). A vault note is SAVED the moment its write, edit, move or delete succeeds (its tool result says "is saved now"): there is nothing to commit for it, the memory service keeps its change history, and it is NOT copied to the git repository — a note file found there is an old copy that is no longer updated. Everything else in the repository (skills, plugins, non-markdown files) lives in git and is saved only when \`mcp__repo__commit\` succeeds (a tool result that says "Not committed yet" is not saved yet)`,
     `- Memory service: ${await memoryServiceStateText(store, ctx)}`,
+    ...(ctx.avatarUserId in store.listVaultImports()
+      ? [
+          "- Repository import: PENDING — Noah is still importing the notes of the connected knowledge repository into this vault (it never overwrites a note; it is tried again by itself after a failure, and at the next server start). Until it is done the vault may look empty or incomplete: do not run `brain-migrate` or rebuild notes meanwhile.",
+        ]
+      : []),
   ];
 }
 
