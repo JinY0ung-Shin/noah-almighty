@@ -74,6 +74,8 @@ checks_stage() {
   # Noah's own addition to pi's page (the names of the users pi shows by id): after the steps that made turns.
   extra 26-admin-user-names      U-admin-user-names.log        node 26-admin-user-names.mjs
   extra 100-history-pages        H-history-pages.log           node 100-history-pages.mjs
+  # pi's turn limits (48 in all, 6 per user): one user's seven turns at once — six run, the seventh waits.
+  extra 101-turn-limits          C-turn-limits.log             node 101-turn-limits.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh

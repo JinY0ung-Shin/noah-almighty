@@ -755,6 +755,23 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   the page — because no session of a fresh stack has rested 30 minutes and the fake LLM cannot answer mining's
   calls; it rests on pi's tests, against no real model. After the run: Noah 192 MiB, gateway 232 MiB, broker
   158 MiB, memory 38 MiB, mining 38 MiB.
+  **pi `a9f4801` (2026-11-20, three commits since `4421482`: the default limit of turns running at once goes
+  16 → 48 in all — `52d765b` — and 3 → 6 per user — `a9f4801`; the mining page says 분류 where it said "붙이다" —
+  `a95a98b`. `52d765b` measured a gateway alone, with a stub model in another process and fake sandboxd and broker:
+  no visible delay up to 64 streaming turns, the gateway's one core saturated at 128, no failure up to 256, and
+  says "확인하지 못한 것: 운영 서버 CPU에서의 포화 지점, 실제 sandbox 컨테이너와 MCP 서버가 붙은 부하"; `a9f4801`
+  ran typecheck and the config, sessions and robustness tests only):** `~/.noah-work/boot-test-2026-11-20f`, Noah
+  `152f593`. The cold build took 193 s. Every step passed with the counts of the `4421482` run, no error-level
+  line in any service's log. **New check `101-turn-limits.mjs` 5/5:** the stack's gateway container runs with
+  `MAX_CONCURRENT_TURNS=48 MAX_CONCURRENT_TURNS_PER_USER=6 TURN_QUEUE_TIMEOUT_SECONDS=120` (no `.env` line sets
+  them — pi's defaults reach the bundle). One owner started seven chat turns at once, each model call held 12 s
+  by the fake LLM: the calls reached the model 0.0, 0.2, 0.2, 0.3, 0.4, 0.4 and 12.1 s after the first — six in
+  flight together, the seventh only after a call had ended — and all seven completed with their own answer in
+  24.6 s (a turn over the limit waits; none was refused). **NOT seen:** the limit of 48 itself (48 turns at
+  once, or the 49th waiting); a wait that outlasts 120 s (pi's 503 and Noah's retries rest on earlier checks
+  and tests); six turns of one user each running a heavy command in their ONE sandbox (1 GiB, one CPU by
+  default) — these seven only waited on the model; the mining page's new wording (not opened with tasks). After
+  the run: Noah 246 MiB, gateway 185 MiB, broker 290 MiB, memory 42 MiB, mining 27 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

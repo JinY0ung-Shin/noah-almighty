@@ -847,7 +847,9 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
   `scripts/pi-system-prompt.md` as the live prompt `noah` (pi's default hardcodes "Reply in Korean" and request_admin;
   pi enforces no placeholder, the template keeps `{{WORKSPACE}}`, `{{LANGUAGE}}`, `{{DATETIME}}`).
 - Other instance config stays in pi's own admin/`.env`: LLM servers, `SANDBOX_EGRESS_ALLOW`, turn concurrency limits
-  (pi's defaults fit a small team; README "Sizing pi-gateway" has the measured sizing and the session-start limit).
+  (pi's defaults since `a9f4801`: 48 turns at once in all, 6 per user — a full split chat of 4 plus that user's 2
+  routines; a turn over a limit waits up to 120 s for a slot, then pi answers 503. README "Sizing pi-gateway" has
+  the measured sizing and the session-start limit).
   (`SANDBOX_IMAGE` and `PI_DECK_SANDBOX=true` are fixed by the bundle; a native setup sets both itself.)
   `SANDBOX_EGRESS_ALLOW` is the sandbox shell's ONLY way out (HTTP(S) via pi's egress proxy; empty = all blocked, a
   refusal is `407`). Noah's `NOAH_EGRESS_POLICY=domain-proxy` (and its 외부 통신 차단 panel) governs only Noah's own
