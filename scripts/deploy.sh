@@ -2,7 +2,7 @@
 # Deploy (or upgrade) Noah + its pi-gateway on THIS host, in the order README.md "Upgrade" requires:
 #
 #   scripts/deploy.sh              pull main, prepare the host, build and start, check
-#   scripts/deploy.sh --backup     … and first back up Noah's data volume and the memory service's volume
+#   scripts/deploy.sh --backup     … and first back up Noah's data volume, the memory service's and process mining's
 #   scripts/deploy.sh --no-pull    deploy the checkout as it is (no git pull)
 #
 # Run it from a user in the docker group; the host preparation step asks for sudo (it writes root-only
@@ -12,8 +12,9 @@
 #   1 preflight   docker + compose ≥ 2.24, Noah's .env with SESSION_SECRET and PI_GATEWAY_HOME, a clean
 #                 checkout on main (a local edit would be deployed silently otherwise)
 #   2 pull        git pull --ff-only origin main, then the pi-gateway submodule at the commit main pins
-#   3 backup      (--backup only) stops Noah and the memory service, tars both volumes into
-#                 $BACKUP_DIR/<stamp>/ (default ./backups), and leaves them stopped — step 5 starts them again
+#   3 backup      (--backup only) stops Noah, the memory service and pi's mining service, tars their three
+#                 volumes into $BACKUP_DIR/<stamp>/ (default ./backups), and leaves them stopped — step 5
+#                 starts them again
 #   4 host        sudo docker/pi/setup-host.sh — on EVERY deploy: a release can add a secret file compose
 #                 mounts (the memory service's key is one), and without it `up` never creates Noah
 #   5 up          docker compose up -d --build
@@ -33,6 +34,7 @@ cd "$REPO"
 ENV_FILE="$REPO/.env"
 NOAH_SERVICE=noah-almighty
 MEMORY_SERVICE=memory
+MINING_SERVICE=mining
 WAIT_SECONDS="${DEPLOY_WAIT_SECONDS:-600}"
 
 DO_PULL=1
@@ -128,7 +130,7 @@ if [ "$DO_BACKUP" -eq 1 ]; then
   # The image that runs tar: Noah's own (present on any host that ran this stack before; it has tar).
   tar_image="$(docker compose images -q "$NOAH_SERVICE" 2>/dev/null | head -n 1)" || true
   volumes=()
-  for key in noah-almighty-data memory-data; do
+  for key in noah-almighty-data memory-data mining-data; do
     v="$(volume_of "$key")"
     if [ -n "$v" ]; then volumes+=("$key=$v"); else warn "no $key volume yet (first boot?): nothing to back up"; fi
   done
@@ -136,7 +138,13 @@ if [ "$DO_BACKUP" -eq 1 ]; then
     [ -n "$tar_image" ] || fail "no Noah image to run the backup with — deploy once without --backup"
     mkdir -p "$dest"
     # Stopped first, so SQLite and the memory service's files are copied at rest; step 5 starts them again.
-    docker compose stop "$NOAH_SERVICE" "$MEMORY_SERVICE"
+    # mining-data is pi's process mining (the run history, the tasks and the processes, one SQLite file): its
+    # writer is the mining service — a run in progress ends 실패 and the next run goes on from where it stopped.
+    # The gateway opens that file too, but writes it only for an admin's press on the panel, which is behind
+    # Noah, so the gateway keeps running. (A pi checkout from before its mining service has no such service.)
+    stop_services=("$NOAH_SERVICE" "$MEMORY_SERVICE")
+    if docker compose config --services 2>/dev/null | grep -qx "$MINING_SERVICE"; then stop_services+=("$MINING_SERVICE"); fi
+    docker compose stop "${stop_services[@]}"
     for pair in "${volumes[@]}"; do
       key="${pair%%=*}"
       v="${pair#*=}"
@@ -148,7 +156,7 @@ if [ "$DO_BACKUP" -eq 1 ]; then
     echo "       restore: docker compose stop <service>, then untar into the volume (README.md \"Upgrade\")"
   fi
 else
-  ok "skipped (pass --backup to back up Noah's data and the memory service first)"
+  ok "skipped (pass --backup to back up Noah's data, the memory service and process mining first)"
 fi
 
 # ---- 4 host -------------------------------------------------------------------------------------

@@ -437,7 +437,7 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   (it asks for sudo for the host step), and stops at the first failure:
   ```bash
   scripts/deploy.sh             # pull main, setup-host.sh, up -d --build, wait, check
-  scripts/deploy.sh --backup    # first stop Noah + the memory service and tar both volumes into ./backups/<stamp>/
+  scripts/deploy.sh --backup    # first stop Noah, the memory service and mining, and tar their volumes into ./backups/<stamp>/
   scripts/deploy.sh --no-pull   # deploy the checkout as it is
   ```
   It refuses a checkout that is not on `main` or has local changes (unless `--no-pull`), waits until every
@@ -445,7 +445,9 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   that Noah's copy of the memory key is mounted and not empty, that pi's MCP page has NO entry for the memory
   service, and that `SANDBOX_EGRESS_ALLOW` names no service of the stack — a warning there exits non-zero.
   It never moves anyone's brain: 미리 확인 and 이전 stay an admin's presses (below). `BACKUP_DIR` overrides
-  `./backups`; a restore is: stop the service, untar into its volume.
+  `./backups`; a restore is: stop the service, untar into its volume. The three archives are Noah's data
+  (`noah-almighty-data`), the memory service's wikis (`memory-data`) and pi's process mining (`mining-data`:
+  its run history, tasks and processes — restore it with `mining` AND `gateway` stopped, both open that file).
 - **Noah (by hand):** `git pull && git submodule update --init`, then `sudo docker/pi/setup-host.sh`, then
   `docker compose up -d --build`. The submodule carries the pi-gateway pin, so a pin move arrives with the pull.
   `pi-setup` re-registers what changed. Run `setup-host.sh` on EVERY upgrade: it is idempotent (it keeps what

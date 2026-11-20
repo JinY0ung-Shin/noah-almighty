@@ -797,8 +797,11 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. Its routes
   (`/admin/api/mining*`) are behind the same Noah-admin check as the rest of `/admin`. The gateway mounts
   `mining-data` WRITABLE (it writes the run request, the daily time and an admin's edits of a process), so an
-  upgrade recreates the gateway — `up` does that; `scripts/deploy.sh --backup` does not take that volume (without
-  it the run history and the processes are gone and the next run reads from the start). Noah's code, prompts and
+  upgrade recreates the gateway — `up` does that. `scripts/deploy.sh --backup` takes that volume too
+  (`mining-data.tar.gz`; without it the run history and the processes are gone and the next run reads from the
+  start): it stops the `mining` service for the copy — a run in progress ends 실패 and the next one goes on from
+  where it stopped — and leaves the gateway running, which writes the file only for an admin's press on the
+  panel, behind the stopped Noah. Noah's code, prompts and
   both metacognition surfaces know nothing of it. Seen on a real stack: the container, the routes, the page with 지금
   실행 pressed and the empty run that follows (`98-mining.mjs`; → `build-run-verify.md`); NOT seen: a run that reads
   a session.
