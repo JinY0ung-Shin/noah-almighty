@@ -2572,7 +2572,7 @@ describe("buildPrompt", () => {
     expect(t).toContain("it may change the task");
     expect(t).toContain("let the newest instruction take precedence");
     expect(t).toContain("briefly acknowledge the change instead of restarting");
-    // Never in the frozen append.
+    // Not in an append rendered without pi facts (a pi conversation freezes it as a rule — pi-runner.test.ts).
     expect(buildSystemPromptAppend(req(over))).not.toContain("The user may send additional messages");
   });
 

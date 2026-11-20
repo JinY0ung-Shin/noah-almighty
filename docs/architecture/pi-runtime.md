@@ -109,14 +109,21 @@ model call. Skills there are the bundled ones as files plus the target's via `mc
    frozen in `conversations.pi_instructions` (`ensureConversationPiInstructions`, write-once like `todo_snapshot`);
    sent as `instructions` only when a session starts, and re-sent verbatim for every later session (model switch,
    lost session). Per-turn facts ride the user input instead (`buildPiTurnPreamble`): the KST date/time line, the
-   turn's RUN KIND (`piRunKindParagraph`: live chat + the mid-turn-message line + background `ask_avatar`, a
-   routine's unattended rules, or the external-task provenance paragraph — the same three cases as describe_system's
-   origin line), a rewind's provenance, the open working repo's sandbox copy (`piActiveRepoTurnLine` — `open_repo`
+   turn's RUN KIND (`piRunKindParagraph`: live chat, a routine's unattended rules, or the external-task provenance
+   paragraph — the same three cases as describe_system's origin line), a rewind's provenance, the open working repo's sandbox copy (`piActiveRepoTurnLine` — `open_repo`
    changes it mid-conversation), and a new session's reason. One conversation mixes routine runs, task-API turns and
    live chat on ONE pi session, so the frozen text must not depend on the run kind (review M2): an owner routine
    renders the OWNER branch (`piOwnerRun`), the owner line and the 할 일 policy name both cases, and the
    getting-started pitch is omitted when the first turn is unattended. Capability FACTS that differ by kind (browser,
    file cards) stay D2-stale; the run-kind note says describe_system is authoritative and a missing tool is refused.
+   **A live-chat turn's note is ONE line.** What such a turn means — mid-turn messages, the note-is-authoritative
+   rule (`PI_INTERACTIVE_TURN_STANDING`) and background `ask_avatar` (`PI_ASYNC_ASK_STANDING`, only with the
+   consultation guidance) — is frozen with the prompt as a RULE about interactive turns, whatever kind froze it, so
+   it is not repeated in every turn's input. `runPiAgent` hands the preamble the standing text of the session the
+   turn runs in (`sessionStanding`: the frozen text for a new session, the stored row for a continued one) and the
+   note drops exactly the sentences that text contains: a conversation frozen before they existed (or frozen
+   without the ask rule, or with other wording) still gets them per turn, and a chat turn without a steer channel
+   says so. The unattended kinds always carry their full paragraph.
    Rows frozen by an earlier build of this branch keep their text (unreleased; only dev/e2e instances have them). The pi variant
    adds `piRuntimeSection` (sandbox, work folder, built-in tools, `mcp_call`/`mcp_search`, what is missing, "these
    instructions were fixed at conversation start — check describe_system").

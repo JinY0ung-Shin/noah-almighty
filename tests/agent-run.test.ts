@@ -884,18 +884,25 @@ describe("pi run loop (fake gateway)", () => {
   it("tells the model it can be interrupted only when the run really has a channel", async () => {
     const env = setup();
     const MID_TURN = "They are delivered DURING your work";
+    const NO_CHANNEL = "Mid-turn messages are not delivered on this turn.";
     const withChannel = fakeClient([() => textTurn("resp_c_1", "ok")]);
     await runPiAgent(env.baseRequest, [], env.config, env.store, makeEvents({ steers: new SteerChannel() }), undefined, {
       client: withChannel.client,
     });
-    expect(inputText(withChannel.requests[0]!)).toContain(MID_TURN);
+    // The rule about interactive chat turns is frozen with the prompt; a turn
+    // that has the channel adds nothing to it…
+    expect(withChannel.requests[0]!.instructions).toContain(MID_TURN);
+    expect(inputText(withChannel.requests[0]!)).not.toContain(MID_TURN);
+    expect(inputText(withChannel.requests[0]!)).not.toContain(NO_CHANNEL);
 
     env.store.touchConversation(env.owner.id, "conv-2", env.owner.id, "x");
     const without = fakeClient([() => textTurn("resp_c_2", "ok")]);
     await runPiAgent({ ...env.baseRequest, conversationId: "conv-2" }, [], env.config, env.store, makeEvents(), undefined, {
       client: without.client,
     });
-    expect(inputText(without.requests[0]!)).not.toContain(MID_TURN);
+    // …and a turn without one takes the rule back.
+    expect(without.requests[0]!.instructions).toContain(MID_TURN);
+    expect(inputText(without.requests[0]!)).toContain(NO_CHANNEL);
   });
 
   it("closes the steer channel at a steer-free boundary, so a late message is refused", async () => {

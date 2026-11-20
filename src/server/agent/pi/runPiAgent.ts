@@ -412,10 +412,21 @@ async function runPiAgentAs(
   // ---- input --------------------------------------------------------------
   const stagedFiles = request.imageFiles?.length ? stagePiAttachmentFiles(workspace, request.imageFiles) : [];
   const userRequest: AgentRequest = { ...promptRequest, imageFiles: stagedFiles.length ? stagedFiles : undefined };
+  // The standing instructions of the session a turn runs in — a new session
+  // gets the frozen text now, a continued one was started with the stored
+  // text. The turn's run-kind note leaves out what they already say; a session
+  // whose text is unknown hears the full note.
+  const sessionStanding = (fresh: boolean): string | undefined =>
+    fresh
+      ? frozenInstructions()
+      : conversationId
+        ? (store.conversationPiInstructions(principal, conversationId) ?? undefined)
+        : undefined;
   const firstInputText = (fresh: boolean): string =>
     [
       buildPiTurnPreamble(promptRequest, {
         now: now(),
+        standing: sessionStanding(fresh),
         ...(fresh && sessionLost ? { sessionLost: true } : {}),
         // A fresh session's text history already ends with the stopped row.
         ...(fresh ? {} : { continuedAfterStop: true }),
@@ -738,7 +749,7 @@ async function runPiAgentAs(
               inlineUiStateChanges: undefined,
               documents: undefined,
             },
-            { now: now() },
+            { now: now(), standing: sessionStanding(false) },
           ),
           ...pending.map((steer) => steer.text),
         ].join("\n\n"),

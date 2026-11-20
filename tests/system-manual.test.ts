@@ -61,8 +61,9 @@ describe("official system manual", () => {
     expect(visionPrompt).toContain("Images you are shown are also FILES in the scratch workspace");
     expect(visionPrompt).toContain("saved in the scratch workspace's `captures/`");
     expect(visionPrompt).not.toContain("Screenshots and pixel-mode clicks are unavailable");
-    // The mid-turn line is a per-turn fact: it rides the pi turn preamble, so
-    // it neither appears in nor counts against the standing append.
+    // Without pi facts the append carries no mid-turn rule (a pi conversation
+    // freezes it as PI_INTERACTIVE_TURN_STANDING); a turn whose standing text
+    // lacks it states it in its own preamble.
     expect(prompt).not.toContain("The user may send additional messages");
     expect(buildPiTurnPreamble(flags as unknown as AgentRequest)).toContain(
       "The user may send additional messages while you are working.",

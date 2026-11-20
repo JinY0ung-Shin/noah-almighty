@@ -1036,8 +1036,9 @@ describe("asynchronous tools on pi", () => {
       },
     };
     const pi = buildSystemPromptAppend(request);
-    // The background-ask contract depends on the run kind, so it rides the
-    // turn input (review M2), never the frozen append.
+    // The background-ask rule is frozen only with the consultation guidance
+    // (a run that has ask_avatar — not this one); a turn whose standing text
+    // lacks it states it in its input (review M2).
     expect(pi).not.toContain("returns at once with a consultation id");
     expect(buildPiTurnPreamble(request)).toContain("`mcp__avatars__ask_avatar` returns at once with a consultation id");
     expect(buildPiTurnPreamble({ ...request, piRuntime: { ...request.piRuntime, asyncAskAvatar: false } })).not.toContain(

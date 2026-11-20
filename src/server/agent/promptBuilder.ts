@@ -1072,7 +1072,8 @@ function piRelayedMcpSentence(pi: NonNullable<AgentRequest["piRuntime"]>): strin
  */
 function piAsyncToolsSentence(request: AgentRequest): string {
   // ask_avatar's background mode depends on the run kind (interactive chats
-  // only), so it rides the turn's input (piRunKindParagraph), not this frozen text.
+  // only), so it is not claimed here: the consultation guidance states it as a
+  // rule about interactive turns (PI_ASYNC_ASK_STANDING).
   return (
     (request.canvasEnabled
       ? "A canvas never waits on this runtime: after showing one with controls, finish your answer — the user's submission arrives as their next message. "
@@ -1292,7 +1293,10 @@ export function buildSystemPromptAppend(
       lines.push(
         "Consulting teammate avatars: when the owner needs knowledge you lack but a teammate's avatar likely has (their projects, decisions, expertise), ask that avatar directly with `mcp__avatars__ask_avatar` — one self-contained question per call; only active teammates' avatars that are not private will answer. " +
           "Find candidates and their exact @username with `mcp__avatars__search_avatars` first. Present answers as the other avatar's claims and attribute them." +
-          captureNote,
+          captureNote +
+          // pi: the background mode is an interactive-chat fact, stated as a
+          // rule about such turns (see PI_INTERACTIVE_TURN_STANDING).
+          (request.piRuntime ? ` ${PI_ASYNC_ASK_STANDING}` : ""),
       );
     }
     // Standing skill-exchange guidance (#skill-share), OWNER-DRIVEN turns only —
@@ -1340,12 +1344,15 @@ export function buildSystemPromptAppend(
   if (sharedMcpBlock) {
     lines.push(sharedMcpBlock);
   }
-  // Mid-turn user messages (steers). ONE standing line for every viewer class
-  // of a run that carries a live steer channel — the person can talk while the
-  // avatar works, so it must expect a late instruction instead of treating it
-  // as a stray. Mirrored by describe_system (AgentRequest.midTurnMessages).
-  // (Mid-turn messages and a rewind's provenance are per TURN, so they ride
-  // the turn's input — buildPiTurnPreamble — never this frozen text.)
+  // What an INTERACTIVE CHAT turn means (mid-turn messages, and which text wins
+  // when the turn differs from this one), for every viewer class of a
+  // conversation — whatever kind its first turn was. Stated here ONCE, as a
+  // rule about such turns, so a chat turn's run-kind note stays one line
+  // (piRunKindParagraph leaves out what this text already holds). WHICH kind a
+  // turn is, and a rewind's provenance, stay per turn (buildPiTurnPreamble).
+  if (request.piRuntime && (!request.headless || piOwnerRun(request))) {
+    lines.push(PI_INTERACTIVE_TURN_STANDING);
+  }
   const fileOutputBlock = fileOutputSection(request);
   if (fileOutputBlock) {
     lines.push(fileOutputBlock);
@@ -1709,15 +1716,48 @@ function piOwnerRun(request: AgentRequest): boolean {
   return Boolean(request.viewerIsOwner) && Boolean(request.allowHeadlessTools) && !request.avatarConsultation;
 }
 
+/** How a mid-turn user message (steer) reaches a turn that has the channel. */
+const PI_MID_TURN_MESSAGES_SENTENCE =
+  "The user may send additional messages while you are working. They are delivered DURING your work: a new message appears as a user message at your next tool-call boundary (after the current tool calls finish, or right after the answer you are writing), and it may change the task. Read it before you continue, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch. One that arrives just as you finish comes as the next user turn instead.";
+
+/** `ask_avatar`'s background mode (design D8) — interactive chat turns only. */
+const PI_ASYNC_ASK_SENTENCE =
+  "`mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives later as its own message — at your next tool-call boundary while you are still working, otherwise right after your current answer (Noah keeps the run open for it) — so tell the user whom you asked instead of waiting or polling.";
+
+/**
+ * The STANDING half of the interactive-chat run-kind note: frozen once with
+ * the conversation's prompt, so a chat turn's note is one line instead of
+ * repeating this on every turn. A rule about such turns, never a claim about
+ * the turn that froze it (a routine or a task-API first turn freezes it too).
+ * {@link piRunKindParagraph} drops from a chat turn exactly what the session's
+ * standing text contains, so a conversation frozen without these sentences
+ * still hears them per turn.
+ */
+export const PI_INTERACTIVE_TURN_STANDING =
+  "Run-kind note: each turn's input starts with a `Run kind (this turn): …` note. Where these standing instructions describe tools or permissions that differ on that turn, the note and `mcp__system__describe_system` are authoritative; a tool the turn lacks is refused when called. " +
+  `On a turn whose note says \`interactive chat\` (unless the note says otherwise): ${PI_MID_TURN_MESSAGES_SENTENCE}`;
+
+/** The standing form of {@link PI_ASYNC_ASK_SENTENCE} (same rule as {@link PI_INTERACTIVE_TURN_STANDING}). */
+export const PI_ASYNC_ASK_STANDING = `On an interactive chat turn ${PI_ASYNC_ASK_SENTENCE} On an unattended turn (a routine, a task-API turn) the call itself waits for the answer and returns it.`;
+
 /**
  * pi only: the run-kind statement of THIS turn — what the frozen system
  * prompt cannot know, because one conversation mixes live chat, routine runs
  * and task-API submissions (review M2). Agrees with describe_system's origin,
  * mid-turn-message and long-running-tools lines for the same turn.
+ * An interactive chat turn — most turns — is ONE line once the session's
+ * `standing` text holds the rules for such turns; the unattended kinds always
+ * carry their full paragraph.
  */
-function piRunKindParagraph(request: AgentRequest): string {
+function piRunKindParagraph(request: AgentRequest, standing?: string): string {
   const authority =
     " Where the standing instructions describe tools or permissions that differ on this turn, this note and `mcp__system__describe_system` are authoritative; a tool this turn lacks is refused when called.";
+  // An interactive chat turn leaves out what the session's standing text
+  // already says about such turns. Matched on the exact sentences: a
+  // conversation frozen before they existed (or with other wording) keeps the
+  // full note.
+  const chatStanding = Boolean(standing?.includes(PI_INTERACTIVE_TURN_STANDING));
+  const askStanding = Boolean(standing?.includes(PI_ASYNC_ASK_STANDING));
   // Same fact the runner sends as `interactive: false` (PiRuntimeFacts.nonInteractive).
   const noAsk = request.piRuntime?.nonInteractive ? ` ${PI_NO_ASK_USER_SENTENCE}` : "";
   if (request.externalTaskApi) {
@@ -1743,12 +1783,14 @@ function piRunKindParagraph(request: AgentRequest): string {
   return (
     "Run kind (this turn): interactive chat — a person is on the other side of this conversation." +
     (request.midTurnMessages === true
-      ? " The user may send additional messages while you are working. They are delivered DURING your work: a new message appears as a user message at your next tool-call boundary (after the current tool calls finish, or right after the answer you are writing), and it may change the task. Read it before you continue, let the newest instruction take precedence when it conflicts with an earlier one, and briefly acknowledge the change instead of restarting from scratch. One that arrives just as you finish comes as the next user turn instead."
-      : "") +
-    (request.piRuntime?.asyncAskAvatar
-      ? " `mcp__avatars__ask_avatar` returns at once with a consultation id; the answer arrives later as its own message — at your next tool-call boundary while you are still working, otherwise right after your current answer (Noah keeps the run open for it) — so tell the user whom you asked instead of waiting or polling."
-      : "") +
-    authority
+      ? chatStanding
+        ? ""
+        : ` ${PI_MID_TURN_MESSAGES_SENTENCE}`
+      : chatStanding
+        ? " Mid-turn messages are not delivered on this turn."
+        : "") +
+    (request.piRuntime?.asyncAskAvatar && !askStanding ? ` ${PI_ASYNC_ASK_SENTENCE}` : "") +
+    (chatStanding ? "" : authority)
   );
 }
 
@@ -1910,10 +1952,16 @@ export function buildPiTurnPreamble(
     sessionLost?: boolean;
     /** The turn continues the session of an answer the user stopped (`AgentRequest.stoppedAnswer`). */
     continuedAfterStop?: boolean;
+    /**
+     * The standing instructions of the pi session this turn runs in. An
+     * interactive chat turn's run-kind note leaves out what they already say
+     * about such turns; unknown (omitted) → the full note.
+     */
+    standing?: string;
   } = {},
 ): string {
   const lines = [`[Current date and time: ${kstDateTimeString(options.now ?? new Date())} KST]`];
-  lines.push(piRunKindParagraph(request));
+  lines.push(piRunKindParagraph(request, options.standing));
   const inlineUiOff = inlineUiOffTurnNote(request);
   if (inlineUiOff) {
     lines.push(inlineUiOff);

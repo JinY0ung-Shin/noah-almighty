@@ -322,6 +322,14 @@ export function withConversations<TBase extends Constructor<StoreBase>>(Base: TB
       return Boolean(row?.frozen);
     }
 
+    /** The frozen pi instructions as stored — null before the conversation's first pi turn (never freezes them). */
+    conversationPiInstructions(ownerId: string, conversationId: string): string | null {
+      const row = this.db
+        .prepare("SELECT pi_instructions FROM conversations WHERE id = ? AND owner_user_id = ?")
+        .get(conversationId, ownerId) as { pi_instructions: string | null } | undefined;
+      return row?.pi_instructions ?? null;
+    }
+
     ensureConversationPiInstructions(ownerId: string, conversationId: string, take: () => string): string | null {
       const read = () =>
         this.db

@@ -45,7 +45,12 @@ import {
   type PiResponsesClient,
   type PiStreamEvent,
 } from "../src/server/agent/pi/responsesClient.js";
-import { buildPiTurnPreamble, buildSystemPromptAppend } from "../src/server/agent/promptBuilder.js";
+import {
+  PI_ASYNC_ASK_STANDING,
+  PI_INTERACTIVE_TURN_STANDING,
+  buildPiTurnPreamble,
+  buildSystemPromptAppend,
+} from "../src/server/agent/promptBuilder.js";
 import { gitInit, makeBareRemote, withTempDir, signup } from "./helpers.js";
 import { activeRepoHolder } from "../src/server/activeRepoLock.js";
 import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
@@ -501,12 +506,16 @@ describe("runPiAgent", () => {
     const conversationDir = `/workspace/c/${piConversationSegment("conv-1")}`;
     expect(req!.instructions).toContain("Runtime: your own pi sandbox");
     expect(req!.instructions).toContain(conversationDir);
-    // Run-kind guidance (mid-turn messages included) rides the turn input (M2).
-    expect(req!.instructions).not.toContain("They are delivered DURING your work");
+    // WHICH kind a turn is rides the turn input (M2). What an interactive chat
+    // turn means is frozen once with the prompt, so its note is one line.
+    expect(req!.instructions).toContain(PI_INTERACTIVE_TURN_STANDING);
     expect(req!.instructions).not.toContain("[Current date and time");
     expect(inputText(req!)).toMatch(/^\[Current date and time: \d{4}-\d\d-\d\d \d\d:\d\d KST\]/);
-    expect(inputText(req!)).toContain("Run kind (this turn): interactive chat");
-    expect(inputText(req!)).toContain("They are delivered DURING your work");
+    expect(inputText(req!)).toContain(
+      "Run kind (this turn): interactive chat — a person is on the other side of this conversation.\n\n",
+    );
+    expect(inputText(req!)).not.toContain("They are delivered DURING your work");
+    expect(inputText(req!)).not.toContain("are authoritative");
     expect(inputText(req!)).toContain("User message:\nhello there");
     expect(of(calls, "session")).toEqual(["resp_s1_1"]);
     expect(of(calls, "resume")).toEqual([{ sessionId: "resp_s1_1", uuid: "resp_s1_1" }]);
@@ -794,9 +803,49 @@ describe("runPiAgent", () => {
       : [inputText(second!), inputText(first!)];
     expect(routineText).toContain("Run kind (this turn): the **automated execution** of a scheduled routine");
     expect(routineText).not.toContain("They are delivered DURING your work");
-    expect(chatText).toContain("Run kind (this turn): interactive chat");
-    expect(chatText).toContain("They are delivered DURING your work");
+    // Whichever kind froze the prompt, it holds the rules for a chat turn —
+    // so the chat turn's own note is one line.
+    expect(first!.instructions).toContain(PI_INTERACTIVE_TURN_STANDING);
+    expect(chatText).toContain(
+      "Run kind (this turn): interactive chat — a person is on the other side of this conversation.\n\n",
+    );
+    expect(chatText).not.toContain("They are delivered DURING your work");
     expect(chatText).not.toContain("do not ask questions");
+  });
+
+  it("a conversation frozen before the standing chat rules keeps the full run-kind note on every chat turn", async () => {
+    const { store, config, owner, base } = setup();
+    // An earlier build froze this conversation's prompt without the rules.
+    store.ensureConversationPiInstructions(owner.id, "conv-1", () => "An older frozen prompt.");
+    const { client, requests } = fakeClient([() => textTurn("resp_o_1", "one"), () => textTurn("resp_o_2", "two")]);
+    for (const resume of [undefined, "resp_o_1"]) {
+      const { events } = recorder({ steers: new SteerChannel() });
+      await runPiAgent(base(resume ? { resumeSessionId: resume } : {}), [], config, store, events, undefined, { client });
+    }
+    const [first, second] = requests;
+    expect(first!.instructions).toBe("An older frozen prompt.");
+    expect(second!.previousResponseId).toBe("resp_o_1");
+    for (const turn of [first!, second!]) {
+      expect(inputText(turn)).toContain("Run kind (this turn): interactive chat");
+      expect(inputText(turn)).toContain("They are delivered DURING your work");
+      expect(inputText(turn)).toContain("are authoritative");
+    }
+  });
+
+  it("a continued chat turn of a conversation frozen WITH the rules stays one line", async () => {
+    const { store, config, base } = setup();
+    const { client, requests } = fakeClient([() => textTurn("resp_n_1", "one"), () => textTurn("resp_n_2", "two")]);
+    for (const resume of [undefined, "resp_n_1"]) {
+      const { events } = recorder({ steers: new SteerChannel() });
+      await runPiAgent(base(resume ? { resumeSessionId: resume } : {}), [], config, store, events, undefined, { client });
+    }
+    const second = requests[1]!;
+    expect(second.previousResponseId).toBe("resp_n_1");
+    expect(second.instructions).toBeUndefined();
+    expect(inputText(second)).toContain(
+      "Run kind (this turn): interactive chat — a person is on the other side of this conversation.\n\n",
+    );
+    expect(inputText(second)).not.toContain("They are delivered DURING your work");
   });
 
   it("sends steers pi did not take as ONE follow-up turn after the answer (turn_end contract)", async () => {
@@ -1463,7 +1512,8 @@ describe("pi prompt variant", () => {
     expect(pi).not.toContain("Conversation rewind (this turn)");
     expect(pi).not.toContain("submitted by an **EXTERNAL SYSTEM**");
     expect(pi).toContain("`API_TOKEN` is set to 셸 노출 and present as `$NAME` environment variables in every `bash` command of this run");
-    expect(pi).not.toContain("They are delivered DURING your work");
+    // Mid-turn messages are stated as a RULE about interactive chat turns, never as this turn's fact.
+    expect(pi).toContain("On a turn whose note says `interactive chat` (unless the note says otherwise): The user may send additional messages");
     const turn = buildPiTurnPreamble(owner, { now: new Date("2026-10-29T00:00:00Z") });
     expect(turn).toContain("[Current date and time: 2026-10-29 09:00 KST]");
     expect(turn).toContain("Conversation rewind (this turn)");
@@ -1503,12 +1553,14 @@ describe("pi prompt variant", () => {
     const frozen = buildSystemPromptAppend(routine);
     expect(buildSystemPromptAppend(chat)).toBe(frozen);
     expect(buildSystemPromptAppend(api)).toBe(frozen);
-    // No run-kind branch, mid-turn line, background-ask line or open-repo line in it.
+    // No run-kind branch or open-repo line in it.
     expect(frozen).not.toContain("automated execution");
     expect(frozen).not.toContain("talking to right now");
-    expect(frozen).not.toContain("They are delivered DURING your work");
-    expect(frozen).not.toContain("returns at once with a consultation id");
     expect(frozen).not.toContain("Working repository");
+    // Mid-turn messages and the background ask are in it as RULES about
+    // interactive chat turns — the same text whichever kind froze it.
+    expect(frozen).toContain(PI_INTERACTIVE_TURN_STANDING);
+    expect(frozen).toContain(PI_ASYNC_ASK_STANDING);
     // It points at the per-turn note instead, and keeps the owner's standing state.
     expect(frozen).toContain("each turn's input starts with a run-kind note");
     expect(frozen).toContain("On a turn that is not a live conversation");
@@ -1541,6 +1593,38 @@ describe("pi prompt variant", () => {
       expect(turn).toContain("`mcp__system__describe_system` are authoritative");
     }
     expect(buildPiTurnPreamble({ ...chat, activeRepoName: undefined }, { now })).not.toContain("Working repository");
+  });
+
+  it("drops from a chat turn's note exactly what the session's standing text already says", () => {
+    const now = new Date("2026-10-29T00:00:00Z");
+    const frozen = buildSystemPromptAppend(routine);
+    const line = "Run kind (this turn): interactive chat — a person is on the other side of this conversation.";
+    // Both rules standing → the note is the one line.
+    expect(buildPiTurnPreamble(chat, { now, standing: frozen })).toContain(`${line}\n\n`);
+    // The unattended kinds are untouched by it.
+    expect(buildPiTurnPreamble(routine, { now, standing: frozen })).toBe(buildPiTurnPreamble(routine, { now }));
+    expect(buildPiTurnPreamble(api, { now, standing: frozen })).toBe(buildPiTurnPreamble(api, { now }));
+    // A chat turn WITHOUT the channel takes the standing rule back.
+    expect(buildPiTurnPreamble({ ...chat, midTurnMessages: false }, { now, standing: frozen })).toContain(
+      `${line} Mid-turn messages are not delivered on this turn.`,
+    );
+    // Frozen while no teammate was reachable (no ask rule in it): a turn that has the background ask states it.
+    const lonely = buildSystemPromptAppend({ ...chat, reachableTeammateCount: 0 });
+    expect(lonely).toContain(PI_INTERACTIVE_TURN_STANDING);
+    expect(lonely).not.toContain("returns at once with a consultation id");
+    const lonelyTurn = buildPiTurnPreamble(chat, { now, standing: lonely });
+    expect(lonelyTurn).toContain(`${line} \`mcp__avatars__ask_avatar\` returns at once with a consultation id`);
+    expect(lonelyTurn).not.toContain("They are delivered DURING your work");
+    // Standing text without the rules (an older freeze, or none known) → the full note.
+    for (const standing of ["An older frozen prompt.", undefined]) {
+      const full = buildPiTurnPreamble(chat, { now, ...(standing ? { standing } : {}) });
+      expect(full).toContain("They are delivered DURING your work");
+      expect(full).toContain("returns at once with a consultation id");
+      expect(full).toContain("`mcp__system__describe_system` are authoritative");
+    }
+    // Consultations and one-shot generators have no chat turn: no rule in their prompt.
+    expect(buildSystemPromptAppend({ ...routine, allowHeadlessTools: false })).not.toContain("Run-kind note:");
+    expect(buildSystemPromptAppend({ ...routine, avatarConsultation: true })).not.toContain("Run-kind note:");
   });
 
   it("keeps per-turn facts out of the append even without stamped pi facts (no SDK variant)", () => {
