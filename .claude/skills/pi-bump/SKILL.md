@@ -75,7 +75,7 @@ Nothing in the skill folder is ever run directly — only the copy in `$RUN/scri
 The build is half of a run's wall time and needs nothing from you: write the bump's check (step 5) while it
 runs, not after. Each step prints one line, `<step> exit=<rc>  <n>/<m> passed`, with its `FAIL` lines under it; the last line
 is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit status says the same. The same
-text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `776f575`:
+text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `2806c7a`:
 
 ```
 10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 5/5
@@ -86,6 +86,7 @@ text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`
 90-pi-validation 22/22 · 92-grep-glob 10/10 · 93-tool-call-limit 23/23 · 94-turn-timings 13/13
 80-context-usage 19/19 · 96-memory 29/29 · 97-memory-search 10/10 · 98-mining 34/34
 26-admin-user-names 17/17      (Noah's names on pi's panel — a pi UI change that hides them fails here)
+100-history-pages 11/11        (대화 기록 in pages of 20; needs the sessions the earlier steps made)
 95-final-state 1/1             (no error-level line in any service's log; prints memory)
 ```
 
@@ -124,7 +125,7 @@ not look at. Minutes of work, seconds of run time.
   file into `.claude/skills/pi-bump/boot-test/scripts/` and add its `extra` line to `drive.sh` THERE too — a
   check that lives only in a run directory is lost. It is a regression guard from then on.
 - Name: `NN-<what>.mjs`; the number only groups files (drive.sh's order is explicit). Bump guards are `90`–`94`,
-  `96`–`98`, then `100`+ (`94` and `96`–`98` are taken; the next free one is `100`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
+  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100` are taken; the next free one is `101`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
 - Helpers, all in `scripts/e2e-common.mjs`: `loadState()` (the `owner` — a Noah admin — and `second`, a member:
   `{id, username, cookie}`), `client(cookie)` (`.get/.post/.put`), `turn(client, {avatarId, conversationId,
   message})` → `{status, frames, of(event)}`, `fake.enqueue(key, turns)` / `fake.requests(key)` /

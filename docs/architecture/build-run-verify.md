@@ -723,6 +723,23 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   minute without a start; an EXISTING `mining.db` getting the new `runs` columns when the service starts (this
   stack starts from nothing). After the run: Noah 198 MiB, gateway 212 MiB, broker 296 MiB, memory 43 MiB, mining
   28 MiB.
+  **pi `2806c7a` (2026-11-20, one commit since `776f575`: the 대화 기록 list of pi's admin panel is a page of 20,
+  not 50 — one constant and its test. pi's commit ran typecheck and that route test and did not open the page):**
+  `~/.noah-work/boot-test-2026-11-20d`, Noah `f206064`. The cold build took 192 s. Every step passed with the
+  counts of the `776f575` run (`98-mining` 34/34, `26-admin-user-names` 17/17 — it now finds the owner's id on 17
+  rows of the first page, where it found 31), no error-level line in any service's log. **The new check,
+  `100-history-pages.mjs` (11/11)**, runs late, when the earlier steps have left more than a page of sessions —
+  36 here — so it is also the first time a boot test saw a SECOND page of one of the panel's lists. **The route
+  through Noah's `/admin` proxy:** `GET /admin/api/history` as a Noah admin → 20 items, `pageSize: 20`,
+  `total: 36`, no `limit`; `?page=2` → the other 16, none of them on the first page, most recent first across
+  the two; `?page=3` → `{"items":[],"total":36,"pageSize":20}`; `?page=abc` → the first page; `?user=<the
+  member's id>` → that user's 5 sessions only; a member → 403 `forbidden`. **The page in Chromium,
+  `/admin/#/history`:** 20 rows and "1–20 / 전체 36개 처음 이전 1 / 2 다음 끝" with 처음 and 이전 disabled; 다음 pressed → 16 other
+  rows and "21–36 / 전체 36개 … 2 / 2"; a row of the second page opens its session (`#/history/<id>`); no page
+  error, failed call or CSP violation. `sessionWith` of the tracing checks looks at the owner's newest 12
+  sessions, so the smaller page costs it nothing. **NOT seen:** the `user` filter typed into the page and 조회
+  pressed; 처음 / 끝 pressed; a list of more than two pages. After the run: Noah 118 MiB, gateway 214 MiB, broker
+  137 MiB, memory 139 MiB, mining 27 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

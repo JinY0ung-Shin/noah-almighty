@@ -73,6 +73,7 @@ checks_stage() {
   extra 98-mining                N-mining.log                  node 98-mining.mjs
   # Noah's own addition to pi's page (the names of the users pi shows by id): after the steps that made turns.
   extra 26-admin-user-names      U-admin-user-names.log        node 26-admin-user-names.mjs
+  extra 100-history-pages        H-history-pages.log           node 100-history-pages.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
