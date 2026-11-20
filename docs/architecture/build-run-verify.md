@@ -799,6 +799,32 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   pi's test); a run on a model of ANOTHER LLM server, or on a tier that points elsewhere than the default; a
   model picked while a run is in progress. After the run: Noah 258 MiB, gateway 216 MiB, broker 171 MiB, memory
   137 MiB, mining 33 MiB.
+  **pi `71011f6` (2026-11-20, one commit since `2bca2c2`, inside process mining: the page's run section has an
+  추가 프롬프트 row — a text of up to 4,000 characters an admin writes in a dialog, kept in `mining.db` and appended
+  to the system prompt of every LLM call of a run as "Additional instructions from the operator:", from the next
+  run on; no prompt per stage and no history of its changes. pi's tests call the route on an in-process gateway
+  and read the composed system prompt off a scripted server; the commit names nothing it left unverified — it
+  did not open the dialog on a real gateway or start the service's run process with a text set):**
+  `~/.noah-work/boot-test-2026-11-20h`, Noah `564352f`. The cold build took 218 s. Every step passed with the
+  counts of the `2bca2c2` run (`98-mining` 34/34, `102-mining-model` 23/23), no error-level line in any
+  service's log but the one `102-` makes. **New check `103-mining-prompt.mjs` 20/20**, through Noah's `/admin`
+  as a Noah admin and in a real browser — 19/20 in the run itself, because the check pressed 닫기 where the
+  dialog holds two such buttons after a save (its × and the saved notice's); with the × named by its class it
+  was run again alone on the same stack, 20/20. The route: `GET /admin/api/mining` carries `prompt: null`;
+  `PUT /admin/api/mining/prompt` answers 400 `invalid_prompt` ("prompt must be a string of at most 4000
+  characters, or null") for 4,001 characters and for a number, 403 without the panel's headers and for a
+  member, 200 with the text trimmed, 200 for exactly 4,000 characters, and `{prompt: null}` for a blank text
+  and for `null`. The page: the row reads "추가 프롬프트 없음 편집 세션 읽기·분류·검토·대표 흐름의 모든 호출에서 시스템
+  프롬프트 끝에 붙습니다. 다음 실행부터 적용됩니다."; 편집 opens a dialog with an empty text box (`maxlength` 4000),
+  "0 / 4,000자" and 저장 disabled; 44 characters typed and 저장 pressed, the dialog says "저장했습니다. 다음 실행부터
+  적용됩니다." and stays open, and closed, the row reads "44자"; a run requested then ends `completed` 0.5 s after
+  it started; after a reload the dialog holds the saved text; the box emptied and saved, the row reads "없음".
+  The gateway logs each change with a count only (`"chars":44`, "mining prompt updated", info) — the text is in
+  neither the gateway's log nor the mining service's. **NOT seen:** the system prompt a mining call carries —
+  that the text reaches the model at all, in every stage, after pi's own instructions (no session of a fresh
+  stack has rested 30 minutes; rests on pi's test of ONE call); what a text does to the processes a real model
+  names; a text saved while a run is in progress. After the run: Noah 273 MiB, gateway 268 MiB, broker 195 MiB,
+  memory 44 MiB, mining 42 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

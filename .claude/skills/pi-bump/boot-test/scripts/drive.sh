@@ -79,6 +79,8 @@ checks_stage() {
   # The model a mining run uses (pi 2bca2c2): picked on the page, used by the run, and a run whose model is gone
   # ends 실패 — that run's one error-level line is the line 95-final-state.sh expects.
   extra 102-mining-model         K-mining-model.log            node 102-mining-model.mjs
+  # The operator's extra system prompt for mining (pi 71011f6): the route, the dialog on the page, a run with it set.
+  extra 103-mining-prompt        Y-mining-prompt.log           node 103-mining-prompt.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh

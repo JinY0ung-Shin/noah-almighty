@@ -791,7 +791,7 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
-- **Process mining (pi `2bca2c2`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
+- **Process mining (pi `71011f6`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
   pi's `mining` service has no compose profile since pi `28ab28e`: `docker compose up` starts it and
   `scripts/deploy.sh` waits for it like any service without a health check. It is the gateway image as uid 10001
   with no secret, on `edge` only (never `control`, `noah-mcp` or `noah-memory`), with the gateway's data mounted
@@ -803,7 +803,10 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   the one its chat page offers). A run uses the LLM servers the users' chats use, so both are load on the chats;
   a mining call's output is bounded by the picked model's own `maxTokens` on pi's LLM page (it was 2,000 tokens).
   **A model removed from pi's LLM page stays picked:** every run then ends 실패 with "마이닝에 고른 모델 … 이 LLM 설정에
-  없다" until an admin picks again on the mining page — it never falls back to the default.
+  없다" until an admin picks again on the mining page — it never falls back to the default. Since pi `71011f6` the
+  page also holds an 추가 프롬프트: up to 4,000 characters an admin writes (the organisation's terms, how to name a
+  process), appended to the system prompt of EVERY LLM call of a run, from the next run on; it is kept in
+  `mining.db` and the gateway logs only its length.
   **Starting a run is a decision about every user's
   conversations, and it is now a Noah admin's press — no longer an operator's cron line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
   calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to that
@@ -820,8 +823,10 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   both metacognition surfaces know nothing of it. Seen on a real stack: the container, the routes, the page with 지금
   실행 pressed and the empty run that follows, the concurrency saved and a waiting request stopped there
   (`98-mining.mjs`), a model picked on the page and the run that uses it, and the 실패 run after that model was
-  removed (`102-mining-model.mjs`; → `build-run-verify.md`); NOT seen: a run that reads a session, so neither its
-  progress on the page, nor a running run being stopped, nor the request a mining call sends (its `max_tokens`).
+  removed (`102-mining-model.mjs`), the 추가 프롬프트 written, shown again and cleared in its dialog and a run
+  with it set (`103-mining-prompt.mjs`; → `build-run-verify.md`); NOT seen: a run that reads a session, so
+  neither its progress on the page, nor a running run being stopped, nor the request a mining call sends (its
+  `max_tokens`, its system prompt with the admin's text).
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,
