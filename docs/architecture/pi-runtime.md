@@ -62,7 +62,7 @@ step lands, the invariants in `CLAUDE.md` and in these pages hold as written.
   survive the move: the model only drafts; one press by the drafter per card; no delete; a page changed since
   it was read is refused; wiki text reaches an avatar marked as untrusted; the move goes through
   `retirementGate()` and quarantine; retired names stay reserved.
-- **Order:** (0) pi's memory service keeps history in a local git → (1) the retirements in Noah (mirror,
+- **Order:** (0) pi's memory service keeps history in a local git — DONE, pi `2759ae2`, bumped 2026-11-20 → (1) the retirements in Noah (mirror,
   deletion ledger, migration, the `repo` home's dead branches) → (2) Keycloak + OIDC, Noah first, then pi →
   (3) personal brain tools in pi, and with them a brain without a repository → (4) team brain in pi. 1 and 2
   are independent; 3 needs 1 (and can start on the service key, switching the identity check to tokens
@@ -986,6 +986,15 @@ Noah needs from the STACK.
 - **No `depends_on`:** Noah does not wait for the memory service. An outage degrades the brain of moved
   owners (reported as an outage on every surface — `repo-knowledge.md`); it does not stop the app.
 - **Pin:** the service arrived with pi-gateway `e0e5b8c` (the memory service and its JSON API).
+- **The service keeps every wiki's history (pi `2759ae2`, 2026-11-20):** a local git repository per wiki inside
+  its own volume, one commit per change (`create` / `replace` / `edit` / `delete` + the note path, authored by the
+  owner id Noah put in the URL), no remote — so the `memory-data` volume is the only place notes AND history
+  are, and its backup is the operator's. Nothing in Noah reads the history (no route, no tool; an operator
+  reads it with git in the memory container, pi's `docs/OPERATIONS.md` "장기 메모리"). What Noah can meet: a
+  change whose commit failed answers 500 — Noah's client reports it as an outage and "read again before
+  repeating", which is right, because the note may already be changed; and a wiki's FIRST change after the
+  upgrade also commits every note it already held (about 1 s for 3,000 notes on the dev box, inside the
+  client's 15 s). The git mirror is still what Noah does today; this is step 0 of "Direction" above.
 - **Seen on a real stack** (boot test at pi `60f4b59`, `96-memory.mjs`; → `build-run-verify.md`): the service
   healthy under pi's hardening, the two-member `noah-memory` network, Noah's 0400 key copy, and — from inside
   Noah's container with that key — every answer the client depends on (an owner without a wiki lists as

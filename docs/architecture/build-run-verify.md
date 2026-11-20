@@ -859,6 +859,32 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   file — shown by folder name); the 502 `memory_key_mismatch` answer with a wrong key; the upgrade of an existing
   host without re-running `setup-host.sh` (the gateway then refuses to start — read in pi's code, not run).
   After the run: gateway 234 MiB, broker 236 MiB.
+  **pi `2759ae2` (2026-11-20, two commits since `d46a9e5`: pi's `CLAUDE.md` now says pi-gateway is the team's
+  harness — docs only — and the memory service keeps every wiki's HISTORY: a local git repository per wiki
+  (`<wiki>/.git`), one commit of the whole wiki per change, named `create` / `replace` / `edit` / `delete` + the
+  note path and authored by the wiki's owner id; no remote; a change whose commit fails answers 500; the memory
+  image now installs git and the service does not start without it. pi's tests ran the store in a temp directory
+  with the developer's git 2.43 — never the image's git, never under the stack's hardening):**
+  `~/.noah-work/boot-test-2026-11-20l`, Noah `9633a0f` plus the pin. Every step passed with the counts of the
+  `d46a9e5` run (`96-memory` 29/29, `97-memory-search` 10/10, `105-admin-memory` 7/7), no error-level line in any
+  service's log but the one `102-` makes; the build installed git in the memory image (`git version 2.39.5`) and
+  the service came up healthy. **New check `106-memory-history.mjs` 14/14**, with the requests Noah's client makes
+  from inside Noah's container and git run inside the memory container (uid 10002, read-only rootfs, no
+  capability): four changes of a new wiki answered 200 and its log reads `create wiki/개념/배포.md`,
+  `create CLAUDE.md`, `replace wiki/개념/배포.md`, `delete wiki/개념/배포.md`, each by the owner id — a rewrite with
+  the same text made no commit; `git show` returns the text the note had before the delete and its first text;
+  the repository has no remote, nothing is left uncommitted, it is the service's own (uid 10002, 0700) and holds
+  no hooks folder; the listing shows the notes and nothing of `.git`. A note put in the volume BEFORE any history
+  (what every wiki of an existing deployment is) was committed first, on its own (`notes from before history
+  began`), then the change, and `git show HEAD~1:wiki/old.md` returns `before`. Deleting a wiki removed its
+  repository with it. Recorded, not judged: 46–48 ms per change with its commit, 101 ms for a wiki's first change
+  (it makes the repository), 19 ms for the rewrite that commits nothing.
+  **NOT seen:** a moved owner's tools writing through Noah (nobody is moved in this stack — no knowledge
+  repository exists; Noah's code is unchanged and its tests run against the in-process fake); a commit that
+  FAILS (the 500 rests on pi's test); the first commit of a large existing wiki (3,000 notes took about 1 s on the
+  dev box outside the stack; Noah's client gives a request 15 s); git's own packing of a long history; the
+  upgrade of the deployed stack, where every existing wiki gets its first commit at its next change.
+  After the run: gateway 186 MiB, broker 89 MiB, memory 40 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

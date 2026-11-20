@@ -85,6 +85,9 @@ checks_stage() {
   extra 104-mining-rename        Z-mining-rename.log           node 104-mining-rename.mjs
   # pi's 장기 메모리 admin page (pi ea1513f): the gateway's own copy of the memory key, read through Noah's /admin.
   extra 105-admin-memory         R-admin-memory.log            node 105-admin-memory.mjs
+  # The memory service's history (pi 2759ae2): one commit per change in a local git, with the IMAGE's git under the
+  # stack's hardening; a note from before the history is committed first; nothing has a remote.
+  extra 106-memory-history       J-memory-history.log          node 106-memory-history.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
