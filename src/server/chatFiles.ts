@@ -96,8 +96,8 @@ const FILE_TYPES: Record<string, { mediaType: string; magic?: Buffer[]; link?: f
   // payloads — still a text file, so no magic prefix like csv/md/txt). This
   // mediaType is what FileTab keys on to render the diagram client-side.
   drawio: { mediaType: DRAWIO_MEDIA_TYPE },
-  // A page the avatar wrote. The owner reads it in the chat's 파일 tab (drawn
-  // script-less, in a sandboxed frame); the card's own bytes are only ever a
+  // A page the avatar wrote. The owner reads it in the chat's 파일 tab (run in
+  // a sandboxed frame with an origin of its own); the card's own bytes are only ever a
   // download. `link: false`: never exported by a share link (`HTML_MEDIA_TYPE`).
   html: { mediaType: HTML_MEDIA_TYPE, link: false },
 };

@@ -16,16 +16,16 @@ Use this skill when the user explicitly asks for an HTML / web slide deck: a sin
 
 ## Two ways the file is read
 
-The same file is read in two places, and it must work in both:
+The same file is read in two ways, and it must work in both:
 
-1. **In Noah, without script.** Noah's 파일 tab draws the page with every script removed. The page shell below then shows the slides as a stack — each a 16:9 block, one under the other — so the user can read the whole deck right in the chat.
-2. **In the user's own browser, as a deck.** Downloaded and opened in a browser, the script turns the same page into a deck: one slide fills the window, with keyboard navigation, the progress bar and the overview grid.
+1. **As a deck, with its script running.** Noah's 파일 tab runs the page in an isolated frame, and so does the user's own browser once the file is downloaded: one slide fills the window, with keyboard navigation, the progress bar and the overview grid. In Noah's frame the page reaches NOTHING outside itself: no network load of any kind (no CDN script or stylesheet, no remote image or font, no fetch), `localStorage` / `sessionStorage` / cookies throw, popups and downloads do nothing, and a link to another page, a reload or any navigation leaves an error in the frame (`#hash` links work). The file must be fully self-contained — which this shell already is. Never add a storage call without `try`/`catch`, a link out, or a reload.
+2. **Without script, as a stack.** Wherever a page's scripts are off (Noah's 파일 tab in a browser whose Noah extension is older than 0.30.0, a reader or mail client that strips them, an `html` canvas), the page shell below shows the slides as a stack — each a 16:9 block, one under the other — so the whole deck still reads.
 
-Three rules keep the first one true. They are not optional:
+Three rules keep the second one true. They are not optional:
 
 - **Every slide reads without script.** Its text and diagrams are plain HTML/SVG in the `<section>`. Script may only ADD to a slide (navigation, replaying an animation) — never build its content.
 - **A hidden start state is always under `.js`** (`.js .slide .anim-fade { opacity: 0 }`). The script in `<head>` sets that class; where scripts are off nothing would ever reveal the element.
-- **No `vh` inside a slide.** Sizes and spacing are `vw` (on a 16:9 screen `1vh` is about `0.56vw`). Noah fits the frame to the page's height, so a `vh` length there grows with the page.
+- **No `vh` inside a slide.** Sizes and spacing are `vw` (on a 16:9 screen `1vh` is about `0.56vw`). A stacked page is as tall as all its slides, and Noah's side panel is often taller than it is wide — a `vh` length follows neither the slide nor its width.
 
 ## Requirements
 
@@ -728,6 +728,6 @@ For SVG path drawing, set `--len` to the path's total length:
 1. Write the deck as ONE file in the conversation folder (the current directory): `<short-name>.html`, named in the user's language. Keep it well under 1 MiB — the 파일 tab does not draw a larger page.
 2. Check it before sharing: no `vh` inside a `<section class="slide">`, no hidden start state outside `.js`, every `<section>` has a unique `id`, nothing loaded from the network.
 3. Call `mcp__file_output__share_file` with the path. That is ALL delivery takes — never copy the page into a canvas.
-4. Tell the user both ways to read it, in their language: the 파일 tab shows the slides one under the other (Noah never runs a page's scripts), and to PRESENT they download the file and open it in a browser — arrow keys or Space to move, Esc for the overview.
+4. Tell the user how to use it, in their language: the 파일 tab runs the deck right there — click the slide once, then arrow keys or Space to move, Esc for the overview (a wider side panel gives a bigger slide) — and to PRESENT on a full screen they download the file and open it in a browser.
 
 To change a delivered deck, edit the file and `share_file` it again.

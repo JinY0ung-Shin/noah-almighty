@@ -66,7 +66,7 @@ function shareFileDescription(deckConverterInstalled: boolean): string {
     "Use this whenever you finish producing a file the user should keep — a PPTX deck, PDF, DOCX, XLSX, ZIP, CSV, Markdown/text file, HTML page (.html), or draw.io diagram (.drawio). " +
     pptxSentence +
     "A shared .drawio file renders as an INTERACTIVE diagram in that same panel (client-side) — never export a diagram to PNG just to deliver it. " +
-    "A page you SAVED AS A FILE (.html) is delivered here too: the app draws it for the user from the card (a static page of up to 1 MB — scripts never run, links don't open; a larger one is a download only). Do NOT also paste that page into `mcp__canvas__show`: the user would get the same page in two places. " +
+    "A page you SAVED AS A FILE (.html) is delivered here too: the app RUNS it for the user from the card, in an isolated frame (a page of up to 1 MB; a larger one is a download only; in a browser whose Noah extension is older than 0.30.0 the page is shown WITHOUT running its scripts, so keep it readable without them). Its inline scripts run, so it can be interactive — but it must be ONE self-contained file: nothing loads from the network (no CDN script or stylesheet, no remote image or font, no fetch — inline everything, pictures as data: URIs), localStorage / sessionStorage / cookies throw (wrap them in try/catch), popups and downloads do nothing, and the page must never link to another page, reload or navigate itself (the frame would show an error) — only #hash links. Do NOT also paste that page into `mcp__canvas__show`: the user would get the same page in two places. " +
     "Pass the local file path from your working directory; never paste a local path or file:// URL into Markdown, because the browser cannot reach your filesystem and there is NO Bash workaround for delivering files. " +
     "The file must be inside the run's working directory or scratch workspace, at most 30 MB, and its content must match its extension. A turn can share at most 3 files."
   );
@@ -132,7 +132,7 @@ function sharePreviewNotes(result: SharedFile, deckConverterInstalled: boolean):
       workspacePreviewKind(place.slice(place.lastIndexOf("/") + 1), result.attachment.size ?? 0) === "html";
     notes.push(
       drawn
-        ? "The app draws the page for the user in the side panel (static: scripts never run, links don't open) — do not also show it with mcp__canvas__show."
+        ? "The app runs the page for the user in the side panel, in an isolated frame: its inline scripts run (not in a browser whose Noah extension is older than 0.30.0 — there it is shown without them), nothing loads from the network, browser storage throws, and a link to another page or a reload breaks the page (only #hash links) — do not also show it with mcp__canvas__show."
         : "This page is a DOWNLOAD ONLY: the app does not draw it for the user (it draws a page of up to 1 MB) — tell the user it is a file to download, and do not say they can see it.",
     );
   }

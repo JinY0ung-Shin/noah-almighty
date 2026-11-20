@@ -30,6 +30,23 @@ export function workspaceFileUrl(path: string, preview = false, version = 0): st
   return `/api/me/workspace/file?${query.toString()}`;
 }
 
+/**
+ * An `.html` file as the page the tab RUNS: the `src` of the sandboxed frame
+ * (`WorkspaceHtmlFrame`), good for ONE load within a minute. The address alone
+ * serves nothing — it carries a ticket only this app can ask for (a session
+ * call), so a page runs where the app chose to run it: never from a link, a
+ * frame something else made, or the page reloading itself. Throws a Korean
+ * `ApiError` like every `api()` call.
+ */
+export async function requestWorkspaceHtmlPageUrl(path: string, signal?: AbortSignal): Promise<string> {
+  const { ticket } = await api<{ ticket: string }>("/api/me/workspace/html-ticket", {
+    method: "POST",
+    body: JSON.stringify({ path }),
+    signal,
+  });
+  return `/api/me/workspace/html?${new URLSearchParams({ path, ticket }).toString()}`;
+}
+
 /** A text-like file's bytes for a preview; throws a Korean `ApiError` (413 when it outgrew the text cap). */
 export async function fetchWorkspaceBytes(path: string, signal?: AbortSignal): Promise<Uint8Array> {
   let response: Response;

@@ -2,7 +2,7 @@
 
 Animations in these presentations are **slide-activated**: they play when a slide gets the `.active` class and reset when the slide loses it. This means animations replay each time the audience navigates to that slide.
 
-They exist in deck mode only (the page's script running, `html.js`). Where scripts are off — Noah's 파일 tab — no slide ever becomes `.active`, so **every hidden start state is written under `.js`**; without it the element is simply shown, finished.
+They exist in deck mode only (the page's script running, `html.js`). Where scripts are off no slide ever becomes `.active`, so **every hidden start state is written under `.js`**; without it the element is simply shown, finished.
 
 ## When to Animate (and When Not To)
 

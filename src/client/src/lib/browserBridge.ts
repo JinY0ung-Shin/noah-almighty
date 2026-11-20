@@ -458,6 +458,54 @@ export function extensionSupportsInspectOps(version: string | undefined | null):
 }
 
 /**
+ * First extension build that answers only a document whose origin IS Noah's
+ * (`isNoahPageSender`, background.js). An older build let in any document AT a
+ * Noah address — also a page Noah serves sandboxed, with an origin of its own —
+ * so an .html file of the workspace, run as a page, could command the bridge:
+ * rewrite the allowlist, open tabs, read other sites. So the 파일 tab runs such
+ * a page only where no older build can hear it (`workspaceHtmlPageMayRun`);
+ * `BROWSER_EXTENSION_MIN_COMPATIBLE` does not move — every op keeps working on
+ * an older build, the page is simply shown without its scripts.
+ *
+ * KEEP THIS DECLARATION ON ONE LINE — `tests/infra.test.ts` pins it against the
+ * bundled manifest version by REGEX over this file's text, exactly like
+ * SECRET_INPUT_MIN_EXTENSION_VERSION above.
+ */
+export const FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION = "0.30.0";
+
+/** Whether a workspace .html page may run its scripts here, or why not. */
+export type WorkspaceHtmlPageRun =
+  | { run: true }
+  /** `outdated`: an older build answered (`version` when it said). `unclear`: the bridge did not answer readably. */
+  | { run: false; reason: "outdated" | "unclear"; version?: string };
+
+/**
+ * May the 파일 tab RUN an .html page in this browser? Yes when no extension can
+ * hear a document at this address — `chrome.runtime` is absent (a page in the
+ * frame, at the same address, has none either) — or when OUR installed build
+ * answers and is one that refuses a sandboxed sender. Everything else is a NO,
+ * so the page is shown without scripts: an older build, a build that reports
+ * no version, a reply that is late or unreadable, and `chrome.runtime` present
+ * with no answer from our id (SOME extension lists this address — one under
+ * another id, or ours mid-reload — and the page may message any id).
+ *
+ * `chrome.runtime` appears in documents ALREADY open when an extension is
+ * enabled or loaded later — in this one and in a running page alike (checked) —
+ * so one answer at mount is not enough: WorkspaceHtmlFrame asks again whenever
+ * `browserBridgeReachable()` turns true under a running page. Between that
+ * flip and its next look (a second) the page is on its own.
+ */
+export async function workspaceHtmlPageMayRun(): Promise<WorkspaceHtmlPageRun> {
+  if (!runtime()) return { run: true };
+  const reply = (await sendToExtension({ op: "getAllowedOrigins" } as unknown as BridgeOperation, 5000)) as AllowlistReply;
+  if (reply === NOT_INSTALLED || !reply.ok) return { run: false, reason: "unclear" };
+  const version = typeof reply.version === "string" ? reply.version : "";
+  const cmp = version ? compareBridgeVersions(version, FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION) : null;
+  if (cmp !== null && cmp >= 0) return { run: true };
+  return { run: false, reason: "outdated", ...(version ? { version: version.slice(0, 32) } : {}) };
+}
+
+/**
  * Ask the extension to reload itself after the one-click update rewrote its
  * folder (the chrome://extensions ↻ equivalent). Builds before 0.5.0 answer
  * `Unsupported operation` — the caller falls back to asking for one manual ↻.

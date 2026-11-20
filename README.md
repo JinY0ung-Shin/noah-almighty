@@ -109,9 +109,10 @@ which check owner/teammate trust themselves.
   [`docs/architecture/drawio-skill.md`](docs/architecture/drawio-skill.md).
 - **HTML slide decks**: asked for an HTML / web presentation, the avatar writes ONE self-contained `.html`
   file (three themes, inline SVG diagrams, no framework, nothing loaded from the network) and hands it
-  over as a download card. The 파일 tab shows its slides one under the other — Noah never runs a page's
-  scripts — and the downloaded file is a keyboard-driven deck in any browser (arrow keys or Space, Esc for
-  an overview). A PowerPoint request still gets a `.pptx`. Adapted from
+  over as a download card. The 파일 tab runs it as a deck right in the chat — in a frame of its own that
+  cannot touch Noah or load anything (with a browser extension older than 0.30.0 installed it shows the
+  slides one under the other instead) — and the downloaded file is the same keyboard-driven deck in any
+  browser (arrow keys or Space, Esc for an overview). A PowerPoint request still gets a `.pptx`. Adapted from
   [ericmjl/skills](https://github.com/ericmjl/skills). Mechanics:
   [`docs/architecture/html-presentations-skill.md`](docs/architecture/html-presentations-skill.md).
 - **Scheduled routines**: owners can create one-time or recurring chat jobs (`/api/me/routines`)

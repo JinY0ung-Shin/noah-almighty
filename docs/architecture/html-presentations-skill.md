@@ -22,24 +22,30 @@ lists every change).
 
 ## Why Noah's copy differs: the file is read twice
 
-Noah never runs a page's scripts: the 파일 tab (and an `html` canvas) draw a page through
-`canvasHtmlDocument` — DOMPurify, `<iframe sandbox="allow-same-origin">` — and `fitCanvasFrame` then grows the
+When the skill was written (e2099f1) Noah never ran a page's scripts: the 파일 tab drew a page through
+`canvasHtmlDocument` — DOMPurify, `<iframe sandbox="allow-same-origin">` — and `fitCanvasFrame` then grew the
 frame to the page's height. Upstream's deck is built by its script: every slide is `position: absolute;
-opacity: 0` until the script marks one `.active`. Drawn by Noah, the upstream exemplar showed NOTHING — 0 of
+opacity: 0` until the script marks one `.active`. Drawn that way, the upstream exemplar showed NOTHING — 0 of
 19 slides, 137 of 137 text elements hidden.
 
 So Noah's page shell is the same deck written the other way round:
 
 - **Without script** the slides are a stack — each `.slide` a block of `min-height: 56.25vw` (16:9 of the
-  frame's width), one under the other. That is what the 파일 tab shows.
+  frame's width), one under the other.
 - **With script** a one-line script in `<head>` sets `html.js`, and every deck-mode rule sits under `.js`
-  (`.js .slide { position: absolute; inset: 0; opacity: 0 }`, the nav bar, the overview): in the user's own
-  browser the downloaded file is upstream's deck — keys, progress dots, overview grid, the slide kept in the
-  URL hash.
+  (`.js .slide { position: absolute; inset: 0; opacity: 0 }`, the nav bar, the overview): the page is upstream's
+  deck — keys, progress dots, overview grid, the slide kept in the URL hash.
+
+**Since 2026-11-20 the 파일 tab RUNS an `.html` file** (in a frame with an origin of its own that loads nothing
+from the network — [`client.md`](client.md) "An .html file RUNS"), so there the page is the DECK, as in the
+user's own browser. The shell's script needs nothing the frame withholds: it keeps the slide with
+`history.replaceState` to its own URL (allowed in an opaque origin) and touches no storage. The script-less
+reading is still NEEDED: beside a browser-bridge build older than 0.30.0 the 파일 tab draws the page without its
+scripts (`workspaceHtmlPageMayRun`), and so does anything else that strips them; the test pins both readings.
 - **A hidden start state is always under `.js`** (`.js .slide .anim-fade { opacity: 0 }`): without script
   nothing would reveal it.
-- **No `vh` inside a slide; lengths are `vw`.** The frame is fitted to the page, so a `vh` length there grows
-  with the page it sizes. Upstream's `vh` spacings were converted at 16:9 (`1vh` = `0.5625vw`). The deck-mode
+- **No `vh` inside a slide; lengths are `vw`.** A script-less frame was fitted to the page, so a `vh` length
+  there grew with the page it sized (and the 파일 tab's frame, now a fixed window, is usually taller than wide). Upstream's `vh` spacings were converted at 16:9 (`1vh` = `0.5625vw`). The deck-mode
   chrome (nav bar, overview) keeps `vh`: it exists under `.js` only.
 - A supplementary link carries `href="#<slide id>"` next to `data-goto`, so it is an ordinary link where the
   script is not there to catch the click.
@@ -52,8 +58,9 @@ demos — the part Noah's view never runs) and the author's notes for his other 
 
 ## Delivery
 
-`share_file` takes `.html` (30 MB cap; the 파일 tab draws a page up to 1 MiB). The card opens the page in the
-파일 tab — the stack. To present, the user downloads the file and opens it in a browser. No share link ever
+`share_file` takes `.html` (30 MB cap; the 파일 tab runs a page up to 1 MiB). The card opens the page in the
+파일 tab — the deck, in the panel's width. To present on a full screen, the user downloads the file and opens
+it in a browser. No share link ever
 exports an HTML page ([`share-links.md`](share-links.md)). The skill tells the avatar to say both.
 
 ## What was checked
@@ -71,5 +78,9 @@ exports an HTML page ([`share-links.md`](share-links.md)). The skill tells the a
   path drawn, the SVG markers, `marker-end` attributes and the drop-shadow filter still there, the nav bar
   not shown, and the frame at its final height after ONE step (8123 px; the same on a second fit).
 
-NOT checked: a deck a model actually writes from the skill; the page inside Noah's real 파일 tab (the frame was
-rebuilt from `canvasHtml.ts` in a bare page); the downloaded file on a user's machine.
+- **In Noah's real 파일 tab (2026-11-20, Chromium 149, the worktree build with a signed-up user)** — the
+  exemplar opens in deck mode (`html.js`, 1 of 19 slides showing), a click then → and Space move it to the
+  third slide with `#2` in the frame's URL, Esc opens the overview without closing anything of the app's, and
+  the frame made no request but its own document.
+
+NOT checked: a deck a model actually writes from the skill; the downloaded file on a user's machine.

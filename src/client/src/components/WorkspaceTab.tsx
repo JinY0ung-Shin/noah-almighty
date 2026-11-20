@@ -1,15 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import CanvasHtmlFrame from "./CanvasHtmlFrame";
+import WorkspaceHtmlPage from "./WorkspaceHtmlFrame";
 import DrawioDiagram from "./DrawioDiagram";
 import Icon from "./Icon";
 import { knownImageSize, type PixelSize } from "./ReservedImage";
 import ZoomableImage from "./ZoomableImage";
 import { ApiError } from "../lib/api";
-import { canvasHtmlDocument } from "../lib/canvasHtml";
 import { formatFileSize, renderMarkdown } from "../lib/format";
 import { SHARED_FILE_PREVIEW_FAILED_NOTICE, openFileTab, takeWorkspaceReveal, workspaceFileGone } from "../lib/chat";
-import { cx, useAppState, useLatest, useStore } from "../lib/hooks";
-import { theme as themeStore } from "../lib/theme";
+import { cx, useAppState, useLatest } from "../lib/hooks";
 import {
   fetchWorkspaceBytes,
   loadWorkspaceDocumentPreview,
@@ -40,11 +38,15 @@ import "./WorkspaceTab.css";
 // PEOPLE and read-only: it sends nothing to the avatar and changes nothing.
 //
 // Everything listed or shown is the agent's (or a page the agent saved): a
-// name is drawn as text, a file as text or through the sanitizers the chat
-// already uses (markdown → DOMPurify, html → the canvas's script-less sandboxed
-// frame), an image through the file route (never inline data), a pdf, pptx or
-// docx as page images the SERVER renders (`workspacePreviews.ts`). A link is
-// listed and never opened.
+// name is drawn as text, a file as text or through the sanitizer the chat
+// already uses (markdown → DOMPurify), an image through the file route (never
+// inline data), a pdf, pptx or docx as page images the SERVER renders
+// (`workspacePreviews.ts`). An .html file alone RUNS — as a page the server
+// serves into a frame with an origin of its own (`WorkspaceHtmlFrame`): it
+// can script and draw anything and reach nothing of the app — though it can
+// send out what it holds itself (where an older browser extension could hear
+// it, it is drawn without its scripts instead).
+// A link is listed and never opened.
 //
 // The tree is the workspace root with ONE change: `c/`, which holds a folder
 // per conversation, is replaced by this conversation's own folder, pinned at
@@ -868,7 +870,6 @@ function WorkspacePreview({
     refusal ? { status: "none", message: refusal } : { status: "loading" },
   );
   const [imageFailed, setImageFailed] = useState(false);
-  const resolvedTheme = useStore(themeStore);
   const rawOffered = state.status === "text" && RAW_TOGGLE_KINDS.has(kind as WorkspacePreviewKind);
   useEffect(() => {
     onRawOffered(rawOffered);
@@ -941,7 +942,7 @@ function WorkspacePreview({
         />
       );
     }
-    if (kind === "html") return <CanvasHtmlFrame doc={canvasHtmlDocument(text, resolvedTheme)} title={entry.name} />;
+    if (kind === "html") return <WorkspaceHtmlPage path={path} title={entry.name} text={text} />;
     if (kind === "csv") {
       const table = parseDelimitedText(text, workspaceExtension(entry.name) === "tsv" ? "\t" : ",");
       if (!table.rows.length) return <p className="muted">내용이 없습니다.</p>;
@@ -984,7 +985,7 @@ function WorkspacePreview({
     return null;
     // `state` is replaced, never mutated; `text` covers it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, raw, kind, resolvedTheme, entry.name]);
+  }, [text, raw, kind, entry.name, path]);
 
   let body: ReactNode;
   if (kind === "image") {

@@ -25,8 +25,8 @@
   image card and not an HTML page) whose bytes still resolve as a type a link serves (`resolveShareableFile` →
   `isShareFileExtension`: what share_file publishes MINUS `.html`, `FILE_TYPES[ext].link === false`).
   **An HTML page is never exported (2026-11-19)**: share_file delivers one (its owner reads it in the 파일 tab,
-  script-less), but a link hands the recipient the BYTES, and a downloaded page opens in their browser with
-  its scripts running — so the card has no 공유 링크, the 파일 tab offers none for a `.html`
+  run in a frame that cannot touch Noah or load anything), but a link hands the recipient the BYTES, and a
+  downloaded page opens in their browser with its scripts running and the whole network in reach — so the card has no 공유 링크, the 파일 tab offers none for a `.html`
   (`SHAREABLE_FILE_EXTENSIONS`, held equal to the server's `LINK_SHAREABLE_EXTENSIONS` by a test), a
   conversation link shows the card as a name only, and `create_share_link` refuses it. So a file the USER attached (on a DRM fleet: a decrypted copy), a browser
   screenshot card and a legacy Craft-app card are never linkable — all three are refused at creation, and

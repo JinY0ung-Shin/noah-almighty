@@ -1176,6 +1176,57 @@ describe("browser extension bundle", () => {
     expect(BROWSER_EXTENSION_MIN_COMPATIBLE).toBe("0.6.0");
   });
 
+  it("runs a workspace page only beside a build that refuses it as a sender — a build this download provides", () => {
+    // The 파일 tab runs an .html file's scripts in a sandboxed frame at a Noah
+    // address. A build older than FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION answers
+    // such a document, so the client shows the page without scripts beside one.
+    // The floor must be a build the bundled download provides (else no install
+    // could ever run a page) and the fleet floor must not move for it.
+    const clientSource = fs.readFileSync(
+      path.join(process.cwd(), "src", "client", "src", "lib", "browserBridge.ts"),
+      "utf8",
+    );
+    const declared = /export const FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION = "([^"]+)"/.exec(clientSource);
+    expect(declared, "browserBridge.ts must export FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION").toBeTruthy();
+    const need = declared![1].split(".").map(Number);
+    const bundled = browserExtensionVersion()!.split(".").map(Number);
+    let cmp = 0;
+    for (let i = 0; i < Math.max(need.length, bundled.length) && cmp === 0; i += 1) {
+      cmp = (need[i] ?? 0) - (bundled[i] ?? 0);
+    }
+    expect(cmp, `framed-page floor ${declared![1]} exceeds bundled ${browserExtensionVersion()}`).toBeLessThanOrEqual(0);
+    expect(BROWSER_EXTENSION_MIN_COMPATIBLE).toBe("0.6.0");
+  });
+
+  it("answers only a document whose origin IS a Noah origin, never one that merely sits at a Noah address", () => {
+    // `externally_connectable` matches a document by URL, so a page Noah serves
+    // sandboxed (opaque origin) reaches onMessageExternal too — with
+    // `sender.origin === "null"`, a truthy string. The listener must gate on
+    // isNoahPageSender; the function is pure, so it is run here as shipped.
+    const background = fs.readFileSync(path.join(BROWSER_EXTENSION_DIR, "background.js"), "utf8");
+    const source = /^function isNoahPageSender\(sender\) \{\n[\s\S]*?\n\}\n/m.exec(background);
+    expect(source, "background.js must define isNoahPageSender").toBeTruthy();
+    const isNoahPageSender = new Function(`${source![0]}; return isNoahPageSender;`)() as (sender: unknown) => boolean;
+    const app = { origin: "https://noah.corp.local", url: "https://noah.corp.local/#/chat/1", frameId: 0 };
+    expect(isNoahPageSender(app)).toBe(true);
+    expect(isNoahPageSender({ origin: "http://10.0.0.5:48787", url: "http://10.0.0.5:48787/" })).toBe(true);
+    // The sandboxed page: at a Noah address, in an origin of its own.
+    expect(
+      isNoahPageSender({ origin: "null", url: "https://noah.corp.local/api/me/workspace/html?path=a.html", frameId: 7 }),
+    ).toBe(false);
+    expect(isNoahPageSender({ origin: "null", url: "https://noah.corp.local/" })).toBe(false);
+    // An origin that is not the one of the address it claims to sit at, or no usable one.
+    expect(isNoahPageSender({ origin: "https://noah.corp.local", url: "https://elsewhere.example/" })).toBe(false);
+    expect(isNoahPageSender({ origin: "https://noah.corp.local" })).toBe(false);
+    expect(isNoahPageSender({ origin: "chrome-extension://abc", url: "chrome-extension://abc/x.html" })).toBe(false);
+    expect(isNoahPageSender({ origin: "", url: "https://noah.corp.local/" })).toBe(false);
+    expect(isNoahPageSender({ url: "https://noah.corp.local/" })).toBe(false);
+    expect(isNoahPageSender(undefined)).toBe(false);
+    // …and the external listener is gated on it, not on a merely non-empty origin.
+    const listener = /chrome\.runtime\.onMessageExternal\.addListener\(\(message, sender, sendResponse\) => \{\n\s*if \(([^\n]+)\) \{/.exec(background);
+    expect(listener?.[1]).toBe('!message || message.source !== "noah" || !isNoahPageSender(sender)');
+  });
+
   it("ships every extension/ file except deliberate dev-only excludes", () => {
     // Field-bricking invariant: a new file under extension/ that a coder forgets
     // to add to BUNDLE_FILES silently ships an incomplete zip/install. Diff the

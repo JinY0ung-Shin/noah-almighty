@@ -161,6 +161,17 @@ export type WorkspaceDocumentPreview =
   | { status: "rendering"; waiting?: boolean }
   | { status: "failed"; reason: WorkspaceDocumentPreviewFailure };
 
+/**
+ * The sandbox tokens an `.html` workspace file RUNS under in the 파일 tab — the
+ * one list behind the frame's `sandbox` attribute (client) and the `sandbox`
+ * directive of the page route's own CSP (server). NEVER `allow-same-origin`:
+ * without it the page's origin is opaque, so its scripts hold no cookie, no
+ * storage and no way into the app around the frame. `allow-forms` only lets a
+ * page's own `submit` handlers fire — the route's `form-action 'none'` stops
+ * the submission itself. No popups, no top navigation, no downloads, no modals.
+ */
+export const WORKSPACE_HTML_PAGE_SANDBOX = "allow-scripts allow-forms";
+
 /** How the tab draws a file. */
 export type WorkspacePreviewKind = "image" | "document" | "markdown" | "html" | "csv" | "json" | "drawio" | "text";
 

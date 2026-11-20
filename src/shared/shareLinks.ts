@@ -84,10 +84,11 @@ export const PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.pr
 
 /**
  * A page the avatar delivered as a `.html` file (share_file). Its owner reads
- * it in the chat's 파일 tab, drawn script-less in a sandboxed frame. It is the
- * one share_file type a link NEVER exports: a link hands the recipient the
- * bytes as a download, and a downloaded page opens in their browser with its
- * scripts running — nothing the owner saw would tell them so.
+ * it in the chat's 파일 tab, where it runs in a sandboxed frame that cannot
+ * touch the app or load anything. It is the one share_file type a link NEVER
+ * exports: a link hands the recipient the bytes as a download, and a
+ * downloaded page opens in their browser with its scripts running and the
+ * whole network in reach — nothing the owner saw would tell them so.
  */
 export const HTML_MEDIA_TYPE = "text/html";
 

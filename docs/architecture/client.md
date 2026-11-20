@@ -673,8 +673,8 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   `openFilePreview`) is marked `featureHintAnchor("chat-file-card")` (side: top; hint `2026-11-14.file-card`), so a
   deck's card or a split pane's is never pointed at.
   Focus moves to 목록 when a file opens and back to its row. A file opens INSIDE the tab (the tree stays mounted behind it): images through the file route in an
-  `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML through the canvas's script-less
-  sandboxed frame (`canvasHtmlDocument` + `CanvasHtmlFrame`), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×
+  `<img>`, Markdown through `renderMarkdown(…, { forbidInlineStyle })`, HTML as a page that RUNS in a frame with
+  an origin of its own (`WorkspaceHtmlFrame`, next rule), CSV/TSV as a table (`parseDelimitedText`, ≤ 500 rows ×
   50 columns), JSON re-indented, `.drawio` through `DrawioDiagram`, a pdf / pptx / docx as the page images the SERVER renders
   (`kind: "document"`: the tab asks `/api/me/workspace/preview` every 2 s while it answers `rendering`, for at most
   5 min, then draws one lazy `<img>` per page; an office file carries a line that its preview is approximate;
@@ -683,6 +683,97 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   extension, ≤ 1 MiB (images ≤ 10 MiB). 원문 보기 shows the source of a rendered kind. Names are drawn through
   `workspaceDisplayName` (control characters and bidi overrides become a mark). Relative images inside a Markdown or
   HTML file do not resolve (the file route is query-addressed).
+- **An .html file RUNS (2026-11-20, user decision: "스크립트 실행이 되어야 자유도가 올라간다"; on open, no press —
+  chosen again ("자동 실행하게 해줘") after the leak channels under "What is NOT closed" were laid out;
+  the 파일 tab only — an `html` canvas is still `CanvasHtmlFrame`, script-less).** Until then the tab drew a page
+  through DOMPurify into a same-origin `srcdoc` frame, so a deck's buttons were dead. A page's scripts must never
+  run in Noah's origin (they would hold the viewer's session), and no document made from text the app holds can
+  run them at all: `srcdoc`, `blob:` and `data:` documents INHERIT the app's policy (`script-src 'self'`), and
+  `frame-src` (from `default-src 'self'`) refuses the last two. So the SERVER serves the file as a document:
+  `GET /api/me/workspace/html?path=…&ticket=…` (`routes/workspaceFiles.ts`), framed by
+  `<iframe sandbox="allow-scripts allow-forms" src=…>` (`WorkspaceHtmlFrame`; the token list is
+  `WORKSPACE_HTML_PAGE_SANDBOX` in `shared/workspaceFiles.ts`, used by both sides). Two things are decided by
+  the APP before a page runs, because the page is the agent's and the address it is served at is Noah's:
+  - **The ticket.** The address alone serves nothing: the route wants a one-use ticket
+    (`WorkspaceHtmlPageTickets`: 32 random bytes, 60 s, bound to the user and the path, spent by any use, at
+    most 20 open per user — their oldest goes first, so no user's tickets push out another's) that only `POST /api/me/workspace/html-ticket` hands out — a session call the page can never
+    make (no cookie, no fetch) and the app-wide cross-site refusal covers. So a page runs where
+    `WorkspaceHtmlFrame` mounted it: not from a link the avatar wrote, a frame something else made, the page
+    reloading itself, or a typed address — on any deployment, with or without fetch metadata.
+  - **The browser bridge.** `externally_connectable` matches a document by URL, so the running page gets
+    `chrome.runtime` and a bridge build up to 0.29.0 took its orders (`sender.origin === "null"` passed a
+    truthiness test — [`browser-bridge/extension.md`](browser-bridge/extension.md)). `workspaceHtmlPageMayRun`
+    (`lib/browserBridge.ts`) therefore runs a page only where no older build can hear it: no `chrome.runtime`
+    in the app (the frame has none either), OUR extension not installed (the send fails — the page's would
+    too), or a build ≥ `FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION` (0.30.0, `isNoahPageSender`). Anything else —
+    an older build, no version, a late or unreadable reply — draws the page the old script-less way
+    (`CanvasHtmlFrame`) under a line that says why, with 확장 업데이트 안내 (the composer badge's deep link).
+    `chrome.runtime` present with no answer from our id is a NO too (some extension lists this address; the page
+    may message any id). And one answer at mount is not enough: enabling or loading an extension gives
+    `chrome.runtime` to documents ALREADY open — the app and a running page alike (checked by toggling 0.29.0 in
+    chrome://extensions) — so while a page runs the frame looks once a second (and on focus / visibility change),
+    and the moment `browserBridgeReachable()` turns true it takes the page down and decides again (a build
+    ≥ 0.30.0 starts the page afresh under a new ticket). What stays: the second between that flip and the look.
+  What bounds a page that does run is the answer's own policy, `WORKSPACE_HTML_PAGE_CSP`:
+  - `sandbox allow-scripts allow-forms` in the HEADER, so the origin is opaque whoever loads the response — no
+    cookie, no `localStorage`/`sessionStorage` (they throw), no reading the app around the frame. `allow-forms`
+    only lets a page's own `submit` handlers fire; `form-action 'none'` stops the submission. No popups, top
+    navigation, downloads or modals.
+  - `default-src 'none'`; `script-src 'unsafe-inline' 'unsafe-eval'`; `style-src 'unsafe-inline'`;
+    `img-src`/`media-src data: blob:`; `font-src data:` — the page runs what the FILE carries and can LOAD
+    nothing: no fetch/XHR/WebSocket/beacon, no remote script, stylesheet, image, font, worker or child frame
+    (not even Noah's own `/assets`). Loading nothing is not sending nothing — see "What is NOT closed".
+  - `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` replace the app-wide `'none'`/`DENY` for this answer
+    alone. The frame's own navigation to another site (`location = …`, a link, `<meta refresh>`, a form) is
+    refused by the APP's policy, not the page's: `default-src 'self'` is the `frame-src` of every navigation
+    inside a frame of the app. **So the route refuses a request the browser marks as anything but a frame's** (`Sec-Fetch-Dest`
+    present and not `iframe` → 400): as a tab the page is its own top window, with no app policy around it
+    (checked: it left for another site). Browsers send fetch metadata only to https and localhost origins, so on
+    a PLAIN-HTTP deployment the mark is absent — there the ticket alone keeps the address from serving a tab.
+  - The bytes go out as the text the tab's reader makes of them (`decodeWorkspaceText`), in UTF-8 with the
+    charset in the header — a CP949 file's own `<meta charset>` does not matter. Same test as the tab: an
+    `.html`/`.htm` name within the 1 MiB text cap, text by its bytes. A refusal a frame will show is plain text
+    under `sandbox; default-src 'none'` (`framedNotice`), never the app-wide JSON a frame could not display.
+  - The frame is NOT fitted to the page (the app cannot look into another origin): `WorkspaceHtmlFrame` gives it
+    the height `.canvas-body` has left (body height − what is above − what follows, min 240 px; a
+    `ResizeObserver` on the body and the file's card, never a layout read at mount), so the panel has nothing to
+    scroll and the page scrolls inside its own window. White background, light scheme, whatever the app's theme —
+    it is the file as a browser shows it. 원문 보기 still shows the source (the tab's own read); 새로고침 remounts
+    the preview, so a new ticket and a new document. A hidden 파일 tab keeps the page running.
+  - A page cannot reload itself or go anywhere: a navigation it starts is cross-site (opaque initiator), so the
+    `SameSite=Lax` session cookie is not sent (and the ticket is spent) — the frame shows the JSON 401 — and a
+    link to another site, a `<meta refresh>` or a form leaves the browser's error page in the frame until
+    새로고침. The avatar is told to never link, reload or navigate. `#hash` links and `history.replaceState` to
+    the same URL work (the skill's deck keeps its slide in the hash); `history.back()` in the frame does not
+    move the app.
+  **Checked in Chromium 149 (2026-11-20; harness not in the repo)** — a bare two-origin rig, then the REAL app
+  (worktree build, a signed-up user, the 파일 tab): inline script, `eval`, clicks, keys and a handled `submit`
+  work; `self.origin` is `null`; `document.cookie`, `localStorage`, `sessionStorage` and `parent.document` throw;
+  `fetch` to Noah's API and to another host, `<img>`, `<script src>`, WebSocket, `sendBeacon`, CSS
+  `@import`/`url()`/`@font-face`, child frames, `<link rel=prefetch|preconnect|preload|…>`: no request left;
+  `window.open` and `target=_blank` are refused, `top.location` throws, `location.href = <other site>`,
+  `<meta refresh>`, a plain link and a form submission leave nothing on the other host (the frame becomes the
+  browser's error page — 새로고침 brings the page back); the app's URL and title never changed; the skill's exemplar
+  deck opens in deck mode, → and Space move it with the slide in the hash.
+  With the extension LOADED (old 0.29.0 / fixed 0.30.0 / none, the real app): beside 0.29.0 the page is drawn
+  script-less with the note and the allowlist is untouched; beside 0.30.0 the page runs, its
+  `chrome.runtime.sendMessage` is answered "Rejected: unrecognized sender." and the app still reaches the bridge;
+  with none the page runs and has no `chrome.runtime`.
+  **What is NOT closed — a page can SEND OUT what it holds, or what the viewer types into it, with no click**
+  (it runs on open, and a delivered page opens by itself while the tab is showing). No policy closes these in
+  Chrome: (1) `<link rel=prerender href="http://other/?…">`, static or script-inserted, sent a real GET to
+  another host from inside the frame (NoStatePrefetch ignores the page's `default-src 'none'`; full Chromium
+  only — Playwright's headless shell has none, so check with `channel: "chromium"`); a same-origin one arrived
+  WITH the session cookie, its answer unreadable (no state-changing GET was found). (2) WebRTC —
+  `RTCPeerConnection` with a STUN server sent UDP packets to the named host, and Chromium 149 does not know the
+  `webrtc 'block'` directive ("Unrecognized"); deleting the constructor would not hold (a child `about:blank`
+  frame has a fresh one). (3) A refused frame navigation still resolved the host and opened a TCP connection
+  to it. Nothing of NOAH's leaves this way — the page holds only its own bytes and what is typed into it (so a
+  page can also pose as a login form inside Noah's panel). Before this change nothing left without a click.
+  (4) A page that spins forever: the parent stayed responsive in full Chromium 149 (the sandboxed frame got its
+  own process) and FROZE in Playwright's headless shell — an older or differently configured browser may freeze
+  the tab. NOT checked: Edge, a deployed Noah behind nginx, a deck a model writes, an extension installed
+  through the policy channel. Harnesses: `~/.noah-work/html-scripted-frame-2026-11-20/` (not in the repo).
 - **A file card OPENS its file in the 파일 tab (2026-11-14, user decision: one place draws a file).** The card's own
   tab (`FileTab`) draws only what rides the card — a deck's slide renders, a `.drawio` — and answered every other
   format with "미리보기를 제공하지 않습니다", while the 파일 tab draws markdown, html, csv, json, images, documents and

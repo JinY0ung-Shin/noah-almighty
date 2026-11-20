@@ -186,3 +186,30 @@ button.ws-row-main:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html
   background: var(--panel-strong);
   font-weight: 600;
 }
+/* An .html file running as its own page (WorkspaceHtmlFrame). The page is shown
+   as a browser shows it — on white, in the light scheme — whatever the app's
+   theme: it is the file, not app UI. This height holds until the frame has
+   measured the room the panel has left. */
+.ws-html-frame:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  display: block;
+  width: 100%;
+  height: 60vh;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: #fff;
+  color-scheme: light;
+}
+/* The page would otherwise take the pointer away from a panel-width drag. */
+body.col-resizing .ws-html-frame:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  pointer-events: none;
+}
+/* The way to the fix inside a note (the page was shown without its scripts). */
+.ws-note-action:is(.cmp-workspace-tab, .cmp-workspace-tab *):where(:not(.html-container *)) {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

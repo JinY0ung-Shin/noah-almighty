@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SidePanel from "../src/client/src/components/SidePanel";
 import WorkspaceTab from "../src/client/src/components/WorkspaceTab";
+import { workspaceHtmlPageMayRun } from "../src/client/src/lib/browserBridge";
 import {
   SHARED_FILE_GONE_NOTICE,
   SHARED_FILE_PREVIEW_FAILED_NOTICE,
@@ -43,15 +44,27 @@ let files: Record<string, string | Uint8Array>;
 let requests: string[];
 /** What `/api/me/workspace/preview` answers, one per ask (the last one repeats). */
 let previewAnswers: unknown[];
+/** Tickets handed out by `/api/me/workspace/html-ticket`, in order. */
+let tickets: number;
+/** Whether the ticket call fails (an older server, a lost connection). */
+let ticketFails: boolean;
 
 function stubFetch(): void {
   requests = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://noah.test");
       requests.push(`${url.pathname}${url.search}`);
       const path = url.searchParams.get("path") ?? "";
+      if (url.pathname === "/api/me/workspace/html-ticket") {
+        if (ticketFails || init?.method !== "POST") return new Response(JSON.stringify({ error: "없음" }), { status: 404 });
+        tickets += 1;
+        return new Response(JSON.stringify({ ticket: `ticket-${tickets}` }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       if (url.pathname === "/api/me/workspace") {
         const found = folders[path];
         if (!found) return new Response(JSON.stringify({ error: "폴더를 찾을 수 없습니다." }), { status: 404 });
@@ -108,6 +121,8 @@ beforeEach(() => {
     [`c/${CONVERSATION}/data.csv`]: '이름,값\n"가,나",1\n',
   };
   previewAnswers = [{ status: "ready", id: "a".repeat(64), pages: 2 }];
+  tickets = 0;
+  ticketFails = false;
   stubFetch();
 });
 
@@ -246,7 +261,169 @@ describe("WorkspaceTab", () => {
     expect(screen.getByRole("button", { name: "report.html" })).toBeTruthy();
   });
 
-  it("draws an HTML file as a script-less sandboxed page, never into the app", async () => {
+  it("runs an HTML file as a page of the server's, in a frame with an origin of its own — never into the app", async () => {
+    const { container } = render(<WorkspaceTab pane={pane()} active />);
+    fireEvent.click(await screen.findByRole("button", { name: "report.html" }));
+    const frame = await waitFor(() => {
+      const found = container.querySelector("iframe") as HTMLIFrameElement | null;
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    // Scripts run ONLY because the page is not in this origin: the frame never gets allow-same-origin,
+    // and never popups, top navigation, downloads or modals.
+    const sandbox = (frame.getAttribute("sandbox") ?? "").split(/\s+/).sort();
+    expect(sandbox).toEqual(["allow-forms", "allow-scripts"]);
+    // The file comes from the page route (its own policy), never from text this app holds —
+    // and only for a ticket this app asked for.
+    expect(frame.hasAttribute("srcdoc")).toBe(false);
+    const src = new URL(frame.getAttribute("src") ?? "", "http://noah.test");
+    expect(src.pathname).toBe("/api/me/workspace/html");
+    expect(src.searchParams.get("path")).toBe(`c/${CONVERSATION}/report.html`);
+    expect(src.searchParams.get("ticket")).toBe("ticket-1");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(container.querySelector(".cmp-workspace-tab h1")).toBeNull();
+
+    // 새로고침 is a new document under a new ticket (a ticket is good for one load).
+    fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => {
+      const again = container.querySelector("iframe");
+      expect(new URL(again?.getAttribute("src") ?? "", "http://noah.test").searchParams.get("ticket")).toBe("ticket-2");
+    });
+  });
+
+  describe("an HTML file where a browser extension could hear the page", () => {
+    /** A `chrome.runtime` whose extension answers `getAllowedOrigins` with `reply` (undefined + lastError: not installed). */
+    function stubBridge(reply: unknown, lastError?: string): { sent: unknown[] } {
+      const sent: unknown[] = [];
+      const runtime = {
+        lastError: undefined as { message: string } | undefined,
+        sendMessage(_id: string, message: unknown, callback: (response: unknown) => void) {
+          sent.push(message);
+          if (reply === "silent") return;
+          queueMicrotask(() => {
+            runtime.lastError = lastError ? { message: lastError } : undefined;
+            callback(reply);
+            runtime.lastError = undefined;
+          });
+        },
+      };
+      vi.stubGlobal("chrome", { runtime });
+      return { sent };
+    }
+    const openReport = async (container: HTMLElement): Promise<HTMLIFrameElement> => {
+      fireEvent.click(await screen.findByRole("button", { name: "report.html" }));
+      return waitFor(() => {
+        const found = container.querySelector("iframe") as HTMLIFrameElement | null;
+        expect(found).toBeTruthy();
+        return found!;
+      });
+    };
+    /** The page drawn the old way: sanitized, same-origin, no script. */
+    const expectStatic = (frame: HTMLIFrameElement): void => {
+      expect(frame.getAttribute("sandbox")).toBe("allow-same-origin");
+      expect(frame.hasAttribute("src")).toBe(false);
+      const doc = frame.getAttribute("srcdoc") ?? "";
+      expect(doc).toContain("<h1>보고서</h1>");
+      expect(doc).not.toContain("<script");
+      expect(tickets).toBe(0); // no ticket was even asked for
+    };
+
+    it("draws the page WITHOUT its scripts while an older extension build is installed, and says what to update", async () => {
+      const { sent } = stubBridge({ ok: true, patterns: [], source: "empty", version: "0.29.0" });
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      expectStatic(await openReport(container));
+      expect(sent).toEqual([{ source: "noah", op: "getAllowedOrigins" }]);
+      const note = screen.getByRole("status");
+      expect(note.textContent).toContain("(0.29.0)");
+      expect(note.textContent).toContain("0.30.0 이상으로 업데이트");
+      // The note is the way to the fix: the same deep link the composer's bridge badge uses.
+      fireEvent.click(within(note).getByRole("button", { name: "확장 업데이트 안내" }));
+      expect(readState().browserGuideRequested).toBe(true);
+    });
+
+    it.each<[string, unknown, string?]>([
+      ["a build that reports no version", { ok: true, patterns: [] }],
+      ["an unparseable version", { ok: true, version: "next" }],
+      ["a version that is not text", { ok: true, version: 30 }],
+      ["a refusal", { ok: false, message: "Rejected: unrecognized sender." }],
+      ["an unreadable reply", "what"],
+      // `chrome.runtime` is there, so SOME extension lists this address — and the page may message any id.
+      ["no answer from our extension id", undefined, "Could not establish connection. Receiving end does not exist."],
+    ])("draws the page without its scripts on %s", async (_name, reply, lastError) => {
+      stubBridge(reply, lastError);
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      expectStatic(await openReport(container));
+      expect(screen.getByRole("status").textContent).toContain("스크립트는 실행하지 않았습니다");
+    });
+
+    it.each<[string, unknown]>([
+      ["the build that refuses a sandboxed sender", { ok: true, patterns: [], version: "0.30.0" }],
+      ["a newer build", { ok: true, patterns: [], version: "0.31.2" }],
+    ])("runs the page with %s", async (_name, reply) => {
+      stubBridge(reply);
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      const frame = await openReport(container);
+      expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+      expect(frame.getAttribute("src")).toContain("ticket=ticket-1");
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("takes a RUNNING page down the moment an extension appears, and decides again", async () => {
+      // No extension at mount: the page runs.
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      const running = await openReport(container);
+      expect(running.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
+
+      // An older build is enabled while the page runs: open documents get chrome.runtime, the page too.
+      stubBridge({ ok: true, patterns: [], version: "0.29.0" });
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      // The scripted frame is gone at once — before the bridge has even answered.
+      expect(container.querySelector("iframe.ws-html-frame")).toBeNull();
+      await waitFor(() => expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-same-origin"));
+      expect(screen.getByRole("status").textContent).toContain("(0.29.0)");
+      expect(tickets).toBe(1); // no second ticket was asked for
+
+      // The same appearance with a build that refuses the page: it starts afresh under a new ticket.
+      vi.unstubAllGlobals();
+      stubFetch();
+      fireEvent.click(screen.getByRole("button", { name: "새로고침" }));
+      await waitFor(() => expect(container.querySelector("iframe.ws-html-frame")?.getAttribute("src")).toContain("ticket=ticket-2"));
+      stubBridge({ ok: true, patterns: [], version: "0.30.0" });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => expect(container.querySelector("iframe.ws-html-frame")?.getAttribute("src")).toContain("ticket=ticket-3"));
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("finds an extension that appears with no event at all, within its watch interval", async () => {
+      const { container } = render(<WorkspaceTab pane={pane()} active />);
+      await openReport(container);
+      stubBridge({ ok: true, patterns: [], version: "0.29.0" });
+      await waitFor(() => expect(container.querySelector("iframe")?.getAttribute("sandbox")).toBe("allow-same-origin"), {
+        timeout: 4000,
+      });
+    });
+
+    it("takes a bridge that never answers as a NO, not as no bridge", async () => {
+      vi.useFakeTimers();
+      try {
+        stubBridge("silent");
+        const verdict = workspaceHtmlPageMayRun();
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(await verdict).toEqual({ run: false, reason: "unclear" });
+      } finally {
+        vi.useRealTimers();
+      }
+      vi.unstubAllGlobals();
+      expect(await workspaceHtmlPageMayRun()).toEqual({ run: true }); // no chrome.runtime: nothing can hear the page
+    });
+  });
+
+  it("draws an HTML file without its scripts when no ticket can be had, and says so", async () => {
+    ticketFails = true;
     const { container } = render(<WorkspaceTab pane={pane()} active />);
     fireEvent.click(await screen.findByRole("button", { name: "report.html" }));
     const frame = await waitFor(() => {
@@ -255,10 +432,10 @@ describe("WorkspaceTab", () => {
       return found!;
     });
     expect(frame.getAttribute("sandbox")).toBe("allow-same-origin");
-    const doc = frame.getAttribute("srcdoc") ?? "";
-    expect(doc).toContain("<h1>보고서</h1>");
-    expect(doc).not.toContain("<script");
-    expect(container.querySelector(".cmp-workspace-tab h1")).toBeNull();
+    expect(frame.getAttribute("srcdoc")).not.toContain("<script");
+    const note = screen.getByRole("status");
+    expect(note.textContent).toContain("스크립트 없이 표시합니다");
+    expect(within(note).queryByRole("button")).toBeNull();
   });
 
   it("draws a CSV as a table", async () => {

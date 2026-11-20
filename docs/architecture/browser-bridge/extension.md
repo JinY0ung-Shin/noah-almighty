@@ -24,6 +24,16 @@
   extension code runs and a policy install cannot be hand-edited, so a missing Noah address fails
   SILENTLY on every machine (`chrome.runtime` simply isn't there — no error to see). The manual zip path
   needs none of this: the download route stamps the requesting origin into that bundle's manifest.
+- **`externally_connectable` matches a document by URL, NOT by origin (0.30.0, verified by loading the
+  extension).** A document Noah serves under `Content-Security-Policy: sandbox` — the 파일 tab's running
+  .html page — sits at a Noah address, so Chrome gives it `chrome.runtime.sendMessage`, and its
+  `sender.origin` is the STRING `"null"`. Up to 0.29.0 `onMessageExternal` refused only a falsy origin, so
+  such a page could command the bridge (checked: it rewrote the local allowlist, opened a tab and read
+  another site; the one prompt was the tab-group consent). 0.30.0 gates on `isNoahPageSender`: an http(s)
+  origin that IS the origin of `sender.url` (not `frameId === 0` — a prerendered page's main frame has
+  another id). Installed older builds stay as they are, so the CLIENT keeps the page script-less beside
+  one (`workspaceHtmlPageMayRun`, `FRAMED_PAGE_SAFE_MIN_EXTENSION_VERSION`; the fleet floor does not move).
+  `tests/infra.test.ts` runs the shipped function and pins the listener's condition.
 - **Chrome facts verified by experiment, not by docs.** `externally_connectable` match patterns IGNORE
   the port (a pattern with no port matched a `:48787` page ⇒ writing a port grants EVERY port on that
   host) — but a pattern WITH a port did NOT match a different port in Playwright's Chromium 1234

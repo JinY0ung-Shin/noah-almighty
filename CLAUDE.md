@@ -157,11 +157,12 @@ These are the invariants the project is built around. New work should reinforce 
   sandbox** (`drawio.sh layout | route | check`; never an MCP tool, never the network) — the model cannot
   see the picture. The engine is vendored whole into the skill (hash-pinned, Node only: no toolchain flag,
   nothing to install). **A fix goes into `engine/lib/`, never into a vendored file.** → `drawio-skill.md`.
-- **An HTML deck is ONE `.html` file that reads WITHOUT script** (the `html-presentations` skill; only for an
-  explicit HTML / web deck — a PowerPoint request stays the pptx skill's). Noah never runs a page's scripts,
-  so the skill's page shell is a stack of slides there and a deck only in the user's own browser: deck mode
-  and every hidden start state sit under `html.js`, and nothing inside a slide is sized in `vh`. **A change
-  to the shell keeps both readings** (a test pins them). → `html-presentations-skill.md`.
+- **An HTML deck is ONE self-contained `.html` file that still reads WITHOUT script** (the
+  `html-presentations` skill; only for an explicit HTML / web deck — a PowerPoint request stays the pptx
+  skill's). The 파일 tab runs it as a deck (below) and so does the user's own browser; wherever a page's
+  scripts are off it is a stack of slides: deck mode and every hidden start state sit under `html.js`, and
+  nothing inside a slide is sized in `vh`. **A change to the shell keeps both readings** (a test pins them).
+  → `html-presentations-skill.md`.
 - **An image the avatar is SHOWN is also a FILE it can place** (attachments, screenshots, Confluence
   attachments land in the conversation's sandbox folder; host-side writes go through `PinnedDir`). Text
   stays a legitimate slide choice: **never add a check that fires because a slide has no image.**
@@ -197,8 +198,8 @@ These are the invariants the project is built around. New work should reinforce 
   workspace root with `c/` replaced by THIS conversation's folder (the shared folders stay; other conversations
   only on request) and says so in the tab, so nobody has to know the layout. Pinned descriptors only (a link is
   shown, never followed), no id that selects another user's files, every byte a sandboxed download, a file drawn
-  only as text or through the chat's sanitizers. It never writes or deletes in the workspace and never reaches
-  the avatar. A pdf/pptx/docx is rendered from Noah's own COPY of the bytes into an expiring per-user cache —
+  only as text or through the chat's sanitizers (an `.html` page alone RUNS — next rule). It never writes or
+  deletes in the workspace and never reaches the avatar. A pdf/pptx/docx is rendered from Noah's own COPY of the bytes into an expiring per-user cache —
   never from a workspace path. **A new preview kind goes through a sanitizer, its own script-less frame, or
   that copy-then-convert path.** A `share_file` card records where its file sat, and a press on the card
   opens the file IN the tab — the one place that draws a file, as it is NOW; a deck keeps its own tab (its
@@ -208,6 +209,17 @@ These are the invariants the project is built around. New work should reinforce 
   on an opened file shares Noah's own COPY of it (above) — the tab still never writes the workspace. The
   avatar never opens, selects or learns of the tab (a live `.drawio` or `.html` opens there by the client's
   own rule, only while the viewer has the tab open). → `pi-runtime.md`, `client.md`.
+- **An `.html` file in the 파일 tab RUNS on open — in an origin of its own that cannot touch Noah
+  (2026-11-20, user decision, made knowing what stays open).** The server serves it as a frame's document
+  under ONE policy (`WORKSPACE_HTML_PAGE_CSP`: an opaque origin, never `allow-same-origin`; inline script
+  only; no storage, popup or way out of the frame) and only for a ONE-USE TICKET the app asks for — a page
+  runs where `WorkspaceHtmlFrame` chose to run it, never because an address was opened. It does NOT run
+  beside a browser-bridge build older than 0.30.0 (that build answers any document at a Noah address); the
+  page is then drawn script-less. **No policy stops a page SENDING OUT what it holds or what is typed into
+  it** (`<link rel=prerender>`, WebRTC, the DNS/TCP of a refused navigation). An `html` CANVAS stays
+  script-less. **A wider directive or sandbox token — or any new document at a Noah address that runs
+  untrusted script — re-runs the real-browser checks WITH the extension loaded.** → `client.md` ("An .html
+  file RUNS").
 - **할 일 is ONE per-user list behind ONE store** (`store/todos.ts`). `mcp__todo__*` exist only on owner
   runs (always-on `system` group; an API run cannot delete); test open-ness with `isOpenTodo` and keep every
   write setting the `done` mirror. The chat card never ADDS items, and the prompt's list snapshot is frozen

@@ -15,6 +15,12 @@ browser", "Deploy topology"); install/policy in [`README.md`](README.md); mechan
   icon makes Chrome refuse the WHOLE extension and breaks the zip route, release build and tests.
 - **`manifest.json` `key` IS the extension's identity.** Changing it moves the id in four places (see
   `extension.md`); the private half lives only on the release machine.
+- **The bridge answers a document whose ORIGIN is Noah's — never one that only sits at a Noah address**
+  (`isNoahPageSender`, 0.30.0). `externally_connectable` matches a document by URL, so a page Noah serves
+  sandboxed (an .html file of the workspace, run in the 파일 tab) gets `chrome.runtime` and reaches
+  `onMessageExternal` with `sender.origin === "null"` — a truthy string. Never loosen the gate back to
+  "has an origin"; the client keeps such a page script-less beside an older build. → `client.md`
+  ("An .html file RUNS").
 - **`BROWSER_EXTENSION_MIN_COMPATIBLE` is a fleet-wide reinstall order.** Raise it ONLY when the agent-facing
   op contract breaks, never because this folder changed; it must stay ≤ the bundled manifest version.
 - **The extension FETCHES NOTHING on its own — a security decision.** No `host_permissions`, no network call

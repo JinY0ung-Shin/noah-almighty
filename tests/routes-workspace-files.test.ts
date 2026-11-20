@@ -3,7 +3,9 @@
  * sandbox workspace, listed and read through pinned descriptors. What must
  * hold: it is self-scoped (no way to name another user's files), nothing below
  * the user root is reached through a link, a path is plain segments, and the
- * bytes never come back as something this origin would render.
+ * bytes never come back as something this origin would render — an .html file
+ * runs, but only as a frame's document in an origin of its own, under a policy
+ * that lets it load nothing.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -32,8 +34,16 @@ import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
 import { PinnedDir } from "../src/server/pinnedFs.js";
 import { workspacePathOfHostFile } from "../src/server/workspaceBrowser.js";
 import {
+  WORKSPACE_HTML_PAGE_CSP,
+  WORKSPACE_HTML_PAGE_TICKET_MAX_PER_USER,
+  WORKSPACE_HTML_PAGE_TICKET_TTL_MS,
+  WorkspaceHtmlPageTickets,
+} from "../src/server/routes/workspaceFiles.js";
+import {
+  WORKSPACE_HTML_PAGE_SANDBOX,
   WORKSPACE_IMAGE_PREVIEW_MAX_BYTES,
   WORKSPACE_LIST_MAX_ENTRIES,
+  WORKSPACE_TEXT_PREVIEW_MAX_BYTES,
   type WorkspaceEntry,
   type WorkspaceListing,
 } from "../src/shared/workspaceFiles.js";
@@ -356,6 +366,253 @@ describe("GET /api/me/workspace/file", () => {
     // The download itself is not capped (HEAD: the 10 MiB body is not pulled through the test).
     const res = await agent.head("/api/me/workspace/file?path=big.bin").expect(200);
     expect(res.headers["content-length"]).toBe(String(WORKSPACE_IMAGE_PREVIEW_MAX_BYTES + 1));
+  });
+});
+
+describe("GET /api/me/workspace/html (an .html file as a page that runs)", () => {
+  /** The request a browser makes for a frame's document. */
+  const asFrame = { "Sec-Fetch-Dest": "iframe" };
+  type Agent = ReturnType<typeof request.agent>;
+  const directives = (header: string): Record<string, string> =>
+    Object.fromEntries(
+      header.split(";").map((part) => {
+        const [name, ...rest] = part.trim().split(/\s+/);
+        return [name, rest.join(" ")];
+      }),
+    );
+  /** What the app does before it mounts the frame: one ticket for one load of `file`. */
+  const ticketFor = async (agent: Agent, file: string): Promise<string> =>
+    (await agent.post("/api/me/workspace/html-ticket").send({ path: file }).expect(200)).body.ticket as string;
+  /** The frame's request for `file`, with a fresh ticket; the answer must have `status`. */
+  const page = async (agent: Agent, file: string, status: number): Promise<request.Response> =>
+    agent
+      .get("/api/me/workspace/html")
+      .query({ path: file, ticket: await ticketFor(agent, file) })
+      .set(asFrame)
+      .expect(status);
+
+  it("serves the page with scripts on, an opaque origin and nothing loadable — to its owner's frame only", async () => {
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    const html = "<!doctype html><h1>보고서</h1><script>document.title = 'ran'</script>";
+    seed(workspacesDir, me, { "c/x/보고서.html": html });
+
+    const res = await page(agent, "c/x/보고서.html", 200);
+    expect(res.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(res.text).toBe(html);
+    expect(res.headers["x-content-type-options"]).toBe("nosniff");
+    expect(res.headers["cache-control"]).toBe("private, no-store");
+    expect(res.headers["referrer-policy"]).toBe("no-referrer");
+    expect(res.headers["content-disposition"]).toBeUndefined();
+
+    // The whole policy, directive by directive: anything added or widened fails here.
+    expect(res.headers["content-security-policy"]).toBe(WORKSPACE_HTML_PAGE_CSP);
+    expect(directives(res.headers["content-security-policy"])).toEqual({
+      // An origin of its own, whoever loads the response: scripts and form events, nothing else.
+      sandbox: "allow-scripts allow-forms",
+      // Nothing from the network: only what the file itself carries.
+      "default-src": "'none'",
+      "script-src": "'unsafe-inline' 'unsafe-eval'",
+      "style-src": "'unsafe-inline'",
+      "img-src": "data: blob:",
+      "media-src": "data: blob:",
+      "font-src": "data:",
+      "form-action": "'none'",
+      "base-uri": "'none'",
+      // Framed by Noah's own pages only (the app-wide DENY / 'none' is replaced for this answer).
+      "frame-ancestors": "'self'",
+    });
+    expect(WORKSPACE_HTML_PAGE_SANDBOX).toBe("allow-scripts allow-forms");
+    expect(res.headers["x-frame-options"]).toBe("SAMEORIGIN");
+
+    // Another user's session reads another workspace: the same path is not there.
+    const other = request.agent(app);
+    await signup(other, "bob").expect(201);
+    const missing = await page(other, "c/x/보고서.html", 404);
+    expect(missing.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    // No session: the app-wide JSON refusal, which no frame may show.
+    const anonymous = await request(app).get("/api/me/workspace/html").query({ path: "c/x/보고서.html" }).set(asFrame).expect(401);
+    expect(anonymous.headers["content-type"]).toContain("application/json");
+    expect(anonymous.headers["x-frame-options"]).toBe("DENY");
+    await request(app).post("/api/me/workspace/html-ticket").send({ path: "c/x/보고서.html" }).expect(401);
+  });
+
+  it("serves nothing for the address alone: a page runs for a one-use ticket of this user for this file", async () => {
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    seed(workspacesDir, me, { "a.html": "<script>1</script>", "b.html": "<script>2</script>" });
+    const other = request.agent(app);
+    const bob = (await signup(other, "bob").expect(201)).body.user.id as string;
+    seed(workspacesDir, bob, { "a.html": "<script>bob</script>" });
+    const get = (who: Agent, query: Record<string, string>) => who.get("/api/me/workspace/html").query(query).set(asFrame);
+    const refused = async (res: request.Response): Promise<void> => {
+      expect(res.status).toBe(403);
+      // A refusal the frame can show: text, with nothing of the file in it.
+      expect(res.headers["content-type"]).toBe("text/plain; charset=utf-8");
+      expect(res.text).not.toContain("script");
+      expect(directives(res.headers["content-security-policy"]).sandbox).toBe("");
+    };
+
+    // No ticket (a link, a typed address, the page reloading itself), or one never issued.
+    await refused(await get(agent, { path: "a.html" }));
+    await refused(await get(agent, { path: "a.html", ticket: "" }));
+    await refused(await get(agent, { path: "a.html", ticket: "x".repeat(43) }));
+
+    // One load, then it is spent.
+    const ticket = await ticketFor(agent, "a.html");
+    expect(ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await get(agent, { path: "a.html", ticket }).expect(200)).text).toBe("<script>1</script>");
+    await refused(await get(agent, { path: "a.html", ticket }));
+
+    // For this file only — and a wrong use spends it too.
+    const forA = await ticketFor(agent, "a.html");
+    await refused(await get(agent, { path: "b.html", ticket: forA }));
+    await refused(await get(agent, { path: "a.html", ticket: forA }));
+
+    // For this user only.
+    const alices = await ticketFor(agent, "a.html");
+    await refused(await get(other, { path: "a.html", ticket: alices }));
+    await refused(await get(agent, { path: "a.html", ticket: alices }));
+
+    // A ticket is for an .html file by a plain path; what is there is the page route's answer.
+    await agent.post("/api/me/workspace/html-ticket").send({ path: "notes.txt" }).expect(400);
+    await agent.post("/api/me/workspace/html-ticket").send({ path: "../a.html" }).expect(400);
+    await agent.post("/api/me/workspace/html-ticket").send({ path: "" }).expect(400);
+    await agent.post("/api/me/workspace/html-ticket").send({}).expect(400);
+    await agent.post("/api/me/workspace/html-ticket").send({ path: ["a.html"] }).expect(400);
+    await page(agent, "gone.html", 404);
+
+    // Another site cannot ask for one with the user's session.
+    await agent
+      .post("/api/me/workspace/html-ticket")
+      .set("Sec-Fetch-Site", "cross-site")
+      .send({ path: "a.html" })
+      .expect(403);
+  });
+
+  it("keeps a ticket for a minute, and a bounded number per user", () => {
+    const tickets = new WorkspaceHtmlPageTickets();
+    const fresh = tickets.issue("u1", "a.html", 1_000);
+    expect(tickets.redeem(fresh, "u1", "a.html", 1_000 + WORKSPACE_HTML_PAGE_TICKET_TTL_MS - 1)).toBe(true);
+    const late = tickets.issue("u1", "a.html", 1_000);
+    expect(tickets.redeem(late, "u1", "a.html", 1_000 + WORKSPACE_HTML_PAGE_TICKET_TTL_MS)).toBe(false);
+    expect(tickets.redeem(undefined, "u1", "a.html")).toBe(false);
+    expect(tickets.redeem(["x"], "u1", "a.html")).toBe(false);
+
+    // A user's own oldest go first once they hold the cap; nobody else's are touched.
+    const others = tickets.issue("u1", "a.html", 5_000);
+    const mine: string[] = [];
+    for (let i = 0; i < WORKSPACE_HTML_PAGE_TICKET_MAX_PER_USER + 5; i += 1) mine.push(tickets.issue("u2", "b.html", 5_000));
+    expect(mine.slice(0, 5).map((id) => tickets.redeem(id, "u2", "b.html", 5_000))).toEqual([false, false, false, false, false]);
+    expect(mine.slice(5).every((id) => tickets.redeem(id, "u2", "b.html", 5_000))).toBe(true);
+    expect(tickets.redeem(others, "u1", "a.html", 5_000)).toBe(true);
+    // Expired tickets do not count against the cap.
+    for (let i = 0; i < WORKSPACE_HTML_PAGE_TICKET_MAX_PER_USER; i += 1) tickets.issue("u3", "c.html", 10_000);
+    const afterExpiry = Array.from({ length: WORKSPACE_HTML_PAGE_TICKET_MAX_PER_USER }, () =>
+      tickets.issue("u3", "c.html", 10_000 + WORKSPACE_HTML_PAGE_TICKET_TTL_MS),
+    );
+    expect(afterExpiry.every((id) => tickets.redeem(id, "u3", "c.html", 10_000 + WORKSPACE_HTML_PAGE_TICKET_TTL_MS))).toBe(true);
+  });
+
+  it("is not a page of its own: a request the browser marks as anything but a frame's document is refused", async () => {
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    seed(workspacesDir, me, { "page.html": "<script>top.location = 'https://elsewhere.example/'</script>" });
+    for (const dest of ["document", "empty", "image", "script", "embed", "object", "frame", ""]) {
+      const res = await agent
+        .get("/api/me/workspace/html")
+        .query({ path: "page.html", ticket: await ticketFor(agent, "page.html") })
+        .set("Sec-Fetch-Dest", dest)
+        .expect(400);
+      expect(res.headers["content-type"]).toContain("application/json");
+      expect(res.text).not.toContain("elsewhere");
+      // The app-wide framing refusal still stands on a refusal.
+      expect(res.headers["x-frame-options"]).toBe("DENY");
+    }
+    // No mark at all is a plain-HTTP deployment (browsers send fetch metadata only to https and
+    // localhost): the frame's request looks like this there, so it is served — for a ticket, under the same policy.
+    const ticket = await ticketFor(agent, "page.html");
+    const unmarked = await agent.get("/api/me/workspace/html").query({ path: "page.html", ticket }).expect(200);
+    expect(unmarked.headers["content-security-policy"]).toBe(WORKSPACE_HTML_PAGE_CSP);
+    // HEAD answers like GET, without the page.
+    const head = await agent
+      .head("/api/me/workspace/html")
+      .query({ path: "page.html", ticket: await ticketFor(agent, "page.html") })
+      .set(asFrame)
+      .expect(200);
+    expect(head.headers["content-security-policy"]).toBe(WORKSPACE_HTML_PAGE_CSP);
+    expect(head.text ?? "").toBe("");
+  });
+
+  it("runs only an .html file within the text preview cap, and shows the frame a plain-text notice otherwise", async () => {
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    const root = seed(workspacesDir, me, {
+      "binary.html": Buffer.from([0x3c, 0x00, 0x68, 0x00]),
+      "dir/x.html": "<p>x</p>",
+      "folder.html/inner.txt": "x",
+    });
+    fs.writeFileSync(path.join(root, "big.html"), "");
+    fs.truncateSync(path.join(root, "big.html"), WORKSPACE_TEXT_PREVIEW_MAX_BYTES + 1);
+    fs.symlinkSync(path.join(root, "dir", "x.html"), path.join(root, "alias.html"));
+
+    const refused: [string, number][] = [
+      ["binary.html", 400],
+      ["big.html", 400],
+      ["folder.html", 404], // a folder is not a file
+      ["alias.html", 404], // a link is never followed
+      ["nope.html", 404],
+    ];
+    for (const [file, status] of refused) {
+      const res = await page(agent, file, status);
+      // What the frame shows is text: nothing in the answer runs or loads.
+      expect(res.headers["content-type"], file).toBe("text/plain; charset=utf-8");
+      expect(directives(res.headers["content-security-policy"]), file).toEqual({
+        sandbox: "",
+        "default-src": "'none'",
+        "frame-ancestors": "'self'",
+      });
+      expect(res.headers["x-frame-options"], file).toBe("SAMEORIGIN");
+      expect(res.text, file).not.toContain("<");
+    }
+    // A bad path is refused before any ticket is looked at.
+    const bad = await agent.get("/api/me/workspace/html").query({ path: "../x.html", ticket: "t" }).set(asFrame).expect(400);
+    expect(bad.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    await page(agent, "dir/x.html", 200);
+  });
+
+  it("sends the page as the text the tab reads: UTF-8 whatever the file was saved in", async () => {
+    const { app, workspacesDir } = boot();
+    const agent = request.agent(app);
+    const me = (await signup(agent, "alice").expect(201)).body.user.id as string;
+    seed(workspacesDir, me, {
+      // "<p>한글</p>" in CP949, with a meta that names it (the header's charset wins).
+      "cp949.html": Buffer.concat([
+        Buffer.from('<meta charset="euc-kr"><p>'),
+        Buffer.from([0xc7, 0xd1, 0xb1, 0xdb]),
+        Buffer.from("</p>"),
+      ]),
+      "bom.html": Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("<p>한글</p>")]),
+      "empty.html": "",
+      "PAGE.HTM": "<p>htm</p>",
+    });
+    const cp949 = await page(agent, "cp949.html", 200);
+    expect(cp949.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(cp949.text).toBe('<meta charset="euc-kr"><p>한글</p>');
+    expect((await page(agent, "bom.html", 200)).text).toBe("<p>한글</p>");
+    expect((await page(agent, "empty.html", 200)).text).toBe("");
+    expect((await page(agent, "PAGE.HTM", 200)).text).toBe("<p>htm</p>");
+  });
+
+  it("is unavailable where the 파일 tab is", async () => {
+    const { app } = boot({ workspaces: false });
+    const agent = request.agent(app);
+    await signup(agent, "alice").expect(201);
+    await page(agent, "a.html", 404);
   });
 });
 

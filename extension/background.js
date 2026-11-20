@@ -8114,6 +8114,26 @@ async function runBatch(message, senderOrigin, ctx) {
 // `externally_connectable` restricts senders to the Noah origins declared in the
 // manifest, and `sender.origin` is filled in by the browser, so the page cannot
 // forge it. Re-check anyway: the manifest is the gate, this is the assertion.
+//
+// The manifest gate matches a document by its URL, not by its origin, so it
+// also lets in a document that sits AT a Noah address without BEING Noah: a
+// page Noah serves sandboxed (an .html file of the user's workspace, run in a
+// frame with an origin of its own — the agent's bytes, 0.30.0). The browser
+// reports such a sender's origin as the opaque "null", not as nothing, so a
+// test for a missing origin let it command the bridge. Hence
+// isNoahPageSender: the origin must be a real http(s) one AND the origin of
+// the address the document sits at. (Not `frameId === 0`: a prerendered page's
+// own main frame has another id, and the Noah app is never a child frame.)
+function isNoahPageSender(sender) {
+  const origin = sender?.origin;
+  if (typeof origin !== "string" || !/^https?:\/\//.test(origin)) return false;
+  try {
+    return new URL(sender.url).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Read/write the local allowlist from the Noah page, so an operator can manage
  * it where they already are instead of hunting for the extension's options
@@ -8209,7 +8229,7 @@ function performCoalesced(message, senderOrigin) {
 }
 
 chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (!message || message.source !== "noah" || !sender.origin) {
+  if (!message || message.source !== "noah" || !isNoahPageSender(sender)) {
     sendResponse({ ok: false, message: "Rejected: unrecognized sender." });
     return false;
   }
