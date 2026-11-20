@@ -147,26 +147,31 @@ describe("admin 시스템 tab seeding", () => {
     expect(screen.getByRole("link", { name: "pi-gateway 관리 화면" }).getAttribute("href")).toBe("/admin/");
   });
 
-  it("lists pi-gateway's models read-only and links to pi-gateway's admin page", async () => {
+  it("Agent 관리 is a LINK in the tab strip that opens pi-gateway's admin page in a new tab — never a tab", async () => {
     await openSystemTab();
-    const table = screen.getByRole("group", { name: "pi-gateway 모델 목록" });
-    const cells = [...table.children].map((cell) => (cell.textContent || "").trim());
-    expect(cells).toEqual([
-      "모델", "기본", "이미지 입력", "추론 단계",
-      "deepseek/v3 vllm-a", "기본", "지원", "low, high (기본 high)",
-      "qwen/coder", "—", "미지원", "사용 안 함",
-      "older-pi", "—", "알 수 없음 (지원으로 처리)", "알 수 없음",
-    ]);
-    const link = screen.getByRole("link", { name: "pi-gateway 관리 화면 열기" }) as HTMLAnchorElement;
+    const link = screen.getByRole("link", { name: /^Agent 관리/ }) as HTMLAnchorElement;
     expect(link.getAttribute("href")).toBe("/admin/");
     expect(link.target).toBe("_blank");
     expect(link.rel).toBe("noopener");
-    // Nothing to set here any more: no model select, no vision selectors, no save call.
+    // In the strip, beside the tablist — a link inside a tablist would be announced as a broken tab.
+    const tablist = screen.getByRole("tablist", { name: "관리자 분류" });
+    expect(tablist.contains(link)).toBe(false);
+    expect(link.parentElement).toBe(tablist.parentElement);
+    expect(screen.queryByRole("tab", { name: /Agent 관리/ })).toBeNull();
+    // Pressing it selects nothing here: the 시스템 tab stays the open one.
+    fireEvent.click(link);
+    expect(screen.getByRole("tab", { name: "시스템" }).getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("no longer mirrors pi-gateway's model table: the names stay in 시스템 정보, the rest is pi's own page", async () => {
+    await openSystemTab();
+    expect(screen.queryByRole("group", { name: "pi-gateway 모델 목록" })).toBeNull();
+    expect(screen.queryByText("LLM 모델 (pi-gateway)")).toBeNull();
+    expect(screen.queryByRole("link", { name: "pi-gateway 관리 화면 열기" })).toBeNull();
+    // Nothing to set here either: no model select, no vision selectors, no save call.
     expect(document.querySelector('select[name="model"]')).toBeNull();
     expect(screen.queryByLabelText("qwen/coder 이미지 입력 지원")).toBeNull();
-    const text = document.body.textContent || "";
-    expect(text).toContain("배포(docker compose up) 때마다 저장소 기준으로 되돌아갑니다");
-    expect(text).not.toContain("MODEL_VISION");
+    expect(document.body.textContent || "").not.toContain("MODEL_VISION");
     expect(calls.some((c) => c.url.includes("/api/admin/model"))).toBe(false);
   });
 
@@ -191,8 +196,6 @@ describe("admin 시스템 tab seeding", () => {
     await openSystemTab();
     expect(screen.getByText("로컬 스텁")).toBeTruthy();
     expect(screen.getByText("없음 (로컬 스텁)")).toBeTruthy();
-    expect(screen.getByText("로컬 스텁에는 모델이 없습니다.")).toBeTruthy();
-    expect(screen.queryByRole("group", { name: "pi-gateway 모델 목록" })).toBeNull();
   });
 
   it("keeps unsaved policy edits across a manual 새로고침", async () => {

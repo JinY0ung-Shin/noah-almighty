@@ -1050,8 +1050,11 @@ own** (user decision 2026-11-01): the admin model override (`PUT/DELETE /api/adm
 policy (`PUT /api/admin/model-vision-policy`) and `MODEL_VISION` are RETIRED — pi's admin LLM page owns the default
 model, each model's image input and efforts. Their `app_config` keys (`agent_model_override`, `model_vision_policy`)
 are deleted behind `retirementGate()` and reserved forever; their audit labels stay for old rows; a still-set
-`MODEL_VISION` only logs a boot warning (`warnRetiredModelEnv`). The admin 시스템 tab lists pi's models read-only and
-links to pi's admin page.
+`MODEL_VISION` only logs a boot warning (`warnRetiredModelEnv`). The admin 시스템 tab shows only the
+NAMES of pi's models (시스템 정보 ▸ pi 모델); its read-only copy of pi's model table (LLM 모델 card) was removed
+2026-11-20 by user choice — one home for it, pi's LLM page, reached from 관리자's **Agent 관리** entry
+(`/admin/` in a new browser tab; [`client.md`](client.md)). `GET /api/admin/system` still sends the full
+`piModels` rows.
 `piServicesFor(store, config).models` is one catalog per app instance: a 60 s cache, one in-flight fetch for every
 caller (5 s timeout), stale-on-error (a failed refresh keeps the last good list; retried after 5 s); never fetched
 successfully → empty, and the `local` stub's is always empty (the client then hides the picker). A successful

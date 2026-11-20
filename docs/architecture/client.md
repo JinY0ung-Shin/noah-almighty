@@ -1026,6 +1026,15 @@ screens show what it says and ask before each step that changes where notes live
   `active={settingsTab === "…"}`; each child gates only its own markup (`active && user ? … : null`, after
   its hooks) and initializes form state ONCE from `readState().user`. `SettingsView.tsx` is the worked
   example (tabs in `components/Settings{Profile,Access,Knowledge}Tab.tsx`).
+- **관리자's strip ends with Agent 관리 — a LINK, not a tab** (`AdminView.tsx`, user decision 2026-11-20):
+  `<a href="/admin/" target="_blank" rel="noopener">` opens pi-gateway's own admin panel (the proxy in
+  [`pi-runtime.md`](pi-runtime.md)) in a new browser tab. pi's page refuses framing (`X-Frame-Options: DENY`,
+  `frame-ancestors 'none'`), so it can never be a panel inside 관리자. It is not an `AdminTab` and has no
+  `#/admin/…` route; the tabs sit in an inner `role="tablist"` box (`.admin-tablist`, `display: contents`) so
+  the link shares the row without being a tablist child, and arrow keys move among the tabs only. What the
+  two admin screens share is settled by pointing, not copying: Noah keeps what only Noah has (사용자, 공용
+  MCP with per-user secret slots, the MCP tool-group policy, per-skill blocks, 팀 브레인, its own audit log)
+  and shows nothing of pi's settings beyond the model names in 시스템 정보.
 - **관리자 ▸ 도구·스킬 (`#/admin/tools`, between 시스템 and 감사 로그) holds the two team-wide admin panels**
   (single team, 2026-11-06 — [`team-trust.md`](team-trust.md)). `AdminToolPolicyPanel.tsx` (MCP 도구 정책)
   edits the ONE global allowlist through `GET/PUT /api/admin/tool-policy`; `system` is shown checked and

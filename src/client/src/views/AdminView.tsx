@@ -211,30 +211,15 @@ function auditStatusLabel(status: string): string {
   return AUDIT_STATUS_LABELS[status] || status;
 }
 
-// ---- system: pi-gateway's models (READ-ONLY) ----
+// ---- system: pi-gateway's models (names only) ----
 // pi-gateway's live model list (empty under the local stub or when pi is
-// unreachable). Noah no longer sets a model or image input of its own: the
-// default model, each model's image input and efforts are pi-gateway's admin
-// LLM settings (opened at /admin/ through Noah's own port).
+// unreachable), shown as names in 시스템 정보. Noah sets no model or image
+// input of its own, and no longer mirrors pi's model table: that is
+// pi-gateway's admin LLM page, opened by the Agent 관리 tab.
 type PiModelRow = {
   id: string;
   server: string | null;
-  default?: true;
-  imageInput?: boolean;
-  reasoning?: { efforts: string[]; defaultEffort?: string } | null;
 };
-
-function imageInputLabel(model: PiModelRow): string {
-  if (model.imageInput === false) return "미지원";
-  return model.imageInput === true ? "지원" : "알 수 없음 (지원으로 처리)";
-}
-
-function reasoningLabel(model: PiModelRow): string {
-  if (model.reasoning === null) return "사용 안 함";
-  if (!model.reasoning) return "알 수 없음";
-  const efforts = model.reasoning.efforts.join(", ") || "없음";
-  return model.reasoning.defaultEffort ? `${efforts} (기본 ${model.reasoning.defaultEffort})` : efforts;
-}
 
 // ---- system: hex-ssh policy ----
 function hexToolNames(tools: any[]): string[] {
@@ -745,23 +730,42 @@ export default function AdminView() {
           </div>
         ) : (
           <>
-            <div className="settings-tabs admin-primary-tabs" role="tablist" aria-label="관리자 분류">
-              {tabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  id={`admin-tab-${tab.id}`}
-                  className={cx("settings-tab", state.adminTab === tab.id && "active")}
-                  type="button"
-                  role="tab"
-                  aria-selected={state.adminTab === tab.id}
-                  aria-controls="admin-panel"
-                  tabIndex={state.adminTab === tab.id ? 0 : -1}
-                  onClick={() => setTab(tab.id)}
-                  onKeyDown={(event) => onAdminTabKeydown(event, tab.id)}
-                >
-                  <Icon name={tab.icon} /> <span>{tab.label}</span>
-                </button>
-              ))}
+            {/* One strip, two kinds of entry: Noah's own tabs (the tablist, an inner
+                box that lays nothing out), then a LINK — Agent 관리 leaves for
+                pi-gateway's own admin panel (/admin/, a new browser tab; that page
+                refuses framing, so it cannot be a panel here). */}
+            <div className="settings-tabs admin-primary-tabs">
+              <div className="admin-tablist" role="tablist" aria-label="관리자 분류">
+                {tabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    id={`admin-tab-${tab.id}`}
+                    className={cx("settings-tab", state.adminTab === tab.id && "active")}
+                    type="button"
+                    role="tab"
+                    aria-selected={state.adminTab === tab.id}
+                    aria-controls="admin-panel"
+                    tabIndex={state.adminTab === tab.id ? 0 : -1}
+                    onClick={() => setTab(tab.id)}
+                    onKeyDown={(event) => onAdminTabKeydown(event, tab.id)}
+                  >
+                    <Icon name={tab.icon} /> <span>{tab.label}</span>
+                  </button>
+                ))}
+              </div>
+              <a
+                className="settings-tab admin-agent-link"
+                href="/admin/"
+                target="_blank"
+                rel="noopener"
+                title="pi-gateway 관리 화면을 새 탭으로 엽니다 (LLM·프롬프트·내장 도구·MCP·plugin·대화 기록)"
+              >
+                <Icon name="network" /> <span>Agent 관리</span>
+                <span className="admin-agent-link-mark" aria-hidden="true">
+                  ↗
+                </span>
+                <span className="sr-only"> (새 탭에서 열림)</span>
+              </a>
             </div>
 
             <div className="admin-panel" role="tabpanel" id="admin-panel" aria-labelledby={`admin-tab-${state.adminTab}`}>
@@ -1076,56 +1080,6 @@ export default function AdminView() {
                           </button>
                         </div>
                       </form>
-                    </section>
-
-                    {/* pi-gateway's models: read-only (pi's admin LLM page owns them) */}
-                    <section className="settings-card">
-                      <div className="panel-section-head">
-                        <div>
-                          <h3>LLM 모델 (pi-gateway)</h3>
-                          <p className="muted">
-                            LLM 서버·키·모델·기본 모델·이미지 입력·시스템 프롬프트는 pi-gateway 관리 화면에서 바꿉니다. 이 표는 pi-gateway가 지금 제공하는 모델을 보여 주기만 합니다.
-                            대화에서 모델을 고르지 않으면 Noah는 pi-gateway의 <span className="mono">falcon</span> 티어를 사용합니다. falcon 티어가 없으면 아래 표에서 '기본'으로 표시된 pi-gateway 기본 모델을 사용합니다. 이미지 입력이 미지원인 모델을 쓰는 대화에서는 첨부한 이미지가 파일로만 전달됩니다.
-                          </p>
-                          <p className="muted">
-                            pi-gateway의 시스템 프롬프트 <span className="mono">noah</span>, Noah MCP 서버 등록, Noah가 꺼 둔 pi 도구는 배포(docker compose up) 때마다 저장소 기준으로 되돌아갑니다. 관리 화면에서 바꾼 내용은 다음 배포 전까지만 유지됩니다.
-                          </p>
-                        </div>
-                        <a className="btn sm" href="/admin/" target="_blank" rel="noopener">
-                          pi-gateway 관리 화면 열기
-                        </a>
-                      </div>
-                      {piModels.length ? (
-                        <div className="hex-policy-grid" role="group" aria-label="pi-gateway 모델 목록">
-                          <div className="hex-policy-head muted">모델</div>
-                          <div className="hex-policy-head">기본</div>
-                          <div className="hex-policy-head">이미지 입력</div>
-                          <div className="hex-policy-head">추론 단계</div>
-                          {piModels.map((model) => (
-                            <Fragment key={model.id}>
-                              <div className="hex-policy-tool">
-                                <strong className="mono">{model.id}</strong>{" "}
-                                {model.server && <span className="muted mono">{model.server}</span>}
-                              </div>
-                              <div className="hex-policy-check">
-                                {model.default ? <span className="tag ok">기본</span> : <span className="muted">—</span>}
-                              </div>
-                              <div className="hex-policy-check">
-                                <span className={model.imageInput !== true ? "muted" : undefined}>{imageInputLabel(model)}</span>
-                              </div>
-                              <div className="hex-policy-check">
-                                <span className="muted">{reasoningLabel(model)}</span>
-                              </div>
-                            </Fragment>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="empty-note">
-                          {sys.agentRuntime === "pi"
-                            ? "pi-gateway 모델 목록을 불러오지 못했습니다. 대화는 pi-gateway 기본 모델로 실행됩니다."
-                            : "로컬 스텁에는 모델이 없습니다."}
-                        </div>
-                      )}
                     </section>
 
                     {/* hex-ssh policy */}

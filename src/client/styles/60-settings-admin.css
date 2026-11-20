@@ -57,6 +57,21 @@
   color: var(--text);
 }
 /* .settings-tab.active is a segmented-control thumb, painted by 80-apple-design.css. */
+/* 관리자's strip ends with a LINK (Agent 관리 → pi-gateway's own admin page, a new browser tab).
+   The tablist is an inner box that lays nothing out, so tabs and the link share ONE row (and the
+   narrow-screen grid); the ↗ says before the press that this entry leaves the page. */
+.admin-tablist {
+  display: contents;
+}
+a.settings-tab {
+  text-decoration: none;
+  /* A button's own line box (10-base.css), so the link is exactly as tall as the tabs beside it. */
+  line-height: 1.2;
+}
+.admin-agent-link-mark {
+  font-size: var(--t-xs);
+  opacity: 0.7;
+}
 .settings-panel {
   display: grid;
   /* Section separation (docs/DESIGN.md §3 설정 화면). */
