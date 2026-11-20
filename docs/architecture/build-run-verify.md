@@ -740,6 +740,21 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   sessions, so the smaller page costs it nothing. **NOT seen:** the `user` filter typed into the page and 조회
   pressed; 처음 / 끝 pressed; a list of more than two pages. After the run: Noah 118 MiB, gateway 214 MiB, broker
   137 MiB, memory 139 MiB, mining 27 MiB.
+  **pi `4421482` (2026-11-20, two commits since `2806c7a`, both inside process mining: a group of tasks becomes
+  a process with five tasks of its kind and no longer needs two users' — `95b0b57`; a run that finds no process
+  in its sample of 60 unlabelled tasks draws another, three times a run, where it used to stop — `4421482`. The
+  page says so in its run section. pi's commits ran typecheck and vitest against a scripted LLM and say "확인하지
+  못한 것: 실제 모델로 돌린 마이닝"):** `~/.noah-work/boot-test-2026-11-20e`, Noah `e2099f1`. The cold build took 193 s.
+  Every step passed with the counts of the `2806c7a` run (`98-mining` 34/34, `26-admin-user-names` 17/17,
+  `100-history-pages` 11/11), no error-level line in any service's log. **No new check; one line of
+  `98-mining.mjs` follows the page's new wording**, changed before the run from pi's diff: on a fresh stack the
+  run section reads "읽을 새 세션은 없습니다 (마지막 활동 뒤 30분 넘게 쉰 세션만 읽습니다)." (it began "지금 실행해도 …") and says nothing of
+  sampling — that sentence ("실행할 때마다 미분류 N건에서 무작위로 60건씩 3번 뽑아 새 프로세스를 찾습니다.") needs 20 unlabelled
+  tasks. The empty run started 0.8 s after the press and ended `completed`. **NOT seen:** all of what the two
+  commits change — a process made from ONE user's tasks, a second and third sample, the sampling sentence on
+  the page — because no session of a fresh stack has rested 30 minutes and the fake LLM cannot answer mining's
+  calls; it rests on pi's tests, against no real model. After the run: Noah 192 MiB, gateway 232 MiB, broker
+  158 MiB, memory 38 MiB, mining 38 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

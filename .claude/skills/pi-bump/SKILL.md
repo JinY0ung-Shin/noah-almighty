@@ -75,7 +75,7 @@ Nothing in the skill folder is ever run directly — only the copy in `$RUN/scri
 The build is half of a run's wall time and needs nothing from you: write the bump's check (step 5) while it
 runs, not after. Each step prints one line, `<step> exit=<rc>  <n>/<m> passed`, with its `FAIL` lines under it; the last line
 is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit status says the same. The same
-text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `2806c7a`:
+text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `4421482`:
 
 ```
 10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 5/5

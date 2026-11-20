@@ -3,6 +3,8 @@
 // an always-up service (the gateway image, no secret, the `edge` network only) that waits for a request row in
 // `mining-data`, a volume the gateway now mounts WRITABLE; pi's admin panel has a 프로세스 마이닝 page (run now,
 // a daily time, the run history, the processes and their edits).
+// Since 95b0b57 / 4421482 (2026-11-20) a process no longer needs two users' tasks and a run that finds none samples
+// again (three times a run); of that, only the page's sentence for an empty stack is seen here.
 // Since 7000e9c / 776f575 (2026-11-20) a run reports its progress and can be stopped, an admin sets how many LLM
 // calls a run makes at once, and the overview (`GET /admin/api/mining`) carries `active` / `last` / `next` /
 // `concurrency` instead of the run and revision lists — those are pages of their own (`/mining/runs`,
@@ -158,8 +160,8 @@ try {
 const navLabel = await page.getByText("프로세스 마이닝").first().innerText().catch(() => "");
 const parallel = page.locator("#mining-concurrency");
 check(
-  `N  the 프로세스 마이닝 page opens: 지금 실행 enabled, ${before === 0 ? '"아직 실행한 적이 없습니다."' : "the earlier runs listed"}, "지금 실행해도 읽을 새 세션이 없습니다 (…)", "지금은 자동으로 실행하지 않습니다", LLM을 동시에 4`,
-  pageOk && navLabel === "프로세스 마이닝" && (await runButton.isEnabled()) && (await page.getByText("지금 실행해도 읽을 새 세션이 없습니다 (마지막 활동 뒤 30분 넘게 쉰 세션만 읽습니다).").count()) === 1 &&
+  `N  the 프로세스 마이닝 page opens: 지금 실행 enabled, ${before === 0 ? '"아직 실행한 적이 없습니다."' : "the earlier runs listed"}, "읽을 새 세션은 없습니다 (…)" and no word of sampling (fewer than 20 unlabelled tasks), "지금은 자동으로 실행하지 않습니다", LLM을 동시에 4`,
+  pageOk && navLabel === "프로세스 마이닝" && (await runButton.isEnabled()) && (await page.getByText("읽을 새 세션은 없습니다 (마지막 활동 뒤 30분 넘게 쉰 세션만 읽습니다).").count()) === 1 && (await page.getByText("무작위로 60건씩 3번").count()) === 0 &&
     (await page.getByText("지금은 자동으로 실행하지 않습니다").count()) === 1 && (await parallel.inputValue().catch(() => "")) === "4",
   `LLM을 동시에 ${await parallel.inputValue().catch(() => "(no input)")}`,
 );

@@ -791,7 +791,7 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
-- **Process mining (pi `776f575`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
+- **Process mining (pi `4421482`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
   pi's `mining` service has no compose profile since pi `28ab28e`: `docker compose up` starts it and
   `scripts/deploy.sh` waits for it like any service without a health check. It is the gateway image as uid 10001
   with no secret, on `edge` only (never `control`, `noah-mcp` or `noah-memory`), with the gateway's data mounted
@@ -803,7 +803,8 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   conversations, and it is now a Noah admin's press — no longer an operator's cron line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
   calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to the default
   LLM, and keeps the tasks of each session, the processes (task types) it finds and their change history in the
-  `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. Its routes
+  `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. A process is five or more tasks of
+  one kind — since pi `95b0b57` they may all be ONE user's, so a process can be one person's repeated work. Its routes
   (`/admin/api/mining*`) are behind the same Noah-admin check as the rest of `/admin`. The gateway mounts
   `mining-data` WRITABLE (it writes the run request, the daily time and an admin's edits of a process), so an
   upgrade recreates the gateway — `up` does that. `scripts/deploy.sh --backup` takes that volume too
