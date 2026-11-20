@@ -81,6 +81,8 @@ checks_stage() {
   extra 102-mining-model         K-mining-model.log            node 102-mining-model.mjs
   # The operator's extra system prompt for mining (pi 71011f6): the route, the dialog on the page, a run with it set.
   extra 103-mining-prompt        Y-mining-prompt.log           node 103-mining-prompt.mjs
+  # The rename-only run (pi f9df928): the route, the 409 while busy, the run's trigger, the button and the history row.
+  extra 104-mining-rename        Z-mining-rename.log           node 104-mining-rename.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh

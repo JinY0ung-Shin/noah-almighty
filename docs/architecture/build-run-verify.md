@@ -825,6 +825,24 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   stack has rested 30 minutes; rests on pi's test of ONE call); what a text does to the processes a real model
   names; a text saved while a run is in progress. After the run: Noah 273 MiB, gateway 268 MiB, broker 195 MiB,
   memory 44 MiB, mining 42 MiB.
+  **pi `f9df928` (2026-11-20, two commits since `71011f6`, inside process mining: the 프로세스 section gets an
+  이름 다시 짓기 button — a run (trigger `rename`) that reads no session and only renames the existing processes with
+  the current model and 추가 프롬프트, leaving a process a person edited alone; one run at a time with 지금 실행. pi's
+  tests run the rename pass on a scripted model and the route in-process; the commit names nothing it left
+  unverified — it did not press the button or start the service's run process on a real gateway):**
+  `~/.noah-work/boot-test-2026-11-20i`, Noah `d5a562b` (a worktree off `origin/main`: the main checkout was 18
+  commits behind with uncommitted work). The cold build took 191 s. Every step passed with the counts of the
+  `71011f6` run (`98-mining` 34/34, `102-mining-model` 23/23, `103-mining-prompt` 20/20), no error-level line in any
+  service's log but the one `102-` makes. **New check `104-mining-rename.mjs` 10/10**, through Noah's `/admin` as a
+  Noah admin and in a real browser: `POST /admin/api/mining/rename` answers 403 without the panel's headers
+  (`csrf`) and for a member (`forbidden`), 200 `{id}` for a Noah admin; a second request while it waits answers 409
+  `mining_busy`, and so does 지금 실행; the run is in the history with trigger `rename`, ends `completed` 0.5 s after
+  it started, read nothing and has no error; the page's 이름 다시 짓기 button is there and disabled (a fresh
+  stack has no process), the history row names the trigger "이름 다시 짓기", no page error or failed call; the
+  gateway logs "mining run requested" with `"trigger":"rename"` at info. **NOT seen:** a process actually renamed
+  (a fresh stack has none and no session has rested 30 minutes, so no model finds one — rests on pi's
+  `mining.test.ts`); the confirm dialog and the 변경 이력 rows of a rename; a person-edited process left alone.
+  After the run: Noah 267 MiB, gateway 273 MiB, broker 92 MiB, memory 38 MiB, mining 31 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`
