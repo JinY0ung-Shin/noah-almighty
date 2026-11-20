@@ -369,8 +369,8 @@ pi-gateway's defaults fit a small team. They are pi's own settings: set them in 
 
 | pi `.env` | pi default | Example | At the default |
 |---|---|---|---|
-| `MAX_CONCURRENT_TURNS` | `16` | `250` (peak + headroom) | Turns over the limit queue; after `TURN_QUEUE_TIMEOUT_SECONDS` (120) pi answers 503, Noah tries the stream open 4 times in all with backoff, then the turn fails. |
-| `MAX_CONCURRENT_TURNS_PER_USER` | `3` | `8` | A user's 4th simultaneous conversation waits until one of the first three finishes. |
+| `MAX_CONCURRENT_TURNS` | `48` | `250` (peak + headroom) | Turns over the limit queue; after `TURN_QUEUE_TIMEOUT_SECONDS` (120) pi answers 503, Noah tries the stream open 4 times in all with backoff, then the turn fails. |
+| `MAX_CONCURRENT_TURNS_PER_USER` | `6` | `8` | A user's 7th simultaneous turn waits until one of the first six finishes. Six covers a full split chat (4 conversations) plus that user's routines (2 at once by default). |
 | `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `1g` / `1` | `4g` / `2` | All of one user's turns share ONE sandbox: with 8 at once, a deck build (one ≈ 0.5 GiB Chromium; builds queue one at a time per sandbox) and the other turns' commands (python, pandas…) share 1 GiB and one CPU. Both are caps, not reservations. |
 
 Measured with the example values (2026-10-31, the e2e stack in dind on a 12-core dev box, a stub model, every
@@ -382,6 +382,12 @@ turn holding a `sleep` in its sandbox):
 - 200 live sessions holding 400 KiB of history each added ≈ 100 MiB to the gateway's heap (its V8 limit is
   ≈ 4 GiB).
 - One user's 8 simultaneous turns all ran in parallel.
+
+That run held idle turns. pi's own load measurement (pi `52d765b`, 2026-11-20: a gateway alone on a dev box, a stub
+model streaming 50 chunks a second, three model calls per turn) found the limit of STREAMING turns in the gateway's
+single Node process: no visible delay up to 64 turns (≈ 70 % of one core), the core saturated at 128 (turns 14 %
+slower), no failure up to 256. pi's default of 48 is under half of that point; a value above ~100 trades speed for
+fewer queued turns, and the production CPU's own saturation point is not measured.
 
 **Session starts are the expensive part.** pi starts a session on a conversation's first turn and after
 `SESSION_IDLE_SECONDS` without one (it unloads the idle session and rebuilds it on the next turn), and every
