@@ -688,34 +688,22 @@ export async function loadAgentPluginRoots(
 /** Cap on the injected CLAUDE.md so standing memory can't bloat every turn. */
 const PERSONAL_CLAUDE_MD_CAP = 6_000;
 
-/** Standing CLAUDE.md memory read from the avatar's knowledge repo (push, every turn). */
+/** The avatar's standing CLAUDE.md memory (push, every turn). */
 export interface KnowledgeRepoMemory {
-  /** Root CLAUDE.md of the personal knowledge repo, or null when absent/empty. */
+  /** `CLAUDE.md` of the owner's personal vault (or the unavailable notice), or null when absent/empty. */
   personal: string | null;
 }
 
-/** Read a repo-root CLAUDE.md (trimmed, capped). Returns null when missing/empty. */
-async function readRepoClaudeMd(repoRoot: string, cap: number): Promise<string | null> {
-  try {
-    // No-link read: a committed `CLAUDE.md -> /run/secrets/…` must not land in the frozen prompt.
-    const raw = (await readTextBelow(repoRoot, path.join(repoRoot, "CLAUDE.md")))?.trim();
-    if (!raw) {
-      return null;
-    }
-    return raw.length > cap ? `${raw.slice(0, cap)}\n…(truncated)` : raw;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Load the standing CLAUDE.md memory from the avatar's personal knowledge repo.
- * Reads the working-tree clone directly (which `loadAgentPluginRoots` already
- * ensured for the same turn); a missing repo, a missing CLAUDE.md, or a
- * not-yet-cloned repo simply contributes nothing. Unlike skills (pulled on
- * demand), this is injected into the prompt, so it is capped. (Group repo
- * CLAUDE.md files were injected too until group knowledge repos were retired
- * 2026-10-30.)
+ * Load the avatar's standing CLAUDE.md memory. `CLAUDE.md` is a note of the
+ * owner's personal vault, so it is read from the memory service — never from
+ * the knowledge repository's clone (a `CLAUDE.md` file there is not the vault's
+ * and is read by nobody). The brain rides the knowledge repository: without a
+ * connected one there is no standing memory. A missing or empty note
+ * contributes nothing; a service that cannot be used contributes the notice
+ * below, never nothing. Unlike skills (pulled on demand), this is injected into
+ * the prompt, so it is capped. (Group repo CLAUDE.md files were injected too
+ * until group knowledge repos were retired 2026-10-30.)
  */
 export async function loadKnowledgeRepoMemory(
   store: Store,
@@ -729,11 +717,11 @@ export async function loadKnowledgeRepoMemory(
   if (!store.getKnowledgeRepo(avatarId).repo) {
     return { personal: null };
   }
-  // Vault in the memory service: CLAUDE.md is a vault note and is read there, never from the clone's copy.
-  const vault = memoryVaultFor(store, config, avatarId);
-  const personal = vault
-    ? await readVaultClaudeMd(vault, PERSONAL_CLAUDE_MD_CAP, options.vaultDeadlineMs ?? STANDING_MEMORY_VAULT_DEADLINE_MS)
-    : await readRepoClaudeMd(knowledgeClonePath(avatarId, config), PERSONAL_CLAUDE_MD_CAP);
+  const personal = await readVaultClaudeMd(
+    memoryVaultFor(store, config, avatarId),
+    PERSONAL_CLAUDE_MD_CAP,
+    options.vaultDeadlineMs ?? STANDING_MEMORY_VAULT_DEADLINE_MS,
+  );
   return { personal };
 }
 
@@ -749,18 +737,17 @@ export const STANDING_MEMORY_UNAVAILABLE_NOTICE =
   "(Noah's notice, not the owner's text.) The owner's standing guidance (CLAUDE.md) could NOT be loaded when this conversation started: it is a vault note kept in the memory service, and that service was unavailable. It is NOT empty and NOT missing — it simply is not shown here. Before relying on the owner's standing rules, read it yourself with `mcp__repo__read_file` (path `CLAUDE.md`) if that tool is available in this run; if it cannot be read either, tell the user that the owner's standing guidance could not be loaded because the memory service is unavailable.";
 
 /**
- * How long a turn waits for the standing memory of a vault in the memory
- * service. The read is awaited at the start of EVERY turn (the prompt it feeds
+ * How long a turn waits for the standing memory. The read is awaited at the start of EVERY turn (the prompt it feeds
  * is frozen after the first), so a service that hangs must not hold each turn
  * for the client's whole timeout: past this, the notice takes the memory's place.
  */
 export const STANDING_MEMORY_VAULT_DEADLINE_MS = 3_000;
 
 /**
- * {@link readRepoClaudeMd} for a vault in the memory service: same trim, cap
- * and truncation mark; a missing or empty note is null. A service that cannot
- * be used — or does not answer within `deadlineMs` — is NOT null: the notice
- * above takes the memory's place.
+ * The vault's `CLAUDE.md`, trimmed and capped (with a truncation mark); a
+ * missing or empty note is null. A service that cannot be used — or does not
+ * answer within `deadlineMs` — is NOT null: the notice above takes the
+ * memory's place.
  */
 async function readVaultClaudeMd(vault: MemoryVault, cap: number, deadlineMs: number): Promise<string | null> {
   let raw: string;

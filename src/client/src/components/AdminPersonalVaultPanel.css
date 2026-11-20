@@ -1,36 +1,25 @@
-/* 관리자 ▸ 시스템 ▸ 개인 브레인 이전 */
-.vault-admin-sub:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  margin: var(--s-2) 0 var(--s-1);
-  font-size: var(--t-sm);
-}
-/* The sub-heading already separates the cards from the head. */
-.vault-admin-sub:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) + .radio-cards {
-  margin-top: var(--s-2);
-}
-.vault-admin-actions:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--s-2);
-  margin-left: auto;
-}
-.vault-admin-hint:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  margin: var(--s-2) 0 0;
-  font-size: var(--t-xs);
-}
+/* 관리자 ▸ 시스템 ▸ 개인 브레인 사용량 */
 .warn-box:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
   margin: var(--s-3) 0 0;
 }
 .empty-note:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
   margin-top: var(--s-3);
 }
-.vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) .tag + .tag {
-  margin-left: var(--s-1);
+.vault-admin-limits:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
+  margin: var(--s-3) 0 0;
+  font-size: var(--t-sm);
+}
+.vault-admin-status:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
+  margin: var(--s-3) 0 0;
+  font-size: var(--t-xs);
+}
+.vault-admin-status:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *):empty {
+  display: none;
 }
 
 /* Per-owner table. Wide: a plain table; narrow: one block per owner. */
 .vault-table-wrap:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  margin-top: var(--s-4);
+  margin-top: var(--s-3);
   min-width: 0;
   overflow-x: auto;
 }
@@ -40,7 +29,7 @@
   font-size: var(--t-sm);
 }
 /* The app's bare `th`/`td` rules (markdown tables: bottom rule, sticky shaded head, row hover) are
-   undone here: an owner and the report under it are ONE block, ruled above the owner only. */
+   undone here: one rule above each owner. */
 .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) :is(th, td) {
   padding: var(--s-2);
   border-top: 1px solid var(--line-soft);
@@ -61,17 +50,6 @@
   font-weight: 600;
   white-space: nowrap;
 }
-.vault-cell-when:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  white-space: nowrap;
-}
-/* A moved owner's wiki size, under the 보관 위치 tag. */
-.vault-usage:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  margin-top: 4px;
-  font-size: var(--t-xs);
-}
-.vault-cell-mirror:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  min-width: 10em;
-}
 .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) tbody th {
   font-weight: 600;
 }
@@ -79,69 +57,16 @@
   font-size: var(--t-xs);
   font-weight: 400;
 }
-.vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) code {
-  font-size: var(--t-xs);
-}
 .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) td {
   font-variant-numeric: tabular-nums;
-}
-.vault-cell-action:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  text-align: right;
-  white-space: nowrap;
 }
 .vault-cell-failed:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
   color: var(--danger);
   font-weight: 600;
 }
-.vault-cell-hold:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
+.vault-cell-near:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
   color: var(--warn);
   font-weight: 600;
-}
-/* The report belongs to the owner row above it: no rule between the two. */
-.vault-report-row:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) > td {
-  border-top: 0;
-  padding-top: 0;
-}
-.vault-report:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  display: grid;
-  gap: var(--s-1-5);
-  padding: var(--s-2) var(--s-2-5);
-  border-radius: var(--r-sm);
-  background: var(--bg-subtle);
-  font-size: var(--t-xs);
-  line-height: 1.5;
-}
-.vault-report:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) ul {
-  margin: var(--s-1) 0 0;
-  padding-left: var(--s-4);
-  display: grid;
-  gap: var(--s-0-5);
-}
-.vault-report-blockers:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  color: var(--warn);
-}
-/* What the last copy has to tell: the repository holds notes the memory service does not. */
-.vault-notice:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-  margin: 0;
-  padding: var(--s-2) var(--s-2-5);
-  border: 1px solid var(--info-line);
-  border-radius: var(--r-sm);
-  background: var(--info-soft);
-  color: var(--info);
-  font-size: var(--t-xs);
-  line-height: 1.5;
-}
-.vault-notice:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) + .vault-report {
-  margin-top: var(--s-1-5);
-}
-.vault-report-blockers:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) .ghost-sm {
-  margin-top: var(--s-2);
-  white-space: normal;
-  text-align: left;
-}
-.vault-report-skipped:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) summary {
-  cursor: pointer;
-  color: var(--text-soft);
 }
 
 @media (max-width: 760px) {
@@ -161,10 +86,6 @@
     padding: var(--s-2) 0;
     border-top: 1px solid var(--line-soft);
   }
-  .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) tbody tr.vault-report-row {
-    border-top: 0;
-    padding-top: 0;
-  }
   .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) tbody :is(th, td) {
     border-top: 0;
     padding: var(--s-0-5) 0;
@@ -173,20 +94,6 @@
     content: attr(data-label) " · ";
     color: var(--muted);
     font-size: var(--t-xs);
-  }
-  .vault-cell-action:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-    text-align: left;
-  }
-  .vault-cell-when:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-    white-space: normal;
-  }
-  .vault-cell-mirror:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) {
-    min-width: 0;
-  }
-  .vault-table:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *) tbody tr.vault-report-row > td {
-    padding-top: var(--s-1);
-  }
-  .vault-cell-action:is(.cmp-admin-personal-vault-panel, .cmp-admin-personal-vault-panel *):empty {
-    display: none;
+    font-weight: 400;
   }
 }

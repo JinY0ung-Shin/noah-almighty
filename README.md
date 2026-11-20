@@ -38,11 +38,11 @@ which check owner/teammate trust themselves.
   skills become available in chat), and the avatar **manages it itself**: in an owner chat
   the avatar can list/read/write files, scaffold skills (`skills/<name>/SKILL.md`), and
   commit & push — via the owner-only `mcp__repo__*` tools. Settings just points at the repo
-  (a GitHub link); there is no in-app file editor. The avatar's **brain notes** (the repo-root
-  `CLAUDE.md` and the markdown notes under `wiki/` and `raw/`) live in that repo too — or, once an
-  admin moves them (Upgrade → "Personal brain → memory service"), in the stack's memory service,
-  where a note is saved the moment it is written and the repo keeps a copy Noah pushes. The avatar's
-  tools, the paths and who may read or write are the same either way.
+  (a GitHub link); there is no in-app file editor. The avatar's **brain notes** (the root
+  `CLAUDE.md` and the markdown notes under `wiki/` and `raw/`) are written with the same tools and
+  paths, but they are not files of that repo: they live in the stack's memory service, where a note
+  is saved the moment it is written, with nothing to commit and no copy in the repo (Upgrade →
+  "Personal brain: the memory service is its only home"). The brain still needs a connected repo.
 - **Team brain (팀 브레인)**: ONE shared knowledge wiki for the whole team — decisions, system
   facts, fixes, glossary, conventions, owners. Every avatar can search it, and every teammate
   writes it: when a conversation produces team knowledge the avatar offers to put it in and
@@ -275,7 +275,7 @@ never copied into this repository.
 | Noah → pi | `http://gateway:8080` over pi's `edge` network, with pi's service key from the compose secret (`PI_GATEWAY_API_KEY_FILE`). |
 | pi's admin panel | Served on Noah's port at `/admin/` (alias `/settings/pi`) to Noah ADMINS only: Noah forwards to `http://gateway:8080/admin…` with pi's admin key from its own compose secret (`PI_GATEWAY_ADMIN_API_KEY_FILE`), drops Noah's cookies, refuses cross-origin writes and audits every write (`pi_admin_proxy`). What `pi-setup` applies (Noah's prompt `noah`, its MCP registrations, the disabled pi built-ins) is re-applied on every `up` — edit those in this repository, not there. |
 | pi's broker → Noah `/mcp/<server>` | `http://noah-almighty:48787` over `noah-mcp`, an internal network only the broker and Noah are on. The broker has a pinned address there (`NOAH_MCP_BROKER_IP`, default `172.16.248.10` in `NOAH_MCP_SUBNET` `172.16.248.0/24` — outside Docker's default address pools, so no auto-allocated network lands on it), and Noah's `NOAH_MCP_ALLOWED_CIDRS` defaults to exactly that address, so no other container, and no published-port client, passes `/mcp`'s source check; each call still needs a per-run token Noah mints itself. Change both variables if the subnet collides with a network your host routes to. |
-| Noah → pi's memory service | `http://memory:7090` over `noah-memory`, an internal network only Noah and the memory service are on (no pinned subnet), with Noah's own copy of the service's key from a compose secret (`PI_MEMORY_API_KEY_FILE`). Noah is not on pi's internal `control` network, so this gives it no route to sandboxd or the broker; the service publishes no port. It stays on pi's `control` network too, where pi's own services can reach it — which is why it must NOT be registered on pi's MCP page in a Noah stack (Upgrade → "Personal brain → memory service"): Noah's server is meant to be its only caller. It holds the brain notes of users an admin moved (Upgrade → "Personal brain → memory service"). Noah does not wait for it at start: while it is down those users' brains are reported as unavailable, and the rest of the app works. |
+| Noah → pi's memory service | `http://memory:7090` over `noah-memory`, an internal network only Noah and the memory service are on (no pinned subnet), with Noah's own copy of the service's key from a compose secret (`PI_MEMORY_API_KEY_FILE`). Noah is not on pi's internal `control` network, so this gives it no route to sandboxd or the broker; the service publishes no port. It stays on pi's `control` network too, where pi's own services can reach it — which is why it must NOT be registered on pi's MCP page in a Noah stack (Upgrade → "Personal brain: the memory service is its only home"): Noah's server is meant to be its only caller. It holds every user's brain notes and their history, and nothing else does — its `memory-data` volume belongs in your backups. Noah does not wait for it at start: while it is down every brain is reported as unavailable, and the rest of the app works. |
 | sandboxes | No network at all (`network_mode: none`, pi's sandboxd). Their only exit is pi's egress-proxy, which opens only what pi's `SANDBOX_EGRESS_ALLOW` lists — keep Noah's address out of it: the broker, not the sandbox, calls Noah. |
 | workspaces | `$PI_GATEWAY_HOME/workspaces` is bind-mounted read-write into Noah at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`): Noah stages attachments, captures and Confluence files into each user's sandbox folder and reads shared files and deck previews from it. uid 1000 on both sides. |
 | sandbox image | `noah-almighty/pi-sandbox:${NOAH_PI_SANDBOX_TAG:-latest}` ([docker/pi-sandbox](docker/pi-sandbox/README.md)), built FROM pi's own `pi-gateway/sandbox:latest` and set as sandboxd's `SANDBOX_IMAGE`; pi's own image keeps its own tag. It carries the pptx skill's converter (Chromium headless shell, the pinned Python set, the deck fonts), so `PI_DECK_SANDBOX=true` is fixed. |
@@ -458,8 +458,9 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   service is healthy and every one-shot service exited 0 (`DEPLOY_WAIT_SECONDS`, default 600), then checks
   that Noah's copy of the memory key is mounted and not empty, that pi's MCP page has NO entry for the memory
   service, and that `SANDBOX_EGRESS_ALLOW` names no service of the stack — a warning there exits non-zero.
-  It never moves anyone's brain: 미리 확인 and 이전 stay an admin's presses (below). `BACKUP_DIR` overrides
-  `./backups`; a restore is: stop the service, untar into its volume. The three archives are Noah's data
+  It does not back up the memory service's volume unless you pass `--backup` — every personal brain lives
+  only there (below). `BACKUP_DIR` overrides `./backups`; a restore is: stop the service, untar into its
+  volume. The three archives are Noah's data
   (`noah-almighty-data`), the memory service's wikis (`memory-data`) and pi's process mining (`mining-data`:
   its run history, tasks and processes — restore it with `mining` AND `gateway` stopped, both open that file).
 - **Noah (by hand):** `git pull && git submodule update --init`, then `sudo docker/pi/setup-host.sh`, then
@@ -469,82 +470,61 @@ Every build arg is empty by default (= public upstreams); set them in Noah's `.e
   `/admin` panel's `noah/pi_gateway_admin_api_key` is one, the memory service's `noah/pi_memory_api_key`
   another. Without that file `docker compose up` stops with
   `bind source path does not exist` and the new Noah container is never created.
-- **Personal brain → memory service (optional, per deployment).** Each user's brain notes (the repo-root
-  `CLAUDE.md` plus every `.md` under `wiki/` and `raw/` of their knowledge repository) can move from the
-  repository into the stack's memory service; skills, plugins and every other file stay in git. Nothing moves
-  by itself: until an admin starts it, every user works on their repository exactly as before.
-  1. **Host:** this release's pi-gateway carries the memory service, and Compose mounts Noah's copy of its
-     key as a secret — so the stack does not start without that file, even when nobody is ever moved. Run
-     `git submodule update --init`, then `sudo docker/pi/setup-host.sh` BEFORE `docker compose up -d --build`:
-     pi's half creates the service's key (`$PI_GATEWAY_SECRETS/memory/api_key`), Noah's half copies it to
-     `$PI_GATEWAY_SECRETS/noah/pi_memory_api_key` (uid 1000, 0400) and stops with an error if pi's key is
-     missing (the pi-gateway checkout is older than its memory service). Nothing goes into `.env`:
-     docker-compose.yml fixes `PI_MEMORY_URL` and `PI_MEMORY_API_KEY_FILE` for the container. Noah does not
-     wait for the memory service at start, and until an admin starts a move nobody's brain depends on it.
-  2. **Dry run:** 관리자 → 시스템 → **개인 브레인 이전** → **미리 확인** lists, per user, how many notes would
-     move, which files stay in the repository (anything that is not a markdown note) and what blocks a user —
-     no git token (none at all, or none for that repository's host: without one the copy could never be
-     pushed), uncommitted or unpushed work in Noah's copy of the repository, a note over 512 KiB or not
-     UTF-8, a run of that user in progress, or notes left in the memory service that the repository does not
-     have (an earlier move that did not finish — clear them with **메모리 서비스에 남은 사본 비우기** on that
-     user's row, then check again; before deleting, Noah sets aside every such note that differs from the
-     repository under `APP_DATA_DIR/retired/<stamp>/personal-vault-leftover/`, and deletes nothing when it
-     cannot). The dry run itself changes nothing. On a team with many repositories it can take longer than
-     the browser waits for one request (2 minutes): the screen then shows a timeout while the server finishes
-     — reload the page to see the reports.
-  3. **Start:** set 보관 방식 to **메모리 서비스로 이전**. Noah moves users one at a time: it syncs the
-     repository, copies the notes, reads every one back and compares it, and only then switches that user
-     over. A blocked user is skipped with the reason in the table and stays on their repository; **이전 실행**
-     retries. A user who connects a repository later, or changes it or its branch, is moved then.
-     **The move takes no database backup, and needs none to be undone:** it deletes and rewrites no file of
-     the repository and adds one database row; every note is read back and compared before the switch; a
-     copy that fails half-way takes back what it wrote; and moving back (step 5) first proves the repository
-     holds every note. The one tie to the retirement backup
-     (below): after a boot in which THAT backup failed, Noah refuses to move anyone in either direction until
-     a later boot's backup works.
-  4. **After the move** a note is saved when the avatar writes it, and the repository receives a copy: on
-     every avatar commit and shortly after a write, in one ordinary (never forced) push with the user's git
-     token. A failed push loses nothing — the note stays saved and the copy is retried (every minute, for as
-     long as it fails); 설정 → 지식·플러그인 shows its state.
-     - **The copy is one-way.** A brain note EDITED directly in git is not read back and is replaced the next
-       time Noah pushes the copy — which happens when some note changed, so on an idle brain the edit stays
-       until then (it stays in git history afterwards; an avatar commit that meets such an edit keeps the
-       brain's text instead of failing). A note ADDED directly in git is left where it is but is not in the brain —
-       the settings card and the admin table say how many such notes there are.
-     - **Noah deletes from the repository only the notes it deleted itself.** A note the memory service does
-       not have is never removed from the repository just for that reason — so an emptied service cannot
-       empty the repository.
-     - **A newly connected repository (or branch) is looked at before anything is written into it.** If it
-       holds brain notes of its own, the user is asked in 설정 → 지식·플러그인 and nothing there is replaced
-       until they confirm; if Noah cannot read it (no git token, wrong address) the card says so, keeps
-       retrying (about once a minute for half an hour, then every ten minutes; again after a restart),
-       offers 지금 다시 확인, and the admin table above names what is in the way.
-     - A `.gitignore` in the repository that ignores `CLAUDE.md`, `wiki/` or `raw/` keeps the copy out of
-       git without any error — do not ignore those paths.
-  5. **Moving one user back** (되돌리기 in the same table): Noah first pushes the copy; only when the
-     repository holds every note does that user go back to the repository and their notes leave the memory
-     service. A copy that cannot be brought up to date blocks it and says why. Setting 보관 방식 back to
-     **저장소에 보관** only stops NEW moves; it moves nobody back. **To keep someone on the repository, set
-     보관 방식 to 저장소에 보관 FIRST and then press 되돌리기:** while it says 메모리 서비스로 이전, a user who
-     was moved back is moved again by the next 이전 실행 or their next repository change.
-  6. **If the memory service's data is lost** (its volume): the repositories still hold every note as last
-     pushed, and Noah has deleted nothing from them. For each moved user press 되돌리기 — it goes through,
-     because the repository holds everything the (now empty) service has — and then move them again with
-     이전 실행; the notes come back from the repository. Notes written after a user's last successful push
-     are lost with the volume. Noah keeps no backup of the service's data: back up its volume
-     (`memory-data`) if that window matters.
+- **Personal brain: the memory service is its only home (2026-11-20).** Each user's brain notes (the root
+  `CLAUDE.md` plus every `.md` under `wiki/` and `raw/`) live in the stack's memory service — for every user;
+  skills, plugins and every other file stay in git. Earlier releases could also keep the notes in the
+  knowledge repository, moved users with an admin screen (개인 브레인 이전) and pushed a copy of a moved
+  brain back into its repository. All of that is retired: there is nothing to switch on and nothing to move.
+  1. **Upgrade as always:** `scripts/deploy.sh` (or by hand: `git submodule update --init`,
+     `sudo docker/pi/setup-host.sh`, `docker compose up -d --build`). Compose mounts Noah's copy of the
+     memory service's key as a secret, so the stack does not start without `setup-host.sh` having run;
+     nothing goes into `.env` (docker-compose.yml fixes `PI_MEMORY_URL` and `PI_MEMORY_API_KEY_FILE`).
+  2. **What the first boot does:** after the retirement DB backup (`pre-retire-<stamp>.db`, below; a failed
+     backup holds the step until the next boot) it drops the two tables that recorded where a brain lived
+     and the state of its repository copy, and the 보관 방식 setting. **No note is deleted or moved** — not in
+     the memory service, not in any repository. The admin screen becomes **개인 브레인 사용량** (how full each
+     brain is; it changes nothing), and the settings card only says where the notes are and whether the
+     memory service answers.
+  3. **Users whose brain was already in the memory service** (after an earlier move): nothing changes for
+     their notes. The copy in their repository **stays as last pushed and is never updated again** — Noah
+     no longer writes, reads or deletes it. It is an old copy, not the brain; a note edited or added there
+     in git does not reach the brain.
+  4. **Users who were never moved** (their notes are still only in their repository): the first boot looks
+     at each of their repositories once, in the background, and imports the notes into the memory service —
+     **only if that user's brain there holds no note yet**, never overwriting, and without changing a
+     repository file. The boot log names them (`vault import: these owners had a repository connected but
+     their notes were never moved…`) and each result (`…were imported into the owner's vault`, or `…already
+     holds notes, so nothing is imported`). A user whose brain in the service is NOT empty — a leftover of an
+     earlier move — keeps what the service holds; their repository's notes stay in the repository. If the
+     memory service or the repository cannot be reached, that user's import stays pending and is tried again
+     at the next restart — until it has run their brain is empty, and a note written into it meanwhile means
+     the repository's notes are no longer imported (the brain is not empty any more). Check the log after
+     the first boot.
+  5. **Connecting a repository later** works the same way: when a user connects a repository (or changes its
+     branch) that already holds brain notes, Noah imports them once — only into a brain that is still empty.
+  6. **Back up the `memory-data` volume.** It is now the ONLY copy of every brain — the notes and their
+     change history (the memory service keeps a local git per user inside that volume; nothing is pushed to
+     any git host). Noah backs up nothing of it. `scripts/deploy.sh --backup` archives it together with
+     Noah's data (it stops the services while it does); put the volume in your regular backups too. There is
+     no button that moves a brain back into a repository any more.
+  7. **Going back to an older release** after this boot is not a plain downgrade: the older release finds no
+     record of who was moved and reads every brain from its repository again — the old copies. Restore the
+     `pre-retire-<stamp>.db` backup first ("Retirement backups and quarantine").
 
-  A memory service that is down is reported as such — in chat, in settings and by the avatar — and never as
-  an empty brain; notes cannot be read or written until it answers, and none are lost.
+  A brain needs the memory service: while it is down — or on a native run started without `PI_MEMORY_URL` /
+  `PI_MEMORY_API_KEY_FILE` — it is reported as unavailable in chat, in settings and by the avatar, never as
+  an empty brain; notes cannot be read or written until it answers, and none are lost. It also still needs a
+  connected knowledge repository: without one the notes stay in the service but cannot be reached.
 
   **Do NOT register pi's memory service on pi's MCP page** (pi's admin panel, which Noah serves at `/admin`
   → MCP). pi-gateway's own operations guide describes that registration, and pi's `setup-host.sh` prints
   the service's key for it — that is for pi used on its own. In a Noah stack it would give every avatar
   session a second set of memory tools that bypass Noah entirely: no owner/teammate/consultation gate, no
-  path rules, notes written under whichever user the run executes as, and Noah would then copy whatever
-  landed in an owner's wiki into their repository. **Nothing in Noah prevents or detects this** — neither
-  the proxy at `/admin` nor `pi-setup` checks pi's MCP list for it — so it is a rule for the operator to
-  keep. If it was registered, remove it there; notes written through it stay in the service.
+  path rules, notes written under whichever user the run executes as — and whatever they write IS that
+  user's brain from then on. **Nothing in Noah's server prevents or detects this** — neither the proxy at
+  `/admin` nor `pi-setup` checks pi's MCP list for it; only `scripts/deploy.sh` looks, once, at the end of a
+  deploy — so it is a rule for the operator to keep. If it was registered, remove it there; notes written
+  through it stay in the service.
 - **After rotating a pi key** (`$PI_GATEWAY_SECRETS/gateway/api_key` or `admin_api_key`): re-run
   `sudo docker/pi/setup-host.sh`, then `docker compose up -d --force-recreate noah-almighty`. Noah reads both
   keys once at boot, and its secret mount still points at the old file, so a plain `up -d` keeps the old key. A
@@ -724,7 +704,8 @@ with the bundled pi-gateway: its firewall admits only its own proxy, so Noah can
 ### Retirement backups and quarantine
 
 Removed features (personal bots, external avatars, group shared agents, groups, server agents, Craft apps, STT,
-the team brain's review queue — its still-open submissions are closed, not deleted)
+the team brain's review queue — its still-open submissions are closed, not deleted —, the personal brain's
+repository home and repository copy — two tables and a setting, no note)
 are cleaned out of an existing deployment at boot. Before any of that deletes or closes data, Noah:
 
 - **backs up the whole SQLite DB** to `APP_DATA_DIR/backups/pre-retire-<UTC stamp>.db` (file 0600,
@@ -771,7 +752,7 @@ backup and quarantine).
 | `AGENT_RUNTIME` | `pi` (default; every turn runs on pi-gateway — see `docs/architecture/pi-runtime.md`) or `local` (deterministic offline stub for tests). `claude` is retired and stops the boot. **Fixed to `pi` by docker-compose.yml.** |
 | `PI_GATEWAY_URL` / `PI_GATEWAY_API_KEY` / `PI_GATEWAY_API_KEY_FILE` | The pi-gateway origin and its service key — inline, or a file holding only the key (trimmed). Set ONE: both, or an unreadable/empty file, stops the boot. The key is server-only (it can run turns as any user): an inline key is scrubbed from the process env after boot, a file's key never enters it. **Fixed by docker-compose.yml** (`http://gateway:8080`, the compose secret `/run/secrets/pi_gateway_api_key`; a `PI_GATEWAY_API_KEY` in `.env` would stop the boot); set them yourself only for a native run. |
 | `PI_GATEWAY_ADMIN_API_KEY_FILE` | A file holding ONLY pi's admin key (trimmed). Set → Noah serves pi-gateway's admin panel at `/admin/` (alias `/settings/pi`) to Noah admins, injecting the key; unset → `/admin` answers 503. An inline `PI_GATEWAY_ADMIN_API_KEY`, or an unreadable/empty file, stops the boot. **Fixed by docker-compose.yml** (`/run/secrets/pi_gateway_admin_api_key_noah`, Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`). |
-| `PI_MEMORY_URL` / `PI_MEMORY_API_KEY_FILE` | The stack's memory service (the home of personal brain notes once an admin moves them — Upgrade → "Personal brain → memory service"): its origin and a file holding ONLY its key (trimmed, one line). **Fixed by docker-compose.yml** (`http://memory:7090`, the compose secret `/run/secrets/pi_memory_api_key_noah` — Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`); set them yourself only for a native run. Set BOTH or NEITHER: neither = the feature is off and every brain stays in its knowledge repository; one without the other, an unreadable/empty file, or an inline `PI_MEMORY_API_KEY` stops the boot (the key is server-only and never enters the process env). On `noah-memory` Noah is the service's only caller; pi's own services reach it over pi's internal network, and it must NOT be registered as an MCP server on pi's MCP page (Upgrade → "Personal brain → memory service"). Do not unset them while any user's brain lives in the service — their notes become unreadable (reported as an outage) until it is back. |
+| `PI_MEMORY_URL` / `PI_MEMORY_API_KEY_FILE` | The stack's memory service (the only home of every user's personal brain notes — Upgrade → "Personal brain: the memory service is its only home"): its origin and a file holding ONLY its key (trimmed, one line). **Fixed by docker-compose.yml** (`http://memory:7090`, the compose secret `/run/secrets/pi_memory_api_key_noah` — Noah's uid-1000 0400 copy from `docker/pi/setup-host.sh`); set them yourself only for a native run. Set BOTH or NEITHER: neither = this server has no personal brain (every use of one is reported as unavailable; nothing falls back to the knowledge repository); one without the other, an unreadable/empty file, or an inline `PI_MEMORY_API_KEY` stops the boot (the key is server-only and never enters the process env). On `noah-memory` Noah is the service's only caller; pi's own services reach it over pi's internal network, and it must NOT be registered as an MCP server on pi's MCP page (Upgrade → "Personal brain: the memory service is its only home"). Do not unset them: every user's notes become unreadable (reported as an outage) until the service is back. |
 | `PI_WORKSPACES_DIR` | Path of pi's `$PI_GATEWAY_HOME/workspaces` as Noah sees it (same host, same uid). Noah creates each conversation's `/workspace/c/<id>` folder and stages attachments there. **Fixed by docker-compose.yml** (`/srv/pi-workspaces`, a bind mount of `$PI_GATEWAY_HOME/workspaces`). |
 | `NOAH_MCP_PUBLIC_URL` | The base URL pi's MCP broker uses to reach this Noah's `/mcp/<server>` (registered by the `pi-setup` service through `scripts/pi-register-mcp.mjs`, logged at boot). Compose default `http://noah-almighty:<PORT>`; set it (with `NOAH_MCP_HOST_ALIAS`) only for native TLS. |
 | `NOAH_MCP_ALLOWED_CIDRS` | Comma-separated addresses/CIDRs (IPv4/IPv6) allowed to reach `/mcp/<server>`, matched on the TCP peer (never `X-Forwarded-For`); others get 403 before the token is read. An invalid entry stops the boot. Compose default: the broker's pinned address, `${NOAH_MCP_BROKER_IP}/32`. Unset (native run) = open — then bind/firewall the port to the broker's network. |

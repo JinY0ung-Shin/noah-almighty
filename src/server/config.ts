@@ -122,14 +122,15 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
 
 /**
  * The memory service (`AppConfig.memory`): `PI_MEMORY_URL` +
- * `PI_MEMORY_API_KEY_FILE`, or undefined when neither is set (the feature is
- * off and every personal vault stays in its knowledge repo). The key is read
- * ONLY from a file, for the reason pi's admin key is
+ * `PI_MEMORY_API_KEY_FILE`, or undefined when neither is set (this server has
+ * no memory service: every use of a personal vault fails as unavailable — the
+ * service is the vault's only home, nothing falls back to the knowledge repo).
+ * The key is read ONLY from a file, for the reason pi's admin key is
  * (`readPiGatewayAdminApiKey`): an inline `PI_MEMORY_API_KEY` would sit in
  * process.env, where every child Noah spawns could inherit it, so it stops the
- * boot. Half a configuration stops the boot too — a vault that already lives
- * in the service must never be served from a server that cannot reach it. No
- * message here carries the key.
+ * boot. Half a configuration stops the boot too — every personal vault lives
+ * in the service, so a server must never come up as if it had none because one
+ * of the two values is missing. No message here carries the key.
  */
 export function parseMemoryConfig(values: { url: string; apiKeyFile: string; inlineApiKey: string }): MemoryServiceConfig | undefined {
   if (values.inlineApiKey) {

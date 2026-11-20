@@ -31,6 +31,9 @@ import {
 import { text, decodeRepoFsError, decodeExecError } from "../src/server/agent/mcpTools.js";
 import type { AgentRequest, AppConfig } from "../src/server/types.js";
 import { gitInit, makeBareRemote, callTool } from "./helpers.js";
+import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
+import { MemoryUnavailableError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 
 // addTrustedHost fetches a live host key over an SSH handshake (paramiko); mock
 // it so the add_host success path is deterministic + offline. listTrustedHosts /
@@ -1044,7 +1047,9 @@ describe("run plan — the Confluence save target", () => {
 });
 
 // ---------------------------------------------------------------------------
-// brainTools — personal second-brain search over a REAL local clone
+// brainTools — personal second-brain search over the owner's vault. A vault
+// note (`wiki/…md`) lives in the memory service; the knowledge repository is
+// still what makes a second brain exist, and holds whatever is not a note.
 // ---------------------------------------------------------------------------
 
 /** Seed a bare remote from `files` (repo-relative path → content) on `main`. */
@@ -1067,16 +1072,23 @@ function seedRemote(dir: string, files: Record<string, string>): string {
 }
 
 describe("brain tools — search + get_note over a real vault", () => {
-  function setup(dir: string, files: Record<string, string> | null) {
+  /**
+   * `files`: the connected repository's files (null = no repository seeded).
+   * `notes`: the owner's vault notes, placed in the memory service.
+   */
+  function setup(dir: string, files: Record<string, string> | null, notes: Record<string, string> = {}) {
     const base = path.join(tempDir, dir);
     fs.mkdirSync(base, { recursive: true });
     const { store, config } = createServices({ dataDir: path.join(base, "data"), agentRuntime: "local", sessionSecret: "t" });
+    const memory = createFakeMemoryClient();
+    setMemoryClientForTests(store, memory);
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     if (files) {
       const remote = seedRemote(base, files);
       store.setKnowledgeRepo(owner.id, remote, "main");
     }
-    return { store, config, owner };
+    for (const [notePath, content] of Object.entries(notes)) memory.seed(owner.id, notePath, content);
+    return { store, config, owner, memory };
   }
   // Omit `elevated` so the `elevated ?? viewerIsOwner` default path is exercised.
   const tools = (s: ReturnType<typeof setup>) =>
@@ -1085,47 +1097,103 @@ describe("brain tools — search + get_note over a real vault", () => {
   const NOTE = "---\ntitle: Deploy Guide\ntags: [ops]\naliases: [rollout]\n---\nUse kubernetes to deploy the service.\n";
 
   it("ranks a matching wiki note and reads it back with get_note", async () => {
-    const s = setup("brain-hit", { "wiki/concepts/deploy.md": NOTE, "README.md": "x" });
+    // The repository holds another text at the note's path: it is never what the tools answer with.
+    const s = setup(
+      "brain-hit",
+      { "wiki/concepts/deploy.md": "---\ntitle: Repository Copy\n---\nA stale copy in the repository.\n", "README.md": "x" },
+      { "wiki/concepts/deploy.md": NOTE },
+    );
     const hit = await callTool(tools(s), "search", { query: "deploy" });
     expect(hit.isError).toBeFalsy();
     expect(hit.content[0].text).toContain("wiki/concepts/deploy.md");
     expect(hit.content[0].text).toContain("Deploy Guide");
+    expect(hit.content[0].text).not.toContain("Repository Copy");
 
     const note = await callTool(tools(s), "get_note", { path: "wiki/concepts/deploy.md" });
     expect(note.isError).toBeFalsy();
-    expect(note.content[0].text).toContain("Use kubernetes to deploy");
+    expect(note.content[0].text).toBe(NOTE);
+    // Both were answered by the owner's vault in the memory service.
+    expect(s.memory.calls.map((c) => c.op)).toEqual(expect.arrayContaining(["search", "read"]));
+    expect(s.memory.calls.every((c) => c.owner === s.owner.id)).toBe(true);
   });
 
   it("reports no matches distinctly from an absent vault", async () => {
-    const withVault = setup("brain-empty", { "wiki/concepts/deploy.md": NOTE });
+    const withVault = setup("brain-empty", { "README.md": "x" }, { "wiki/concepts/deploy.md": NOTE });
     const noMatch = await callTool(tools(withVault), "search", { query: "somethingnobodywrote" });
     expect(noMatch.isError).toBeFalsy();
     expect(noMatch.content[0].text).toContain("No notes in your second brain matched");
 
-    // A repo with neither wiki/ nor raw/ → the migrate-first message.
-    const noVault = setup("brain-novault", { "README.md": "just a readme" });
+    // A vault with no note under wiki/ or raw/ → the migrate-first message — even when the
+    // repository has files at vault paths (they are not the vault).
+    const noVault = setup("brain-novault", { "README.md": "just a readme", "wiki/concepts/deploy.md": NOTE });
     const res = await callTool(tools(noVault), "search", { query: "deploy" });
     expect(res.isError).toBe(true);
     expect(res.content[0].text).toContain("brain-migrate");
+    expect(res.content[0].text).not.toContain("No notes in your second brain matched");
   });
 
   it("get_note surfaces a read failure for a missing wiki path", async () => {
-    const s = setup("brain-missing", { "wiki/concepts/deploy.md": NOTE });
+    const s = setup("brain-missing", { "README.md": "x" }, { "wiki/concepts/deploy.md": NOTE });
     const res = await callTool(tools(s), "get_note", { path: "wiki/does-not-exist.md" });
     expect(res.isError).toBe(true);
-    // readFile's resolveInRepo guards containment + existence together, so a
-    // missing (but wiki-scoped) path decodes to the INVALID_PATH sentinel.
-    expect(res.content[0].text).toContain("Invalid path");
+    // A note the vault does not hold is worded as a missing note (the clone
+    // used to word a missing file as an invalid path).
+    expect(res.content[0].text).toContain("No such note in your second brain");
+    expect(res.content[0].text).toContain("mcp__brain__search");
+
+    // A file under wiki/ that is NOT a note is still the clone's: readFile's
+    // resolveInRepo guards containment + existence together, so a missing one
+    // decodes to the INVALID_PATH sentinel.
+    const file = await callTool(tools(s), "get_note", { path: "wiki/does-not-exist.png" });
+    expect(file.isError).toBe(true);
+    expect(file.content[0].text).toContain("Invalid path");
   });
 
-  it("maps a clone failure to the load-failure message", async () => {
-    const s = setup("brain-clone-fail", null);
+  it("a repository that cannot be loaded does not stop the brain: notes are not read from the clone", async () => {
+    const s = setup("brain-clone-fail", null, { "wiki/concepts/deploy.md": NOTE });
     // Point at a bogus local remote so ensureClone throws.
     s.store.setKnowledgeRepo(s.owner.id, path.join(tempDir, "nope.git"), "main");
-    const res = await callTool(tools(s), "search", { query: "deploy" });
-    expect(res.isError).toBe(true);
-    expect(res.content[0].text).toContain("Failed to load the repository");
-    expect(res.content[0].text).toContain("no git credentials");
+    // The search used to fail here with the load-failure message; it has no clone to load any more.
+    const hit = await callTool(tools(s), "search", { query: "deploy" });
+    expect(hit.isError).toBeFalsy();
+    expect(hit.content[0].text).toContain("wiki/concepts/deploy.md");
+    expect(hit.content[0].text).not.toContain("Failed to load the repository");
+    const note = await callTool(tools(s), "get_note", { path: "wiki/concepts/deploy.md" });
+    expect(note.isError).toBeFalsy();
+    expect(note.content[0].text).toBe(NOTE);
+    // No clone was attempted for either.
+    expect(fs.existsSync(knowledgeClonePath(s.owner.id, s.config))).toBe(false);
+
+    // Only a file under wiki/ that is NOT a note is still the clone's — and that read fails, without the service being asked.
+    const calls = s.memory.calls.length;
+    const file = await callTool(tools(s), "get_note", { path: "wiki/diagram.png" });
+    expect(file.isError).toBe(true);
+    expect(s.memory.calls.length).toBe(calls);
+  });
+
+  it("maps a memory-service failure to an error that is never 'no match' (what a search depends on now)", async () => {
+    const s = setup("brain-memory-fail", { "README.md": "x" }, { "wiki/concepts/deploy.md": NOTE });
+    const down = () => new MemoryUnavailableError("memory service unavailable (search): network error (ECONNREFUSED)", "network");
+    s.memory.failNext(down(), { op: "search" });
+    const search = await callTool(tools(s), "search", { query: "deploy" });
+    expect(search.isError).toBe(true);
+    expect(search.content[0].text).toContain("The memory service");
+    expect(search.content[0].text).toContain("is unavailable right now");
+    expect(search.content[0].text).toContain("This is NOT an empty result");
+    expect(search.content[0].text).not.toContain("No notes in your second brain matched");
+    expect(search.content[0].text).not.toContain("brain-migrate");
+
+    s.memory.failNext(down(), { op: "read" });
+    const note = await callTool(tools(s), "get_note", { path: "wiki/concepts/deploy.md" });
+    expect(note.isError).toBe(true);
+    expect(note.content[0].text).toContain("is unavailable right now");
+    expect(note.content[0].text).not.toContain("No such note");
+
+    // A server with no memory service configured at all answers the same way — there is no clone fallback.
+    setMemoryClientForTests(s.store, null);
+    const off = await callTool(tools(s), "search", { query: "deploy" });
+    expect(off.isError).toBe(true);
+    expect(off.content[0].text).toContain("is unavailable right now");
   });
 
   it("buildBrainServer exposes the named MCP server", () => {

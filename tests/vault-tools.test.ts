@@ -1,32 +1,26 @@
-// Personal vault in the memory service (noah-almighty#84), Lane B — the avatar's
-// tools: `mcp__repo__*` (repoTools.ts / repoToolKit.ts) and `mcp__brain__*`
-// (brainTools.ts) for an owner whose vault home is `memory`, next to a
-// regression block proving a repo-home owner gets exactly what they always got.
+// The avatar's tools and the personal vault: `mcp__repo__*` (repoTools.ts /
+// repoToolKit.ts) and `mcp__brain__*` (brainTools.ts). A vault note — the root
+// `CLAUDE.md` and the `.md` notes under `wiki/` and `raw/` — is read and written
+// in the memory service, for every owner; every other path is a file of the
+// knowledge repository's clone. (The `repo` home, the git mirror and the
+// migration between the two were retired on 2026-11-20.)
 //
 // The memory service is the in-process fake (tests/helpers/fakeMemory.ts); the
-// knowledge repo is a local bare remote, so clone/commit/push run offline. The
-// mirror (`vaultMirror.ts`) is the real one behind a spy, so a commit is checked
-// end to end (the note really lands in the remote) and its failures can be
-// scripted.
+// knowledge repo is a local bare remote, so clone/commit/push run offline and a
+// commit is checked end to end (what really lands in the remote).
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/server/vaultMirror.js", async (importOriginal) => {
-  const real = await importOriginal<typeof import("../src/server/vaultMirror.js")>();
-  return { ...real, syncVaultMirror: vi.fn(real.syncVaultMirror) };
-});
-vi.mock("../src/server/vaultMigration.js", async (importOriginal) => {
-  const real = await importOriginal<typeof import("../src/server/vaultMigration.js")>();
+vi.mock("../src/server/vaultImport.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/server/vaultImport.js")>();
   return { ...real, onKnowledgeRepoChanged: vi.fn() };
 });
 
-import request from "supertest";
-import { createApp, createServices } from "../src/server/app.js";
+import { createServices } from "../src/server/app.js";
 import { buildRepoTools } from "../src/server/agent/repoTools.js";
 import { buildBrainTools, personalNoteBlobId } from "../src/server/agent/brainTools.js";
-import { buildSkillExchangeTools } from "../src/server/agent/skillExchangeTools.js";
 import {
   NO_CHANGES,
   VAULT_NOTES_NEED_NO_COMMIT,
@@ -38,9 +32,8 @@ import {
 import type { TeamBrainToolsContext } from "../src/server/agent/teamBrainTools.js";
 import { MemoryRefusedError, MemoryUnavailableError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { withVaultWriteLock } from "../src/server/personalVault.js";
-import { knowledgeClonePath, listTree } from "../src/server/knowledgeRepo.js";
-import { cutoverVault, onKnowledgeRepoChanged } from "../src/server/vaultMigration.js";
-import { syncVaultMirror } from "../src/server/vaultMirror.js";
+import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
+import { onKnowledgeRepoChanged } from "../src/server/vaultImport.js";
 import { callTool, gitInit, makeBareRemote, withTempDir, type ToolResult } from "./helpers.js";
 import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 import { seedTeamVault, teamPage } from "./team-brain-fixtures.js";
@@ -50,10 +43,8 @@ const getTempDir = withTempDir("vault-tools", () => {
   tempDir = getTempDir();
 });
 
-const mirrorSpy = vi.mocked(syncVaultMirror);
 const repoChangedSpy = vi.mocked(onKnowledgeRepoChanged);
 beforeEach(() => {
-  mirrorSpy.mockClear();
   repoChangedSpy.mockClear();
 });
 
@@ -72,8 +63,8 @@ function expectUnavailable(res: ToolResult): void {
   expect(t).not.toMatch(/pi-gateway/i);
 }
 
-/** A store + owner on a local bare remote; `memory: true` puts the owner's vault home in the (fake) memory service. */
-function setup(name: string, opts: { memory?: boolean; repo?: boolean; files?: Record<string, string> } = {}) {
+/** A store + owner on a local bare remote (seeded with `files`), with the (fake) memory service as the owner's vault. */
+function setup(name: string, opts: { repo?: boolean; files?: Record<string, string> } = {}) {
   const base = path.join(tempDir, name);
   const services = createServices({ dataDir: path.join(base, "data"), agentRuntime: "local", sessionSecret: "t" });
   const { store, config } = services;
@@ -105,7 +96,6 @@ function setup(name: string, opts: { memory?: boolean; repo?: boolean; files?: R
   store.setGitToken(user.id, "tok");
   const fake = createFakeMemoryClient();
   setMemoryClientForTests(store, fake);
-  if (opts.memory !== false) store.setPersonalVaultMemory(user.id, { sourceRepo: remote, sourceCommit: null });
   const owner = { id: user.id, username: "owner", displayName: "Owner" };
   const events: Array<{ action: string; path: string }> = [];
   const tools = buildRepoTools(store, {
@@ -154,25 +144,23 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * Start `call` while the owner's vault write queue is held by something else
- * (a cutover, a rollback), let `change` happen while it waits, then let it run.
+ * (the import, another tool), look at the world while it waits (`whileWaiting`),
+ * then let it run.
  */
-async function whileQueued(s: Fixture, change: () => void, call: () => Promise<ToolResult>): Promise<ToolResult> {
+async function whileQueued(s: Fixture, whileWaiting: () => void, call: () => Promise<ToolResult>): Promise<ToolResult> {
   let release!: () => void;
   const held = withVaultWriteLock(s.store, s.ownerId, () => new Promise<void>((resolve) => (release = resolve)));
   const pending = call();
   await tick();
   await tick();
-  change();
+  whileWaiting();
   release();
   await held;
   return pending;
 }
 
-/** What a finished cutover leaves: the row, and the given notes in the service. */
-function flipToMemory(s: Fixture, notes: Record<string, string> = {}): void {
-  for (const [p, c] of Object.entries(notes)) s.fake.seed(s.ownerId, p, c);
-  s.store.setPersonalVaultMemory(s.ownerId, { sourceRepo: s.remote, sourceCommit: null });
-}
+/** The service calls that change something. */
+const writesOf = (s: Fixture) => s.fake.calls.filter((c) => c.op === "put" || c.op === "remove");
 
 /** A trusted teammate's run on the owner's SHARED account: may write and commit, is not the owner. */
 function teammateTools(s: Fixture) {
@@ -219,8 +207,8 @@ describe("which paths are vault notes for the tools", () => {
         { type: "dir", path: "wiki/old" },
         { type: "dir", path: "wiki/sources" },
         { type: "file", path: "README.md" },
-        { type: "file", path: "CLAUDE.md" }, // the mirror's copy
-        { type: "file", path: "wiki/old/gone.md" }, // a mirror copy of a note the service no longer has
+        { type: "file", path: "CLAUDE.md" }, // a clone file at a vault path: not the vault's
+        { type: "file", path: "wiki/old/gone.md" }, // a clone file of a note the service does not hold
         { type: "file", path: "wiki/sources/.gitkeep" },
       ],
       [{ path: "CLAUDE.md" }, { path: "raw/2026/c.md" }, { path: "wiki/a.md" }],
@@ -241,7 +229,7 @@ describe("which paths are vault notes for the tools", () => {
   });
 });
 
-describe("mcp__repo__* for an owner whose vault is in the memory service", () => {
+describe("mcp__repo__*: vault notes live in the memory service, everything else in the clone", () => {
   it("writes, reads, edits and deletes a vault note in the service — never in the clone", async () => {
     const s = setup("crud");
 
@@ -249,13 +237,14 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     expect(w.isError).toBeFalsy();
     expect(txt(w)).toBe(`Saved the file wiki/people/kim.md. ${VAULT_NOTE_SAVED}`);
     expect(txt(w)).toBe(
-      "Saved the file wiki/people/kim.md. (Vault note: it is saved now. It needs no commit to exist; mcp__repo__commit pushes its copy to the repository.)",
+      "Saved the file wiki/people/kim.md. (Vault note: it is saved now — vault notes live in the memory service, not in the repository. There is nothing to commit for it.)",
     );
     expect(s.notes()).toEqual({ "wiki/people/kim.md": "# Kim\nalpha\n" });
     expect(s.inClone("wiki/people/kim.md")).toBe(false);
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(true);
+    // A vault write never needs the clone.
+    expect(fs.existsSync(s.clonePath)).toBe(false);
 
-    // The clone's copy is the mirror's and may be behind: nobody reads it.
+    // A clone file at a vault path (a copy the retired mirror left) is not the vault's: nobody reads it.
     await s.call("list_files"); // clones
     fs.mkdirSync(path.join(s.clonePath, "wiki/people"), { recursive: true });
     fs.writeFileSync(path.join(s.clonePath, "wiki/people/kim.md"), "STALE MIRROR COPY");
@@ -278,10 +267,9 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
 
     const d = await s.call("delete_file", { path: "wiki/people/kim.md" });
     expect(d.isError).toBeFalsy();
-    expect(txt(d)).toBe(
-      "Deleted wiki/people/kim.md. (Vault note: the deletion is saved now. It needs no commit to take effect; mcp__repo__commit pushes it to the repository's copy.)",
-    );
+    expect(txt(d)).toBe("Deleted wiki/people/kim.md. (Vault note: the deletion is saved now — there is nothing to commit for it.)");
     expect(s.notes()["wiki/people/kim.md"]).toBeUndefined();
+    expect(s.cloneFile("wiki/people/kim.md")).toBe("STALE MIRROR COPY");
     // Already gone = no-op, as a clone delete is.
     expect((await s.call("delete_file", { path: "wiki/people/kim.md" })).isError).toBeFalsy();
 
@@ -315,13 +303,13 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     expect(txt(big)).toBe("The content is too large.");
     expect(s.notes()["wiki/big.md"]).toBeUndefined();
 
-    // An absolute path is refused as it always was — it never reaches the clone's mirror copy either.
+    // An absolute path is refused as it always was — it never reaches a clone file at a vault path either.
     const abs = await s.call("read_file", { path: "/wiki/a.md" });
     expect(abs.isError).toBe(true);
     expect(txt(abs)).toBe("Invalid path.");
   });
 
-  it("keeps every path that is not a vault note in the clone, with today's text", async () => {
+  it("keeps every path that is not a vault note in the clone, with the text that says it is not committed yet", async () => {
     const s = setup("repo-paths");
 
     const w = await s.call("write_file", { path: "notes/misc.md", content: "plain" });
@@ -362,7 +350,7 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     await s.call("write_file", { path: "wiki/a.md", content: "a" });
     await s.call("write_file", { path: "wiki/concepts/b.md", content: "b" });
     await s.call("write_file", { path: "raw/2026/c.md", content: "c" });
-    // Mirror copies in the clone: one behind, one of a note the service no longer holds (its folder exists only for it).
+    // Clone files at vault paths: one that differs from the note, one of a note the service does not hold (its folder exists only for it).
     fs.writeFileSync(path.join(s.clonePath, "wiki/a.md"), "stale");
     fs.mkdirSync(path.join(s.clonePath, "wiki/old"), { recursive: true });
     fs.writeFileSync(path.join(s.clonePath, "wiki/old/gone.md"), "gone");
@@ -390,28 +378,6 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     );
   });
 
-  it("renders the same list a repo-home owner gets for the same files", async () => {
-    const files: Array<[string, string]> = [
-      ["CLAUDE.md", "c"],
-      ["wiki/index.md", "i"],
-      ["wiki/concepts/한글 노트.md", "k"],
-      ["wiki/concepts/b.md", "b"],
-      ["wiki/sources/.gitkeep", ""],
-      ["raw/.gitkeep", ""],
-      ["raw/2026/x.md", "x"],
-      ["skills/s/SKILL.md", "s"],
-      ["notes/n.md", "n"],
-    ];
-    const lists: string[] = [];
-    for (const memory of [false, true]) {
-      const s = setup(`parity-${memory}`, { memory });
-      for (const [p, c] of files) expect((await s.call("write_file", { path: p, content: c })).isError).toBeFalsy();
-      lists.push(txt(await s.call("list_files")));
-      expect(Object.keys(s.notes()).length).toBe(memory ? 5 : 0);
-    }
-    expect(lists[1]).toBe(lists[0]);
-  });
-
   it("deletes a folder on both sides: its notes in the service, the rest in the clone", async () => {
     const s = setup("del-folder");
     await s.call("write_file", { path: "wiki/concepts/a.md", content: "a" });
@@ -423,18 +389,18 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     const res = await s.call("delete_file", { path: "wiki/concepts" });
     expect(res.isError).toBeFalsy();
     expect(txt(res)).toBe(
-      "Deleted wiki/concepts. (Its 2 vault note(s) are deleted now; any other file under it is deleted in the working tree only. mcp__repo__commit pushes both to the repository.)",
+      "Deleted wiki/concepts. (Its 2 vault note(s) are deleted now, with nothing to commit for them. Any other file under it was deleted in Noah's working copy only: Not committed yet — push that part with mcp__repo__commit.)",
     );
     expect(s.notes()).toEqual({ "wiki/keep.md": "k" });
     expect(s.inClone("wiki/concepts")).toBe(false);
 
-    // A folder under wiki/ that holds no note is the clone op, with today's text.
+    // A folder under wiki/ that holds no note is the clone op, with a repo path's text.
     await s.call("write_file", { path: "wiki/assets/x.txt", content: "x" });
     expect(txt(await s.call("delete_file", { path: "wiki/assets" }))).toBe(
       "Deleted wiki/assets. (Not committed yet — push it with mcp__repo__commit.)",
     );
 
-    // A folder that exists only in the service (not mirrored yet) is deleted there.
+    // A folder that exists only in the service (the clone has no such folder) is deleted there.
     await s.call("write_file", { path: "raw/2026/x.md", content: "x" });
     const raw = await s.call("delete_file", { path: "raw" });
     expect(txt(raw)).toContain("Its 1 vault note(s) are deleted now");
@@ -462,7 +428,7 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     const inVault = await s.call("move_file", { from: "wiki/a.md", to: "wiki/concepts/b.md" });
     expect(inVault.isError).toBeFalsy();
     expect(txt(inVault)).toBe(
-      "Moved wiki/a.md → wiki/concepts/b.md. (Vault notes: the move is saved now. It needs no commit to take effect; mcp__repo__commit pushes it to the repository's copy.)",
+      "Moved wiki/a.md → wiki/concepts/b.md. (Vault notes: the move is saved now — there is nothing to commit for it.)",
     );
     expect(s.notes()).toEqual({ "wiki/concepts/b.md": "A" });
 
@@ -478,7 +444,7 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     const out = await s.call("move_file", { from: "wiki/concepts/b.md", to: "archive/b.md" });
     expect(out.isError).toBeFalsy();
     expect(txt(out)).toBe(
-      "Moved wiki/concepts/b.md → archive/b.md. (The vault notes of this move are saved now; the files outside the vault changed in the working tree only. mcp__repo__commit pushes both to the repository.)",
+      "Moved wiki/concepts/b.md → archive/b.md. (The vault notes of this move are saved now, with nothing to commit for them. The files outside the vault changed in Noah's working copy only: Not committed yet — push that part with mcp__repo__commit.)",
     );
     expect(s.notes()).toEqual({});
     expect(s.cloneFile("archive/b.md")).toBe("A");
@@ -491,7 +457,7 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     expect(s.inClone("archive/b.md")).toBe(false);
     expect(s.inClone("raw/2026/b.md")).toBe(false);
 
-    // A repo file moved inside the vault folders stays a clone move with today's text.
+    // A repo file moved inside the vault folders stays a clone move with a repo path's text.
     await s.call("write_file", { path: "wiki/pic.txt", content: "p" });
     const plain = await s.call("move_file", { from: "wiki/pic.txt", to: "wiki/img/pic.txt" });
     expect(txt(plain)).toBe("Moved wiki/pic.txt → wiki/img/pic.txt. (Not committed yet — push it with mcp__repo__commit.)");
@@ -504,13 +470,13 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     await s.call("write_file", { path: "wiki/concepts/deep/b.md", content: "B" });
     await s.call("write_file", { path: "wiki/concepts/.gitkeep", content: "" });
     await s.call("write_file", { path: "wiki/concepts/deep/pic.txt", content: "P" });
-    // A mirror copy in the clone is never moved as if it were the note.
+    // A clone file at a vault path is never moved as if it were the note.
     fs.writeFileSync(path.join(s.clonePath, "wiki/concepts/a.md"), "STALE");
 
     // Inside the vault: notes move in the service, repo files in the clone.
     const res = await s.call("move_file", { from: "wiki/concepts", to: "wiki/ideas" });
     expect(res.isError).toBeFalsy();
-    expect(txt(res)).toContain("The vault notes of this move are saved now; the files outside the vault changed in the working tree only");
+    expect(txt(res)).toContain("The vault notes of this move are saved now, with nothing to commit for them. The files outside the vault changed in Noah's working copy only");
     expect(s.notes()).toEqual({ "wiki/ideas/a.md": "A", "wiki/ideas/deep/b.md": "B" });
     expect(s.cloneFile("wiki/ideas/deep/pic.txt")).toBe("P");
     expect(s.inClone("wiki/ideas/.gitkeep")).toBe(true);
@@ -670,10 +636,12 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
     expectUnavailable(lost);
     expect(txt(lost)).toContain("may or may not have been saved");
 
-    // A server with no memory service configured at all, for an owner whose vault lives there.
+    // A server with no memory service configured at all: there is no other place a vault note could be.
     setMemoryClientForTests(s.store, null);
     expectUnavailable(await s.call("read_file", { path: "wiki/a.md" }));
     expectUnavailable(await s.call("list_files"));
+    expectUnavailable(await s.call("write_file", { path: "wiki/a.md", content: "never in the clone instead" }));
+    expect(s.inClone("wiki/a.md")).toBe(false);
     // The rest of the repo still works.
     expect(txt(await s.call("read_file", { path: "notes/n.txt" }))).toBe("N");
   });
@@ -721,124 +689,130 @@ describe("mcp__repo__* for an owner whose vault is in the memory service", () =>
   });
 });
 
-describe("the write tools' descriptions (one static catalog for both vault homes)", () => {
-  it("say what is true in both homes: commit pushes to the repository, a vault note in the memory service is saved at once", () => {
-    for (const memory of [false, true]) {
-      const s = setup(`desc-${memory}`, { memory });
-      const description = (name: string) => s.tools.find((t) => t.name === name)!.description ?? "";
-      for (const name of ["write_file", "edit_file"]) {
-        expect(description(name)).toContain(
-          "The change reaches the repository only when you call mcp__repo__commit, so commit after writing. Until then a repository file exists only in Noah's working copy and may disappear on the next sync; a vault note (CLAUDE.md, wiki/, raw/ markdown) of an owner whose vault lives in the memory service is already saved when this returns — the result says which applies.",
-        );
-      }
-      expect(description("delete_file")).toContain(
-        "The deletion reaches the repository only when you call mcp__repo__commit, so commit after deleting. Until then a deleted repository file may reappear on the next sync; a vault note of an owner whose vault lives in the memory service is deleted at once — the result says which applies.",
-      );
-      expect(description("move_file")).toContain(
-        "The move reaches the repository only when you call mcp__repo__commit; a vault note of an owner whose vault lives in the memory service is moved at once — the result says which applies.",
-      );
-      // Nothing a description says depends on the owner's home, and none tells the avatar not to commit.
-      for (const name of ["write_file", "edit_file", "delete_file", "move_file"]) {
-        expect(description(name)).not.toMatch(/saved only temporarily|no commit needed/);
-        expect(description(name)).toContain("(owner only)");
-      }
+describe("the write tools' descriptions (one static catalog)", () => {
+  it("say which change needs a commit: a repository file does, a vault note is saved in the memory service at once", () => {
+    const s = setup("desc");
+    const description = (name: string) => s.tools.find((t) => t.name === name)!.description ?? "";
+    const twoKinds =
+      "A vault note (CLAUDE.md and the .md notes under wiki/ and raw/) lives in the memory service: the change is saved when this returns and needs no commit. Any other path is a repository file: the change reaches the repository only when you call mcp__repo__commit, so commit after it — until then it exists only in Noah's working copy and may be lost on the next sync. The result says which applies.";
+    for (const name of ["write_file", "edit_file", "delete_file", "move_file"]) {
+      expect(description(name), name).toContain(twoKinds);
+      expect(description(name), name).toContain("(owner only)");
+      // Nothing of the retired copy in the repository is promised any more.
+      expect(description(name), name).not.toMatch(/mirror|whose vault lives|its copy|repository's copy/i);
     }
-    const repo = setup("desc-a", { memory: false });
-    const mem = setup("desc-b", { memory: true });
-    expect(mem.tools.map((t) => t.description)).toEqual(repo.tools.map((t) => t.description));
+    expect(description("commit")).toContain(
+      "Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are not part of a commit: they are saved in the memory service when written.",
+    );
+    // A shared-account teammate's run must not read "(owner only)" on the tools it may use.
+    const mate = teammateTools(s);
+    for (const name of ["write_file", "edit_file", "delete_file", "move_file", "commit"]) {
+      const text = mate.tools.find((t) => t.name === name)!.description ?? "";
+      expect(text, name).toContain("(shared account: the owner and trusted teammates may write)");
+      expect(text, name).not.toContain("(owner only)");
+    }
   });
 });
 
-describe("mcp__repo__commit for an owner whose vault is in the memory service", () => {
-  it("mirrors the vault into the working tree inside the commit, then commits and pushes everything", async () => {
+describe("mcp__repo__commit: the repository's own files, never a vault note", () => {
+  it("commits and pushes the repo paths; a vault note is not in the commit and needs none", async () => {
     const s = setup("commit");
     await s.call("write_file", { path: "wiki/a.md", content: "note A" });
     await s.call("write_file", { path: "notes/plain.txt", content: "plain" });
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(true);
 
     const res = await s.call("commit", { message: "work" });
     expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain(`Committed and pushed the changes: ${s.remote}`);
-    expect(txt(res)).toMatch(/This commit also brought the repository's copy of the vault notes up to date \(\d+ file\(s\)\)\./);
-    expect(mirrorSpy).toHaveBeenCalledTimes(1);
-    expect(mirrorSpy).toHaveBeenCalledWith(s.store, s.config, s.ownerId, { push: false, locked: true });
-    expect(s.remoteFiles()).toEqual(expect.arrayContaining(["notes/plain.txt", "wiki/a.md"]));
-    expect(s.remoteFile("wiki/a.md")).toBe("note A");
-    // Recorded only now that the push went through.
-    const row = s.store.getPersonalVault(s.ownerId)!;
-    expect(row.mirrorDirty).toBe(false);
-    expect(row.mirrorError).toBeNull();
-    expect(row.mirrorSyncedAt).not.toBeNull();
+    expect(txt(res)).toBe(`Committed and pushed the changes: ${s.remote}`);
+    expect(s.remoteFiles()).toContain("notes/plain.txt");
+    expect(s.remoteFiles()).not.toContain("wiki/a.md");
+    expect(s.inClone("wiki/a.md")).toBe(false);
+    expect(s.notes()).toEqual({ "wiki/a.md": "note A" });
 
-    // Nothing else to commit and the mirror has nothing to write: the answer says notes need no commit.
+    // Nothing else to commit: the answer says notes need no commit.
     const noop = await s.call("commit", { message: "again" });
     expect(noop.isError).toBeFalsy();
     expect(txt(noop)).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
     expect(txt(noop)).toBe(
-      "There are no changes to commit. Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are saved the moment they are written — they need no commit to exist; a commit pushes their copy to the repository.",
+      "There are no changes to commit. Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are saved in the memory service the moment they are written — there is nothing to commit for them, and they are not copied to the repository.",
     );
 
-    // A vault-only change is carried by the next commit too.
+    // A vault-only change leaves nothing to commit either — and it is saved all the same.
     await s.call("edit_file", { path: "wiki/a.md", old_string: "note A", new_string: "note A2" });
+    await s.call("delete_file", { path: "wiki/a.md" });
+    await s.call("write_file", { path: "raw/2026/x.md", content: "raw" });
     const only = await s.call("commit", { message: "notes" });
-    expect(txt(only)).toContain("Committed and pushed the changes");
-    expect(s.remoteFile("wiki/a.md")).toBe("note A2");
+    expect(only.isError).toBeFalsy();
+    expect(txt(only)).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
+    expect(s.notes()).toEqual({ "raw/2026/x.md": "raw" });
+    expect(s.remoteFiles().filter((f) => f === "CLAUDE.md" || /^(wiki|raw)\/.*\.md$/.test(f))).toEqual([]);
+    // The commit never asked the service for anything.
+    const before = s.fake.calls.length;
+    await s.call("commit", { message: "once more" });
+    expect(s.fake.calls.length).toBe(before);
   });
 
-  it("commits without a clone on disk yet (a vault write never needed one)", async () => {
+  it("with no clone on disk yet (a vault write never needed one) there is nothing to commit — not a failure", async () => {
     const s = setup("commit-noclone");
     await s.call("write_file", { path: "wiki/a.md", content: "A" });
     expect(fs.existsSync(s.clonePath)).toBe(false);
     const res = await s.call("commit", { message: "first" });
     expect(res.isError, txt(res)).toBeFalsy();
-    expect(s.remoteFile("wiki/a.md")).toBe("A");
+    expect(txt(res)).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
+    expect(s.remoteFiles()).not.toContain("wiki/a.md");
   });
 
-  it("commits the other changes when the mirror fails, is on hold or throws — and says the copy is behind", async () => {
-    const s = setup("commit-mirror-fails");
-    await s.call("write_file", { path: "wiki/a.md", content: "A" });
-
-    const outcomes = [
-      { outcome: { kind: "failed", error: "memory service unavailable (network)" } as const, says: "was NOT updated this time (memory service unavailable (network))" },
-      { outcome: { kind: "skipped", reason: "hold" } as const, says: "it is on hold until the owner confirms" },
-      { outcome: null, says: "was NOT updated this time (boom)" },
-    ];
-    for (const [i, c] of outcomes.entries()) {
-      await s.call("write_file", { path: `notes/n${i}.txt`, content: String(i) });
-      if (c.outcome) mirrorSpy.mockResolvedValueOnce(c.outcome);
-      else mirrorSpy.mockRejectedValueOnce(new Error("boom"));
-      const res = await s.call("commit", { message: `c${i}` });
-      expect(res.isError, txt(res)).toBeFalsy();
-      expect(txt(res)).toContain("Committed and pushed the changes");
-      expect(txt(res)).toContain(c.says);
-      expect(txt(res)).toContain("The notes themselves are saved in the vault; only their copy in the repository is behind.");
-      expect(s.remoteFiles()).toContain(`notes/n${i}.txt`);
-      expect(s.remoteFiles()).not.toContain("wiki/a.md");
-      // Still dirty: the background pass or the next commit retries.
-      expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(true);
-    }
-
-    // With nothing else to commit, a failed mirror is still reported next to "no changes".
-    mirrorSpy.mockResolvedValueOnce({ kind: "failed", error: "memory service unavailable (network)" });
-    const noop = await s.call("commit", { message: "noop" });
-    expect(noop.isError).toBeFalsy();
-    expect(txt(noop)).toContain(NO_CHANGES);
-    expect(txt(noop)).toContain(VAULT_NOTES_NEED_NO_COMMIT);
-    expect(txt(noop)).toContain("was NOT updated this time");
+  it("leaves a repository file at a vault path (a copy the retired mirror left) exactly as it is", async () => {
+    const s = setup("commit-old-copy", { files: { "wiki/a.md": "the copy the mirror left\n", "CLAUDE.md": "old standing copy\n" } });
+    await s.call("write_file", { path: "wiki/a.md", content: "the vault's text\n" });
+    await s.call("write_file", { path: "CLAUDE.md", content: "the vault's standing text\n" });
+    await s.call("delete_file", { path: "wiki/a.md" });
+    await s.call("write_file", { path: "notes/plain.txt", content: "plain" });
+    const res = await s.call("commit", { message: "work" });
+    expect(res.isError, txt(res)).toBeFalsy();
+    expect(s.remoteFiles()).toContain("notes/plain.txt");
+    expect(s.remoteFile("wiki/a.md")).toBe("the copy the mirror left\n");
+    expect(s.remoteFile("CLAUDE.md")).toBe("old standing copy\n");
+    expect(s.notes()).toEqual({ "CLAUDE.md": "the vault's standing text\n" });
   });
 
-  it("records the mirror as failed when the push fails after the mirror wrote the working tree", async () => {
+  it("a conflicting direct git edit of a repository file fails the commit as it always did", async () => {
+    const s = setup("commit-conflict");
+    await s.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
+    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
+    await s.call("write_file", { path: "notes/plain.txt", content: "plain edited here\n" });
+    await s.call("write_file", { path: "wiki/a.md", content: "a note written meanwhile\n" });
+    s.pushOutside({ "notes/plain.txt": "plain edited in git\n" });
+    const res = await s.call("commit", { message: "second" });
+    expect(res.isError).toBe(true);
+    expect(txt(res)).toContain("CONFLICT");
+    expect(txt(res)).toContain("notes/plain.txt");
+    expect(txt(res)).toContain("the shell has no git credentials");
+    // Nothing about vault notes is said: they have no part in a commit.
+    expect(txt(res)).not.toMatch(/vault/i);
+    expect(s.remoteFile("notes/plain.txt")).toBe("plain edited in git\n");
+    expect(s.notes()).toEqual({ "wiki/a.md": "a note written meanwhile\n" });
+  });
+
+  it("a direct git edit of a vault path in the repository never stops a commit, and is never read back", async () => {
+    const s = setup("commit-git-note");
+    await s.call("write_file", { path: "wiki/a.md", content: "the vault's text\n" });
+    await s.call("write_file", { path: "notes/plain.txt", content: "plain\n" });
+    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
+    s.pushOutside({ "wiki/a.md": "written directly in git\n" });
+    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
+    const res = await s.call("commit", { message: "second" });
+    expect(res.isError, txt(res)).toBeFalsy();
+    expect(s.remoteFile("wiki/a.md")).toBe("written directly in git\n");
+    expect(txt(await s.call("read_file", { path: "wiki/a.md" }))).toBe("the vault's text\n");
+  });
+
+  it("reports a failed push as a failure", async () => {
     const s = setup("commit-push-fails");
     await s.call("write_file", { path: "notes/x.txt", content: "x" }); // clones
-    await s.call("write_file", { path: "wiki/a.md", content: "A" });
     fs.renameSync(s.remote, `${s.remote}.gone`);
     const res = await s.call("commit", { message: "offline" });
     expect(res.isError).toBe(true);
     expect(txt(res)).toContain("Commit/push failed");
-    const row = s.store.getPersonalVault(s.ownerId)!;
-    expect(row.mirrorDirty).toBe(true);
-    expect(row.mirrorError).toBeTruthy();
-    expect(row.mirrorSyncedAt).toBeNull();
   });
 });
 
@@ -853,42 +827,49 @@ describe("mcp__repo__create_repo and the vault", () => {
       },
     );
   }
+  const vaultPathsOf = (files: string[]) => files.filter((p) => p === "CLAUDE.md" || /^(wiki|raw)\/.*\.md$/.test(p));
 
-  it("tells the migration that a repository was connected (repo-home: the template is committed as always)", async () => {
-    const s = setup("create-repo-home", { memory: false, repo: false });
+  it("puts the template's vault notes into the vault and the rest into the first commit, then starts the import", async () => {
+    const s = setup("create-fresh", { repo: false });
     const res = await callTool(createTools(s), "create_repo", { name: "brain" });
     expect(res.isError, txt(res)).toBeFalsy();
     expect(txt(res)).toContain("initialized it with the default template");
+    expect(txt(res)).toContain("are saved in the owner's vault (the memory service), not in the repository");
+    expect(txt(res)).not.toContain("could not all be saved");
+
+    const notes = s.notes();
+    expect(Object.keys(notes)).toEqual(["CLAUDE.md", "wiki/_template.md", "wiki/index.md", "wiki/log.md"]);
+    expect(notes["wiki/index.md"]).toContain("# Index");
+    expect(notes["wiki/log.md"]).toContain("# Reflection log");
+    expect(notes["wiki/_template.md"]).toContain("title:");
+    // The commit carries the repo files of the template only.
+    const pushed = s.remoteFiles();
+    expect(pushed).toEqual(expect.arrayContaining([".claude-plugin/marketplace.json", "README.md", "raw/.gitkeep", "wiki/sources/.gitkeep"]));
+    expect(vaultPathsOf(pushed)).toEqual([]);
+    expect(vaultPathsOf(fs.readdirSync(s.clonePath, { recursive: true }).map((p) => String(p).split(path.sep).join("/")))).toEqual([]);
+    // The vault's side of a new connection: store, config, owner — nothing else.
     expect(repoChangedSpy).toHaveBeenCalledTimes(1);
-    expect(repoChangedSpy).toHaveBeenCalledWith(s.store, s.config, s.ownerId, null);
-    expect(s.remoteFiles()).toEqual(expect.arrayContaining(["CLAUDE.md", "wiki/index.md", "wiki/log.md", "wiki/_template.md", ".claude-plugin/marketplace.json"]));
-    expect(s.fake.calls).toEqual([]);
+    expect(repoChangedSpy.mock.calls[0]).toEqual([s.store, s.config, s.ownerId]);
   });
 
-  it("sends the template's vault notes to the service for an owner already in memory, never overwriting a note", async () => {
-    const s = setup("create-memory-home", { memory: true, repo: false });
+  it("never overwrites a note the vault already holds (the vault outlives a disconnected repository)", async () => {
+    const s = setup("create-kept", { repo: false });
     s.fake.seed(s.ownerId, "CLAUDE.md", "MY OWN STANDING RULES");
     s.fake.seed(s.ownerId, "wiki/concepts/kept.md", "kept");
     const res = await callTool(createTools(s), "create_repo", { name: "brain" });
     expect(res.isError, txt(res)).toBeFalsy();
     expect(txt(res)).toContain("initialized it with the default template");
-    expect(txt(res)).not.toContain("could not all be saved");
 
     const notes = s.notes();
     expect(notes["CLAUDE.md"]).toBe("MY OWN STANDING RULES");
     expect(notes["wiki/concepts/kept.md"]).toBe("kept");
     expect(notes["wiki/index.md"]).toContain("# Index");
-    expect(notes["wiki/log.md"]).toContain("# Reflection log");
-    expect(notes["wiki/_template.md"]).toContain("title:");
-    // The commit carries the repo files of the template only: the repository's copy of a vault note is the mirror's.
-    const pushed = s.remoteFiles();
-    expect(pushed).toEqual(expect.arrayContaining([".claude-plugin/marketplace.json", "README.md", "raw/.gitkeep", "wiki/sources/.gitkeep"]));
-    expect(pushed.filter((p) => p === "CLAUDE.md" || /^(wiki|raw)\/.*\.md$/.test(p))).toEqual([]);
-    expect(repoChangedSpy).toHaveBeenCalledWith(s.store, s.config, s.ownerId, null);
+    expect(vaultPathsOf(s.remoteFiles())).toEqual([]);
+    expect(repoChangedSpy.mock.calls[0]).toEqual([s.store, s.config, s.ownerId]);
   });
 
   it("still creates the repository when the memory service is down, and says the starter notes are missing", async () => {
-    const s = setup("create-memory-down", { memory: true, repo: false });
+    const s = setup("create-memory-down", { repo: false });
     s.fake.failNext(down());
     const res = await callTool(createTools(s), "create_repo", { name: "brain" });
     expect(res.isError, txt(res)).toBeFalsy();
@@ -898,9 +879,40 @@ describe("mcp__repo__create_repo and the vault", () => {
     expect(s.notes()).toEqual({});
     expect(repoChangedSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("leaves a repository that brings vault notes of its own exactly as it is (the import judges them)", async () => {
+    const s = setup("create-own", { repo: false, files: { "wiki/index.md": "# Their index\n", "CLAUDE.md": "# Their rules\n" } });
+    s.fake.seed(s.ownerId, "wiki/mine.md", "mine");
+    const before = s.remoteFiles();
+    const res = await callTool(createTools(s), "create_repo", { name: "brain" });
+    expect(res.isError, txt(res)).toBeFalsy();
+    expect(txt(res)).toContain("Skipped the default template: this repository already holds vault notes of its own");
+    expect(txt(res)).toContain("imported into the owner's vault in the background only if that vault is still empty");
+    expect(s.remoteFiles()).toEqual(before);
+    expect(s.remoteFile("CLAUDE.md")).toBe("# Their rules\n");
+    expect(s.cloneFile("wiki/index.md")).toBe("# Their index\n");
+    expect(s.notes()).toEqual({ "wiki/mine.md": "mine" });
+    expect(repoChangedSpy.mock.calls[0]).toEqual([s.store, s.config, s.ownerId]);
+  });
+
+  it("writes the template inside the owner's vault write queue, like every other vault write", async () => {
+    const s = setup("create-queued", { repo: false });
+    const res = await whileQueued(
+      s,
+      () => {
+        expect(writesOf(s)).toEqual([]);
+        expect(s.remoteFiles()).not.toContain(".claude-plugin/marketplace.json");
+      },
+      () => callTool(createTools(s), "create_repo", { name: "brain" }),
+    );
+    expect(res.isError, txt(res)).toBeFalsy();
+    expect(s.notes()["wiki/index.md"]).toContain("# Index");
+    expect(s.notes()["CLAUDE.md"]).toBeTruthy();
+    expect(s.remoteFiles()).toContain(".claude-plugin/marketplace.json");
+  });
 });
 
-describe("mcp__brain__* for an owner whose vault is in the memory service", () => {
+describe("mcp__brain__*: the personal brain is read from the memory service", () => {
   const DEPLOY = "---\ntitle: 배포 절차\ntags: [deploy, ops]\n---\n배포는 setup-host.sh 후 compose up 으로 한다.\n";
   const LINK = "---\ntitle: 링크 노트\nteam_page: wiki/howto/deploy.md\n---\n팀 브레인 참조.\n";
   const KEPT = "---\ntitle: 연봉 메모\nteam_share: no\n---\n내 메모\n";
@@ -924,72 +936,59 @@ describe("mcp__brain__* for an owner whose vault is in the memory service", () =
     }
   }
 
-  it("searches the service and reads a note from it, with the same result strings as the clone", async () => {
-    const results: Array<Record<string, string>> = [];
-    for (const memory of [false, true]) {
-      const s = setup(`brain-${memory}`, { memory });
-      await seedNotes(s);
-      const tools = brain(s);
-      const out: Record<string, string> = {};
-      const hit = await callTool(tools, "search", { query: "setup-host", scope: "personal" });
-      expect(hit.isError).toBeFalsy();
-      out.hit = txt(hit);
-      const miss = await callTool(tools, "search", { query: "zzz-nothing", scope: "personal" });
-      expect(miss.isError).toBeFalsy();
-      out.miss = txt(miss);
-      const note = await callTool(tools, "get_note", { path: "wiki/howto/deploy.md" });
-      expect(note.isError).toBeFalsy();
-      out.note = txt(note);
-      out.outside = txt(await callTool(tools, "get_note", { path: "CLAUDE.md" }));
-      results.push(out);
-      if (memory) {
-        // The search really went to the service, as the owner, under wiki/.
-        expect(s.fake.calls.some((c) => c.op === "search" && c.owner === s.ownerId && c.prefix === "wiki")).toBe(true);
-        expect(s.inClone("wiki/howto/deploy.md")).toBe(false);
-      } else {
-        expect(s.fake.calls).toEqual([]);
-      }
-    }
-    const [repo, memory] = results;
-    expect(memory).toEqual(repo);
-    expect(memory.hit).toContain('Top 1 note(s) from your second brain for "setup-host":');
-    expect(memory.hit).toContain("- wiki/howto/deploy.md [deploy, ops]: 배포 절차");
-    expect(memory.hit).toContain("Read a full note with get_note or mcp__repo__read_file.");
-    expect(memory.miss).toBe(
+  it("searches the service and reads a note from it", async () => {
+    const s = setup("brain");
+    await seedNotes(s);
+    const tools = brain(s);
+    const hit = await callTool(tools, "search", { query: "setup-host", scope: "personal" });
+    expect(hit.isError).toBeFalsy();
+    expect(txt(hit)).toContain('Top 1 note(s) from your second brain for "setup-host":');
+    expect(txt(hit)).toContain("- wiki/howto/deploy.md [deploy, ops]: 배포 절차");
+    expect(txt(hit)).toContain("Read a full note with get_note or mcp__repo__read_file.");
+    // The search really went to the service, as the owner, under wiki/ — and nothing was put in the clone.
+    expect(s.fake.calls.some((c) => c.op === "search" && c.owner === s.ownerId && c.prefix === "wiki")).toBe(true);
+    expect(s.inClone("wiki/howto/deploy.md")).toBe(false);
+
+    const miss = await callTool(tools, "search", { query: "zzz-nothing", scope: "personal" });
+    expect(miss.isError).toBeFalsy();
+    expect(txt(miss)).toBe(
       'No notes in your second brain matched "zzz-nothing". It may not be captured yet — if it is durable, capture it with the brain-ingest skill.',
     );
-    expect(memory.note).toBe(DEPLOY);
-    expect(memory.outside).toBe("get_note only reads notes under `wiki/`. Use mcp__repo__read_file for other paths.");
+    const note = await callTool(tools, "get_note", { path: "wiki/howto/deploy.md" });
+    expect(note.isError).toBeFalsy();
+    expect(txt(note)).toBe(DEPLOY);
+    const outside = await callTool(tools, "get_note", { path: "CLAUDE.md" });
+    expect(outside.isError).toBe(true);
+    expect(txt(outside)).toBe("get_note only reads notes under `wiki/`. Use mcp__repo__read_file for other paths.");
   });
 
-  it("says where an empty vault lives: in the memory service it may be lost data, not a repository to migrate", async () => {
-    // Memory home: no note under wiki/ or raw/ in the service. That is either a vault nobody wrote yet or a
-    // service that lost its data — the answer must not send the avatar off to recreate notes that existed.
-    const m = setup("brain-empty-memory");
+  it("an empty vault may be lost data, not a repository to migrate — and the clone's files never stand in for it", async () => {
+    // No note under wiki/ or raw/ in the service. That is either a vault nobody wrote yet or a service that
+    // lost its data — the answer must not send the avatar off to recreate notes that existed.
+    const m = setup("brain-empty");
     const inService = await callTool(brain(m), "search", { query: "배포", scope: "personal" });
     expect(inService.isError).toBe(true);
     expect(txt(inService)).toBe(
-      "Your second brain holds no `wiki/` note (it lives in the memory service, not in the repository). If nothing was ever captured, run the `brain-migrate` skill ONCE to create the vault skeleton, then capture notes with the `brain-ingest` skill and retry. If notes existed before, do NOT recreate them: the memory service may have lost its data — tell the owner to report it to an admin (the knowledge repository still holds the last copy of the notes). Do not use Bash — use the repo tools.",
+      "Your second brain holds no `wiki/` note (it lives in the memory service, not in the repository). If nothing was ever captured, run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing notes), then capture notes with the `brain-ingest` skill and retry. If notes existed before, do NOT recreate them: the memory service may have lost its data — tell the owner to report it to an admin. Do not use Bash — use the repo tools.",
     );
-    expect(txt(inService)).not.toContain("predates the second-brain layout");
     expect(txt(inService)).not.toMatch(/pi-gateway/i);
-    // The clone holding copies of notes changes nothing: the vault is the service, and it is empty.
-    const copies = setup("brain-empty-memory-copies", { files: { "wiki/concepts/old.md": "---\ntitle: 배포\n---\n배포 메모\n" } });
+    // The clone holding files at vault paths changes nothing: the vault is the service, and it is empty.
+    const copies = setup("brain-empty-copies", { files: { "wiki/concepts/old.md": "---\ntitle: 배포\n---\n배포 메모\n" } });
     await copies.call("list_files"); // clones
     const withCopies = await callTool(brain(copies), "search", { query: "배포", scope: "personal" });
     expect(withCopies.isError).toBe(true);
     expect(txt(withCopies)).toContain("it lives in the memory service, not in the repository");
     expect(txt(withCopies)).toContain("do NOT recreate them");
+    const fromClone = await callTool(brain(copies), "get_note", { path: "wiki/concepts/old.md" });
+    expect(fromClone.isError).toBe(true);
+    expect(txt(fromClone)).toBe("No such note in your second brain. Check the path with mcp__brain__search or mcp__repo__list_files.");
 
-    // Repo home: the repository itself has no vault folders — the text it always had, and no service call.
-    const r = setup("brain-empty-repo", { memory: false });
-    const inRepo = await callTool(brain(r), "search", { query: "배포", scope: "personal" });
-    expect(inRepo.isError).toBe(true);
-    expect(txt(inRepo)).toBe(
-      "Your knowledge repository has no `wiki/` vault yet (it predates the second-brain layout). Run the `brain-migrate` skill ONCE to create the vault skeleton (it never overwrites existing files), then capture notes with the `brain-ingest` skill and retry. Do not use Bash — use the repo tools.",
-    );
-    expect(txt(inRepo)).not.toContain("memory service");
-    expect(r.fake.calls).toEqual([]);
+    // No repository connected: the brain needs one, and the service is not asked.
+    const none = setup("brain-no-repo", { repo: false });
+    const noRepo = await callTool(brain(none), "search", { query: "배포", scope: "personal" });
+    expect(noRepo.isError).toBe(true);
+    expect(txt(noRepo)).toContain("No knowledge repository is connected yet");
+    expect(none.fake.calls).toEqual([]);
   });
 
   it("drops the structural pages from a search", async () => {
@@ -1095,83 +1094,10 @@ describe("mcp__brain__* for an owner whose vault is in the memory service", () =
   });
 });
 
-describe("regression: an owner whose vault home is the repo gets exactly what they always got", () => {
-  it("runs every repo tool in the clone with today's strings and never calls the memory service or the mirror", async () => {
-    const s = setup("regression", { memory: false });
-    expect(txt(await s.call("write_file", { path: "wiki/a.md", content: "one two one" }))).toBe(
-      "Saved the file wiki/a.md. (Not committed yet — push it with mcp__repo__commit.)",
-    );
-    expect(txt(await s.call("write_file", { path: "CLAUDE.md", content: "standing" }))).toBe(
-      "Saved the file CLAUDE.md. (Not committed yet — push it with mcp__repo__commit.)",
-    );
-    expect(s.cloneFile("wiki/a.md")).toBe("one two one");
-    expect(txt(await s.call("read_file", { path: "wiki/a.md" }))).toBe("one two one");
-    expect(txt(await s.call("edit_file", { path: "wiki/a.md", old_string: "two", new_string: "2" }))).toBe(
-      "Edited wiki/a.md (1 replacement). (Not committed yet — push it with mcp__repo__commit.)",
-    );
-    // A missing file reads as it always did in the clone.
-    const ghost = await s.call("read_file", { path: "wiki/ghost.md" });
-    expect(ghost.isError).toBe(true);
-    expect(txt(ghost)).toBe("Invalid path.");
-    expect(txt(await s.call("move_file", { from: "wiki/a.md", to: "wiki/b.md" }))).toBe(
-      "Moved wiki/a.md → wiki/b.md. (Not committed yet — push it with mcp__repo__commit.)",
-    );
-    expect(txt(await s.call("move_file", { from: "wiki/ghost.md", to: "wiki/x.md" }))).toBe("The source path does not exist.");
-    await s.call("write_file", { path: "wiki/dir/c.md", content: "c" });
-    expect(txt(await s.call("move_file", { from: "wiki/dir", to: "raw/dir" }))).toBe(
-      "Moved wiki/dir → raw/dir. (Not committed yet — push it with mcp__repo__commit.)",
-    );
-    expect(s.cloneFile("raw/dir/c.md")).toBe("c");
-    expect(txt(await s.call("list_files"))).toBe(
-      ["Knowledge repository file list:", "raw/", "raw/dir/", "wiki/", "CLAUDE.md", "raw/dir/c.md", "README.md", "wiki/b.md"].join("\n"),
-    );
-    expect(txt(await s.call("delete_file", { path: "raw" }))).toBe("Deleted raw. (Not committed yet — push it with mcp__repo__commit.)");
-    expect(txt(await s.call("delete_file", { path: "wiki/b.md" }))).toBe(
-      "Deleted wiki/b.md. (Not committed yet — push it with mcp__repo__commit.)",
-    );
+describe("a tool that changes a vault note runs inside the owner's vault write queue", () => {
+  const NOTES = { "wiki/a.md": "one", "wiki/t/n.md": "N", "wiki/m/x.md": "X" };
 
-    const commit = await s.call("commit", { message: "work" });
-    expect(commit.isError).toBeFalsy();
-    expect(txt(commit)).toBe(`Committed and pushed the changes: ${s.remote}`);
-    expect(s.remoteFile("CLAUDE.md")).toBe("standing");
-    const noop = await s.call("commit", { message: "again" });
-    expect(txt(noop)).toBe("There are no changes to commit.");
-
-    expect(s.events).toEqual([
-      { action: "add", path: "wiki/a.md" },
-      { action: "update", path: "wiki/a.md" },
-      { action: "add", path: "wiki/dir/c.md" },
-    ]);
-    expect(s.fake.calls).toEqual([]);
-    expect(mirrorSpy).not.toHaveBeenCalled();
-    expect(s.store.getPersonalVault(s.ownerId)).toBeNull();
-  });
-
-  it("matches listTree for a repo-home list (the merge is not on that path)", async () => {
-    const s = setup("regression-list", { memory: false });
-    await s.call("write_file", { path: "wiki/a.md", content: "a" });
-    await s.call("write_file", { path: "skills/s/SKILL.md", content: "s" });
-    const entries = await listTree(s.clonePath);
-    expect(txt(await s.call("list_files"))).toBe(
-      `Knowledge repository file list:\n${entries.map((e) => (e.type === "dir" ? `${e.path}/` : e.path)).join("\n")}`,
-    );
-  });
-});
-
-// ---- Addendum 2 ---------------------------------------------------------------------------------------------
-
-describe("D1: a vault write decides its home inside the owner's vault write queue", () => {
-  const CLONE_NOTES = { "wiki/a.md": "one", "wiki/t/n.md": "N", "wiki/t/keep.txt": "K", "wiki/m/x.md": "X" };
-  const VAULT_NOTES = { "wiki/a.md": "one", "wiki/t/n.md": "N", "wiki/m/x.md": "X" };
-
-  /** A repo-home owner whose clone holds the notes; each case then cuts over while its call waits in the queue. */
-  async function repoHome(name: string) {
-    const s = setup(name, { memory: false, files: CLONE_NOTES });
-    await s.call("list_files"); // clones
-    return s;
-  }
-
-  it("a write, edit, delete or move that waited through a cutover lands in the service — never in the clone the mirror now owns", async () => {
+  it("a write, edit, delete or move waits for whatever holds the queue, then runs", async () => {
     const cases: Array<{ tool: string; args: Record<string, unknown>; check: (s: Fixture, res: ToolResult) => void }> = [
       {
         tool: "write_file",
@@ -1179,7 +1105,6 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
         check: (s, res) => {
           expect(txt(res)).toBe(`Saved the file wiki/new.md. ${VAULT_NOTE_SAVED}`);
           expect(s.notes()["wiki/new.md"]).toBe("NEW");
-          expect(s.inClone("wiki/new.md")).toBe(false);
         },
       },
       {
@@ -1188,7 +1113,6 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
         check: (s, res) => {
           expect(txt(res)).toContain(VAULT_NOTE_SAVED);
           expect(s.notes()["wiki/a.md"]).toBe("two");
-          expect(s.cloneFile("wiki/a.md")).toBe("one");
         },
       },
       {
@@ -1197,7 +1121,6 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
         check: (s, res) => {
           expect(txt(res)).toContain("Vault note: the deletion is saved now");
           expect(s.notes()["wiki/a.md"]).toBeUndefined();
-          expect(s.cloneFile("wiki/a.md")).toBe("one");
         },
       },
       {
@@ -1206,9 +1129,6 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
         check: (s, res) => {
           expect(txt(res)).toContain("Its 1 vault note(s) are deleted now");
           expect(s.notes()["wiki/t/n.md"]).toBeUndefined();
-          // The clone's file at the vault path is the mirror's; the repo file of the folder is the tool's.
-          expect(s.cloneFile("wiki/t/n.md")).toBe("N");
-          expect(s.inClone("wiki/t/keep.txt")).toBe(false);
         },
       },
       {
@@ -1218,8 +1138,6 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
           expect(txt(res)).toContain("Vault notes: the move is saved now");
           expect(s.notes()["wiki/b.md"]).toBe("one");
           expect(s.notes()["wiki/a.md"]).toBeUndefined();
-          expect(s.cloneFile("wiki/a.md")).toBe("one");
-          expect(s.inClone("wiki/b.md")).toBe(false);
         },
       },
       {
@@ -1229,91 +1147,61 @@ describe("D1: a vault write decides its home inside the owner's vault write queu
           expect(txt(res)).toContain("Vault notes: the move is saved now");
           expect(s.notes()["wiki/m2/x.md"]).toBe("X");
           expect(s.notes()["wiki/m/x.md"]).toBeUndefined();
-          expect(s.cloneFile("wiki/m/x.md")).toBe("X");
-          expect(s.inClone("wiki/m2")).toBe(false);
         },
       },
     ];
     for (const [i, c] of cases.entries()) {
-      const s = await repoHome(`d1-${i}`);
-      const res = await whileQueued(s, () => flipToMemory(s, VAULT_NOTES), () => s.call(c.tool, c.args));
+      const s = setup(`queue-${i}`);
+      for (const [p, content] of Object.entries(NOTES)) s.fake.seed(s.ownerId, p, content);
+      const res = await whileQueued(
+        s,
+        () => {
+          // Still waiting: nothing was written, and what was there is untouched.
+          expect(writesOf(s), c.tool).toEqual([]);
+          expect(s.notes()).toEqual(NOTES);
+        },
+        () => s.call(c.tool, c.args),
+      );
       expect(res.isError, `${c.tool}: ${txt(res)}`).toBeFalsy();
       c.check(s, res);
+      // Nothing of a vault change lands in the clone.
+      expect(fs.existsSync(path.join(s.clonePath, "wiki"))).toBe(false);
     }
   });
 
-  it("the other way round: a write that waited through a rollback lands in the clone, with the clone's text", async () => {
-    const s = setup("d1-rollback");
-    await s.call("write_file", { path: "wiki/a.md", content: "A" });
-    const res = await whileQueued(s, () => s.store.clearPersonalVault(s.ownerId), () => s.call("write_file", { path: "wiki/b.md", content: "B" }));
-    expect(res.isError).toBeFalsy();
-    expect(txt(res)).toBe("Saved the file wiki/b.md. (Not committed yet — push it with mcp__repo__commit.)");
-    expect(s.cloneFile("wiki/b.md")).toBe("B");
-    expect(s.notes()["wiki/b.md"]).toBeUndefined();
-  });
-
-  it("create_repo's template waits in the queue too: its vault notes go where the vault is when it runs", async () => {
-    const s = setup("d1-create", { memory: false, repo: false });
-    const tools = buildRepoTools(
-      s.store,
-      { avatarUserId: s.ownerId, owner: s.owner, viewerIsOwner: true, config: s.config },
-      { allowCreate: true, createRemoteRepo: async () => ({ ok: true as const, fullName: s.remote, defaultBranch: "main", isPrivate: true }) },
-    );
-    const res = await whileQueued(s, () => flipToMemory(s), () => callTool(tools, "create_repo", { name: "brain" }));
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(s.notes()["wiki/index.md"]).toContain("# Index");
-    expect(s.notes()["CLAUDE.md"]).toBeTruthy();
-    expect(s.remoteFiles()).toContain(".claude-plugin/marketplace.json");
-    expect(s.remoteFiles().filter((f) => f === "CLAUDE.md" || /^(wiki|raw)\/.*\.md$/.test(f))).toEqual([]);
+  it("two edits of one note that race both land (the second reads what the first wrote)", async () => {
+    const s = setup("queue-race");
+    await s.call("write_file", { path: "wiki/a.md", content: "one two" });
+    const [a, b] = await Promise.all([
+      s.call("edit_file", { path: "wiki/a.md", old_string: "one", new_string: "1" }),
+      s.call("edit_file", { path: "wiki/a.md", old_string: "two", new_string: "2" }),
+    ]);
+    expect(a.isError, txt(a)).toBeFalsy();
+    expect(b.isError, txt(b)).toBeFalsy();
+    expect(s.notes()["wiki/a.md"]).toBe("1 2");
   });
 
   it("does not queue a path that is not a vault path, nor a caller the gate refuses", async () => {
-    const s = setup("d1-noqueue");
+    const s = setup("queue-not");
     let release!: () => void;
     const held = withVaultWriteLock(s.store, s.ownerId, () => new Promise<void>((resolve) => (release = resolve)));
     // While the queue is held, repo paths and reads go through; a refused caller is refused at once.
     expect(txt(await s.call("write_file", { path: "notes/x.txt", content: "x" }))).toContain("Saved the file notes/x.txt");
     expect(txt(await s.call("delete_file", { path: "notes/x.txt" }))).toContain("Deleted notes/x.txt");
     expect((await s.call("list_files")).isError).toBeFalsy();
+    expect((await s.call("read_file", { path: "wiki/ghost.md" })).isError).toBe(true);
     const visitor = buildRepoTools(s.store, { avatarUserId: s.ownerId, owner: s.owner, viewerIsOwner: false, config: s.config });
     expect(txt(await callTool(visitor, "write_file", { path: "wiki/a.md", content: "x" }))).toBe("This tool can only be used by the avatar owner.");
     release();
     await held;
   });
-
-  it("a shared-account teammate's write and edit racing a REAL cutover are not lost (review E1)", async () => {
-    const s = setup("d1-cutover", { memory: false, files: { "CLAUDE.md": "# standing\n", "wiki/index.md": "# Index\n", "raw/2026-11-01.md": "captured\n" } });
-    await s.call("list_files"); // clones
-    const mate = teammateTools(s);
-    const cut = cutoverVault(s.store, s.config, s.ownerId);
-    await tick();
-    const [w, e] = await Promise.all([
-      mate.call("write_file", { path: "wiki/new.md", content: "written during the cutover\n" }),
-      mate.call("edit_file", { path: "wiki/index.md", old_string: "# Index", new_string: "# Index (edited during the cutover)" }),
-    ]);
-    const report = await cut;
-    expect(report.blockers).toEqual([]);
-    expect(report.state).toBe("memory");
-    expect(w.isError, txt(w)).toBeFalsy();
-    expect(e.isError, txt(e)).toBeFalsy();
-    // Whichever side of the flip each call ran on, the vault holds it now …
-    expect(s.notes()["wiki/new.md"]).toBe("written during the cutover\n");
-    expect(s.notes()["wiki/index.md"]).toBe("# Index (edited during the cutover)\n");
-    // … and the next mirror carries it to the repository instead of deleting it.
-    s.store.markVaultMirrorDirty(s.ownerId);
-    const outcome = await syncVaultMirror(s.store, s.config, s.ownerId, { push: true });
-    expect(outcome.kind).toBe("synced");
-    expect(s.remoteFile("wiki/new.md")).toBe("written during the cutover\n");
-    expect(s.remoteFile("wiki/index.md")).toBe("# Index (edited during the cutover)\n");
-  });
 });
 
-describe("D4: for a memory-home owner the tools never touch a clone file at a vault path", () => {
-  it("a folder delete during a hold leaves the connected repository's own notes alone, and the next commit does not push their deletion (review)", async () => {
-    // The newly connected repository holds notes of its own under wiki/topic; the owner has not confirmed yet.
-    const s = setup("d4-hold", { files: { "wiki/topic/theirs.md": "the repository's own note\n", "wiki/topic/asset.txt": "asset\n" } });
+describe("D4: the tools never touch a clone file at a vault path", () => {
+  it("a folder delete or move leaves the repository's own files at vault paths alone, and the next commit does not push their deletion", async () => {
+    // The connected repository holds markdown of its own under wiki/topic (never imported: the vault was not empty).
+    const s = setup("d4-own", { files: { "wiki/topic/theirs.md": "the repository's own note\n", "wiki/topic/asset.txt": "asset\n" } });
     s.fake.seed(s.ownerId, "wiki/topic/mine.md", "the vault's note\n");
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
 
     const del = await s.call("delete_file", { path: "wiki/topic" });
     expect(del.isError, txt(del)).toBeFalsy();
@@ -1324,7 +1212,6 @@ describe("D4: for a memory-home owner the tools never touch a clone file at a va
 
     const commit = await s.call("commit", { message: "cleanup" });
     expect(commit.isError, txt(commit)).toBeFalsy();
-    expect(txt(commit)).toContain("it is on hold until the owner confirms");
     expect(s.remoteFile("wiki/topic/theirs.md")).toBe("the repository's own note\n");
     expect(s.remoteFiles()).not.toContain("wiki/topic/asset.txt");
 
@@ -1335,15 +1222,14 @@ describe("D4: for a memory-home owner the tools never touch a clone file at a va
     expect(s.cloneFile("wiki/topic/theirs.md")).toBe("the repository's own note\n");
     expect(s.cloneFile("archive/topic/mine.md")).toBe("the vault's note\n");
     expect(s.inClone("archive/topic/theirs.md")).toBe(false);
-    // While the check of a just-connected repository is still running, the result says that instead.
-    s.store.setVaultMirrorHold(s.ownerId, "checking");
-    const checking = await s.call("commit", { message: "moved" });
-    expect(txt(checking)).toContain("is still being checked before anything is copied into it");
+    const moved = await s.call("commit", { message: "moved" });
+    expect(moved.isError, txt(moved)).toBeFalsy();
     expect(s.remoteFile("wiki/topic/theirs.md")).toBe("the repository's own note\n");
+    expect(s.remoteFile("archive/topic/mine.md")).toBe("the vault's note\n");
   });
 
   it("a folder that exists only as clone copies of notes does not exist", async () => {
-    const s = setup("d4-mirror-only", { files: { "wiki/old/gone.md": "a copy the service no longer has\n" } });
+    const s = setup("d4-clone-only", { files: { "wiki/old/gone.md": "a copy the service no longer has\n" } });
     await s.call("list_files"); // clones
     const mv = await s.call("move_file", { from: "wiki/old", to: "wiki/new" });
     expect(mv.isError).toBe(true);
@@ -1380,50 +1266,37 @@ describe("D4: for a memory-home owner the tools never touch a clone file at a va
     s.fake.failNext(down());
     expectUnavailable(await s.call("write_file", { path: "wiki/other", content: "x" }));
     expect(s.inClone("wiki/other")).toBe(false);
-    // A repo-home owner's clone cannot collide with itself: no check, no service call.
-    const r = setup("d4-collision-repo", { memory: false });
-    await r.call("write_file", { path: "wiki/topic", content: "plain file" });
-    expect(r.cloneFile("wiki/topic")).toBe("plain file");
-    expect(r.fake.calls).toEqual([]);
   });
 
   it("refuses a path that reaches the clone's vault folders through a link in the repository", async () => {
-    for (const memory of [true, false]) {
-      const s = setup(`d4-alias-${memory}`, { memory, files: { "wiki/a.md": "THE CLONE'S FILE\n" } });
-      await s.call("list_files"); // clones
-      fs.symlinkSync("wiki", path.join(s.clonePath, "notes"));
-      const read = await s.call("read_file", { path: "notes/a.md" });
-      if (!memory) {
-        // A repo-home owner's clone IS the vault: the link works as it always did.
-        expect(txt(read)).toBe("THE CLONE'S FILE\n");
-        continue;
-      }
-      const refused = [
-        read,
-        await s.call("write_file", { path: "notes/a.md", content: "through the link" }),
-        await s.call("write_file", { path: "notes/new.md", content: "through the link" }),
-        await s.call("edit_file", { path: "notes/a.md", old_string: "CLONE", new_string: "X" }),
-        await s.call("delete_file", { path: "notes/a.md" }),
-        await s.call("move_file", { from: "notes/a.md", to: "elsewhere.md" }),
-        await s.call("move_file", { from: "README.md", to: "notes/readme.md" }),
-      ];
-      for (const res of refused) {
-        expect(res.isError).toBe(true);
-        expect(txt(res)).toBe("Invalid path.");
-      }
-      expect(s.cloneFile("wiki/a.md")).toBe("THE CLONE'S FILE\n");
-      expect(s.inClone("wiki/new.md")).toBe(false);
-      expect(s.inClone("README.md")).toBe(true);
-      // The link itself can be removed (that touches no vault file).
-      const unlink = await s.call("delete_file", { path: "notes" });
-      expect(unlink.isError, txt(unlink)).toBeFalsy();
-      expect(s.inClone("notes")).toBe(false);
-      expect(s.cloneFile("wiki/a.md")).toBe("THE CLONE'S FILE\n");
+    const s = setup("d4-alias", { files: { "wiki/a.md": "THE CLONE'S FILE\n" } });
+    await s.call("list_files"); // clones
+    fs.symlinkSync("wiki", path.join(s.clonePath, "notes"));
+    const refused = [
+      await s.call("read_file", { path: "notes/a.md" }),
+      await s.call("write_file", { path: "notes/a.md", content: "through the link" }),
+      await s.call("write_file", { path: "notes/new.md", content: "through the link" }),
+      await s.call("edit_file", { path: "notes/a.md", old_string: "CLONE", new_string: "X" }),
+      await s.call("delete_file", { path: "notes/a.md" }),
+      await s.call("move_file", { from: "notes/a.md", to: "elsewhere.md" }),
+      await s.call("move_file", { from: "README.md", to: "notes/readme.md" }),
+    ];
+    for (const res of refused) {
+      expect(res.isError).toBe(true);
+      expect(txt(res)).toBe("Invalid path.");
     }
+    expect(s.cloneFile("wiki/a.md")).toBe("THE CLONE'S FILE\n");
+    expect(s.inClone("wiki/new.md")).toBe(false);
+    expect(s.inClone("README.md")).toBe(true);
+    // The link itself can be removed (that touches no vault file).
+    const unlink = await s.call("delete_file", { path: "notes" });
+    expect(unlink.isError, txt(unlink)).toBeFalsy();
+    expect(s.inClone("notes")).toBe(false);
+    expect(s.cloneFile("wiki/a.md")).toBe("THE CLONE'S FILE\n");
   });
 
   it("classifies a path the same way in mcp__brain__get_note: `wiki/a.md/` is the note, not the clone's file (review)", async () => {
-    const s = setup("d4-getnote", { files: { "wiki/a.md": "THE CLONE'S COPY (behind)\n" } });
+    const s = setup("d4-getnote", { files: { "wiki/a.md": "THE CLONE'S FILE (not the vault's)\n" } });
     await s.call("list_files"); // clones
     s.fake.seed(s.ownerId, "wiki/a.md", "the vault's text\n");
     const tools = buildBrainTools(s.store, { avatarUserId: s.ownerId, viewerIsOwner: true, config: s.config });
@@ -1434,854 +1307,11 @@ describe("D4: for a memory-home owner the tools never touch a clone file at a va
     }
     expect(txt(await s.call("read_file", { path: "wiki/a.md/" }))).toBe("the vault's text\n");
   });
-
-  it("create_repo leaves a repository that brings vault notes of its own exactly as it is", async () => {
-    const s = setup("d4-create-own", { repo: false, files: { "wiki/index.md": "# Their index\n", "CLAUDE.md": "# Their rules\n" } });
-    s.fake.seed(s.ownerId, "wiki/mine.md", "mine");
-    const tools = buildRepoTools(
-      s.store,
-      { avatarUserId: s.ownerId, owner: s.owner, viewerIsOwner: true, config: s.config },
-      { allowCreate: true, createRemoteRepo: async () => ({ ok: true as const, fullName: s.remote, defaultBranch: "main", isPrivate: true }) },
-    );
-    const before = s.remoteFiles();
-    const res = await callTool(tools, "create_repo", { name: "brain" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Skipped the default template: this repository already holds vault notes of its own");
-    expect(s.remoteFiles()).toEqual(before);
-    expect(s.remoteFile("CLAUDE.md")).toBe("# Their rules\n");
-    expect(s.cloneFile("wiki/index.md")).toBe("# Their index\n");
-    expect(s.notes()).toEqual({ "wiki/mine.md": "mine" });
-    expect(repoChangedSpy).toHaveBeenCalledWith(s.store, s.config, s.ownerId, null);
-  });
 });
 
-describe("D3: mcp__repo__commit and a direct git edit of the repository", () => {
-  async function committed(name: string) {
-    const s = setup(name);
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await s.call("write_file", { path: "wiki/b.md", content: "b v1\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    mirrorSpy.mockClear();
-    return s;
-  }
-
-  it("a conflicting edit of a vault note never blocks the commit: the vault's text wins, the rest of the remote is kept", async () => {
-    const s = await committed("d3-conflict");
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2 (vault)" });
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    // Pushed after the working tree was last synced: the commit below has to rebase onto it.
-    s.pushOutside({ "wiki/a.md": "a edited in git\n", "docs/outside.txt": "pushed from outside\n" });
-
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(txt(res)).toContain("brought the repository's copy of the vault notes up to date");
-    expect(s.remoteFile("wiki/a.md")).toBe("a v2 (vault)\n");
-    expect(s.remoteFile("docs/outside.txt")).toBe("pushed from outside\n");
-    expect(s.remoteFile("notes/more.txt")).toBe("more\n");
-    // The mirror ran before the commit AND again on the rebased tree.
-    expect(mirrorSpy).toHaveBeenCalledTimes(2);
-    const row = s.store.getPersonalVault(s.ownerId)!;
-    expect(row.mirrorDirty).toBe(false);
-    expect(row.mirrorError).toBeNull();
-  });
-
-  it("an edit of ANOTHER vault note in git is put back to the vault's text by the pass after the rebase", async () => {
-    const s = await committed("d3-noconflict");
-    s.pushOutside({ "wiki/b.md": "b edited in git\n" });
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2" });
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(mirrorSpy).toHaveBeenCalledTimes(2);
-    expect(s.remoteFile("wiki/a.md")).toBe("a v2\n");
-    expect(s.remoteFile("wiki/b.md")).toBe("b v1\n");
-    expect(txt(res)).toContain("brought the repository's copy of the vault notes up to date");
-  });
-
-  it("never says the copy is up to date when the pass after the rebase did not succeed", async () => {
-    const s = await committed("d3-second-pass-fails");
-    s.pushOutside({ "wiki/b.md": "b edited in git\n" });
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2" });
-    const real = (await vi.importActual<typeof import("../src/server/vaultMirror.js")>("../src/server/vaultMirror.js")).syncVaultMirror;
-    mirrorSpy.mockImplementationOnce(real).mockResolvedValueOnce({ kind: "failed", error: "memory service unavailable (network)" });
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(txt(res)).not.toContain("up to date");
-    expect(txt(res)).toContain("was NOT updated this time (memory service unavailable (network))");
-    // What the first pass wrote was pushed; the git edit of the other note is still there, and the row says so.
-    expect(s.remoteFile("wiki/a.md")).toBe("a v2\n");
-    expect(s.remoteFile("wiki/b.md")).toBe("b edited in git\n");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(true);
-  });
-
-  it("a conflict outside the vault still fails the commit as it always did", async () => {
-    const s = await committed("d3-repo-conflict");
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain edited here\n" });
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2" });
-    s.pushOutside({ "notes/plain.txt": "plain edited in git\n" });
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError).toBe(true);
-    expect(txt(res)).toContain("CONFLICT");
-    expect(txt(res)).toContain("notes/plain.txt");
-    expect(s.remoteFile("wiki/a.md")).toBe("a v1\n");
-    const row = s.store.getPersonalVault(s.ownerId)!;
-    expect(row.mirrorDirty).toBe(true);
-    expect(row.mirrorError).toBeTruthy();
-  });
-
-  it("deleting the last note reaches the repository, and a note written directly in git is left alone and said so", async () => {
-    const s = setup("d3-last-note");
-    await s.call("write_file", { path: "wiki/only.md", content: "only\n" });
-    expect((await s.call("commit", { message: "one note" })).isError).toBeFalsy();
-    expect(s.remoteFiles()).toContain("wiki/only.md");
-    await s.call("delete_file", { path: "wiki/only.md" });
-    const res = await s.call("commit", { message: "delete it" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(s.remoteFiles()).not.toContain("wiki/only.md");
-
-    // Noah did not delete this one: it stays, and the result names what was left alone.
-    s.pushOutside({ "wiki/from-git.md": "written directly in git\n" });
-    await s.call("write_file", { path: "wiki/next.md", content: "next\n" });
-    const next = await s.call("commit", { message: "next" });
-    expect(next.isError, txt(next)).toBeFalsy();
-    expect(s.remoteFile("wiki/from-git.md")).toBe("written directly in git\n");
-    expect(txt(next)).toContain("Left as they are in the repository (repository notes not in the memory service: 1)");
-  });
-});
-
-/** A branch in the repository with its own line from the first commit and its own files. */
-function pushBranch(s: Fixture, name: string, branch: string, files: Record<string, string>) {
-  const work = path.join(tempDir, name, `${branch}-work`);
-  execFileSync("git", ["clone", "-q", s.remote, work], { stdio: "pipe" });
-  const w = (...a: string[]) => execFileSync("git", ["-C", work, ...a], { stdio: "pipe" }).toString().trim();
-  w("config", "user.email", "dev@example.com");
-  w("config", "user.name", "Dev");
-  w("config", "commit.gpgsign", "false");
-  w("checkout", "-q", "-b", branch, w("rev-list", "--max-parents=0", "HEAD"));
-  for (const [rel, content] of Object.entries(files)) {
-    fs.mkdirSync(path.dirname(path.join(work, rel)), { recursive: true });
-    fs.writeFileSync(path.join(work, rel), content);
-  }
-  w("add", "-A");
-  w("commit", "-q", "-m", `${branch}'s own files`);
-  w("push", "-q", "origin", branch);
-}
-
-// What a tool answers when a push of the knowledge clone is stopped because it would change vault notes of
-// the repository while the copy is on hold — its own refusal, not the general failure (no token /
-// branch-protection hint). The look comes BEFORE the commit: nothing is committed, the changes stay in the
-// working tree.
-const HOLD_WAIT = {
-  confirm:
-    "the connected repository (or branch) holds vault notes of its own, and nothing there is changed until the owner confirms in 설정 → 지식·플러그인 → 지식 저장소 (or connects another repository)",
-  checking: "Noah has not finished looking at the newly connected repository (or branch) — `mcp__system__describe_system` shows the state",
-} as const;
-/**
- * The on-hold refusal. `after`: what gets the kept changes out once the hold has ended — the same call again
- * (`commit`), or a commit of the repository for a tool that wrote files first (learning / unlinking a skill:
- * repeating that call would find its own leftover — "already exists", "nothing to unlink").
- */
-const holdRefusal = (files: string, hold: "confirm" | "checking", after: "again" | "commit" = "again") =>
-  `Nothing was committed or pushed: this push would change vault notes in the repository (${files}) while the repository's copy of the vault notes is ON HOLD — ${HOLD_WAIT[hold]}. ` +
-  (after === "commit"
-    ? "What this call changed is kept, uncommitted, in the server's copy of the repository: once the hold has ended, call `mcp__repo__commit` to push it — do NOT repeat this call (it would find its own files there); tell the user that. "
-    : "The changes are kept, uncommitted, in the server's copy of the repository: do the same again once the hold has ended; tell the user that, and do not retry in a loop. ") +
-  "If the server's copy of the repository is still on a previous branch (the branch was changed while there were uncommitted changes), the look at the new branch cannot finish until that is resolved: the owner sets the branch back, has these changes committed there, and switches again. " +
-  "The notes themselves are saved in the vault. Do not work around this with Bash `git` — the shell has no git credentials.";
-
-describe("re-review: a rebase conflict on a vault note is settled for the clone only when this commit's mirror pass just wrote it", () => {
-  const remoteHead = (s: Fixture, branch = "main") =>
-    execFileSync("git", ["--git-dir", s.remote, "rev-parse", branch], { stdio: "pipe" }).toString().trim();
-  const remoteShow = (s: Fixture, branch: string, rel: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "show", `${branch}:${rel}`], { stdio: "pipe" }).toString();
-  const cloneGit = (s: Fixture, ...a: string[]) => execFileSync("git", ["-C", s.clonePath, ...a], { stdio: "pipe" }).toString().trim();
-  /** The refusal every rebase conflict gets (`commitFailureMessage`), for these conflicted files. */
-  const conflictRefusal = (files: string) =>
-    `Commit/push failed: the remote branch has new commits that CONFLICT with this change (conflicting file(s): ${files}). The local commit is preserved, but it cannot be pushed until the conflict is resolved. Tell the user that the same file(s) were changed outside this conversation (e.g. a direct push, or another chat that already pushed), and that the repository owner/admin needs to reconcile it manually. Do not retry in a loop, and do not work around this with Bash \`git\` — the shell has no git credentials.`;
-  const CONFLICT_REFUSAL = conflictRefusal("wiki/a.md");
-  // What a memory-home owner's conflict refusal adds when a VAULT note is among the conflicted files. Such a
-  // conflict reaches the rebase only when this commit's mirror pass FAILED (a copy on hold is stopped before
-  // the rebase; a pass that ran settles the conflict) — and then "reconcile it manually" is the wrong advice.
-  // The same line when such a conflict reaches the rebase although the copy is ON HOLD (rare: commits that
-  // change a vault note and change it back) — one text for both holds; describe_system says which and why.
-  const HOLD_CONFLICT_NOTE =
-    "\nFor the vault note(s) among those files this is NOT something to reconcile by hand: the repository's copy of the vault notes is ON HOLD (`mcp__system__describe_system` shows why and what ends it). Commit again once the hold has ended — the vault's text then settles the conflict. The notes themselves are saved in the vault.";
-  const FAILED_PASS_NOTE =
-    "\nFor the vault note(s) among those files this is NOT something to reconcile by hand: the copy of the vault notes could not be refreshed from the memory service in this commit (`mcp__system__describe_system` shows why). Commit again once it can — the vault's text then settles the conflict. The notes themselves are saved in the vault.";
-
-  /**
-   * The clone holds an UNPUSHED commit of `wiki/a.md` with the vault's text (a mirror pass wrote it, the push
-   * failed), the repository then got its own, different `wiki/a.md`, and the avatar has another change to
-   * commit: the next `commit` has to rebase and meets a conflict on a vault note.
-   */
-  async function diverged(name: string) {
-    const s = setup(name);
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2 (vault)" });
-    fs.renameSync(s.remote, `${s.remote}.away`);
-    expect((await s.call("commit", { message: "second (its push fails)" })).isError).toBe(true);
-    fs.renameSync(`${s.remote}.away`, s.remote);
-    expect(cloneGit(s, "show", "HEAD:wiki/a.md")).toBe("a v2 (vault)");
-    s.pushOutside({ "wiki/a.md": "the repository's own a\n" });
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    mirrorSpy.mockClear();
-    return s;
-  }
-
-  /**
-   * The commit is refused with exactly `refusal`, before anything is committed: nothing reaches the
-   * repository, the clone's commits are what they were, and the pending change is still in the working tree.
-   */
-  async function expectRefused(s: Fixture, message: string, refusal: string) {
-    const head = remoteHead(s);
-    const cloneHead = cloneGit(s, "rev-parse", "HEAD");
-    const res = await s.call("commit", { message });
-    expect(res.isError, txt(res)).toBe(true);
-    expect(txt(res)).toBe(refusal);
-    expect(txt(res)).not.toMatch(/pi-gateway/i);
-    // Nothing was pushed: the repository's note is its own, the other change is not there either.
-    expect(remoteHead(s)).toBe(head);
-    expect(s.remoteFile("wiki/a.md")).toBe("the repository's own a\n");
-    expect(s.remoteFiles()).not.toContain("notes/more.txt");
-    // Nothing was committed or rebased: the clone's commits are untouched and the change waits, uncommitted.
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(cloneHead);
-    expect(cloneGit(s, "log", "--format=%s")).not.toContain(message);
-    expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-    expect(s.cloneFile("notes/more.txt")).toBe("more\n");
-    expect(cloneGit(s, "show", "HEAD:wiki/a.md")).toBe("a v2 (vault)");
-    expect(fs.existsSync(path.join(s.clonePath, ".git", "rebase-merge"))).toBe(false);
-    expect(fs.existsSync(path.join(s.clonePath, ".git", "rebase-apply"))).toBe(false);
-    expect(s.notes()["wiki/a.md"]).toBe("a v2 (vault)\n");
-  }
-
-  for (const hold of ["confirm", "checking"] as const) {
-    it(`hold ${hold}: commits that would conflict on a vault note are stopped before any rebase — the repository's note is not replaced without the owner's press`, async () => {
-      const s = await diverged(`rr-hold-${hold}`);
-      s.store.setVaultMirrorHold(s.ownerId, hold);
-
-      // Local commits that conflict on a vault note necessarily CHANGE that note: the look before the push
-      // stops them as "on hold" — neither the commit nor the rebase (and its conflict) is ever tried.
-      await expectRefused(s, "third", holdRefusal("wiki/a.md", hold));
-      // The mirror was asked once and stood back.
-      expect(mirrorSpy).toHaveBeenCalledTimes(1);
-      await expect(mirrorSpy.mock.results[0].value).resolves.toEqual({ kind: "skipped", reason: "hold" });
-      expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe(hold);
-
-      // Refused again for as long as the hold stands …
-      await expectRefused(s, "third", holdRefusal("wiki/a.md", hold));
-      expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe(hold);
-
-      // … and once the owner lifted it, the same commit goes through with the vault's text (the D3 rule).
-      s.store.setVaultMirrorHold(s.ownerId, null);
-      const res = await s.call("commit", { message: "after the press" });
-      expect(res.isError, txt(res)).toBeFalsy();
-      expect(txt(res)).toContain("Committed and pushed the changes");
-      expect(s.remoteFile("wiki/a.md")).toBe("a v2 (vault)\n");
-      expect(s.remoteFile("notes/more.txt")).toBe("more\n");
-    });
-  }
-
-  for (const hold of ["confirm", "checking"] as const) {
-  it(`hold ${hold}: commits that change a vault note and change it BACK pass the look before the push — the rebase still stops at their conflict`, async () => {
-    // Two unpushed mirror commits: a.md v1 → v2, then v2 → v1. Together they change no vault path, so the
-    // look before the push has nothing to hold; replayed one by one, the first conflicts with the repository's
-    // own edit. With the copy on hold nothing settles that for the clone's side.
-    const s = setup(`rr-hold-roundtrip-${hold}`);
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    fs.renameSync(s.remote, `${s.remote}.away`);
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2 (vault)" });
-    expect((await s.call("commit", { message: "second (its push fails)" })).isError).toBe(true);
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v2 (vault)", new_string: "a v1" });
-    expect((await s.call("commit", { message: "third (its push fails)" })).isError).toBe(true);
-    fs.renameSync(`${s.remote}.away`, s.remote);
-    expect(cloneGit(s, "show", "HEAD:wiki/a.md")).toBe("a v1");
-    s.pushOutside({ "wiki/a.md": "the repository's own a\n" });
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    s.store.setVaultMirrorHold(s.ownerId, hold);
-    const head = remoteHead(s);
-
-    const res = await s.call("commit", { message: "fourth" });
-    expect(res.isError, txt(res)).toBe(true);
-    // The general conflict refusal, then the line that names the real cause: the hold — not a failed pass.
-    expect(txt(res)).toBe(`${CONFLICT_REFUSAL}${HOLD_CONFLICT_NOTE}`);
-    expect(txt(res)).not.toContain("could not be refreshed from the memory service");
-    expect(remoteHead(s)).toBe(head);
-    expect(s.remoteFile("wiki/a.md")).toBe("the repository's own a\n");
-    expect(s.remoteFiles()).not.toContain("notes/more.txt");
-    expect(cloneGit(s, "log", "--format=%s", "-1")).toBe("fourth");
-    expect(cloneGit(s, "status", "--porcelain")).toBe("");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe(hold);
-  });
-  }
-
-  it("the mirror pass FAILED in this commit (memory service down): the conflict stops the commit as well", async () => {
-    const s = await diverged("rr-failed");
-    const unavailable = () => Promise.reject(down());
-    setMemoryClientForTests(s.store, {
-      list: unavailable,
-      read: unavailable,
-      put: unavailable,
-      remove: unavailable,
-      search: unavailable,
-      deleteWiki: unavailable,
-    });
-    const head = remoteHead(s);
-    const res = await s.call("commit", { message: "third" });
-    expect(res.isError, txt(res)).toBe(true);
-    // No hold: the look before the push lets it by, the rebase meets the conflict, and — the pass having
-    // failed — nothing settles it. The added line says why, and what ends it.
-    expect(txt(res)).toBe(`${CONFLICT_REFUSAL}${FAILED_PASS_NOTE}`);
-    expect(mirrorSpy).toHaveBeenCalledTimes(1);
-    await expect(mirrorSpy.mock.results[0].value).resolves.toMatchObject({ kind: "failed" });
-    expect(remoteHead(s)).toBe(head);
-    expect(s.remoteFile("wiki/a.md")).toBe("the repository's own a\n");
-    expect(s.remoteFiles()).not.toContain("notes/more.txt");
-    expect(cloneGit(s, "log", "--format=%s", "-1")).toBe("third");
-    expect(cloneGit(s, "show", "HEAD:wiki/a.md")).toBe("a v2 (vault)");
-    expect(cloneGit(s, "status", "--porcelain")).toBe("");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBeNull();
-
-    // The service is back: the pass runs, and now the conflict is settled for what it just wrote.
-    setMemoryClientForTests(s.store, s.fake);
-    const again = await s.call("commit", { message: "service back" });
-    expect(again.isError, txt(again)).toBeFalsy();
-    expect(s.remoteFile("wiki/a.md")).toBe("a v2 (vault)\n");
-    expect(s.remoteFile("notes/more.txt")).toBe("more\n");
-  });
-
-  it("the reviewer's path: the connected branch was switched to one with its own note while the clone stayed behind (hold confirm)", async () => {
-    const s = setup("rr-branch");
-    await s.call("write_file", { path: "wiki/a.md", content: "the vault's a\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    expect(s.remoteFile("wiki/a.md")).toBe("the vault's a\n");
-
-    // `dev` in the repository: its own line from the first commit, with its own, different wiki/a.md.
-    const work = path.join(tempDir, "rr-branch", "dev-work");
-    execFileSync("git", ["clone", "-q", s.remote, work], { stdio: "pipe" });
-    const w = (...a: string[]) => execFileSync("git", ["-C", work, ...a], { stdio: "pipe" }).toString().trim();
-    w("config", "user.email", "dev@example.com");
-    w("config", "user.name", "Dev");
-    w("config", "commit.gpgsign", "false");
-    w("checkout", "-q", "-b", "dev", w("rev-list", "--max-parents=0", "HEAD"));
-    fs.mkdirSync(path.join(work, "wiki"), { recursive: true });
-    fs.writeFileSync(path.join(work, "wiki", "a.md"), "dev's own a\n");
-    w("add", "-A");
-    w("commit", "-q", "-m", "dev's own note");
-    w("push", "-q", "origin", "dev");
-
-    // The avatar has another change in the working tree; then the owner connects `dev`. The check found
-    // notes the copy would replace: the mirror waits for the owner's press.
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "dev");
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    mirrorSpy.mockClear();
-    const devHead = remoteHead(s, "dev");
-    const mainHead = remoteHead(s, "main");
-
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError, txt(res)).toBe(true);
-    // Stopped before the rebase: the clone's commits change `wiki/a.md`, and the copy is on hold.
-    expect(txt(res)).toBe(holdRefusal("wiki/a.md", "confirm"));
-    // Before the fix `dev`'s note was replaced by the vault's text while the tool said "NOT updated: it is on hold".
-    expect(remoteHead(s, "dev")).toBe(devHead);
-    expect(remoteShow(s, "dev", "wiki/a.md")).toBe("dev's own a\n");
-    expect(remoteHead(s, "main")).toBe(mainHead);
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("confirm");
-    // Nothing was committed: the clone is where it was, the pending change still uncommitted.
-    expect(cloneGit(s, "log", "--format=%s")).toBe(["first", "init"].join("\n"));
-    expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-    expect(cloneGit(s, "show", "HEAD:wiki/a.md")).toBe("the vault's a");
-  });
-  it("the line is there when a vault note is only ONE of the conflicted files", async () => {
-    // Memory home, the pass fails, and the conflict is on a vault note AND a repo file (the line speaks of
-    // "the vault note(s) among those files").
-    const mixed = setup("rr-note-mixed");
-    await mixed.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await mixed.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
-    expect((await mixed.call("commit", { message: "first" })).isError).toBeFalsy();
-    await mixed.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2 (vault)" });
-    await mixed.call("write_file", { path: "notes/plain.txt", content: "plain edited here\n" });
-    fs.renameSync(mixed.remote, `${mixed.remote}.away`);
-    expect((await mixed.call("commit", { message: "second (its push fails)" })).isError).toBe(true);
-    fs.renameSync(`${mixed.remote}.away`, mixed.remote);
-    mixed.pushOutside({ "wiki/a.md": "the repository's own a\n", "notes/plain.txt": "plain edited in git\n" });
-    const unavailable = () => Promise.reject(down());
-    setMemoryClientForTests(mixed.store, {
-      list: unavailable,
-      read: unavailable,
-      put: unavailable,
-      remove: unavailable,
-      search: unavailable,
-      deleteWiki: unavailable,
-    });
-    const both = await mixed.call("commit", { message: "third" });
-    expect(both.isError).toBe(true);
-    expect(txt(both)).toBe(`${conflictRefusal("notes/plain.txt, wiki/a.md")}${FAILED_PASS_NOTE}`);
-  });
-
-  it("no such line for a memory-home owner when no vault note is among the conflicted files, or the failure is not a conflict", async () => {
-    // The general refusal alone — also during a hold.
-    for (const hold of [null, "confirm"] as const) {
-      const m = setup(`rr-note-repo-file-${hold}`);
-      await m.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-      await m.call("write_file", { path: "notes/plain.txt", content: "plain v1\n" });
-      expect((await m.call("commit", { message: "first" })).isError).toBeFalsy();
-      await m.call("write_file", { path: "notes/plain.txt", content: "plain edited here\n" });
-      m.pushOutside({ "notes/plain.txt": "plain edited in git\n" });
-      m.store.setVaultMirrorHold(m.ownerId, hold);
-      const res = await m.call("commit", { message: "second" });
-      expect(res.isError).toBe(true);
-      expect(txt(res)).toBe(conflictRefusal("notes/plain.txt"));
-    }
-
-    // Memory home, a failure that is not a conflict (the push itself fails): no such line either.
-    const push = setup("rr-note-push");
-    await push.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await push.call("write_file", { path: "notes/x.txt", content: "x\n" });
-    fs.renameSync(push.remote, `${push.remote}.away`);
-    const offline = await push.call("commit", { message: "offline" });
-    expect(offline.isError).toBe(true);
-    expect(txt(offline)).toContain("Commit/push failed:");
-    expect(txt(offline)).not.toContain("NOT something to reconcile by hand");
-  });
-
-  it("a repo-home owner's refusal is unchanged: a conflict on wiki/a.md is an ordinary conflict there", async () => {
-    // The clone IS the vault: nothing settles it, and nothing is added to the wording.
-    const r = setup("rr-note-repo-home", { memory: false });
-    await r.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    expect((await r.call("commit", { message: "first" })).isError).toBeFalsy();
-    await r.call("write_file", { path: "wiki/a.md", content: "a edited here\n" });
-    r.pushOutside({ "wiki/a.md": "a edited in git\n" });
-    const repoHome = await r.call("commit", { message: "second" });
-    expect(repoHome.isError).toBe(true);
-    expect(txt(repoHome)).toBe(CONFLICT_REFUSAL);
-    expect(r.remoteFile("wiki/a.md")).toBe("a edited in git\n");
-    expect(r.fake.calls).toEqual([]);
-  });
-});
-
-describe("re-review: under a hold nothing a commit pushes changes a vault path of the repository — also without a conflict", () => {
-  const remoteHead = (s: Fixture, branch: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "rev-parse", branch], { stdio: "pipe" }).toString().trim();
-  const remoteTree = (s: Fixture, branch: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "ls-tree", "-r", "--name-only", branch], { stdio: "pipe" }).toString().split("\n").filter(Boolean);
-  const remoteShow = (s: Fixture, branch: string, rel: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "show", `${branch}:${rel}`], { stdio: "pipe" }).toString();
-  const cloneGit = (s: Fixture, ...a: string[]) => execFileSync("git", ["-C", s.clonePath, ...a], { stdio: "pipe" }).toString().trim();
-
-  /**
-   * The clone stayed behind on `main`'s commits — a mirror commit with the vault's notes among them — while
-   * the owner connected `dev`, which holds a note of its own at ANOTHER path (so nothing conflicts). The
-   * avatar has a change that is not a vault note to commit.
-   */
-  async function behindOnMain(name: string, notes: string[] = ["wiki/a.md"]) {
-    const s = setup(name);
-    for (const note of notes) await s.call("write_file", { path: note, content: `the vault's ${note}\n` });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    pushBranch(s, name, "dev", { "wiki/other.md": "dev's own other note\n" });
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "dev");
-    mirrorSpy.mockClear();
-    return s;
-  }
-
-  for (const hold of ["confirm", "checking"] as const) {
-    it(`hold ${hold}: the previous branch's vault notes do not reach the newly connected branch (the kept repro)`, async () => {
-      const s = await behindOnMain(`hp-${hold}`);
-      s.store.setVaultMirrorHold(s.ownerId, hold);
-      const devHead = remoteHead(s, "dev");
-      const mainHead = remoteHead(s, "main");
-
-      const res = await s.call("commit", { message: "second" });
-      expect(res.isError, txt(res)).toBe(true);
-      expect(txt(res)).toBe(holdRefusal("wiki/a.md", hold));
-      expect(txt(res)).not.toMatch(/Commit\/push failed|GIT_TOKEN|branch protection|pi-gateway/);
-      // Nothing was pushed: `dev` is exactly what it was — no vault note of the old branch, none of its files.
-      expect(remoteHead(s, "dev")).toBe(devHead);
-      expect(remoteTree(s, "dev")).toEqual(["README.md", "wiki/other.md"]);
-      expect(remoteHead(s, "main")).toBe(mainHead);
-      expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe(hold);
-      // Nothing was committed or rebased: the clone still ends at `main`'s commit, and the pending change is
-      // in the working tree, uncommitted.
-      expect(cloneGit(s, "log", "--format=%s")).toBe(["first", "init"].join("\n"));
-      expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-      expect(s.cloneFile("notes/more.txt")).toBe("more\n");
-      expect(mirrorSpy).toHaveBeenCalled();
-      await expect(mirrorSpy.mock.results[0].value).resolves.toEqual({ kind: "skipped", reason: "hold" });
-
-      // Asked again while the hold stands: the same answer, still nothing pushed.
-      const again = await s.call("commit", { message: "second" });
-      expect(again.isError).toBe(true);
-      expect(txt(again)).toBe(holdRefusal("wiki/a.md", hold));
-      expect(remoteHead(s, "dev")).toBe(devHead);
-
-      // The hold has ended: the same commit goes through — a push that carries vault paths is not refused
-      // without a hold — and the branch's own note is left as it is.
-      s.store.setVaultMirrorHold(s.ownerId, null);
-      const done = await s.call("commit", { message: "after the hold" });
-      expect(done.isError, txt(done)).toBeFalsy();
-      expect(txt(done)).toContain("Committed and pushed the changes");
-      expect(remoteShow(s, "dev", "wiki/a.md")).toBe("the vault's wiki/a.md\n");
-      expect(remoteShow(s, "dev", "notes/more.txt")).toBe("more\n");
-      expect(remoteShow(s, "dev", "notes/plain.txt")).toBe("plain\n");
-      expect(remoteShow(s, "dev", "wiki/other.md")).toBe("dev's own other note\n");
-      expect(remoteHead(s, "main")).toBe(mainHead);
-    });
-  }
-
-  it("a refusal commits nothing and rebases nothing, so the remedy it names works: back on the previous branch only the pending change goes out", async () => {
-    const s = await behindOnMain("hp-remedy");
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    const devHead = remoteHead(s, "dev");
-    const refused = await s.call("commit", { message: "second" });
-    expect(txt(refused)).toBe(holdRefusal("wiki/a.md", "confirm"));
-    // The clone's history is `main`'s, untouched — no commit of the refused change, nothing of `dev`.
-    expect(cloneGit(s, "log", "--format=%s")).toBe(["first", "init"].join("\n"));
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(remoteHead(s, "main"));
-    expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-    expect(cloneGit(s, "ls-files")).not.toContain("wiki/other.md");
-
-    // The owner sets the branch back (a hold stands there as well while Noah looks at it again).
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "main");
-    s.store.setVaultMirrorHold(s.ownerId, "checking");
-    const back = await s.call("commit", { message: "second" });
-    expect(back.isError, txt(back)).toBeFalsy();
-    expect(txt(back)).toContain("Committed and pushed the changes");
-    // `main` got the pending change and nothing of `dev`; `dev` is untouched.
-    expect(remoteTree(s, "main")).toEqual(["README.md", "notes/more.txt", "notes/plain.txt", "wiki/a.md"]);
-    expect(remoteShow(s, "main", "notes/more.txt")).toBe("more\n");
-    expect(remoteShow(s, "main", "wiki/a.md")).toBe("the vault's wiki/a.md\n");
-    expect(remoteHead(s, "dev")).toBe(devHead);
-    expect(remoteTree(s, "dev")).toEqual(["README.md", "wiki/other.md"]);
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(remoteHead(s, "main"));
-
-    // "… and switch again": with nothing left uncommitted the clone follows to `dev` on its next sync.
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "dev");
-    expect((await s.call("read_file", { path: "README.md" })).isError).toBeFalsy(); // syncs the clone
-    expect(cloneGit(s, "rev-parse", "--abbrev-ref", "HEAD")).toBe("dev");
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(devHead);
-    expect(cloneGit(s, "status", "--porcelain")).toBe("");
-  });
-
-  it("under a hold, vault notes the REPOSITORY changed meanwhile do not stop a commit that does not touch them", async () => {
-    const s = setup("hp-remote-ahead");
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    // Pushed after the working tree was last synced: the tip of the branch now differs from the clone in
-    // vault paths — but the clone's own commit changes none of them.
-    s.pushOutside({ "wiki/a.md": "a edited in git\n", "wiki/from-git.md": "written in git\n" });
-
-    const res = await s.call("commit", { message: "second" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(txt(res)).toContain("was NOT updated: it is on hold until the owner confirms");
-    expect(s.remoteFile("notes/more.txt")).toBe("more\n");
-    // The repository's notes are what the repository made them.
-    expect(s.remoteFile("wiki/a.md")).toBe("a edited in git\n");
-    expect(s.remoteFile("wiki/from-git.md")).toBe("written in git\n");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("confirm");
-  });
-
-  it("a refused change is not stranded when the clone is synced afterwards: it follows to the connected branch and goes out once the hold has ended", async () => {
-    const s = await behindOnMain("hp-not-stranded");
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    expect(txt(await s.call("commit", { message: "second" }))).toBe(holdRefusal("wiki/a.md", "confirm"));
-    const mainHead = remoteHead(s, "main");
-
-    // Any tool that syncs the clone. The refused change was never committed onto `main`'s line, so the clone
-    // can follow the branch change and carries the change along, still uncommitted.
-    expect((await s.call("read_file", { path: "README.md" })).isError).toBeFalsy();
-    expect(cloneGit(s, "rev-parse", "--abbrev-ref", "HEAD")).toBe("dev");
-    expect(cloneGit(s, "log", "--format=%s", "main")).toBe(["first", "init"].join("\n"));
-    expect(s.cloneFile("notes/more.txt")).toBe("more\n");
-    expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-
-    // The hold still stands, but on `dev` this push carries no vault path any more: the change goes out.
-    const onDev = await s.call("commit", { message: "second" });
-    expect(onDev.isError, txt(onDev)).toBeFalsy();
-    expect(txt(onDev)).toContain("was NOT updated: it is on hold until the owner confirms");
-    expect(remoteTree(s, "dev")).toEqual(["README.md", "notes/more.txt", "wiki/other.md"]);
-    expect(remoteHead(s, "main")).toBe(mainHead);
-
-    // The hold has ended: the copy of the vault notes arrives, `dev`'s own note stays.
-    s.store.setVaultMirrorHold(s.ownerId, null);
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "the vault's", new_string: "the vault's (edited)" });
-    const done = await s.call("commit", { message: "notes" });
-    expect(done.isError, txt(done)).toBeFalsy();
-    expect(remoteShow(s, "dev", "wiki/a.md")).toBe("the vault's (edited) wiki/a.md\n");
-    expect(remoteShow(s, "dev", "wiki/other.md")).toBe("dev's own other note\n");
-  });
-
-  it("the same on ONE branch: an unpushed mirror commit does not go out while the copy is on hold", async () => {
-    const s = setup("hp-same-branch");
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    // A mirror commit whose push failed stays in the clone.
-    await s.call("edit_file", { path: "wiki/a.md", old_string: "a v1", new_string: "a v2 (vault)" });
-    fs.renameSync(s.remote, `${s.remote}.away`);
-    expect((await s.call("commit", { message: "second (its push fails)" })).isError).toBe(true);
-    fs.renameSync(`${s.remote}.away`, s.remote);
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    const head = remoteHead(s, "main");
-
-    const res = await s.call("commit", { message: "third" });
-    expect(res.isError).toBe(true);
-    expect(txt(res)).toBe(holdRefusal("wiki/a.md", "confirm"));
-    expect(remoteHead(s, "main")).toBe(head);
-    expect(s.remoteFile("wiki/a.md")).toBe("a v1\n");
-    expect(s.remoteFiles()).not.toContain("notes/more.txt");
-    expect(cloneGit(s, "log", "--format=%s", "-1")).toBe("second (its push fails)");
-    expect(cloneGit(s, "status", "--porcelain")).toBe("A  notes/more.txt");
-
-    s.store.setVaultMirrorHold(s.ownerId, null);
-    expect((await s.call("commit", { message: "after the hold" })).isError).toBeFalsy();
-    expect(s.remoteFile("wiki/a.md")).toBe("a v2 (vault)\n");
-    expect(s.remoteFile("notes/more.txt")).toBe("more\n");
-  });
-
-  it("under a hold a commit whose push changes NO vault path goes through, and says the copy is on hold", async () => {
-    const s = setup("hp-no-vault-path");
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    // The clone is at the tip. A skill is edited, and a vault note is written (to the service — the copy waits).
-    await s.call("scaffold_skill", { name: "Deploy Runbook" });
-    await s.call("write_file", { path: "wiki/.gitkeep", content: "" });
-    await s.call("write_file", { path: "wiki/new.md", content: "written during the hold\n" });
-
-    const res = await s.call("commit", { message: "a skill" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(txt(res)).toContain("was NOT updated: it is on hold until the owner confirms");
-    expect(s.remoteFiles()).toEqual(expect.arrayContaining(["skills/deploy-runbook/SKILL.md", "wiki/.gitkeep"]));
-    expect(s.remoteFile("wiki/a.md")).toBe("a v1\n");
-    expect(s.remoteFiles()).not.toContain("wiki/new.md");
-    expect(s.notes()["wiki/new.md"]).toBe("written during the hold\n");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("confirm");
-  });
-
-  it("under a hold with a branch the repository does not have yet: not refused (there is nothing there to change)", async () => {
-    const s = setup("hp-new-branch");
-    await s.call("write_file", { path: "wiki/a.md", content: "a v1\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    await s.call("write_file", { path: "notes/more.txt", content: "more\n" });
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "fresh");
-    s.store.setVaultMirrorHold(s.ownerId, "checking");
-    const mainHead = remoteHead(s, "main");
-
-    const res = await s.call("commit", { message: "onto a new branch" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain("Committed and pushed the changes");
-    expect(txt(res)).toContain("is still being checked before anything is copied into it");
-    expect(remoteShow(s, "fresh", "notes/more.txt")).toBe("more\n");
-    expect(remoteShow(s, "fresh", "wiki/a.md")).toBe("a v1\n");
-    expect(remoteHead(s, "main")).toBe(mainHead);
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("checking");
-  });
-
-  it("names at most five of the vault notes the push would change, then how many more", async () => {
-    const seven = ["wiki/n1.md", "wiki/n2.md", "wiki/n3.md", "wiki/n4.md", "wiki/n5.md", "wiki/n6.md", "CLAUDE.md"];
-    const many = await behindOnMain("hp-seven", seven);
-    many.store.setVaultMirrorHold(many.ownerId, "confirm");
-    const res = await many.call("commit", { message: "second" });
-    expect(res.isError).toBe(true);
-    // In the order git lists them; the repo files of the same push (notes/…) are not counted.
-    expect(txt(res)).toBe(holdRefusal("CLAUDE.md, wiki/n1.md, wiki/n2.md, wiki/n3.md, wiki/n4.md, and 2 more", "confirm"));
-    expect(remoteTree(many, "dev")).toEqual(["README.md", "wiki/other.md"]);
-  });
-
-  it("names all of them when there are exactly five, with no \"more\"", async () => {
-    const five = await behindOnMain("hp-five", ["wiki/n1.md", "wiki/n2.md", "wiki/n3.md", "wiki/n4.md", "wiki/n5.md"]);
-    five.store.setVaultMirrorHold(five.ownerId, "checking");
-    const all = await five.call("commit", { message: "second" });
-    expect(all.isError).toBe(true);
-    expect(txt(all)).toBe(holdRefusal("wiki/n1.md, wiki/n2.md, wiki/n3.md, wiki/n4.md, wiki/n5.md", "checking"));
-  });
-});
-
-describe("re-review: every push of the knowledge clone is held — learning or unlinking a skill does not carry vault notes out either", () => {
-  const remoteHead = (s: Fixture, branch: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "rev-parse", branch], { stdio: "pipe" }).toString().trim();
-  const remoteTree = (s: Fixture, branch: string) =>
-    execFileSync("git", ["--git-dir", s.remote, "ls-tree", "-r", "--name-only", branch], { stdio: "pipe" }).toString().split("\n").filter(Boolean);
-  const cloneGit = (s: Fixture, ...a: string[]) => execFileSync("git", ["-C", s.clonePath, ...a], { stdio: "pipe" }).toString().trim();
-  const SKILL_MD = "---\nname: pptx-report\ndescription: Weekly report deck generator\n---\n\n# pptx-report\n\nMake the deck.\n";
-  const MARKER = "skills/pptx-report/.noah-skill-origin.json";
-
-  /** A teammate who shares one skill from their own repository, and the owner's skill-exchange tools. */
-  function withSharedSkill(s: Fixture, name: string) {
-    const remote = makeBareRemote(path.join(tempDir, name, "sharer.git"));
-    const seed = path.join(tempDir, name, "sharer-seed");
-    gitInit(seed);
-    const g = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
-    for (const [rel, content] of Object.entries({
-      ".claude-plugin/marketplace.json": JSON.stringify({ name: "sharer", plugins: [] }),
-      "skills/pptx-report/SKILL.md": SKILL_MD,
-    })) {
-      fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
-      fs.writeFileSync(path.join(seed, rel), content);
-    }
-    g("add", "-A");
-    g("commit", "-q", "-m", "a skill");
-    g("branch", "-M", "main");
-    g("remote", "add", "origin", remote);
-    g("push", "-q", "origin", "main");
-    const sharer = s.store.createUser({ username: "sharer", displayName: "Sharer", password: "password123" });
-    s.store.setKnowledgeRepo(sharer.id, remote, "main");
-    const share = s.store.shareSkill(sharer.id, { skillName: "pptx-report", displayName: "pptx-report", description: "" });
-    const tools = buildSkillExchangeTools(s.store, {
-      avatarUserId: s.ownerId,
-      owner: { ...s.owner, alias: "" },
-      viewerIsOwner: true,
-      config: s.config,
-    });
-    return { shareId: share.id, exchange: (tool: string, args: unknown) => callTool(tools, tool, args) };
-  }
-
-  /**
-   * The owner's clone is left on `main` (a mirror commit with `wiki/a.md` among its commits) while `dev` —
-   * which holds a note of its own — is connected: an uncommitted edit of a tracked file keeps the clone from
-   * switching, also when a tool syncs it. `learned` = the skill was learned (and pushed to `main`) before that.
-   */
-  async function leftOnMain(name: string, opts: { learned?: boolean } = {}) {
-    const s = setup(name);
-    const { exchange, shareId } = withSharedSkill(s, name);
-    await s.call("write_file", { path: "wiki/a.md", content: "the vault's a\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain\n" });
-    expect((await s.call("commit", { message: "first" })).isError).toBeFalsy();
-    if (opts.learned) {
-      const learned = await exchange("learn_skill", { owner_username: "sharer", skill_name: "pptx-report" });
-      expect(learned.isError, txt(learned)).toBeFalsy();
-      expect(s.remoteFiles()).toContain(MARKER);
-    }
-    pushBranch(s, name, "dev", { "wiki/other.md": "dev's own other note\n" });
-    await s.call("write_file", { path: "notes/plain.txt", content: "plain, edited and not committed\n" });
-    s.store.setKnowledgeRepo(s.ownerId, s.remote, "dev");
-    return { s, exchange, shareId };
-  }
-
-  /** The owner signed in to the app (the 스킬 배우기 tab's routes). */
-  async function signedIn(s: Fixture) {
-    const agent = request.agent(createApp(s.services));
-    await agent.post("/api/auth/login").send({ username: "owner", password: "password123" }).expect(200);
-    return agent;
-  }
-  const ON_HOLD_KO =
-    "저장소의 브레인 노트 사본이 보류 중이라 저장소에 올리지 않았습니다. 설정 → 지식·플러그인 → 지식 저장소에서 보류를 확인해 주세요. 변경은 서버 쪽 저장소 사본에 커밋되지 않은 채 남아 있으며, 보류가 끝난 뒤 아바타가 저장소를 커밋하면 함께 올라갑니다.";
-
-  it("learn_skill under a hold: refused as on hold, the branch is unchanged, the skill waits uncommitted in the clone", { timeout: 20_000 }, async () => {
-    const { s, exchange } = await leftOnMain("sk-learn-hold");
-    s.store.setVaultMirrorHold(s.ownerId, "confirm");
-    const devHead = remoteHead(s, "dev");
-    const mainHead = remoteHead(s, "main");
-
-    const res = await exchange("learn_skill", { owner_username: "sharer", skill_name: "pptx-report" });
-    expect(res.isError, txt(res)).toBe(true);
-    // The on-hold refusal, not "Learning failed: …".
-    expect(txt(res)).toBe(holdRefusal("wiki/a.md", "confirm", "commit"));
-    expect(remoteHead(s, "dev")).toBe(devHead);
-    expect(remoteTree(s, "dev")).toEqual(["README.md", "wiki/other.md"]);
-    expect(remoteHead(s, "main")).toBe(mainHead);
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("confirm");
-    // Nothing was committed: the clone still ends at `main`'s commit, and the learned skill is in the working
-    // tree, uncommitted (with its origin marker).
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(mainHead);
-    expect(s.cloneFile("skills/pptx-report/SKILL.md")).toBe(SKILL_MD);
-    expect(cloneGit(s, "status", "--porcelain")).toContain("A  skills/pptx-report/SKILL.md");
-    expect(cloneGit(s, "status", "--porcelain")).toContain(`A  ${MARKER}`);
-    expect(cloneGit(s, "ls-tree", "-r", "--name-only", "HEAD")).not.toContain("skills/pptx-report/SKILL.md");
-
-    // Once the hold has ended it goes out with the avatar's next commit of the repository.
-    s.store.setVaultMirrorHold(s.ownerId, null);
-    const commit = await s.call("commit", { message: "after the hold" });
-    expect(commit.isError, txt(commit)).toBeFalsy();
-    expect(remoteTree(s, "dev")).toEqual(expect.arrayContaining(["skills/pptx-report/SKILL.md", "wiki/a.md", "wiki/other.md"]));
-  });
-
-  it("learn_skill without a hold pushes as it always did", { timeout: 20_000 }, async () => {
-    const { s, exchange } = await leftOnMain("sk-learn-free");
-    const res = await exchange("learn_skill", { owner_username: "sharer", skill_name: "pptx-report" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain('Learned "pptx-report" from @sharer');
-    expect(remoteTree(s, "dev")).toEqual(expect.arrayContaining(["skills/pptx-report/SKILL.md", MARKER, "wiki/a.md", "wiki/other.md"]));
-  });
-
-  it("unlink_skill under a hold: refused as on hold, the branch is unchanged, the unlink waits uncommitted in the clone", { timeout: 20_000 }, async () => {
-    const { s, exchange } = await leftOnMain("sk-unlink-hold", { learned: true });
-    s.store.setVaultMirrorHold(s.ownerId, "checking");
-    const devHead = remoteHead(s, "dev");
-    const mainHead = remoteHead(s, "main");
-
-    const res = await exchange("unlink_skill", { skill_name: "pptx-report" });
-    expect(res.isError, txt(res)).toBe(true);
-    // The on-hold refusal, not "Unlinking failed: …".
-    expect(txt(res)).toBe(holdRefusal("wiki/a.md", "checking", "commit"));
-    expect(remoteHead(s, "dev")).toBe(devHead);
-    expect(remoteTree(s, "dev")).toEqual(["README.md", "wiki/other.md"]);
-    expect(remoteHead(s, "main")).toBe(mainHead);
-    expect(execFileSync("git", ["--git-dir", s.remote, "ls-tree", "-r", "--name-only", "main"], { stdio: "pipe" }).toString()).toContain(MARKER);
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorHold).toBe("checking");
-    // Nothing was committed: the marker is gone from the working tree only.
-    expect(cloneGit(s, "rev-parse", "HEAD")).toBe(mainHead);
-    expect(cloneGit(s, "ls-tree", "-r", "--name-only", "HEAD")).toContain(MARKER);
-    expect(cloneGit(s, "status", "--porcelain")).toContain(`D  ${MARKER}`);
-    expect(s.inClone(MARKER)).toBe(false);
-
-    // Once the hold has ended it goes out with the avatar's next commit of the repository.
-    s.store.setVaultMirrorHold(s.ownerId, null);
-    const commit = await s.call("commit", { message: "after the hold" });
-    expect(commit.isError, txt(commit)).toBeFalsy();
-    const dev = remoteTree(s, "dev");
-    expect(dev).toContain("skills/pptx-report/SKILL.md");
-    expect(dev).not.toContain(MARKER);
-  });
-
-  it("unlink_skill without a hold pushes as it always did", { timeout: 20_000 }, async () => {
-    const { s, exchange } = await leftOnMain("sk-unlink-free", { learned: true });
-    const res = await exchange("unlink_skill", { skill_name: "pptx-report" });
-    expect(res.isError, txt(res)).toBeFalsy();
-    expect(txt(res)).toContain('Unlinked "pptx-report" from @sharer\'s share');
-    const dev = remoteTree(s, "dev");
-    expect(dev).toEqual(expect.arrayContaining(["skills/pptx-report/SKILL.md", "wiki/a.md", "wiki/other.md"]));
-    expect(dev).not.toContain(MARKER);
-  });
-  it("the 스킬 배우기 routes answer 409 with what happened, in Korean, and push nothing", { timeout: 20_000 }, async () => {
-    // Learn.
-    const learn = await leftOnMain("sk-route-learn");
-    learn.s.store.setVaultMirrorHold(learn.s.ownerId, "confirm");
-    const learnDev = remoteHead(learn.s, "dev");
-    const learned = await (await signedIn(learn.s)).post("/api/skill-share/learn").send({ id: learn.shareId }).expect(409);
-    expect(learned.body.error).toBe(ON_HOLD_KO);
-    expect(learned.body.error).not.toMatch(/pi-gateway|VAULT_ON_HOLD_PUSH/i);
-    expect(remoteHead(learn.s, "dev")).toBe(learnDev);
-    expect(cloneGit(learn.s, "status", "--porcelain")).toContain("A  skills/pptx-report/SKILL.md");
-
-    // Unlink.
-    const unlink = await leftOnMain("sk-route-unlink", { learned: true });
-    unlink.s.store.setVaultMirrorHold(unlink.s.ownerId, "checking");
-    const unlinkDev = remoteHead(unlink.s, "dev");
-    const unlinked = await (await signedIn(unlink.s)).post("/api/skill-share/unlink").send({ slug: "pptx-report" }).expect(409);
-    expect(unlinked.body.error).toBe(ON_HOLD_KO);
-    expect(remoteHead(unlink.s, "dev")).toBe(unlinkDev);
-    expect(cloneGit(unlink.s, "status", "--porcelain")).toContain(`D  ${MARKER}`);
-  });
-});
 
 describe("a shared account: a trusted teammate writes as today", () => {
-  it("writes, edits, moves and commits a vault note for a memory-home owner", async () => {
+  it("writes, edits and moves a vault note of the owner's vault, and commits a repository file", async () => {
     const s = setup("shared");
     const mate = teammateTools(s);
     const w = await mate.call("write_file", { path: "wiki/from-mate.md", content: "# from a teammate\n" });
@@ -2296,16 +1326,21 @@ describe("a shared account: a trusted teammate writes as today", () => {
     expect(s.notes()).toEqual({ "wiki/team/from-mate.md": "# from a trusted teammate\n" });
     expect(txt(await mate.call("read_file", { path: "wiki/team/from-mate.md" }))).toBe("# from a trusted teammate\n");
 
-    const c = await mate.call("commit", { message: "mate: add note" });
+    // Only vault notes changed so far: nothing to commit.
+    const nothing = await mate.call("commit", { message: "mate: add note" });
+    expect(txt(nothing)).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
+    const f = await mate.call("write_file", { path: "notes/from-mate.txt", content: "a repository file\n" });
+    expect(txt(f)).toBe("Saved the file notes/from-mate.txt. (Not committed yet — push it with mcp__repo__commit.)");
+    const c = await mate.call("commit", { message: "mate: add file" });
     expect(c.isError, txt(c)).toBeFalsy();
     expect(txt(c)).toContain("Committed and pushed the changes");
-    expect(s.remoteFile("wiki/team/from-mate.md")).toBe("# from a trusted teammate\n");
+    expect(s.remoteFile("notes/from-mate.txt")).toBe("a repository file\n");
+    expect(s.remoteFiles()).not.toContain("wiki/team/from-mate.md");
     // As today: authored as the owner, the teammate in the trailer and in the audit trail.
     expect(s.remoteLog()).toContain("Co-authored-by: Mate <mate@noah-almighty.local>");
     const push = s.store.listAudit(s.ownerId, true, 50).find((a) => a.action === "knowledge_repo_push");
     expect(push?.actorUserId).toBe(mate.mate.id);
     expect(push?.detail).toContain("shared account");
-    expect(s.store.getPersonalVault(s.ownerId)!.mirrorDirty).toBe(false);
   });
 });
 

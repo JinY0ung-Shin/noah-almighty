@@ -55,7 +55,6 @@ import {
   inlineUiUnavailableReason,
   VAULT_MEMORY_NO_REPO_SENTENCE,
   VAULT_NOTES_PHRASE,
-  vaultMirrorStateText,
   vaultOutageRule,
   type OwnerState,
 } from "./ownerState.js";
@@ -171,8 +170,8 @@ const MEMORY_UNAVAILABLE_WORDS: Record<MemoryUnavailableReason, string> = {
 };
 
 /**
- * Whether the memory service answers RIGHT NOW, for the owner whose vault
- * lives there: `probeMemoryVault` (ONE cheap, bounded call — the same check
+ * Whether the memory service answers RIGHT NOW for this owner's vault:
+ * `probeMemoryVault` (ONE cheap, bounded call — the same check
  * the settings card's outage line uses). A failure is stated as
  * unreachable — never as an empty vault, which is what an empty listing from
  * a service that did answer would mean.
@@ -198,34 +197,26 @@ async function memoryServiceStateText(store: Store, ctx: SystemToolsContext): Pr
 }
 
 /**
- * describe_system's lines about where the owner's personal vault lives.
- * - Home `repo` with a repository connected: ONE line — it is the knowledge
- *   repository, and a note is saved only by `mcp__repo__commit`. (The manual,
- *   the repository template and this tool's description all say
- *   describe_system reports the home, so it does for both homes.)
- * - Home `repo` without a repository: nothing — there is no vault.
- * - Home `memory`: the LIVE facts the frozen prompt cannot carry — where it
- *   is, whether the service answers now, and the state of the copy Noah pushes
- *   to the repository. Without a connected repository the tools refuse, so
- *   the lines say the notes are there but unreachable and name no tool to call.
+ * describe_system's lines about the owner's personal vault, which lives in the
+ * memory service for every owner.
+ * - A repository is connected (the brain needs one): what the vault is and how
+ *   a note is saved, then the LIVE fact the frozen prompt cannot carry —
+ *   whether the service answers right now.
+ * - No repository: the tools refuse, so ONE line says notes written earlier are
+ *   still there but unreachable, and names no tool to call. The service is not
+ *   asked — nothing could be done with its answer.
+ * - No repository and no memory service on this server: nothing — there is no
+ *   vault to speak of.
  */
 async function personalVaultLines(store: Store, ctx: SystemToolsContext, state: OwnerState): Promise<string[]> {
-  const { vault } = state;
-  const repoConnected = state.knowledgeRepoConfigured;
-  if (vault.home !== "memory" || !vault.mirror) {
-    return repoConnected
-      ? [
-          `- Personal vault: in the knowledge repository — ${VAULT_NOTES_PHRASE} are files of that repository. A note you write, edit, move or delete is changed only in Noah's working copy and is saved for good only when \`mcp__repo__commit\` pushes it (a tool result that says "Not committed yet" is not saved yet)`,
-        ]
+  if (!state.knowledgeRepoConfigured) {
+    return state.vault.serviceConfigured
+      ? [`- Personal vault: NO knowledge repository connected — any ${VAULT_MEMORY_NO_REPO_SENTENCE}`]
       : [];
   }
-  const since = vault.migratedAt ? ` (since ${vault.migratedAt})` : "";
   return [
-    repoConnected
-      ? `- Personal vault: in Noah's memory service${since} — ${VAULT_NOTES_PHRASE} are stored there, not in the git repository. The same tools and paths apply (\`mcp__repo__*\` reads and writes them, \`mcp__brain__*\` recalls them), and a vault note is SAVED the moment its write, edit, move or delete succeeds — it needs no commit to exist. Everything else in the repository (skills, plugins, non-markdown files) lives in git and is pushed only by \`mcp__repo__commit\`, which also pushes the repository's copy of the vault — so commit after writing as before`
-      : `- Personal vault: in Noah's memory service${since}, with NO knowledge repository connected — ${VAULT_MEMORY_NO_REPO_SENTENCE}`,
+    `- Personal vault: in Noah's memory service — ${VAULT_NOTES_PHRASE} are stored there, not in the git repository. The same tools and paths apply (\`mcp__repo__*\` reads and writes them, \`mcp__brain__*\` recalls them). A vault note is SAVED the moment its write, edit, move or delete succeeds (its tool result says "is saved now"): there is nothing to commit for it, the memory service keeps its change history, and it is NOT copied to the git repository — a note file found there is an old copy that is no longer updated. Everything else in the repository (skills, plugins, non-markdown files) lives in git and is saved only when \`mcp__repo__commit\` succeeds (a tool result that says "Not committed yet" is not saved yet)`,
     `- Memory service: ${await memoryServiceStateText(store, ctx)}`,
-    `- Vault copy in the repository: ${vaultMirrorStateText(vault.mirror, repoConnected)}`,
   ];
 }
 
@@ -1299,7 +1290,7 @@ export function buildSystemTools(store: Store, ctx: SystemToolsContext) {
     ),
     tool(
       "describe_system",
-      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; where the personal vault (CLAUDE.md, wiki/, raw/ notes) lives and — when that is the memory service — whether it answers right now and whether the repository copy is behind or on hold; general git repos; team size; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
+      "Summarizes the current avatar system's structure and the settings this avatar can manage. For the owner, it includes the current state (profile visibility, intro, hashtags; knowledge repository; the personal vault (CLAUDE.md, wiki/, raw/ notes kept in the memory service) and whether that service answers right now; general git repos; team size; secret names; whether SSH is enabled; plugins; routines; pending information requests). When asked about your own settings or state, call this tool first instead of guessing.",
       {},
       async () => {
         const user = store.getUserById(ctx.avatarUserId);

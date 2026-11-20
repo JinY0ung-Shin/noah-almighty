@@ -39,7 +39,7 @@
   gap: var(--s-1-5);
 }
 
-/* ---- 시스템 tab: the 개인 브레인 이전 card sits below the system cards, at the cards' own gap ---- */
+/* ---- 시스템 tab: the 개인 브레인 사용량 card sits below the system cards, at the cards' own gap ---- */
 .admin-vault-slot:is(.cmp-admin-view, .cmp-admin-view *) {
   margin-top: var(--s-4);
 }

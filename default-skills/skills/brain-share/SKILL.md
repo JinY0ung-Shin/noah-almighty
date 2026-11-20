@@ -59,7 +59,7 @@ is what writes the team brain — nobody reviews it afterwards, so draft only wh
    - counts of what was skipped and why (too detailed, already in the team brain, already has a card,
      kept personal, linked or promoted) — no per-note list unless asked.
    When the owner then says a candidate should not go to the team, follow KEPT PERSONAL (mark the note,
-   commit, one line) so the next pass does not bring it back.
+   one line) so the next pass does not bring it back.
 
 ## Never
 - Never submit, press or claim anything was shared: a draft is a draft until the owner presses its

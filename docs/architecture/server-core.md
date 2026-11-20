@@ -82,14 +82,13 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   pure `src/server/todos.ts` (error CODES), shared with the avatar's `mcp__todo__*` tools; the wire
   types, limits and display order are the import-free `src/shared/todos.ts`. Mechanics →
   [`todos.md`](todos.md).
-- **Personal vaults** (where an owner's brain notes live, #84) have their own router
-  (`routes/personalVault.ts`, `createPersonalVaultRouter`: the admin migration routes under
-  `/api/admin/personal-vaults*` and the owner's `/api/me/personal-vault*`) and store mixin
-  (`store/personalVault.ts`, `withPersonalVault`, composed outermost; tables `personal_vaults` — a row exists
-  ONLY for an owner whose vault home is `memory` — and `personal_vault_deletes`, the deletion ledger the
-  mirror settles). The instance setting `personalVaultMode` sits with the
-  other instance settings (`store/admin.ts`). Mechanics → [`repo-knowledge.md`](repo-knowledge.md)
-  "Personal vault: two homes".
+- **Personal vaults** (an owner's brain notes — in the memory service for every owner, #84) have their own
+  router (`routes/personalVault.ts`, `createPersonalVaultRouter`: the admin's usage view
+  `GET /api/admin/personal-vaults/usage` and the owner's `GET /api/me/personal-vault`, both read-only) and
+  store mixin (`store/personalVault.ts`, `withPersonalVault`, composed outermost). The store holds nothing
+  about where a vault lives and has no table for it: only the pending one-time repository imports
+  (app_config key `personal_vault_imports`). Mechanics → [`repo-knowledge.md`](repo-knowledge.md)
+  "Personal vault".
 - Non-obvious route homes: git-token/secrets/ssh-key/git-identity/**knowledge gap-inbox**
   (`/api/me/knowledge/requests`)/**notifications** all live in `routes/knowledgeRepo.ts`;
   **discovery** (`/api/avatars*`) + **conversations** + the **chat SSE** endpoint live in
@@ -133,8 +132,8 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
   media) and the user's pi sandbox workspace (`<PI_WORKSPACES_DIR>/u-<key>`, pi-runtime.md "Cascades") needs a
   best-effort sweep in the `routes/admin.ts` delete handler. One namespace is OFF the box: the user's wiki in the
   memory service (`deleteWiki(owner)`, same handler, best effort and logged, run INSIDE that owner's vault write
-  queue so no queued write or cutover can bring the wiki back — repo-knowledge.md "Personal vault: two homes");
-  `deleteUser` removes their `personal_vaults` row and their `personal_vault_deletes` ledger. Audit rows are RETAINED by design (`actor_*` dangle,
+  queue so no queued write or import can bring the wiki back — repo-knowledge.md "Personal vault"; a pending
+  repository import of that user drops itself when it finds the user gone). Audit rows are RETAINED by design (`actor_*` dangle,
   like `shared_skill_blocks.blocked_by`).
   **The one FK cascade:** `inline_ui_states.message_id REFERENCES messages(id) ON DELETE CASCADE` is the schema's
   ONLY foreign key (chat-sse-media.md "Inline UI"), so every message-deleting path takes those rows without code
@@ -318,9 +317,10 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     purge. When `retirementDataPresent` (read-only, schema-defensive, safe pre-migrate) finds anything a
     retirement would delete — a retired table (`server_agents`, `server_agent_sessions`, `group_agents`,
     `group_agents_legacy`, `external_avatar_images`, `personal_agents`, `bot_tasks`,
-    `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`, `direct_messages`), a retired `app_config` key (`server_agents_enabled`,
-    `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`, the
-    three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
+    `avatar_trusted_users`, `groups`, `group_members`, `shared_skill_group_blocks`, `direct_messages`,
+    `personal_vaults`, `personal_vault_deletes`), a retired `app_config` key (`server_agents_enabled`,
+    `server_agent_deployment_id`, `craft_apps_enabled`, `stt_override`, `external_agents_registry_v1`,
+    `personal_vault_mode`, the three `retired:*:pending` documents), a `personal:`/`external:`/`group:` avatar id in
     `conversations`/`routine_jobs`/`avatar_notifications`/`knowledge_requests`, a bot-bound routine, or a
     still-OPEN row of the team brain's retired review queue (`OPEN_TEAM_BRAIN_QUEUE_ROWS_SQL`, 2026-11-13 —
     the one predicate about rows that are CLOSED, not deleted) — the
@@ -387,6 +387,19 @@ HTTP glue, store, repo plumbing, secrets. Companion to the server-area philosoph
     cards). The queue's tool names, kinds, statuses, routes, press actions and audit events are reserved
     forever → [`team-brain.md`](team-brain.md) ("The review queue's retirement", "Retired (reserved
     forever)"). Tests: `tests/team-brain.test.ts`.
+  - **The personal vault's `repo` home, git mirror and migration retired (2026-11-20, user decision: the
+    memory service is the ONLY home).** Behind the gate `migrate()` runs `DROP TABLE IF EXISTS` on
+    `personal_vault_deletes` and `personal_vaults` and deletes the `app_config` key `personal_vault_mode`;
+    both tables and the key are in `RETIRED_TABLES` / `RETIRED_APP_CONFIG_KEYS`, so that boot's backup is
+    taken first and a failed backup holds the step. It deletes NO note and moves no file: the service's wikis
+    and the users' repositories are untouched, and the quarantine folders an earlier vault rollback left
+    (`retired/<stamp>/personal-vault-leftover/`) stay. Before the drop it records the owners who had a
+    repository connected but no `personal_vaults` row (never moved — their notes are still only in the
+    repository) under `personal_vault_import_stragglers`; the boot's `resumeVaultImports` (`vaultImport.ts`,
+    called from `index.ts`) takes that list once and looks at each repository like a newly connected one.
+    The table, column, setting and route names, the mirror's hold states and `AgentRequest.vaultHome` are
+    reserved forever → [`repo-knowledge.md`](repo-knowledge.md) ("Retired 2026-11-20"). Tests:
+    `tests/personal-vault.test.ts`, `tests/vault-import.test.ts`, `tests/routes-personal-vault.test.ts`.
 
 ## Per-user / per-conversation settings mechanics
 - **Per-user settings pattern:** add a column to the `users` table + an additive `addColumnIfMissing`

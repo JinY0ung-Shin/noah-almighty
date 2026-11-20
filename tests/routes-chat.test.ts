@@ -111,6 +111,8 @@ import { buildUserPrompt } from "../src/server/agent/promptBuilder.js";
 import { gitRepoClonePath } from "../src/server/gitRepos.js";
 import { SERVER_WORKSPACE_COPY_DIRS, workspaceDirFor } from "../src/server/workspace.js";
 import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
+import { setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 import { createPiModelCatalog } from "../src/server/agent/pi/modelCatalog.js";
 
 let tempDir: string;
@@ -4206,6 +4208,9 @@ describe("knowledge-repo load failures degrade to a status frame", () => {
     const owner = request.agent(app);
     const ownerId = (await signup(owner, "repowarn").expect(201)).body.user.id as string;
     store.setKnowledgeRepo(ownerId, path.join(tempDir, "missing", "knowledge.git"), null);
+    const memory = createFakeMemoryClient();
+    setMemoryClientForTests(store, memory);
+    memory.seed(ownerId, "CLAUDE.md", "Answer in short sentences.");
 
     const res = await owner
       .post("/api/chat/stream")
@@ -4217,9 +4222,10 @@ describe("knowledge-repo load failures degrade to a status frame", () => {
     );
     expect(warnings).toHaveLength(1);
     expect((warnings[0].data as { label: string }).label).toContain("불러오기 실패");
-    // The failure costs the avatar its standing memory, not the turn.
+    // The failure costs neither the turn nor the standing memory: that is the vault's CLAUDE.md, which lives
+    // in the memory service, not in the repository that could not be loaded.
     expect(H.requests).toHaveLength(1);
-    expect(H.requests[0].knowledgeMemory).toMatchObject({ personal: null });
+    expect(H.requests[0].knowledgeMemory).toMatchObject({ personal: "Answer in short sentences." });
   });
 });
 

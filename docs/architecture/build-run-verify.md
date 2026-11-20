@@ -555,7 +555,9 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   `stale`, with the current one → 200, again → 404 `not_found`; `DELETE /wiki/<owner>` → `{"deleted":true}` and
   the list is empty after it. **Noah's routes:** `GET /api/admin/personal-vaults` as the admin →
   `serviceConfigured:true`, `mode:"repo"`, both accounts `no_repo`; a member gets 403 there and
-  `{"home":"repo","mirror":null}` for its own view; a dry run reports both accounts `no_repo` with 0 notes.
+  `{"home":"repo","mirror":null}` for its own view; a dry run reports both accounts `no_repo` with 0 notes
+  (the routes as they were at that commit — the list, the dry run and the two homes were retired on
+  2026-11-20, `repo-knowledge.md` "Retired 2026-11-20"; this and the later records below are of their runs).
   **Not one of pi's MCP servers:** pi's broker lists Noah's 19 servers through the `/admin` proxy and no
   `memory`. Noah's log holds no line about the memory service; the service's own log is its four start lines.
   **`55-systemone.mjs` follows pi's new field** (it asserted `compare`, which pi no longer stores): `use:
@@ -612,7 +614,7 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   **Changed in Noah next to this bump** (not in the tree this run exported, and not something this stack
   exercises): `MemoryVault.search` kept only a BLANK query from the service, which was the service's whole rule
   before; a query with no letter or digit is now answered as no hit without being sent (`hasSearchWord`), and
-  `repo-knowledge.md` "Search: what differs from `rankBrainNotes`" lists the new differences.
+  `repo-knowledge.md` "Search: what differs" lists the new differences.
   **NOT seen:** the search of an owner actually MOVED and the text a model reads for it (the stack has no
   knowledge repository; that path rests on Noah's tests against the double, whose ranking is still the old
   count); pi's new refusals when LLM settings are saved (no step saves an over-large window — pi's test); the

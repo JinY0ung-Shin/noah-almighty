@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { Store } from "../store.js";
 import type { AgentOwner, AppConfig, SharedSkillListing } from "../types.js";
 import { scrubGitError } from "../marketplace.js";
-import { vaultHoldPushRefusal } from "./repoToolKit.js";
 import {
   ensureClone,
   knowledgeClonePath,
@@ -462,7 +461,7 @@ export function buildSkillExchangeTools(store: Store, ctx: SkillExchangeContext)
               true,
             );
           }
-          return text(vaultHoldPushRefusal(error, "commit") ?? `Unlinking failed: ${scrubGitError(error)}. You may retry once.`, true);
+          return text(`Unlinking failed: ${scrubGitError(error)}. You may retry once.`, true);
         }
       },
     ),
@@ -537,10 +536,7 @@ function decodeLearnError(error: unknown, listing: SharedSkillListing): string {
     case "SKILL_LOCALLY_MODIFIED":
       return "The learned copy was CUSTOMIZED after learning (or predates modification tracking). Do NOT overwrite silently: tell the user their local edits would be replaced by the sharer's version (git history keeps the old one), and only after they explicitly agree retry with overwrite_modified: true — or learn the new version as a separate copy with new_name to keep both.";
     default:
-      return (
-        vaultHoldPushRefusal(error, "commit") ??
-        `Learning failed: ${scrubGitError(error)}. You may retry once; if it keeps failing, tell the user what happened.`
-      );
+      return `Learning failed: ${scrubGitError(error)}. You may retry once; if it keeps failing, tell the user what happened.`;
   }
 }
 

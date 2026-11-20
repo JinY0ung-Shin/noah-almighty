@@ -49,7 +49,7 @@ export const TEAM_SHARE_PASS_RULE =
 
 /** Remembering a "no" (user decision 2026-11-12: a declined note is not asked about again). */
 export const BRAIN_KEPT_PERSONAL_RULE =
-  `${BRAIN_KEPT_PERSONAL_NAME}: when the user says a personal note should stay out of the team brain — they decline it in a selection pass, or say so about a note — record it so it is not asked again: add the frontmatter line \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` to that note with \`mcp__repo__edit_file\`, commit, and say in one line that the note is now kept personal. When they only cancelled its card without saying why, ask once whether to leave it out of future passes before marking it. A note marked so is never offered or selected again; it goes to the team only when the user names that note and asks — then remove the mark and commit first.`;
+  `${BRAIN_KEPT_PERSONAL_NAME}: when the user says a personal note should stay out of the team brain — they decline it in a selection pass, or say so about a note — record it so it is not asked again: add the frontmatter line \`${PERSONAL_TEAM_SHARE_KEY}: ${PERSONAL_TEAM_SHARE_DECLINED}\` to that note with \`mcp__repo__edit_file\` (a brain note is saved when written — nothing to commit), and say in one line that the note is now kept personal. When they only cancelled its card without saying why, ask once whether to leave it out of future passes before marking it. A note marked so is never offered or selected again; it goes to the team only when the user names that note and asks — then remove the mark first.`;
 
 /** What the personal second brain holds, and that capture needs no question first (user decision 2026-11-10). */
 export const PERSONAL_KNOWLEDGE_DEFINITION =

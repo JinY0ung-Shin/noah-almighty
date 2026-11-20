@@ -5,11 +5,11 @@ import { inspectRepoContents } from "../plugins.js";
 import { scrubGitError } from "../marketplace.js";
 import { isInternalGitSource } from "../gitCredentials.js";
 import { ensureClone, knowledgeRepoContextFor, readFile } from "../knowledgeRepo.js";
-import { buildKnowledgeGraph, buildKnowledgeGraphFromNotes, isVaultNotePath } from "../knowledgeGraph.js";
+import { buildKnowledgeGraphFromNotes, isVaultNotePath } from "../knowledgeGraph.js";
 import { MemoryUnavailableError } from "../memory/memoryClient.js";
 import { memoryVaultFor, type MemoryVault } from "../personalVault.js";
 import { assertNoVaultAlias, vaultNotePathOf } from "../agent/repoToolKit.js";
-import { onKnowledgeRepoChanged } from "../vaultMigration.js";
+import { onKnowledgeRepoChanged } from "../vaultImport.js";
 import { generateSshKeyPair, deriveSshPublicKey } from "../sshIdentity.js";
 import {
   MAX_BROWSER_SECRET_HOSTS,
@@ -50,7 +50,7 @@ async function respondRepoContents(
 const MEMORY_SERVICE_UNAVAILABLE = "메모리 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.";
 
 /**
- * One note of a vault that lives in the memory service, for the graph: null
+ * One note of the viewer's vault (in the memory service), for the graph: null
  * when the note is gone or cannot be a note (left out, as an unreadable file
  * is); a service that cannot be used — or that refuses — is thrown on, so the
  * graph never comes back with notes silently missing.
@@ -329,12 +329,11 @@ export function createKnowledgeRepoRouter({ config, store, auditAs }: RouterDeps
     }
     const user = store.setKnowledgeRepo(req.user!.id, repo, branch);
     // A repository was connected, or a different one, or the same one on a different branch: the vault's
-    // side of that (cutting the owner over, or checking what is there before the mirror writes into it — a
-    // branch holds its own vault files) starts in the background. A re-save of the same repository and
-    // branch is not a change.
+    // side of that (importing the notes it brings along into a vault that is still empty — a branch holds
+    // its own files) starts in the background. A re-save of the same repository and branch is not a change.
     if (previousRepo !== repo || (previousBranch ?? null) !== branch) {
       try {
-        onKnowledgeRepoChanged(store, config, req.user!.id, previousRepo);
+        onKnowledgeRepoChanged(store, config, req.user!.id);
       } catch (error) {
         logger.warn({ userId: req.user!.id, err: error }, "knowledge repo saved, but the vault follow-up could not be started");
       }
@@ -353,46 +352,36 @@ export function createKnowledgeRepoRouter({ config, store, auditAs }: RouterDeps
     await respondRepoContents(res, ctx, "저장소를 가져오지 못했습니다");
   });
 
-  // Build the second-brain `[[wikilink]]` graph for the interactive graph view.
-  // Same clone the agent's repo tools use; pure read, returns {nodes, edges}.
+  // Build the second-brain `[[wikilink]]` graph for the interactive graph view,
+  // from the viewer's vault notes in the memory service — never from the clone
+  // (a file at a vault path there is not the vault's). Pure read, returns
+  // {nodes, edges}; a service that cannot be used is an error, never an empty graph.
   router.get("/api/me/knowledge-repo/graph", requireAuth(store), async (req: AuthenticatedRequest, res) => {
     const ctx = knowledgeRepoContextFor(store, req.user!.id, config);
     if (!ctx) {
       apiError(res, 404, "연결된 지식 저장소가 없습니다.");
       return;
     }
-    // Vault in the memory service: the graph is built from the viewer's notes there, not from the clone
-    // (whose copy of them is the mirror's and may be behind).
     const vault = memoryVaultFor(store, config, req.user!.id);
-    if (vault) {
-      try {
-        const graph = await buildKnowledgeGraphFromNotes({
-          list: () => vault.list(),
-          read: (notePath) => readVaultNoteForGraph(vault, notePath),
-        });
-        res.json({ graph });
-      } catch (error) {
-        if (error instanceof MemoryUnavailableError) {
-          apiError(res, 503, MEMORY_SERVICE_UNAVAILABLE);
-          return;
-        }
-        apiError(res, 502, `지식 그래프를 만들지 못했습니다: ${scrubGitError(error)}`);
-      }
-      return;
-    }
     try {
-      const repoRoot = await ensureClone(ctx);
-      const graph = await buildKnowledgeGraph(repoRoot);
+      const graph = await buildKnowledgeGraphFromNotes({
+        list: () => vault.list(),
+        read: (notePath) => readVaultNoteForGraph(vault, notePath),
+      });
       res.json({ graph });
     } catch (error) {
+      if (error instanceof MemoryUnavailableError) {
+        apiError(res, 503, MEMORY_SERVICE_UNAVAILABLE);
+        return;
+      }
       apiError(res, 502, `지식 그래프를 만들지 못했습니다: ${scrubGitError(error)}`);
     }
   });
 
-  // Read one vault note's markdown for the graph view's content panel. A graph
-  // node id IS the repo-relative path, so the client passes it straight through;
-  // we only serve vault markdown and lean on readFile's traversal guard. Pure
-  // read over the same clone the graph endpoint uses.
+  // Read one note's markdown for the graph view's content panel. A graph node id
+  // IS the repo-relative path, so the client passes it straight through; we only
+  // serve markdown under wiki/ and raw/. A vault note is read from the memory
+  // service; only a markdown file that cannot be a vault note is the clone's.
   router.get("/api/me/knowledge-repo/note", requireAuth(store), async (req: AuthenticatedRequest, res) => {
     const path = req.query.path;
     if (!isVaultNotePath(path)) {
@@ -404,14 +393,13 @@ export function createKnowledgeRepoRouter({ config, store, auditAs }: RouterDeps
       apiError(res, 404, "연결된 지식 저장소가 없습니다.");
       return;
     }
-    // Vault in the memory service: a vault note is read there (classified the way the tools classify a
-    // path). A markdown file the service cannot hold (e.g. under a dot folder) is not a vault note and is
-    // still read from the clone — unless it is a link into the clone's vault folders.
-    const vault = memoryVaultFor(store, config, req.user!.id);
-    const note = vault ? vaultNotePathOf(path) : null;
-    if (vault && note) {
+    // A vault note is read in the memory service (classified the way the tools classify a path). A markdown
+    // file the service cannot hold (e.g. under a dot folder) is not a vault note and is read from the clone
+    // — unless it is a link into the clone's vault folders (`readFile` guards the traversal).
+    const note = vaultNotePathOf(path);
+    if (note) {
       try {
-        const content = await vault.read(note);
+        const content = await memoryVaultFor(store, config, req.user!.id).read(note);
         res.json({ note: { path, content } });
       } catch (error) {
         if (error instanceof MemoryUnavailableError) {
@@ -428,7 +416,7 @@ export function createKnowledgeRepoRouter({ config, store, auditAs }: RouterDeps
     }
     try {
       const repoRoot = await ensureClone(ctx);
-      if (vault) assertNoVaultAlias(repoRoot, path);
+      assertNoVaultAlias(repoRoot, path);
       const content = await readFile(repoRoot, path);
       res.json({ note: { path, content } });
     } catch (error) {

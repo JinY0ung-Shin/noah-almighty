@@ -39,10 +39,15 @@ describe("official system manual", () => {
     // 0 keys), the web-fetch proxy note, and the group, secret, Confluence and
     // experimental-feature sections. A flag-maximal owner turn already measures
     // about 19.1k characters (about 20.5k in one avatar-sharing group), so the
-    // margin under 18,000 is not real headroom: keep standing sections short
+    // margin under the cap is not real headroom: keep standing sections short
     // and put procedures in the manual. Vision is the one flag with TWO real
     // states, so both are budgeted: OFF carries the no-vision notes, ON the
     // image-file sentence and the saved-capture wording.
+    // The cap was 18,000 until 2026-11-20. The memory service became every
+    // owner's vault home that day, so the "where your vault lives" paragraph —
+    // until then stamped only for a moved owner, and outside this measure (such
+    // a prompt was about 19.5k) — is standing text now: a fact and the outage
+    // rule, not a procedure. This flag set measured 18,640 with it.
     const flags = {
       message: "hello",
       avatar: { id: "owner", displayName: "Owner", alias: "", persona: "" },
@@ -55,9 +60,9 @@ describe("official system manual", () => {
       todoState: { deleteEnabled: true },
     };
     const prompt = buildSystemPromptAppend(flags);
-    expect(prompt.length).toBeLessThan(18000);
+    expect(prompt.length).toBeLessThan(18700);
     const visionPrompt = buildSystemPromptAppend({ ...flags, visionEnabled: true });
-    expect(visionPrompt.length).toBeLessThan(18000);
+    expect(visionPrompt.length).toBeLessThan(18700);
     expect(visionPrompt).toContain("Images you are shown are also FILES in the scratch workspace");
     expect(visionPrompt).toContain("saved in the scratch workspace's `captures/`");
     expect(visionPrompt).not.toContain("Screenshots and pixel-mode clicks are unavailable");

@@ -1,6 +1,6 @@
 ---
 name: brain-reflect
-description: Consolidation pass over the personal knowledge repo — synthesize durable notes into wiki/{sources,entities,concepts,synthesis}/, update wiki/index.md and append wiki/log.md, then commit. Reads raw/ + wiki/ and may optionally review the owner's own recent conversations. Personal repo only — the second brain is personal.
+description: Consolidation pass over the personal knowledge repo — synthesize durable notes into wiki/{sources,entities,concepts,synthesis}/, update wiki/index.md and append wiki/log.md. Reads raw/ + wiki/ and may optionally review the owner's own recent conversations. Personal repo only — the second brain is personal.
 ---
 
 # brain-reflect — consolidate the second brain
@@ -9,7 +9,7 @@ Move durable knowledge from `raw/` capture into the consolidated `wiki/`. Run on
 asked to "tidy up / consolidate my notes".
 
 ## Scope
-- **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__commit`.
+- **Personal repo only:** `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`. A brain note is saved when it is written — there is nothing to commit.
   This consolidates the PERSONAL brain only; the team brain is written through cards and never touched here.
 - **Which brain:** follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — ONE FACT ONE HOME, PROMOTED NOTES. Never
   compile a capture into a new full personal note when the team brain already holds that fact — search it
@@ -46,8 +46,9 @@ return nothing for conversations the owner does not own. Never read anyone else'
    — for an UPDATE that changed a value, one terse line naming the note and `old → new`; this is
    where the change history is kept, not in the note.
 6. Optionally archive raw notes you fully consolidated.
-7. **Commit once.** If a write or the commit fails, report what you found and what the tool results
-   say was saved — do not retry via Bash. A tool that reports the memory service as unavailable means
+7. **Nothing to commit:** each note is saved as it is written, and its tool result says so. If a
+   write fails, report what you found and what the tool results say was saved — do not retry via
+   Bash. A tool that reports the memory service as unavailable means
    an outage, not an empty vault: stop the pass and say so instead of consolidating from nothing.
 8. **Point at the team, in one line — never more.** Only in a run that can write the team brain
    (your instructions carry the TEAM KNOWLEDGE tests and THE RIGHT LEVEL): if notes you just wrote or

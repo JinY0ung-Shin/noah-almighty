@@ -14,7 +14,9 @@ import { knowledgeClonePath } from "../src/server/knowledgeRepo.js";
 import { materializePiSkills } from "../src/server/agent/pi/piSkills.js";
 import { piWorkspaceFor } from "../src/server/agent/pi/piWorkspace.js";
 import { commitPiRepoCopy, ensurePiRepoCopy, piRepoCopyStatus } from "../src/server/agent/pi/piRepoCopy.js";
+import { setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { gitInit, makeSkill, withTempDir } from "./helpers.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 import { grepRepo, listRepoFiles, readRepoFile } from "../src/server/gitRepoRead.js";
 import { withRepoLock } from "../src/server/gitMutex.js";
 
@@ -43,8 +45,11 @@ describe("a committed link in the knowledge repo is never followed (review #2/#3
     const base = dir();
     const cfg = config(base);
     const v = victim(base);
-    // No personal_vaults row: this owner's vault home is the repo (the clone is what gets read).
-    const store = { getKnowledgeRepo: () => ({ repo: "me/knowledge" }), getPersonalVault: () => null } as unknown as Store;
+    // The standing memory is the vault's CLAUDE.md, read from the memory service: nothing the clone holds at
+    // that path — a committed link, or a plain file — ever reaches the prompt.
+    const store = { getKnowledgeRepo: () => ({ repo: "me/knowledge" }) } as unknown as Store;
+    const fake = createFakeMemoryClient();
+    setMemoryClientForTests(store, fake);
     const clone = knowledgeClonePath("attacker", cfg);
     fs.mkdirSync(clone, { recursive: true });
     for (const target of [v.secret, path.join(v.root, "CLAUDE.md")]) {
@@ -52,10 +57,15 @@ describe("a committed link in the knowledge repo is never followed (review #2/#3
       fs.symlinkSync(target, path.join(clone, "CLAUDE.md"));
       expect((await loadKnowledgeRepoMemory(store, "attacker", cfg)).personal).toBeNull();
     }
-    // A link on the way (a linked folder) is refused too; a plain file still loads.
     fs.rmSync(path.join(clone, "CLAUDE.md"));
-    fs.writeFileSync(path.join(clone, "CLAUDE.md"), "my memory");
+    fs.writeFileSync(path.join(clone, "CLAUDE.md"), "THE CLONE'S FILE");
+    expect((await loadKnowledgeRepoMemory(store, "attacker", cfg)).personal).toBeNull();
+    // The owner's own note in the service is what loads — as that owner, never another one's.
+    fake.seed("victim", "CLAUDE.md", "VICTIM VAULT CLAUDE.md");
+    expect((await loadKnowledgeRepoMemory(store, "attacker", cfg)).personal).toBeNull();
+    fake.seed("attacker", "CLAUDE.md", "my memory");
     expect((await loadKnowledgeRepoMemory(store, "attacker", cfg)).personal).toBe("my memory");
+    expect(fake.calls.every((c) => c.owner === "attacker")).toBe(true);
   });
 
   it("a `skills` link copies, indexes and serves none of another user's skills", async () => {

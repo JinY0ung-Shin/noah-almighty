@@ -243,13 +243,14 @@ export function createAdminRouter(deps: RouterDeps): Router {
       }
       auditAs(req, "delete_user", `deleted user ${req.params.id}`);
       logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "user deleted");
-      // The owner's wiki in the memory service (their personal vault when its
-      // home was `memory`, or the copy an unfinished import left). Best effort,
-      // like the disk sweep below: the account is gone either way, and a wiki
-      // that could not be deleted is logged for the operator. It runs in the
-      // owner's vault write queue, BEHIND whatever is still in it (a queued
-      // note write, a cutover in the middle of its import): those find the
-      // user gone and write nothing, so nothing re-creates the wiki afterwards.
+      // The owner's wiki in the memory service (their personal vault). Best
+      // effort, like the disk sweep below: the account is gone either way, and
+      // a wiki that could not be deleted is logged for the operator. It runs in
+      // the owner's vault write queue, BEHIND whatever is still in it (a queued
+      // note write, a repository import in the middle of its work): what was
+      // queued earlier is deleted with the rest, and a later tool call or import
+      // finds no user and no repository and writes nothing — so nothing
+      // re-creates the wiki afterwards.
       const targetId = req.params.id;
       const memory = memoryClientFor(store, config);
       if (memory) {

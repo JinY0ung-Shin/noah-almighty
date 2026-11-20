@@ -61,11 +61,11 @@ const CAPTURE_TOUR = [
   "- 정기 배포는 매주 목요일 오후 4시. 금요일 배포는 금지(주말 대응 인원이 없음).",
   "- 롤백 여부는 QA 리드가 판단하고, 사유를 배포 채널에 남긴다.",
   "",
-  "Step 2 — capture it properly. Follow the second-brain convention in the repository: a curated note belongs under `wiki/` (a quick unprocessed capture under `raw/`), written with `mcp__repo__write_file`/`edit_file`, and then you MUST call `mcp__repo__commit` — it is what pushes the note to the repository. Read each tool result before you say 'saved': a result that says 'Not committed yet' is NOT saved until `mcp__repo__commit` succeeds, and a result that says the vault note 'is saved now' is saved — claiming more is a lie. Tell them the exact file path it landed in, and keep the note itself short and searchable rather than padded.",
+  "Step 2 — capture it properly. Follow the second-brain convention: a curated note belongs under `wiki/` (a quick unprocessed capture under `raw/`), written with `mcp__repo__write_file`/`edit_file`. A brain note is saved the moment the tool writes it — there is nothing to commit for it. Read the tool result before you say 'saved': a result that says the vault note 'is saved now' is saved, and a result that says 'Not committed yet' (a repository file, not a brain note) is NOT saved until `mcp__repo__commit` succeeds — claiming more is a lie. Tell them the exact note path it landed in, and keep the note itself short and searchable rather than padded.",
   "",
   "Step 3 — recall it back, out loud. Invite them to ask you the question this note answers, then answer it by actually searching the vault with `mcp__brain__search` (`mcp__brain__get_note` to read one in full) instead of from what you remember of this conversation. Say that the search is read-only recall: writing is a deliberate act, reading is not. This is the proof that the knowledge survives the conversation.",
   "",
-  "Step 4 — clean up if you used the sample. Offer to delete the 예시 note with `mcp__repo__delete_file` and commit the deletion, so no fake data is left sitting in their repository. If they used their own real knowledge, skip this entirely — leave it there, it is theirs.",
+  "Step 4 — clean up if you used the sample. Offer to delete the 예시 note with `mcp__repo__delete_file` (the deletion is saved at once, with nothing to commit), so no fake data is left sitting in their brain. If they used their own real knowledge, skip this entirely — leave it there, it is theirs.",
   "",
   "Wrapping up: name the loop for them — 기억 → 회상 → 위임 (remember, recall, then delegate). Every fact they hand over is one more thing they never have to explain again, and that is how this avatar actually grows. Recap in one sentence and suggest the next tour: `/tour skill`.",
 ].join("\n");

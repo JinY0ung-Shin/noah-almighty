@@ -12,10 +12,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vaultHoldPushStop } from "../knowledgeRepo.js";
 import { scrubGitError } from "../marketplace.js";
 import { MemoryRefusedError, MemoryUnavailableError } from "../memory/memoryClient.js";
-import { VAULT_HOME_CHANGED, isPersonalVaultPath, normalizeVaultPath, type MemoryVault } from "../personalVault.js";
+import { isPersonalVaultPath, normalizeVaultPath, type MemoryVault } from "../personalVault.js";
 import { decodeRepoFsError, text } from "./mcpTools.js";
 
 /** Shared owner-only refusal text. */
@@ -100,33 +99,6 @@ export function commitFailureMessage(error: unknown): string {
     );
   }
   return `Commit/push failed: ${detail}\nCheck the write permission of the token (GIT_TOKEN) and the remote branch protection settings. Do not work around this with Bash \`git push\` — the shell has no git credentials.`;
-}
-
-/**
- * The refusal for a push of the knowledge clone that was stopped because it
- * would change vault notes while their copy is on hold (`VAULT_ON_HOLD_PUSH`,
- * knowledgeRepo.ts) — null for any other failure. The general message's
- * token/branch-protection hint would name the wrong cause. `after` = what
- * gets the kept changes out once the hold has ended: for `commit` the same
- * call again; for a tool that wrote files first (learning or unlinking a
- * skill) a commit of the repository — repeating THAT call would find its own
- * leftover ("already exists", "nothing to unlink").
- */
-export function vaultHoldPushRefusal(error: unknown, after: "again" | "commit" = "again"): string | null {
-  const stopped = vaultHoldPushStop(error);
-  if (!stopped) return null;
-  const wait =
-    stopped.hold === "confirm"
-      ? "the connected repository (or branch) holds vault notes of its own, and nothing there is changed until the owner confirms in 설정 → 지식·플러그인 → 지식 저장소 (or connects another repository)"
-      : "Noah has not finished looking at the newly connected repository (or branch) — `mcp__system__describe_system` shows the state";
-  return (
-    `Nothing was committed or pushed: this push would change vault notes in the repository (${stopped.files}) while the repository's copy of the vault notes is ON HOLD — ${wait}. ` +
-    (after === "commit"
-      ? "What this call changed is kept, uncommitted, in the server's copy of the repository: once the hold has ended, call `mcp__repo__commit` to push it — do NOT repeat this call (it would find its own files there); tell the user that. "
-      : "The changes are kept, uncommitted, in the server's copy of the repository: do the same again once the hold has ended; tell the user that, and do not retry in a loop. ") +
-    "If the server's copy of the repository is still on a previous branch (the branch was changed while there were uncommitted changes), the look at the new branch cannot finish until that is resolved: the owner sets the branch back, has these changes committed there, and switches again. " +
-    "The notes themselves are saved in the vault. Do not work around this with Bash `git` — the shell has no git credentials."
-  );
 }
 
 /** read_file's shared error decode. */
@@ -221,29 +193,6 @@ export interface RepoFileOps {
 export type Resolved<C> =
   | { ok: true; repo: C }
   | { ok: false; result: ReturnType<typeof text> };
-
-/**
- * Run the shared list_files body: clone the resolved repo, list its tree, and
- * either report it empty or hand the rendered tree body to `onBody`. Clone
- * failures map to the shared `cloneFailureMessage`. `onBody`/`empty` carry the
- * caller-specific success wording, so no string moves here.
- */
-export async function runListFiles<C>(
-  resolved: Resolved<C>,
-  ensureClone: (repo: C) => Promise<string>,
-  listTree: RepoFileOps["listTree"],
-  opts: { empty: string; onBody: (body: string) => string },
-): Promise<ReturnType<typeof text>> {
-  if (!resolved.ok) return resolved.result;
-  try {
-    const repoRoot = await ensureClone(resolved.repo);
-    const entries = await listTree(repoRoot);
-    if (entries.length === 0) return text(opts.empty);
-    return text(opts.onBody(formatTree(entries)));
-  } catch (error) {
-    return text(cloneFailureMessage(error), true);
-  }
-}
 
 /** Run the shared read_file body (clone → read → decode). */
 export async function runReadFile<C>(
@@ -372,21 +321,21 @@ export async function runScaffoldSkill<C>(
   }
 }
 
-// ---- The personal vault in the memory service (vault home `memory`) ------------
+// ---- The personal vault (in the memory service) --------------------------------
 //
-// For an owner whose vault lives in the memory service (`memoryVaultFor` is not
-// null), a vault note — the root `CLAUDE.md` and the `.md` notes under `wiki/`
-// and `raw/` — is read and written through `MemoryVault`, never in the clone:
-// the clone's copy of a vault note is the mirror's to write and nobody's to
-// read. Everything below is that second branch; the runners above are the
-// repo-home code and the code for every path that is not a vault note.
+// A vault note — the root `CLAUDE.md` and the `.md` notes under `wiki/` and
+// `raw/` — is read and written through `MemoryVault` (`personalVault.ts`),
+// never in the clone, for every owner: a clone file at a vault path (a copy the
+// retired mirror left, or a note a connected repository brought along) is no
+// tool's to read or change. Everything below is the vault's side of the tools;
+// the runners above are the code for every path that is NOT a vault note.
 
 /**
  * The vault note a tool's repo-relative path argument names (normalized the
  * way the service stores it), or null when the path is not a vault note. Reads
  * the path the way the clone file ops would resolve it, so no spelling of a
  * vault note (`./wiki/a.md`, `wiki//a.md`, `wiki/x/../a.md`, `wiki/a.md/`)
- * reaches the clone's mirror copy; an absolute path stays what those ops make
+ * reaches a clone file at a vault path; an absolute path stays what those ops make
  * of it — refused.
  */
 export function vaultNotePathOf(raw: string): string | null {
@@ -420,16 +369,16 @@ export function touchesVault(raw: string): boolean {
 }
 
 /**
- * Appended to a success line about a vault note: it is saved. It never says
- * "do not commit" — the standing guidance has the avatar commit after writing
- * in both vault homes, and a commit is what pushes the note's copy to the repository.
+ * Appended to a success line about a vault note: it is saved, and a commit has
+ * nothing to do with it. The phrase `is saved now` is what the skills and the
+ * manual key on (a repo path's success says `Not committed yet`) — keep it exact.
  */
 export const VAULT_NOTE_SAVED =
-  "(Vault note: it is saved now. It needs no commit to exist; mcp__repo__commit pushes its copy to the repository.)";
+  "(Vault note: it is saved now — vault notes live in the memory service, not in the repository. There is nothing to commit for it.)";
 
-/** The `commit` tool's extra sentence when there was nothing to commit for an owner whose vault is in the memory service. */
+/** The `commit` tool's extra sentence when there was nothing to commit (the changes were, at most, vault notes). */
 export const VAULT_NOTES_NEED_NO_COMMIT =
-  "Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are saved the moment they are written — they need no commit to exist; a commit pushes their copy to the repository.";
+  "Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are saved in the memory service the moment they are written — there is nothing to commit for them, and they are not copied to the repository.";
 
 /**
  * The memory service could not be used. Never "not found" / "no match": the
@@ -448,14 +397,11 @@ export function memoryUnavailableMessage(what: "read" | "write", subject: string
 /**
  * A vault operation's error as the model reads it. The `MemoryVault` sentinels
  * (INVALID_PATH, FILE_TOO_LARGE, NOT_FOUND, the edit sentinels) go through the
- * tool's existing decoder; the three failures only a vault has are worded here.
+ * tool's existing decoder; the two failures only a vault has are worded here.
  */
 export function vaultToolErrorMessage(error: unknown, decode: (error: unknown) => string, unavailable: string): string {
   if (error instanceof MemoryUnavailableError) return unavailable;
   if (error instanceof MemoryRefusedError) return `The memory service refused this: ${error.message}`;
-  if (error instanceof Error && error.message === VAULT_HOME_CHANGED) {
-    return "Nothing was done: where the owner's vault lives changed while this call was waiting. Call the tool again with the same arguments.";
-  }
   return decode(error);
 }
 
@@ -475,11 +421,11 @@ function byTreeOrder(a: { type: string; path: string }, b: { type: string; path:
 
 /**
  * The clone tree with its vault-note entries replaced by the notes the memory
- * service holds: the clone's own copies of vault notes (the mirror's, possibly
- * behind) are dropped, every service note is listed with its parent folders,
- * and the result is in `listTree`'s order. Under `wiki/` and `raw/` a folder is
- * listed only when it holds a repo file or a note — the service has no empty
- * folders, and a folder that exists only for mirror copies is not shown.
+ * service holds: the clone's own files at vault paths (not the vault's) are
+ * dropped, every service note is listed with its parent folders, and the
+ * result is in `listTree`'s order. Under `wiki/` and `raw/` a folder is listed
+ * only when it holds a repo file or a note — the service has no empty folders,
+ * and a folder that exists only for clone files at vault paths is not shown.
  */
 export function mergeVaultTree(
   entries: Array<{ type: string; path: string }>,
@@ -504,7 +450,7 @@ export function mergeVaultTree(
   ].sort(byTreeOrder);
 }
 
-/** list_files for an owner whose vault is in the memory service: the clone tree merged with the service's notes. */
+/** list_files: the clone tree merged with the vault's notes. `empty`/`onBody` carry the caller's success wording. */
 export async function runVaultListFiles<C>(
   resolved: Resolved<C>,
   ensureClone: (repo: C) => Promise<string>,
@@ -579,10 +525,10 @@ export async function runVaultEditFile<C>(
   }
 }
 
-// ---- A memory-home owner's clone: never a file at a vault path (D4) -------------
+// ---- The clone: never a file at a vault path (D4) -------------------------------
 //
-// The clone's files at vault paths are the mirror's copies (or, while the mirror
-// is on hold, the connected repository's own notes): no tool reads, writes,
+// The clone's files at vault paths are not the vault's (copies the retired
+// mirror left, or the connected repository's own notes): no tool reads, writes,
 // moves or deletes them. A path is classified lexically (`vaultNotePathOf`);
 // the two checks below close what that cannot see.
 
@@ -590,9 +536,8 @@ export async function runVaultEditFile<C>(
  * Refuse (INVALID_PATH, as the clone ops word a path they will not follow) a
  * path that is not a vault path by its spelling but RESOLVES, through a link
  * committed in the repository, into the vault folders of the clone
- * (`notes -> wiki`: `notes/a.md` is the clone's copy of `wiki/a.md`). Only for
- * an owner whose vault is in the memory service; a path the clone ops refuse
- * anyway is left to them.
+ * (`notes -> wiki`: `notes/a.md` is the clone's file at `wiki/a.md`). A path the
+ * clone ops refuse anyway is left to them.
  */
 export function assertNoVaultAlias(repoRoot: string, raw: string, opts: { leafLinkOk?: boolean } = {}): void {
   const rel = repoRelOf(raw);
@@ -640,7 +585,7 @@ export function assertNoVaultAlias(repoRoot: string, raw: string, opts: { leafLi
   }
 }
 
-/** `ensureClone` for a memory-home owner's clone op on paths that are not vault notes: the clone, with {@link assertNoVaultAlias} on each path. */
+/** `ensureClone` for a clone op on paths that are not vault notes: the clone, with {@link assertNoVaultAlias} on each path. */
 export function cloneWithoutVaultAlias<C>(
   ensureClone: (repo: C) => Promise<string>,
   ...rawPaths: Array<string | { path: string; leafLinkOk?: boolean }>
@@ -657,8 +602,9 @@ export function cloneWithoutVaultAlias<C>(
 
 /**
  * Why a repo path cannot be CREATED next to the vault's notes, or null: a file
- * at `wiki/topic` while notes live under `wiki/topic/` (the mirror could no
- * longer write that folder), or a path under a note (`wiki/a.md/x.txt`).
+ * at `wiki/topic` while notes live under `wiki/topic/` (the one tree the tools
+ * show would hold a file and a folder of the same name), or a path under a
+ * note (`wiki/a.md/x.txt`).
  * `notes` = the service's notes; only a path in the vault folders can collide.
  */
 export function noteTreeCollision(raw: string, notes: Array<{ path: string }>): string | null {
@@ -676,7 +622,7 @@ export function noteTreeCollision(raw: string, notes: Array<{ path: string }>): 
 }
 
 /**
- * Before a memory-home owner's write_file of a path that is not a vault note:
+ * Before a write_file of a path that is not a vault note:
  * the refusal when it would collide with the vault's notes
  * ({@link noteTreeCollision}), else null — the caller then runs the clone op.
  * Asks the service only for a path in the vault folders.
@@ -718,13 +664,12 @@ async function removeEmptiedFolders(repoRoot: string, entries: Array<{ type: str
 }
 
 /**
- * delete_file for an owner whose vault is in the memory service, where vault
- * notes can be involved (`touchesVault`), run inside the owner's vault write
- * queue (`vault` is the queue's writer). A vault note is deleted in the
+ * delete_file where vault notes can be involved (`touchesVault`), run inside
+ * the owner's vault write queue (`vault` is the queue's writer). A vault note is deleted in the
  * service. A folder is deleted on BOTH sides: its notes in the service, and in
  * the clone ONLY the repo files under it — a clone file at a vault path is
  * never touched. A plain repo file (`wiki/.gitkeep`) or a link is the clone op
- * alone and never asks the service. `success.repo` is today's text,
+ * alone and never asks the service. `success.repo` is a repo path's text,
  * `success.note` a vault note's, `success.folder` a folder that held `count` notes.
  */
 export async function runVaultDeleteFile<C>(
@@ -792,9 +737,9 @@ interface MoveItem {
 const showMove = (item: MoveItem) => `${item.from} → ${item.to}`;
 
 /**
- * move_file for an owner whose vault is in the memory service, where vault
- * notes can be involved (`touchesVault(from)` or `touchesVault(to)`), run
- * inside the owner's vault write queue (`vault` is the queue's writer).
+ * move_file where vault notes can be involved (`touchesVault(from)` or
+ * `touchesVault(to)`), run inside the owner's vault write queue (`vault` is
+ * the queue's writer).
  *
  * A move is carried out file by file, each on the side it belongs to: note →
  * note inside the service; note → repo path (written into the clone, deleted
@@ -811,7 +756,7 @@ const showMove = (item: MoveItem) => `${item.from} → ${item.to}`;
  * a single file's move does, as a rename always did). On a failure the result
  * names the files that exist at both paths at that moment.
  *
- * `success.repo` is today's text; `success.notes` when only vault notes
+ * `success.repo` is a repo path's text; `success.notes` when only vault notes
  * changed; `success.mixed` when both sides did.
  */
 export async function runVaultMoveFile<C>(

@@ -833,96 +833,51 @@ Mechanics of the links themselves → [`share-links.md`](share-links.md).
   scrolled down, the three toolbar buttons inside the card at a 1000 px window. Tests:
   `tests/react-workspace-tab.test.tsx`, `tests/react-file-tab.test.tsx`.
 
-## Personal vault screens (개인 브레인 보관, #84)
-Where an owner's brain notes live and the state of their repository copy — the server side is
-[`repo-knowledge.md`](repo-knowledge.md) "Personal vault: two homes". The server decides everything; both
-screens show what it says and ask before each step that changes where notes live.
+## Personal vault screens (개인 브레인, #84)
+Every owner's brain notes live in the memory service — the server side is
+[`repo-knowledge.md`](repo-knowledge.md) "Personal vault". Both screens are READ-ONLY: they show what the
+server says and change nothing (the migration controls and the repository copy's state were retired on
+2026-11-20).
 - **설정 ▸ 지식·플러그인 ▸ 지식 저장소: `SettingsVaultStatus.tsx` (브레인 노트 보관).** The state lives in the
   hook `usePersonalVaultStatus(active, userId)`, called by the always-mounted `SettingsKnowledgeTab` (so it
-  survives a tab switch); the component only draws it. It reads `GET /api/me/personal-vault` when the tab
-  becomes active. **For vault home `repo` it renders NOTHING** — also while the first read is in flight; only
-  a failed read shows a line with 다시 시도. For home `memory`: one block saying the notes are kept in the
-  memory service and the repository receives a copy, the copy's ONE state (`vaultMirrorKind`: checking >
-  confirm > failed > waiting > synced), a notice line when the server sent one, and that a direct git edit
-  of those files is not read back.
-  - **Re-reads:** `reloadSoon()` reads at once and once more 4 s later (`FOLLOW_UP_MS` — the server applies a
-    repository change in the background); the tab calls it after a repository is connected, refreshed
-    (새로고침) or disconnected, and after the hold is confirmed. While the hold is `checking` the block
-    follows it every 4 s, at most 10 times (`CHECKING_POLL_MS`, `CHECKING_POLL_MAX`), only while the tab is
-    active. 상태 새로 고침 is the manual read. An answer for a request made before the account changed is
-    dropped (a generation counter).
-  - **`checking`** (the server has not looked at the newly connected repository yet): "연결한 저장소를
-    확인하는 중입니다", NO confirm button — there is nothing to confirm. If it stays, the block says the
-    server cannot read the repository and offers 지금 다시 확인 (`POST …/mirror-recheck`) and 권한·연결
-    탭에서 Git 토큰 확인; the server keeps retrying by itself (about once a minute for half an hour, then every
-    ten minutes — `repoChangeRetry`).
-  - **`confirm`** (the repository holds brain notes the copy would replace): the warning and 저장소의 노트를
-    바꾸고 사본 올리기 → a danger `confirmAction` → `POST …/mirror-confirm` with `{ repo, branch }` — the
-    repository and branch THIS screen showed, so a stale screen confirms nothing. After a refusal the block
-    re-reads and shows the state as it is now.
-  - **The way out sits next to the failure the SERVER reported** (nothing is predicted client-side): no
-    token / no permission → 권한·연결 탭에서 Git 토큰 설정; uncommitted work in the repository → 아바타에게
-    커밋 요청 (opens a seeded chat, `openSeededChat`); a rejected push → the hint to use 새로고침. A conflict
-    (always outside the vault paths) offers NO button to the avatar — its `commit` answers the same conflict
-    with "reconcile it manually" — the text names the two ways out: revert the change in the repository, or
-    ask an admin to fix the server's clone.
-  - **`serviceConfigured: false`** (this server has no memory service): an alert above everything else in
-    the block — nothing of the brain works and no copy is made, whatever the copy's last state says.
+  survives a tab switch) with `active` = the tab is open AND a repository is connected; the component only
+  draws it, under the connected repository. It reads `GET /api/me/personal-vault` each time `active` becomes
+  true; 상태 새로 고침 is the manual read. An answer for a request made before the account changed is dropped
+  (a generation counter), and another account taking over the session clears what was read.
+  - **Nothing is known yet** (the first read in flight, or an answer without the route's shape): nothing is
+    drawn; only a FAILED first read shows a line with 다시 시도.
+  - **The standing sentence**, always: brain notes are kept in the memory service and are NOT copied into the
+    connected repository; skills, plugins and the other files stay in the repository.
+  - **`serviceConfigured: false`** (this server has no memory service): an alert above it — the notes can be
+    neither read nor written, tell an admin.
   - **`service: "unavailable" | "refused"`** (the server's check of the memory service failed on THIS read):
     an alert in the same place — the notes cannot be read or written now, saved notes are kept, try
-    상태 새로 고침 later and tell an admin if it stays. The copy's state below is still shown: it is its last
-    state. `ok`, or a server that does not send the field, shows no such line.
-  - **The notice** (`vaultMirrorNoticeText`): the repository copy holds N notes the memory service does not,
-    nothing was deleted, they are not in the brain; a notice this file does not know is shown as it came.
-- **관리자 ▸ 시스템: `AdminPersonalVaultPanel.tsx` (개인 브레인 이전)** — the LAST card of the 시스템 tab,
-  always mounted by `AdminView` with `active` (its messages and the last 미리 확인 survive a tab switch) and
-  reading its own route (`GET /api/admin/personal-vaults`), so it shows even when the system info failed to
-  load. Controls: 보관 방식 (radio cards 저장소에 보관 / 메모리 서비스로 이전 → `POST …/mode`, each behind
-  a confirm that says what it starts or stops), 미리 확인 (`POST …/dry-run`; the reports appear under each
-  owner at once), 이전 실행 (`POST …/run`), and per owner 되돌리기 (`POST …/:userId/rollback` with
-  `{ expect: "memory" }`, danger confirm). For an owner still on the repository whose report names a leftover
-  copy in the service (`vaultHasLeftoverCopy`), 메모리 서비스에 남은 사본 비우기 calls the SAME route with
-  `{ expect: "repo" }` — the server refuses (409) when the owner's home is not the expected one, so a stale
-  screen can never turn one into the other. A notice on an owner's row says how to bring the repository's
-  notes into the brain (되돌리기, then move again) only where that can be carried out.
-  - **How full a moved owner's wiki is** (`UsageLine`, under the 보관 위치 tag, home `memory` with the service
-    configured only): "노트 N개 · size · 한도의 P%" from `GET …/usage` (counts only), P = the larger share of
-    the two limits (`vaultUsagePercent`, "1% 미만" for a non-empty wiki under 1%); from 80 %
-    (`VAULT_USAGE_WARN_PERCENT`) it is marked and says the service may soon refuse to save. The usage view is
-    read with the table, after every action and when a pass ends — never by the 3 s poll; a failed listing reads
-    "사용량: 메모리 서비스에 연결하지 못했습니다"/"…거절했습니다", a failed read of the whole view "사용량을 확인하지 못했습니다".
-  - **A report is dated** ("<time>에 확인 · …", from the report's `at`; an older server sends none): it is the
-    last look, not the state now. For an owner already moved, blockers read "확인하지 못했습니다." — the look
-    failed — never "아직 옮길 수 없습니다."
-  - **A server with NO memory service configured** shows no controls — but it still shows who is on the
-    memory service: with moved owners the warning says their notes can be neither read nor written until the
-    service is configured again, and their rows carry 읽기·쓰기 불가; with none it says where to set it up.
-  - **While a pass runs the table re-reads every 3 s** (`RUNNING_POLL_MS`, only while the tab is active; a
-    failed read keeps what is shown and tries again), and says so when the pass has ended. One action at a
-    time (`busy`); a refusal is shown as the server phrased it. A dry run over many owners can outlast the
-    client's 120 s request timeout (`lib/api.ts`) — the server still finishes it.
-- **The Korean wording of the server's English codes lives in ONE place: the tables in
-  `src/client/src/lib/personalVaultCodes.ts`** (import-free), the sentences composed from them in
-  `lib/personalVault.ts` — together with the response shapes, declared there because
-  `routes/personalVault.ts` and `vaultMigration.ts` are not server modules the client may import. The tables
-  are PAIRED with server lists, and **`tests/client-vault-codes.test.ts` imports both sides and fails when
-  they differ in either direction** (a server code without a translation would reach a person as raw
-  English; a translation without a server code is dead text):
-  | Client table | Server list | Form of the server's text |
-  |---|---|---|
-  | `VAULT_MIRROR_ERROR_KINDS` → `vaultMirrorFailure` / `vaultMirrorFailureText` | `VAULT_MIRROR_ERROR` (`vaultMirror.ts`) | the value alone, or followed by `: <detail>` / ` (<detail>)` |
-  | `VAULT_BLOCKER_KO` → `vaultBlockerText` | `VAULT_BLOCKER` (`vaultMigration.ts`) | `<code>: <detail>` |
-  | `VAULT_SKIP_KO` → `vaultSkippedReasonText` | `VAULT_SKIP` (`vaultMigration.ts`) | `<code>: <detail>` |
-  | `VAULT_LEFTOVER_BLOCKERS` → `vaultHasLeftoverCopy` | `VAULT_LEFTOVER_BLOCKERS` (`vaultMigration.ts`) | the two codes, never a sentence |
-  | `VAULT_MIRROR_NOTICE_PREFIX` → `vaultMirrorNoticeCount` | `VAULT_MIRROR_NOTICE` (`vaultMirror.ts`) | `<prefix>: <count>` |
-
-  **A new or renamed value on the server needs its row here** (the test says so); a value this file does not
-  know is still shown RAW at run time rather than hidden. A failed push is further told apart by git's own
-  words (`pushFailure`: no permission / a branch that moved / anything else — a protected branch or hook
-  shows git's words). The same English texts are what the avatar reads (`describe_system`, tool results), so
-  they stay English there.
+    상태 새로 고침 later and tell an admin if it stays. `ok`, or `null`, shows no such line.
+  - A failed RE-read keeps what was shown and adds a line that says so.
+- **관리자 ▸ 시스템: `AdminPersonalVaultPanel.tsx` (개인 브레인 사용량)** — the LAST card of the 시스템 tab,
+  always mounted by `AdminView` with `active` and `users` (what it read survives a tab switch) and reading
+  its own route (`GET /api/admin/personal-vaults/usage`), so it shows even when the system info failed to
+  load. It reads once when the tab first becomes active; its only button, 새로 고침, reads again. No poll.
+  - **One row per owner** — a user with a knowledge repository connected, named from the admin view's user
+    list (an id it does not know is shown as it came): notes, size and 한도 대비, P = the larger share of the
+    two limits (`vaultUsagePercent`, "1% 미만" for a non-empty wiki under 1%); from 80 %
+    (`VAULT_USAGE_WARN_PERCENT`) the cell is marked and says the service may soon refuse to save. The limits
+    line above the table states both limits. Counts and sizes only — the route never sends a note's path or
+    content, and the panel says so.
+  - **A listing that failed** fills that owner's row with why (`USAGE_ERROR_TEXT`: could not connect /
+    refused / no answer in time); a failed read of the whole view keeps what was read before under a warning.
+  - **A server with NO memory service configured** shows no table: a warning that nobody's notes can be read
+    or written until `PI_MEMORY_URL` and `PI_MEMORY_API_KEY_FILE` are set.
+  - The status line (`role="status"`, always in the tree) says how many owners are listed, how many are near
+    a limit and how many could not be checked.
+- **The response shapes are declared in `src/client/src/lib/personalVault.ts`** (`MyPersonalVault`,
+  `AdminVaultUsage`, with the readers `readMyPersonalVault` / `readAdminVaultUsage` that drop anything not in
+  the route's shape), because `routes/personalVault.ts` is not a server module the client may import — keep
+  them in step with that file by hand. There are no code tables to translate any more
+  (`lib/personalVaultCodes.ts` went with the mirror and the migration); the audit labels of the retired
+  actions stay in `AdminView` so old audit rows still read as what they were.
 - **Tests:** `tests/react-settings-vault.test.tsx`, `tests/react-admin-vaults.test.tsx`,
-  `tests/react-settings-knowledge.test.tsx`, `tests/client-vault-codes.test.ts`.
+  `tests/react-settings-knowledge.test.tsx`.
 
 ## Client ↔ server contracts mirrored by hand
 - **New cross-boundary code goes into `src/shared/*`** (modules both sides compile, e.g. the import-free

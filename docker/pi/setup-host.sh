@@ -19,8 +19,8 @@
 #   copies  it → $PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key, uid 1000, 0400, the same way: Noah serves
 #           pi's admin panel at /admin to Noah admins and injects this key (re-run after rotating pi's admin key)
 #   copies  $PI_GATEWAY_SECRETS/memory/api_key → $PI_GATEWAY_SECRETS/noah/pi_memory_api_key, uid 1000, 0400:
-#           Noah's server calls pi's memory service itself (personal vaults). pi's own script creates the
-#           service's key; without Noah's copy the stack does not start (compose mounts it as a secret)
+#           Noah's server calls pi's memory service itself (the home of every personal vault). pi's own script
+#           creates the service's key; without Noah's copy the stack does not start (compose mounts it as a secret)
 #   adds    PI_GATEWAY_HOME, PI_GATEWAY_SECRETS to Noah's .env (only when missing)
 #   checks  an EXISTING noah-almighty-data volume's root is uid 1000 (#79) — detection only: it fails with
 #           the repair to run (README.md "Upgrade" → "Data volume ownership"), it never changes the volume
