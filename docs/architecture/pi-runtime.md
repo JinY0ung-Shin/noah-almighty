@@ -784,18 +784,24 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
-- **Process mining (pi `9f579dd`) is in the stack but OFF: nothing of Noah's starts it.** pi's `mining` service
-  has the compose profile `mining`, so `docker compose up` — and `scripts/deploy.sh` — never run it; it runs
-  only when an OPERATOR adds pi's daily cron line (`docker compose run --rm -T mining`, pi's
-  `docs/OPERATIONS.md`). Running it is the operator's decision about every user's conversations: it reads pi's
-  stored sessions (Noah's chats) read-only, sends each idle session's successful tool calls — name and the
-  first 300 characters of the arguments, after masking secret-SHAPED text — to the default LLM, and writes a
-  report that lists work per user. The report is shown to Noah admins on the panel's 대화 기록 page
-  (`GET /admin/api/mining/report`, behind the same Noah-admin check as the rest of `/admin`; `{"report":null}`
-  until a run). The gateway mounts the new `mining-data` volume read-only, so an upgrade recreates the gateway
-  — `up` does that. Noah's code, prompts and both metacognition surfaces know nothing of it. Seen on a real
-  stack: an empty run, the route's three answers and the page (`98-mining-report.mjs`; → `build-run-verify.md`);
-  NOT seen: a run that reads a session.
+- **Process mining (pi `47e9047`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
+  pi's `mining` service has no compose profile since pi `28ab28e`: `docker compose up` starts it and
+  `scripts/deploy.sh` waits for it like any service without a health check. It is the gateway image as uid 10001
+  with no secret, on `edge` only (never `control`, `noah-mcp` or `noah-memory`), with the gateway's data mounted
+  read-only, and Noah overrides nothing of it. It does nothing until the panel's 프로세스 마이닝 page (`/admin`, 운영) is
+  used: 지금 실행, or a daily time (off at first; the service looks for a request every 10 seconds). **Starting a run
+  is a decision about every user's conversations, and it is now a Noah admin's press — no longer an operator's cron
+  line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
+  calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to the default
+  LLM, and keeps the tasks of each session, the processes (task types) it finds and their change history in the
+  `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. Its routes
+  (`/admin/api/mining*`) are behind the same Noah-admin check as the rest of `/admin`. The gateway mounts
+  `mining-data` WRITABLE (it writes the run request, the daily time and an admin's edits of a process), so an
+  upgrade recreates the gateway — `up` does that; `scripts/deploy.sh --backup` does not take that volume (without
+  it the run history and the processes are gone and the next run reads from the start). Noah's code, prompts and
+  both metacognition surfaces know nothing of it. Seen on a real stack: the container, the routes, the page with 지금
+  실행 pressed and the empty run that follows (`98-mining.mjs`; → `build-run-verify.md`); NOT seen: a run that reads
+  a session.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,
@@ -960,7 +966,7 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
   `application/octet-stream`, always with `nosniff`. pi's page assets (`/admin/assets/*`) keep theirs.
 - **Who a user id is (2026-11-19)** — pi knows a user only as what Noah sends it: `user` = the Noah user id (a
   UUID; it also names the sandbox and the session, so it cannot become a name). pi's panel therefore lists people
-  by UUID (사용자별 토큰, 진행 중인 턴, 대화 기록, 요청, the mining report) and sandboxes by `u-<hash of the id>`.
+  by UUID (사용자별 토큰, 진행 중인 턴, 대화 기록, 요청, the tasks of 프로세스 마이닝) and sandboxes by `u-<hash of the id>`.
   Noah adds ONE thing to pi's page DOCUMENT — a 200 UTF-8 `text/html` answer of a non-API GET, uncompressed
   (a page load, a GET that accepts `text/html`, goes out without `Accept-Encoding`; assets and API calls keep
   the browser's): two tags before the first `</head>`, cut into pi's BYTES, that load Noah's own static

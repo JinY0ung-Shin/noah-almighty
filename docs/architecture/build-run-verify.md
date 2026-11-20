@@ -624,6 +624,59 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   flows and a report that names users and their work are pi's tests only, against no real model; so are a
   second run over an existing `mining.db` and the gateway stopped while mining runs. After the run: Noah
   279 MiB, gateway 267 MiB, broker 159 MiB, memory 38 MiB.
+  **pi `47e9047` (2026-11-19, three commits since `9f579dd`: the image build installs each service's dependencies
+  in the service's own stage behind a BuildKit cache mount instead of copying `node_modules` from a `deps-*` stage
+  — `bf6cdf7`; process mining becomes something an admin runs from the panel — `mining` is an always-up service
+  WITHOUT a profile that waits for a request row, the gateway mounts `mining-data` writable, and a 프로세스 마이닝 page
+  replaces the section on 대화 기록, while `report.md`, its route and the cron procedure are gone — `28ab28e`; a run
+  reviews the processes it found and keeps a change history — `47e9047`. pi's commits ran the service as one
+  container next to a `gateway.db` and its stages against a scripted LLM in tests, never opened the page, and did
+  not build behind a corporate mirror):** `~/.noah-work/boot-test-2026-11-20b`, Noah `9c67d93`. A first run,
+  `…-20a`, was made from a checkout five commits behind main (Noah `2c94bb8`) and passed too; only the second is
+  named here. The cold build took 194 s and every image built from pi's new Dockerfile through Noah's CA-trusting
+  builders (the example CA, no mirror). Every step passed: `10-accounts` 6/6, `21-admin-proxy` 11/11,
+  `24-llm-no-falcon-tier` 3/3, `23-admin-ui-assets` 5/5, `30-documents` 30/30, `31-documents-extra` 21/21,
+  `32-second-user-own` 3/3, `50-subagent` 9/9, `55-systemone` 25/25, `65-shell-step-verdicts` 33/33,
+  `71-tracing-turn` 25/25, `75-trace-stats` 37/37, `25-admin-ui-real` 48/48, `85-workspace-files` 26/26,
+  `86-mcp-files` 20/20, `87-mcp-file-args` 19/19, `88-plugin-refresh` 23/23, `90-pi-validation` 22/22,
+  `92-grep-glob` 10/10, `93-tool-call-limit` 23/23, `94-turn-timings` 13/13, `80-context-usage` 19/19, `96-memory`
+  29/29, `97-memory-search` 10/10, `26-admin-user-names` 17/17, `95-final-state` 1/1 — it now reads the `mining`
+  service's log too, and no service logged at error level. **`98-mining.mjs` (26/26) replaces
+  `98-mining-report.mjs`**, whose every line asserted what `28ab28e` removed (no mining container after `up`, the
+  read-only `/mining` mount, `GET /admin/api/mining/report`, `docker compose run mining`, the 보고서 보기 window). What
+  it saw. **The container as Noah's stack starts it:** `running restarts=0 user=10001:10001 readonly=true
+  capdrop=[ALL] ports=map[] health=none`, on `noah-almighty_edge` only (not `control`, `noah-mcp` or
+  `noah-memory`); the gateway's data read-only at `/data`, `mining-data` writable at `/mining`, and the gateway's
+  own mounts read `/mining=true` now; no file under `/run/secrets` and no key, secret, token or password among its
+  env names; `mining.db` is `10001 600`. **The routes through Noah's `/admin` proxy:** `GET /admin/api/mining` as a
+  Noah admin → `{"runs":[],"dailyAt":null,"labels":[],"revisions":[],"recent30":0,"unlabeled30":0}`; a member and
+  an anonymous caller get 403; `POST /admin/api/mining/run` without the panel's headers → 403 `csrf` and no run is
+  requested, a member's with them → 403 `forbidden` (`Noah 관리자만 사용할 수 있습니다.`); `PUT …/schedule` with `25:00` → 400
+  `invalid_schedule`, with `03:30` → 200 and the GET shows it, with `null` → off again; `PUT …/labels/999` → 404
+  `label_not_found`; `GET …/episodes` → `{"items":[],"total":0}`. **The page in Chromium, `/admin/#/mining` through
+  the proxy:** it shows 지금 실행, "아직 실행한 적이 없습니다." and "현재: 자동으로 실행하지 않음"; 지금 실행 pressed THERE, the page says "실행을
+  요청했습니다. mining 서비스가 10초 안에 시작합니다." and the GET shows one run, `trigger:"manual"`, `status:"requested"`; a second
+  POST while it waits → 409 `mining_busy`. **The run:** the service took the request the gateway had written 1.4 s
+  after the press (it looks every 10 s; 0.8 s and 7 s in the first run's two presses) and ended `completed` in 0.49
+  s with `model:"fake-model"` — the default model of pi's LLM settings, read out of the read-only `gateway.db` —
+  and `processed`, `failed`, `remaining`, `episodes`, `changes` all 0: no session of a fresh stack has rested 30
+  minutes, so the run read nothing and called no model. The page's 실행 이력 then shows `수동 완료 488ms 0 0 0 0 0
+  fake-model`, with no page error, failed call or CSP violation. The mining service's log is the run's two lines
+  ("mining run started", "mining finished") — on stderr,
+  which `docker logs` of the helper did not return until the check read both streams (in the first run that one
+  line failed for it, 25/26); the gateway logged "mining run requested" and "mining schedule updated" and nothing
+  at warn or above about mining. **Seen and left as it is:** `scripts/deploy.sh --backup` does not take
+  `mining-data` (pi's own state: without it the run history and the processes are gone and the next run reads from
+  the start); the comment in `src/client/public/pi-admin-names.js` still lists "the mining report" among pi's
+  tables that show a user id. **NOT seen:** a run that reads a session — extraction, assigning, finding, merging,
+  reviewing and the representative flow all call the model and rest on pi's tests with a scripted LLM, against no
+  real model; what such a run sends (pi's masking of secret-shaped text); the daily automatic run; a process being
+  renamed, merged or deleted and the 변경 이력 that records it (there is none to edit); whether Noah's names appear
+  before the user ids of the page's 작업 table (it has no row here); the new Dockerfile behind an HTTPS npm mirror
+  with a private CA, and the build time on the deployment's disk — the reason for `bf6cdf7`; an upgrade of an
+  EXISTING deployment (the gateway recreated with the writable mount, a `mining-data` volume that a `9f579dd` stack
+  already created read-only for the gateway — this run starts from nothing). After the run: Noah 164 MiB, gateway
+  272 MiB, broker 119 MiB, memory 40 MiB, mining 128 MiB (27 MiB at the end of the first run).
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`
