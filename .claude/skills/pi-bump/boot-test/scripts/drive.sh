@@ -83,6 +83,8 @@ checks_stage() {
   extra 103-mining-prompt        Y-mining-prompt.log           node 103-mining-prompt.mjs
   # The rename-only run (pi f9df928): the route, the 409 while busy, the run's trigger, the button and the history row.
   extra 104-mining-rename        Z-mining-rename.log           node 104-mining-rename.mjs
+  # pi's 장기 메모리 admin page (pi ea1513f): the gateway's own copy of the memory key, read through Noah's /admin.
+  extra 105-admin-memory         R-admin-memory.log            node 105-admin-memory.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh

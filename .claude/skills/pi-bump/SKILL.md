@@ -128,7 +128,7 @@ not look at. Minutes of work, seconds of run time.
   file into `.claude/skills/pi-bump/boot-test/scripts/` and add its `extra` line to `drive.sh` THERE too — a
   check that lives only in a run directory is lost. It is a regression guard from then on.
 - Name: `NN-<what>.mjs`; the number only groups files (drive.sh's order is explicit). Bump guards are `90`–`94`,
-  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100`–`104` are taken; the next free one is `105`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
+  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100`–`105` are taken; the next free one is `106`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
 - Helpers, all in `scripts/e2e-common.mjs`: `loadState()` (the `owner` — a Noah admin — and `second`, a member:
   `{id, username, cookie}`), `client(cookie)` (`.get/.post/.put`), `turn(client, {avatarId, conversationId,
   message})` → `{status, frames, of(event)}`, `fake.enqueue(key, turns)` / `fake.requests(key)` /

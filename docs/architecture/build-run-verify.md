@@ -843,6 +843,22 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   (a fresh stack has none and no session has rested 30 minutes, so no model finds one — rests on pi's
   `mining.test.ts`); the confirm dialog and the 변경 이력 rows of a rename; a person-edited process left alone.
   After the run: Noah 267 MiB, gateway 273 MiB, broker 92 MiB, memory 38 MiB, mining 31 MiB.
+  **pi `d46a9e5` (2026-11-20, two commits since `f9df928`: the admin panel gets a read-only 장기 메모리 page — users
+  by usage, a window with their notes, search and a note's text — and the gateway calls the memory service's own API
+  for it, so it holds a copy of the key (`gateway/memory_api_key`, made by `setup-host.sh`) and does not start
+  without `MEMORY_API_KEY`. pi's tests run the routes against a fake memory service; the commit does not say it
+  looked at the page or at a real memory service):** `~/.noah-work/boot-test-2026-11-20k`, Noah `3350d56` plus the
+  pin (the bump was pushed as `ffed73e` before this run — the user chose to push first and verify after). Every step
+  passed with the counts of the `f9df928` run (`96-memory` 29/29, `97-memory-search` 10/10, `98-mining` 34/34,
+  `104-mining-rename` 10/10), no error-level line in any service's log but the one `102-` makes; the build brought
+  the gateway up with the new key copy. **New check `105-admin-memory.mjs` 7/7**, through Noah's `/admin` against the
+  real memory service: `GET /admin/api/memory` answers 200 for a Noah admin (the gateway's key copy is accepted);
+  a wiki written the way Noah's client writes one is listed with its `owner` (the `.owner` file) and `notes: 1`;
+  its notes and search answer 200 (`wiki/개념/배포.md`); an invalid user id answers 400 and a member 403 — never 401.
+  **NOT seen:** the page drawn in a browser (rests on pi's build and tests); a wiki made before the bump (no `.owner`
+  file — shown by folder name); the 502 `memory_key_mismatch` answer with a wrong key; the upgrade of an existing
+  host without re-running `setup-host.sh` (the gateway then refuses to start — read in pi's code, not run).
+  After the run: gateway 234 MiB, broker 236 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`
