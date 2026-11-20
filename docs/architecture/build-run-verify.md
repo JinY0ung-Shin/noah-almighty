@@ -772,6 +772,33 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   and tests); six turns of one user each running a heavy command in their ONE sandbox (1 GiB, one CPU by
   default) — these seven only waited on the model; the mining page's new wording (not opened with tasks). After
   the run: Noah 246 MiB, gateway 185 MiB, broker 290 MiB, memory 42 MiB, mining 27 MiB.
+  **pi `2bca2c2` (2026-11-20, one commit since `a9f4801`, inside process mining: the page's run section has a 모델
+  select — pi's default model until an admin picks a model or a tier, kept in `mining.db` and used from the next
+  run — and a mining call's output is bounded by that model's `maxTokens` where a constant held it at 2,000
+  tokens; a run whose picked model is gone from pi's LLM settings ends 실패 and does not fall back. pi's tests
+  call the route on an in-process gateway and `openModel` on a database file, and read `max_tokens` 4096 off a
+  scripted server; the commit names nothing it left unverified — it did not start the service's run process or
+  open the page on a real gateway):** `~/.noah-work/boot-test-2026-11-20g`, Noah `a308c5c`. The cold build took
+  191 s. Every step passed with the counts of the `a9f4801` run (`98-mining` 34/34, `101-turn-limits` 5/5).
+  **New check `102-mining-model.mjs` 23/23**, through Noah's `/admin` as a Noah admin and in a real browser.
+  The route: `GET /admin/api/mining` carries `model: null`; `PUT /admin/api/mining/model` answers 400
+  `invalid_model` ("model must be one of the configured models or tiers, or null") for an unknown name and for a
+  number, 403 without the panel's headers and for a member, 200 for the tier `falcon` and for `null`. The page:
+  the select lists "기본 모델 (fake-model)" (selected), then `falcon`, `fake-model` and a second model saved on pi's
+  LLM page a moment earlier; that model picked, the page says "저장했습니다. 다음 실행부터 적용됩니다." and the next run
+  ends `completed` with `model: fake-mining` — the run process read the choice from `mining.db` and the model
+  from the read-only `gateway.db`. That model removed on pi's LLM page: the choice STAYS (nothing resets it), the
+  select shows "fake-mining (LLM 설정에 없음)", and the next run ends `failed` 0.5 s after it started, on no model,
+  with "마이닝에 고른 모델 fake-mining이 LLM 설정에 없다 (관리 화면의 프로세스 마이닝에서 다시 고른다)" — the text the
+  page's 실행 이력 row shows, under 마지막 실행 실패; the service stays up. 기본 모델 picked again, the gone model
+  leaves the list and the next run ends `completed` on `fake-model`. The gateway logs each change ("mining model
+  updated", info). **That 실패 run is the one error-level line of the whole run** (the mining service's log, the
+  reason above): `95-final-state.sh` and `98-mining.mjs` now name that line as expected and count every other
+  one — none. **NOT seen:** the request a mining call sends, so neither `max_tokens` = the model's `maxTokens`
+  nor a long answer that 2,000 tokens used to cut (no session of a fresh stack has rested 30 minutes; rests on
+  pi's test); a run on a model of ANOTHER LLM server, or on a tier that points elsewhere than the default; a
+  model picked while a run is in progress. After the run: Noah 258 MiB, gateway 216 MiB, broker 171 MiB, memory
+  137 MiB, mining 33 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

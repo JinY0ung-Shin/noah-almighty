@@ -75,7 +75,7 @@ Nothing in the skill folder is ever run directly — only the copy in `$RUN/scri
 The build is half of a run's wall time and needs nothing from you: write the bump's check (step 5) while it
 runs, not after. Each step prints one line, `<step> exit=<rc>  <n>/<m> passed`, with its `FAIL` lines under it; the last line
 is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit status says the same. The same
-text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `a9f4801`:
+text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `2bca2c2`:
 
 ```
 10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 5/5
@@ -88,7 +88,8 @@ text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`
 26-admin-user-names 17/17      (Noah's names on pi's panel — a pi UI change that hides them fails here)
 100-history-pages 11/11        (대화 기록 in pages of 20; needs the sessions the earlier steps made)
 101-turn-limits 5/5            (pi's limits 48 / 6: one user's seven turns at once — six run, the seventh waits)
-95-final-state 1/1             (no error-level line in any service's log; prints memory)
+102-mining-model 23/23         (the model a mining run uses; fails ONE run on purpose — its model is gone)
+95-final-state 1/1             (no error-level line in any service's log but that run's one; prints memory)
 ```
 
 A count that differs is a finding: read that step's evidence file before anything else. A `FAIL` is either the
@@ -126,7 +127,7 @@ not look at. Minutes of work, seconds of run time.
   file into `.claude/skills/pi-bump/boot-test/scripts/` and add its `extra` line to `drive.sh` THERE too — a
   check that lives only in a run directory is lost. It is a regression guard from then on.
 - Name: `NN-<what>.mjs`; the number only groups files (drive.sh's order is explicit). Bump guards are `90`–`94`,
-  `96`–`98`, then `100`+ (`94`, `96`–`98`, `100` and `101` are taken; the next free one is `102`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
+  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100`–`102` are taken; the next free one is `103`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
 - Helpers, all in `scripts/e2e-common.mjs`: `loadState()` (the `owner` — a Noah admin — and `second`, a member:
   `{id, username, cookie}`), `client(cookie)` (`.get/.post/.put`), `turn(client, {avatarId, conversationId,
   message})` → `{status, frames, of(event)}`, `fake.enqueue(key, turns)` / `fake.requests(key)` /
@@ -194,6 +195,9 @@ was committed or pushed.
   directory. `71-`, `25-`, `85-`…`87-`, `90-`, `92-`, `94-`, `80-` and `98-` can be re-run alone with `node`.
 - **Jaeger's `@jaeger@warnings`** (clock-skew notes on a span) are Jaeger's, not pi's: `71-` lists and skips
   `@jaeger@*` keys. A new check that lists span attributes must skip them too.
+- **A check that makes a service log at error level on purpose must say so to `95-final-state.sh`.** It fails on
+  any error-level line; `102-mining-model.mjs`'s 실패 run is the one it expects (`EXPECTED_MINING_ERROR`, the same
+  text in `98-mining.mjs`). A new expected line is named there the same way — never a wider pattern.
 - **`dind("docker", "logs", …)` returns stdout only.** pi's gateway logs there, its `mining` service to stderr:
   read a service's log with `dindTry("sh", "-c", "docker logs <container> 2>&1")` (`98-mining.mjs`).
 - **A backgrounded build can leave you idle forever.** Foreground, or — if you must background it — wait on

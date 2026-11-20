@@ -791,18 +791,23 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
-- **Process mining (pi `4421482`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
+- **Process mining (pi `2bca2c2`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
   pi's `mining` service has no compose profile since pi `28ab28e`: `docker compose up` starts it and
   `scripts/deploy.sh` waits for it like any service without a health check. It is the gateway image as uid 10001
   with no secret, on `edge` only (never `control`, `noah-mcp` or `noah-memory`), with the gateway's data mounted
   read-only, and Noah overrides nothing of it. It does nothing until the panel's 프로세스 마이닝 page (`/admin`, 운영) is
   used: 지금 실행, or a daily time (off at first; the service looks for a request every 10 seconds). The same page
   stops a run (중지: a waiting request is closed at once, a running one stops before its next LLM call and keeps what
-  it read) and sets how many LLM calls a run makes at once — 1 to 16, 1 at first; a run uses the SAME LLM server
-  as every user's chat, so that number is load on the chats. **Starting a run is a decision about every user's
+  it read), sets how many LLM calls a run makes at once — 1 to 16, 1 at first — and, since pi `2bca2c2`, which
+  model a run uses: pi's default model until an admin picks another model or a tier there (the list is pi's own,
+  the one its chat page offers). A run uses the LLM servers the users' chats use, so both are load on the chats;
+  a mining call's output is bounded by the picked model's own `maxTokens` on pi's LLM page (it was 2,000 tokens).
+  **A model removed from pi's LLM page stays picked:** every run then ends 실패 with "마이닝에 고른 모델 … 이 LLM 설정에
+  없다" until an admin picks again on the mining page — it never falls back to the default.
+  **Starting a run is a decision about every user's
   conversations, and it is now a Noah admin's press — no longer an operator's cron line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
-  calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to the default
-  LLM, and keeps the tasks of each session, the processes (task types) it finds and their change history in the
+  calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to that
+  model, and keeps the tasks of each session, the processes (task types) it finds and their change history in the
   `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. A process is five or more tasks of
   one kind — since pi `95b0b57` they may all be ONE user's, so a process can be one person's repeated work. Its routes
   (`/admin/api/mining*`) are behind the same Noah-admin check as the rest of `/admin`. The gateway mounts
@@ -814,8 +819,9 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   panel, behind the stopped Noah. Noah's code, prompts and
   both metacognition surfaces know nothing of it. Seen on a real stack: the container, the routes, the page with 지금
   실행 pressed and the empty run that follows, the concurrency saved and a waiting request stopped there
-  (`98-mining.mjs`; → `build-run-verify.md`); NOT seen: a run that reads a session, so neither its progress on the
-  page nor a running run being stopped.
+  (`98-mining.mjs`), a model picked on the page and the run that uses it, and the 실패 run after that model was
+  removed (`102-mining-model.mjs`; → `build-run-verify.md`); NOT seen: a run that reads a session, so neither its
+  progress on the page, nor a running run being stopped, nor the request a mining call sends (its `max_tokens`).
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,

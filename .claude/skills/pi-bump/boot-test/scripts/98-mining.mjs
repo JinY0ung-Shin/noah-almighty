@@ -258,7 +258,11 @@ await browser.close();
 const log = dindTry("sh", "-c", `docker logs ${MINING_C} 2>&1`).out;
 note("mining service log", log.trim().split("\n").slice(-8).join("\n").slice(0, 1500));
 const runLines = log.split("\n").filter((l) => l.includes(`"run":${requested?.id},`) || l.includes('"msg":"mining finished"'));
-check("N  the mining log has this run's start and an end, and no error-level line", runLines.some((l) => l.includes('"msg":"mining run started"')) && runLines.some((l) => l.includes('"msg":"mining finished"')) && !/"level":(50|60)/.test(log), `${log.trim().split("\n").length} line(s)`);
+// 102-mining-model.mjs fails one run on purpose (its picked model is gone); that reason is the one error-level
+// line this log may hold when this file is run again after it.
+const EXPECTED_MINING_ERROR = '"msg":"마이닝에 고른 모델 fake-mining이 LLM 설정에 없다';
+const errorLines = log.split("\n").filter((l) => /"level":(50|60)/.test(l) && !l.includes(EXPECTED_MINING_ERROR));
+check("N  the mining log has this run's start and an end, and no error-level line", runLines.some((l) => l.includes('"msg":"mining run started"')) && runLines.some((l) => l.includes('"msg":"mining finished"')) && errorLines.length === 0, `${log.trim().split("\n").length} line(s)`);
 const gatewayLog = dindTry("sh", "-c", `docker logs ${GATEWAY_C} 2>&1`).out.split("\n").filter((l) => /mining/.test(l));
 note("gateway log lines about mining", gatewayLog.join("\n").slice(0, 1200) || "(none)");
 check("N  the gateway logged the request and the schedule changes, nothing at warn or above about mining", gatewayLog.some((l) => l.includes("mining run requested")) && gatewayLog.some((l) => l.includes("mining schedule updated")) && !gatewayLog.some((l) => /"level":(40|50|60)/.test(l)), `${gatewayLog.length} line(s)`);

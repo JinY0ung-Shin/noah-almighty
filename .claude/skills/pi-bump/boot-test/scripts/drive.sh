@@ -76,6 +76,9 @@ checks_stage() {
   extra 100-history-pages        H-history-pages.log           node 100-history-pages.mjs
   # pi's turn limits (48 in all, 6 per user): one user's seven turns at once — six run, the seventh waits.
   extra 101-turn-limits          C-turn-limits.log             node 101-turn-limits.mjs
+  # The model a mining run uses (pi 2bca2c2): picked on the page, used by the run, and a run whose model is gone
+  # ends 실패 — that run's one error-level line is the line 95-final-state.sh expects.
+  extra 102-mining-model         K-mining-model.log            node 102-mining-model.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
