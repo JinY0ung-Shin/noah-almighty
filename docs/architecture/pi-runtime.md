@@ -791,14 +791,16 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
   #84)" below.
-- **Process mining (pi `47e9047`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
+- **Process mining (pi `776f575`) is in the stack and UP, and idle until a pi admin — any Noah admin — starts it.**
   pi's `mining` service has no compose profile since pi `28ab28e`: `docker compose up` starts it and
   `scripts/deploy.sh` waits for it like any service without a health check. It is the gateway image as uid 10001
   with no secret, on `edge` only (never `control`, `noah-mcp` or `noah-memory`), with the gateway's data mounted
   read-only, and Noah overrides nothing of it. It does nothing until the panel's 프로세스 마이닝 page (`/admin`, 운영) is
-  used: 지금 실행, or a daily time (off at first; the service looks for a request every 10 seconds). **Starting a run
-  is a decision about every user's conversations, and it is now a Noah admin's press — no longer an operator's cron
-  line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
+  used: 지금 실행, or a daily time (off at first; the service looks for a request every 10 seconds). The same page
+  stops a run (중지: a waiting request is closed at once, a running one stops before its next LLM call and keeps what
+  it read) and sets how many LLM calls a run makes at once — 1 to 16, 1 at first; a run uses the SAME LLM server
+  as every user's chat, so that number is load on the chats. **Starting a run is a decision about every user's
+  conversations, and it is now a Noah admin's press — no longer an operator's cron line:** a run reads pi's stored sessions (Noah's chats) read-only, sends each idle session's successful tool
   calls — name and the first 300 characters of the arguments, after masking secret-SHAPED text — to the default
   LLM, and keeps the tasks of each session, the processes (task types) it finds and their change history in the
   `mining-data` volume; the page lists tasks per user and leads from a task to its conversation. Its routes
@@ -810,8 +812,9 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   where it stopped — and leaves the gateway running, which writes the file only for an admin's press on the
   panel, behind the stopped Noah. Noah's code, prompts and
   both metacognition surfaces know nothing of it. Seen on a real stack: the container, the routes, the page with 지금
-  실행 pressed and the empty run that follows (`98-mining.mjs`; → `build-run-verify.md`); NOT seen: a run that reads
-  a session.
+  실행 pressed and the empty run that follows, the concurrency saved and a waiting request stopped there
+  (`98-mining.mjs`; → `build-run-verify.md`); NOT seen: a run that reads a session, so neither its progress on the
+  page nor a running run being stopped.
 - **Shared variables** — Noah's `.env` (and the shell) win inside pi's included file too, so a key both read means
   the same on both sides: `NODE_EXTRA_CA_CERTS` is a HOST path (pi's meaning; compose mounts it read-only into
   Noah at `/etc/noah-almighty/extra-ca.pem` and points Noah's variable there), likewise `GOPROXY`, `LOG_LEVEL`,

@@ -677,6 +677,52 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   EXISTING deployment (the gateway recreated with the writable mount, a `mining-data` volume that a `9f579dd` stack
   already created read-only for the gateway — this run starts from nothing). After the run: Noah 164 MiB, gateway
   272 MiB, broker 119 MiB, memory 40 MiB, mining 128 MiB (27 MiB at the end of the first run).
+  **pi `776f575` (2026-11-20, two commits since `47e9047`, both about process mining and pi's admin panel: a run
+  writes its progress to its own row and can be stopped, an admin sets how many LLM calls a run makes at once
+  (1–16, 1 at first), the panel's lists become pages and `GET /admin/api/mining` carries `active` / `last` /
+  `next` / `concurrency` instead of the run and revision lists — `7000e9c`; the page says before a run what it
+  would read and, during one, what is at the LLM now — `776f575`. Nothing under `/v1`, compose, the Dockerfiles
+  or `setup-host.sh` changed. pi's commits ran typecheck, vitest and the panel build, and looked at the page in a
+  browser fed FAKE API answers — never the real gateway):** `~/.noah-work/boot-test-2026-11-20c`, Noah `cca8aa2`.
+  The cold build took 189 s. Every step passed with the counts of the `47e9047` run — `10-accounts` 6/6,
+  `21-admin-proxy` 11/11, `24-llm-no-falcon-tier` 3/3, `23-admin-ui-assets` 5/5, `30-documents` 30/30,
+  `31-documents-extra` 21/21, `32-second-user-own` 3/3, `50-subagent` 9/9, `55-systemone` 25/25,
+  `65-shell-step-verdicts` 33/33, `71-tracing-turn` 25/25 (it reads `items` of `GET /admin/api/history`, now a
+  page of 50 with `total` / `pageSize` in place of `limit`), `75-trace-stats` 37/37, `25-admin-ui-real` 48/48,
+  `85-workspace-files` 26/26, `86-mcp-files` 20/20, `87-mcp-file-args` 19/19, `88-plugin-refresh` 23/23,
+  `90-pi-validation` 22/22, `92-grep-glob` 10/10, `93-tool-call-limit` 23/23, `94-turn-timings` 13/13,
+  `80-context-usage` 19/19, `96-memory` 29/29, `97-memory-search` 10/10, `26-admin-user-names` 17/17 (Noah's
+  names are still drawn on 상태's 사용자별 토큰 table, which has bars now, and on the owner's 31 rows of 대화 기록),
+  `95-final-state` 1/1 with no error-level line in any service's log. **`98-mining.mjs` was rewritten for the new
+  routes and page (34/34)** — written before the run, from pi's diff: the old one read `runs` out of the overview
+  and waited for two texts the page no longer has ("현재: 자동으로 실행하지 않음", the notice "실행을 요청했습니다. …"). What it
+  saw, on top of the container checks of `47e9047` (unchanged). **The routes through Noah's `/admin` proxy:** the
+  overview as a Noah admin →
+  `{"active":null,"last":null,"next":{"sessions":0,"episodes":0},"dailyAt":null,"concurrency":1,"labels":[],"recent30":0,"unlabeled30":0}`;
+  `GET …/mining/runs` and `…/mining/revisions` → `{"items":[],"total":0,"pageSize":10}`, `…/episodes` with
+  `pageSize: 20`; a member gets 403 on the overview and on a list; `POST …/mining/run/stop` with nothing requested
+  → 409 `mining_idle`; `PUT …/mining/concurrency` with 17 → 400 `invalid_concurrency` ("value must be an integer
+  from 1 to 16"), with 4 but without the panel's headers → 403 `csrf` and still 1, with them → 200 `{"value":4}`
+  and the GET shows 4. **The page in Chromium, `/admin/#/mining` through the proxy:** 지금 실행, "아직 실행한 적이
+  없습니다.", "지금 실행해도 읽을 새 세션이 없습니다 (마지막 활동 뒤 30분 넘게 쉰 세션만 읽습니다).", "지금은 자동으로 실행하지 않습니다" and 4 in
+  LLM을 동시에; 1 typed and its 저장 pressed → "저장했습니다. 다음 실행부터 적용됩니다." and the GET shows 1; 지금 실행 pressed → the run
+  section reads "시작 대기 방금 요청 · mining 서비스가 10초 안에 시작합니다" with a 중지 button, and the runs list has one run,
+  `trigger:"manual"`, `status:"requested"`; a second POST while it waits → 409 `mining_busy`. **The run:** the
+  service took the request 7.9 s after the press and ended `completed` in 0.52 s with `model:"fake-model"`, every
+  count 0, `stage:"discover"`, `working:[]`, `stopRequested:false`; the overview then has it as `last` and
+  `active:null`, the 실행 이력 row reads `방금 수동 완료 516ms 0 0 0 0 0 fake-model` and the numbers on top "마지막 실행 완료 … 자동
+  실행 꺼짐". **중지 on the page:** 지금 실행 pressed again 1.5 s after the service's last look and 중지 pressed while the
+  request waited — the page asks "실행 요청을 취소할까요?", the run is `status:"stopped"` with `startedAt:null`, closed
+  69 ms after it was requested, its row reads `방금 수동 중지함 - - - - - 0 -`, and 지금 실행 is enabled again. No page
+  error, failed call or CSP violation; the gateway logged the request and the setting changes and nothing at warn
+  or above about mining. **NOT seen:** everything a run does once it reads a session, so pi's tests only — the
+  progress the page draws (the four stages, n / m, "마지막 진행", the colour after 5 quiet minutes), "지금 LLM에 보낸 것"
+  and whether Noah's name is drawn before the user id on those lines, "지금 실행하면 세션 N개를 읽고 …" against what a
+  run then reads, 중지 on a RUNNING run (it stops before the next LLM call), more than one call at once; a second
+  page of any list (every list of this stack fits its first page: 2 runs, no revision); the 프롬프트 배포 이력 pages; the hint after a
+  minute without a start; an EXISTING `mining.db` getting the new `runs` columns when the service starts (this
+  stack starts from nothing). After the run: Noah 198 MiB, gateway 212 MiB, broker 296 MiB, memory 43 MiB, mining
+  28 MiB.
   **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`

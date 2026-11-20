@@ -75,7 +75,7 @@ Nothing in the skill folder is ever run directly — only the copy in `$RUN/scri
 The build is half of a run's wall time and needs nothing from you: write the bump's check (step 5) while it
 runs, not after. Each step prints one line, `<step> exit=<rc>  <n>/<m> passed`, with its `FAIL` lines under it; the last line
 is `== done: every step passed` or `== done: N step(s) FAILED`, and the exit status says the same. The same
-text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `47e9047`:
+text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`. A healthy run at pi `776f575`:
 
 ```
 10-accounts 6/6 · 21-admin-proxy 11/11 · 24-llm-no-falcon-tier 3/3 · 23-admin-ui-assets 5/5
@@ -84,7 +84,7 @@ text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`
 71-tracing-turn 25/25 · 75-trace-stats 37/37 · 25-admin-ui-real 48/48 · 85-workspace-files 26/26
 86-mcp-files 20/20 · 87-mcp-file-args 19/19 · 88-plugin-refresh 23/23
 90-pi-validation 22/22 · 92-grep-glob 10/10 · 93-tool-call-limit 23/23 · 94-turn-timings 13/13
-80-context-usage 19/19 · 96-memory 29/29 · 97-memory-search 10/10 · 98-mining 26/26
+80-context-usage 19/19 · 96-memory 29/29 · 97-memory-search 10/10 · 98-mining 34/34
 26-admin-user-names 17/17      (Noah's names on pi's panel — a pi UI change that hides them fails here)
 95-final-state 1/1             (no error-level line in any service's log; prints memory)
 ```
