@@ -107,6 +107,13 @@ which check owner/teammate trust themselves.
   (libavoid), and reports overlaps, lines through shapes and labels that do not fit. The engine
   ships inside the skill and needs only the sandbox's Node. Mechanics:
   [`docs/architecture/drawio-skill.md`](docs/architecture/drawio-skill.md).
+- **HTML slide decks**: asked for an HTML / web presentation, the avatar writes ONE self-contained `.html`
+  file (three themes, inline SVG diagrams, no framework, nothing loaded from the network) and hands it
+  over as a download card. The 파일 tab shows its slides one under the other — Noah never runs a page's
+  scripts — and the downloaded file is a keyboard-driven deck in any browser (arrow keys or Space, Esc for
+  an overview). A PowerPoint request still gets a `.pptx`. Adapted from
+  [ericmjl/skills](https://github.com/ericmjl/skills). Mechanics:
+  [`docs/architecture/html-presentations-skill.md`](docs/architecture/html-presentations-skill.md).
 - **Scheduled routines**: owners can create one-time or recurring chat jobs (`/api/me/routines`)
   for a specific KST date/time, daily/weekly slots, or a fixed interval. The avatar executes
   them headlessly and keeps each run's result in a dedicated routine conversation.

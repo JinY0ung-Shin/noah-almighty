@@ -157,6 +157,11 @@ These are the invariants the project is built around. New work should reinforce 
   sandbox** (`drawio.sh layout | route | check`; never an MCP tool, never the network) — the model cannot
   see the picture. The engine is vendored whole into the skill (hash-pinned, Node only: no toolchain flag,
   nothing to install). **A fix goes into `engine/lib/`, never into a vendored file.** → `drawio-skill.md`.
+- **An HTML deck is ONE `.html` file that reads WITHOUT script** (the `html-presentations` skill; only for an
+  explicit HTML / web deck — a PowerPoint request stays the pptx skill's). Noah never runs a page's scripts,
+  so the skill's page shell is a stack of slides there and a deck only in the user's own browser: deck mode
+  and every hidden start state sit under `html.js`, and nothing inside a slide is sized in `vh`. **A change
+  to the shell keeps both readings** (a test pins them). → `html-presentations-skill.md`.
 - **An image the avatar is SHOWN is also a FILE it can place** (attachments, screenshots, Confluence
   attachments land in the conversation's sandbox folder; host-side writes go through `PinnedDir`). Text
   stays a legitimate slide choice: **never add a check that fires because a slide has no image.**
