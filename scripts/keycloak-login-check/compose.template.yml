@@ -1,11 +1,17 @@
 # The login check's private stack (run.sh fills @REPO@ / @WORK@): the REAL keycloak, keycloak-db and
-# noah-nginx service definitions of this checkout, plus Noah itself on the `local` runtime. Nothing is
-# published on the host; the driver runs inside the stack's networks.
+# noah-nginx service definitions of this checkout, Noah itself, and pi's gateway ALONE (no sandboxd, no
+# broker — only its admin API is used, through Noah's /admin relay). Nothing is published on the host;
+# the driver runs inside the stack's networks.
 services:
   noah-almighty:
     image: noah-keycloak-login-check:latest
     environment:
-      AGENT_RUNTIME: local
+      AGENT_RUNTIME: pi
+      PI_GATEWAY_URL: http://gateway:8080
+      PI_GATEWAY_API_KEY_FILE: /run/secrets/pi_gateway_api_key
+      # Deliberately NOT pi's real admin key: a request that reaches pi's admin API through the relay can
+      # then only have got in on the person's own token.
+      PI_GATEWAY_ADMIN_API_KEY_FILE: /run/secrets/pi_gateway_admin_api_key_noah
       SESSION_SECRET: login-check-session-secret-0123456789abcdef0123456789abcdef
       APP_DATA_DIR: /app/data
       PORT: "48787"
@@ -18,8 +24,27 @@ services:
     volumes:
       - noah-data:/app/data
       - @WORK@/secrets/noah/keycloak_client_secret:/run/secrets/keycloak_client_secret_noah:ro
+      - @WORK@/secrets/noah/pi_gateway_api_key:/run/secrets/pi_gateway_api_key:ro
+      - @WORK@/secrets/noah/pi_gateway_admin_api_key_wrong:/run/secrets/pi_gateway_admin_api_key_noah:ro
     networks:
       noah-front: {}
+      noah-auth: {}
+  # pi's gateway with the two values docker-compose.keycloak.yml gives it (same realm, same internal address).
+  gateway:
+    image: noah-keycloak-login-check-gateway:latest
+    user: "10001:10001"
+    env_file:
+      - @WORK@/secrets/gateway.env
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+      PLUGINS_DIR: /opt/plugins
+      OIDC_ISSUER: https://${NOAH_SERVER_NAME}/sso/realms/noah
+      OIDC_JWKS_URL: http://keycloak:8080/sso/realms/noah/protocol/openid-connect/certs
+    tmpfs:
+      - /data:uid=10001,gid=10001
+      - /mining:uid=10001,gid=10001
+    networks:
       noah-auth: {}
   keycloak:
     extends:

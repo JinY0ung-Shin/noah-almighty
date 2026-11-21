@@ -69,6 +69,10 @@ function fakeKeycloak(): FakeKeycloak {
       if (!identity) throw new KeycloakUnavailableError("no such token");
       return identity;
     },
+    // Not used by these routes (the pi admin relay's, tests/pi-admin-proxy.test.ts).
+    async refresh(refreshToken) {
+      return { accessToken: `access-of-${refreshToken}`, refreshToken: null, expiresInSeconds: 300 };
+    },
     async endSession(refreshToken) {
       fake.ended.push(refreshToken);
     },

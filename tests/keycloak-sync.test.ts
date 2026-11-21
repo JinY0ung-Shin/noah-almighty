@@ -83,6 +83,7 @@ function fakeKeycloak(): FakeKeycloak {
     redirectUri: notUsed,
     exchangeCode: notUsed,
     userinfo: notUsed,
+    refresh: notUsed,
     endSession: notUsed,
 
     async getUser(id) {

@@ -394,9 +394,10 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     /**
      * `keycloakRefreshToken`: a session that began at Keycloak keeps that
-     * login's refresh token (encrypted, like every stored secret) for ONE use —
-     * ending the Keycloak session when this one logs out
-     * (`takeSessionKeycloakToken`).
+     * login's refresh token (encrypted, like every stored secret) — to end the
+     * Keycloak session when this one logs out, and until then to get the
+     * person's own access token (`takeSessionKeycloakToken`,
+     * `keycloakPersonToken.ts`).
      */
     createSession(userId: string, opts: { keycloakRefreshToken?: string | null } = {}): string {
       const token = crypto.randomBytes(32).toString("base64url");
@@ -458,9 +459,10 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
     }
 
     /**
-     * The Keycloak refresh token this session was created with, for the logout
-     * that is about to revoke it. Null for a built-in-login session, an unknown
-     * token, or a value that no longer decrypts (a rotated SESSION_SECRET).
+     * The Keycloak refresh token of this session (READ, not removed): the one
+     * it was created with, or the newer one a refresh stored since. Null for a
+     * built-in-login session, an unknown token, or a value that no longer
+     * decrypts (a rotated SESSION_SECRET).
      */
     takeSessionKeycloakToken(token: string | undefined): string | null {
       if (!token) {
@@ -470,6 +472,21 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
         .prepare("SELECT keycloak_refresh_enc FROM sessions WHERE token_hash = ?")
         .get(hashToken(token)) as { keycloak_refresh_enc: string | null } | undefined;
       return row?.keycloak_refresh_enc ? decryptSecret(row.keycloak_refresh_enc, this.secret) : null;
+    }
+
+    /**
+     * Keycloak answered a refresh with a NEWER refresh token: it replaces the
+     * stored one, so the next refresh and the logout use a token Keycloak still
+     * takes. Only a session that already holds one is written — a built-in
+     * session never gains a Keycloak login, and a session that is gone stays gone.
+     */
+    setSessionKeycloakToken(token: string | undefined, refreshToken: string): void {
+      if (!token || !refreshToken) {
+        return;
+      }
+      this.db
+        .prepare("UPDATE sessions SET keycloak_refresh_enc = ? WHERE token_hash = ? AND keycloak_refresh_enc IS NOT NULL")
+        .run(encryptSecret(refreshToken, this.secret), hashToken(token));
     }
 
     revokeSession(token: string | undefined): void {

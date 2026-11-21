@@ -6,7 +6,9 @@
 #
 # A private compose project with the real keycloak / keycloak-db / noah-nginx definitions and Noah on the
 # `local` runtime. Phase 1: the install BEFORE Keycloak (built-in login) leaves accounts behind. Phase 2: the
-# same data with Keycloak turned on. Needs docker with compose and openssl; publishes nothing on the host.
+# same data with Keycloak turned on — including pi's admin API through Noah's /admin relay, which pi lets in
+# on the PERSON's token. Needs docker with compose and openssl; publishes nothing on the host.
+# CHECK_PI_DIR builds pi's gateway from another checkout than vendor/pi-gateway.
 # NOAH_NGINX_SUBNET / NOAH_NGINX_IP move the stack's front network when 172.16.239.0/24 is taken.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -31,6 +33,14 @@ printf '%s\n' "$db_password" > "$WORK/secrets/keycloak/db_password"
 printf 'KC_DB_PASSWORD=%s\nKC_BOOTSTRAP_ADMIN_USERNAME=keycloak-admin\nKC_BOOTSTRAP_ADMIN_PASSWORD=%s\nNOAH_KEYCLOAK_CLIENT_SECRET=%s\n' \
   "$db_password" "$(rand)" "$client_secret" > "$WORK/secrets/keycloak/keycloak.env"
 printf '%s\n' "$client_secret" > "$WORK/secrets/noah/keycloak_client_secret"
+# pi's gateway: its keys as plain environment (this stack only), Noah's copies as files. Noah's copy of the
+# ADMIN key is wrong on purpose (compose.template.yml).
+pi_api_key="$(rand)"; pi_admin_key="$(rand)"
+printf 'API_KEY=%s\nADMIN_API_KEY=%s\nSANDBOXD_JWT_SECRET=%s\nBROKER_JWT_SECRET=%s\nMEMORY_API_KEY=%s\n' \
+  "$pi_api_key" "$pi_admin_key" "$(rand)" "$(rand)" "$(rand)" > "$WORK/secrets/gateway.env"
+printf '%s\n' "$pi_api_key" > "$WORK/secrets/noah/pi_gateway_api_key"
+printf '%s\n' "$(rand)" > "$WORK/secrets/noah/pi_gateway_admin_api_key_wrong"
+chmod 644 "$WORK/secrets/noah/pi_gateway_api_key" "$WORK/secrets/noah/pi_gateway_admin_api_key_wrong"
 chmod 644 "$WORK/secrets/keycloak/db_password" "$WORK/secrets/keycloak/keycloak.env" "$WORK/secrets/noah/keycloak_client_secret"
 openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=$NOAH_SERVER_NAME" -addext "subjectAltName=DNS:$NOAH_SERVER_NAME" \
   -keyout "$WORK/tls/privkey.pem" -out "$WORK/tls/fullchain.pem" 2>/dev/null
@@ -39,10 +49,14 @@ sed "s#@REPO@#$REPO#g; s#@WORK@#$WORK#g" "$HERE/compose.template.yml" > "$WORK/c
 
 echo "== build Noah from $REPO"
 docker build -q -t noah-keycloak-login-check:latest "$REPO" >/dev/null
+PI_DIR="${CHECK_PI_DIR:-$REPO/vendor/pi-gateway}"
+echo "== build pi's gateway from $PI_DIR"
+docker build -q --target gateway -t noah-keycloak-login-check-gateway:latest "$PI_DIR" >/dev/null
 compose down -v >/dev/null 2>&1 || true
 
 drive() {
   docker run --rm --network "${PROJECT}_noah-front" --network "${PROJECT}_noah-auth" -e IDS="${IDS:-}" -e SECRET="$client_secret" \
+    -e PI_ADMIN_KEY="$pi_admin_key" \
     -v "$HERE:/check:ro" --entrypoint node noah-keycloak-login-check:latest "/check/$1" 2>&1 | grep -v 'Warning\|trace-warnings'
 }
 wait_noah() {

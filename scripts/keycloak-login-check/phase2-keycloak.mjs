@@ -102,6 +102,19 @@ check("signup approval again: registration is back", Boolean(await until(async (
 const del = await adminBrowser.req(`/api/admin/users/${newbieRow.id}`, { method: "DELETE" });
 check("deleting the account in Noah deletes it in Keycloak", del.status === 200 && Boolean(await until(async () => ((await kc.user(newbieRow.id)) === null ? true : null))), String(del.status));
 
+// ---- pi's admin API through Noah's /admin relay --------------------------------
+// Noah's copy of pi's admin key is WRONG in this stack, so whatever pi lets in came on the person's token.
+const viaRelay = (browser) => browser.json("/admin/api/session");
+const adminViaToken = await viaRelay(moved);
+check("a Noah admin on a Keycloak session reaches pi's admin API — on their own token, checked by pi", adminViaToken.status === 200 && adminViaToken.body.authenticated === true, `${adminViaToken.status} ${JSON.stringify(adminViaToken.body).slice(0, 120)}`);
+const adminViaKey = await viaRelay(adminBrowser);
+check("the same admin on a built-in session falls back to the key (wrong here → pi refuses)", adminViaKey.status === 401, `${adminViaKey.status} ${JSON.stringify(adminViaKey.body).slice(0, 120)}`);
+const memberViaRelay = await viaRelay(l2);
+check("a teammate who is not an admin never gets past Noah's relay", memberViaRelay.status === 403, String(memberViaRelay.status));
+const direct = (headers, path = "/admin/api/session", init = {}) => fetch("http://gateway:8080" + path, { ...init, headers: { ...headers, ...(init.headers ?? {}) } });
+check("pi itself: a program's Bearer admin key still works, a wrong key does not", (await direct({ authorization: "Bearer " + process.env.PI_ADMIN_KEY })).status === 200 && (await direct({ authorization: "Bearer " + "0".repeat(64) })).status === 401);
+const keyLogin = await direct({ "x-admin-request": "1", "content-type": "application/json" }, "/admin/api/login", { method: "POST", body: JSON.stringify({ apiKey: process.env.PI_ADMIN_KEY }) });
+check("pi itself: the admin key's screen login is off on an install with an issuer", keyLogin.status === 403 && (await keyLogin.json()).error?.code === "key_login_disabled", String(keyLogin.status));
 // ---- the front door ---------------------------------------------------------
 const b = new Browser();
 check("Keycloak's admin console and API are not reachable through nginx", (await b.req("/sso/admin/")).status === 404 && (await b.req("/sso/admin/realms/noah/users")).status === 404 && (await b.req("/sso/")).status === 404);

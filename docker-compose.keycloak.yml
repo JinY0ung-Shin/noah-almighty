@@ -39,6 +39,16 @@ services:
     depends_on:
       - keycloak
 
+  # pi's gateway checks a person's token ITSELF (its admin API, relayed by Noah's /admin): it needs the
+  # issuer's name exactly as tokens carry it, and the signing keys — fetched on the internal network.
+  # With an issuer set, pi's own admin-key screen login is off; programs' `Bearer <admin key>` stays.
+  gateway:
+    environment:
+      OIDC_ISSUER: https://${NOAH_SERVER_NAME}/sso/realms/noah
+      OIDC_JWKS_URL: http://keycloak:8080/sso/realms/noah/protocol/openid-connect/certs
+    networks:
+      noah-auth: {}
+
   keycloak:
     image: ${NOAH_KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.2}
     # Keycloak takes its secrets from its environment only. They are NOT an `env_file`: compose itself would
@@ -127,7 +137,7 @@ secrets:
     file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/keycloak/db_password
 
 networks:
-  # Noah ↔ Keycloak (and later pi ↔ Keycloak): token, userinfo and admin calls. Nothing leaves it.
+  # Noah ↔ Keycloak (token, userinfo and admin calls) and pi's gateway ↔ Keycloak (signing keys). Nothing leaves it.
   noah-auth:
     internal: true
   # Keycloak ↔ its database only.

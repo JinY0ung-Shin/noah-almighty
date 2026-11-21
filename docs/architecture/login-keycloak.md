@@ -1,8 +1,9 @@
 # Login through the bundled Keycloak (2026-11-21)
 
-Step 2 of "pi owns the harness" ([`pi-runtime.md`](pi-runtime.md), "Direction") — the **Noah half**. pi's half
-(pi checks a person's token itself; the admin panel and the per-person screens log in through the same
-Keycloak) is not built.
+Step 2 of "pi owns the harness" ([`pi-runtime.md`](pi-runtime.md), "Direction"). Built: Noah's login, and —
+since pi `d6411c9` — pi's ADMIN API taking the person's own token (Noah's `/admin` relay carries it; pi checks
+signature, issuer, audience `pi`, expiry, the admin role and the teammates group itself). Not built: a browser
+login of pi's own, the per-person screens in pi, tokens on pi's `/v1`.
 
 An install either has a Keycloak (`AppConfig.keycloak`, the `docker-compose.keycloak.yml` overlay) or it does
 not. Without one, login is the built-in username + password, unchanged. With one, **Keycloak says WHO a person
@@ -46,8 +47,13 @@ configuration.
   token is for. `state` + the verifier live in the starting browser's HttpOnly cookie (`ac_login_flow`, path
   `/api/auth/oidc`, 10 minutes, cleared by the first callback).
 - **A session that began at Keycloak ends there too.** The login's refresh token is kept encrypted on the
-  session row for that one use; logout and a refused login AWAIT Keycloak's logout — a retry that arrives
+  session row for that; logout and a refused login AWAIT Keycloak's logout — a retry that arrives
   while the session is still ending gets a code that is dead when Noah trades it.
+- **The pi admin relay carries the PERSON's token when the session has one, pi's admin key otherwise**
+  (`keycloakPersonToken.ts`; [`pi-runtime.md`](pi-runtime.md), "pi admin panel proxy"). The same stored refresh
+  token is traded for a short-lived access token (a newer refresh token Keycloak returns replaces the stored
+  one); access tokens live in memory only and are never parsed by Noah — pi verifies the token itself. A
+  built-in-login session, a refused refresh or an unreachable Keycloak falls back to the key.
 - **One password per account, ever.** With Keycloak configured the admin's password reset writes Keycloak, not
   Noah; a login at Keycloak drops a digest Noah still held. A reset and a move of the same account run in
   that account's turn (`setKeycloakPassword`), the digest is dropped inside it, and a move acts only while
@@ -118,5 +124,7 @@ admin has reset the stragglers.
 REAL `keycloak`, `keycloak-db` and `noah-nginx` service definitions and a Noah image built from the checkout:
 phase 1 creates accounts on the built-in login, phase 2 turns Keycloak on over the same data and walks the
 import, the move, a new registration, approval, logout, suspension, roles, the admin reset, signup mode and
-delete, and what the front door refuses (6 + 37 checks). Not covered by it: a real browser, the root-owned
-secrets folder of a real host (the check's files are the caller's), and pi.
+delete, what the front door refuses, and pi's admin API through the `/admin` relay with pi's gateway built from
+`vendor/pi-gateway` (Noah's copy of pi's admin key is wrong there on purpose, so what pi lets in came on the
+person's token) — 6 + 42 checks. Not covered by it: a real browser, the root-owned
+secrets folder of a real host (the check's files are the caller's), and the rest of pi (sandboxes, turns).

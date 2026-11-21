@@ -53,10 +53,21 @@ export class KeycloakRefusedError extends Error {
   }
 }
 
-/** What the code exchange returns. The refresh token is kept (encrypted) only to end the Keycloak session at logout. */
+/**
+ * What the code exchange returns. The refresh token is kept (encrypted) on the
+ * session row: it ends the Keycloak session at logout, and until then it gets
+ * the person's access token for the pi admin relay (`keycloakPersonToken.ts`).
+ */
 export interface KeycloakTokens {
   accessToken: string;
   refreshToken: string | null;
+}
+
+/** What a refresh returns. `refreshToken` is the one to use NEXT when Keycloak sent one (null = keep using the old one). */
+export interface KeycloakRefreshedTokens {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresInSeconds: number;
 }
 
 /** Who a token is for, as Keycloak's `userinfo` says. `sub` is the Keycloak user id — for an imported account, the Noah user id. */
@@ -94,6 +105,11 @@ export interface KeycloakClient {
   redirectUri(): string;
   exchangeCode(code: string, codeVerifier: string): Promise<KeycloakTokens>;
   userinfo(accessToken: string): Promise<KeycloakIdentity>;
+  /**
+   * A fresh access token of the login a refresh token belongs to. A session
+   * that ended (logout, suspension, idle too long) is REFUSED: 400 `invalid_grant`.
+   */
+  refresh(refreshToken: string): Promise<KeycloakRefreshedTokens>;
   /** End the Keycloak session a refresh token belongs to. An already-ended session is not an error. */
   endSession(refreshToken: string): Promise<void>;
 
@@ -302,6 +318,22 @@ export function createHttpKeycloakClient(config: KeycloakConfig, fetchImpl: type
         throw new KeycloakUnavailableError("Keycloak's userinfo carried no subject or username.");
       }
       return { sub: body.sub, username: body.preferred_username, name: typeof body.name === "string" ? body.name.trim() : "" };
+    },
+
+    async refresh(refreshToken) {
+      const { body } = await call("token refresh", `${oidc(config.internalUrl)}/token`, {
+        method: "POST",
+        body: form({ grant_type: "refresh_token", refresh_token: refreshToken }),
+      });
+      if (!isRecord(body) || typeof body.access_token !== "string" || !body.access_token) {
+        throw new KeycloakUnavailableError("Keycloak returned no access token for the refresh.");
+      }
+      return {
+        accessToken: body.access_token,
+        refreshToken: typeof body.refresh_token === "string" && body.refresh_token ? body.refresh_token : null,
+        // No lifetime in the answer: treat the token as short-lived rather than guess long.
+        expiresInSeconds: typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 60,
+      };
     },
 
     async endSession(refreshToken) {

@@ -89,7 +89,8 @@ are described as code where they live ("Memory service" below, [`repo-knowledge.
 - **Order:** (0) pi's memory service keeps history in a local git — DONE, pi `2759ae2`, bumped 2026-11-20 →
   (1) the retirements in Noah (mirror, deletion ledger, migration, the `repo` home) — DONE 2026-11-20 →
   (2) Keycloak + OIDC, Noah first (BUILT 2026-11-21 as an optional overlay — [`login-keycloak.md`](login-keycloak.md);
-  the built-in login is not retired yet), then pi → (3) personal brain tools in pi, and with them a brain without a
+  the built-in login is not retired yet), then pi (its ADMIN API takes the person's token since pi `d6411c9`,
+  2026-11-21; no browser login of pi's own, nothing on `/v1`) → (3) personal brain tools in pi, and with them a brain without a
   repository → (4) team brain in pi. 2 is independent of the rest; 3 needed 1 (done) and can start on the
   service key, switching the identity check to tokens later; 4 needs 2. **0 came before 1 (user,
   2026-11-20): the mirror was not dropped until pi kept history**, so there was never a time with neither a
@@ -1064,6 +1065,12 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
 - **Key** — Noah's cookies, any client `Authorization` and client `X-Forwarded-*` are stripped; pi's admin key
   (`PiRuntimeConfig.adminApiKey`, `PI_GATEWAY_ADMIN_API_KEY_FILE` ONLY — an inline `PI_GATEWAY_ADMIN_API_KEY` stops
   the boot) is injected as `Authorization: Bearer`. Without the key `/admin` answers a Korean 503.
+- **Whose bearer (2026-11-21)** — when the admin's Noah session began at Keycloak, the relay sends that PERSON's
+  Keycloak access token instead of the key (`keycloakPersonToken.ts`: `personAccessTokenFor(...) ?? adminKey`, per
+  forwarded request); pi verifies it itself, so pi knows who acts. The key still goes out for a built-in-login
+  session, an install without Keycloak, and a refresh Keycloak refused or could not answer (a warn line) — so it
+  stays REQUIRED and Noah's gate is unchanged. Access tokens live in memory only; the Noah session is looked up
+  before every use, so a logged-out session's token goes nowhere. A token pi refuses is NOT retried with the key.
 - **CSRF** — pi skips its own `X-Admin-Request` check for bearer callers, and an injected bearer is ambient, so
   Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
   `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND

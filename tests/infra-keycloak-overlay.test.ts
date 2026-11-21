@@ -136,6 +136,18 @@ describe("docker-compose.keycloak.yml", () => {
     }
   });
 
+  it("tells pi's gateway the issuer exactly as tokens carry it, and where to fetch the signing keys", () => {
+    // `iss` is Keycloak's KC_HOSTNAME + the realm; pi compares it character for character.
+    expect(overlay).toContain("KC_HOSTNAME: https://${NOAH_SERVER_NAME}/sso\n");
+    expect(overlay).toContain("OIDC_ISSUER: https://${NOAH_SERVER_NAME}/sso/realms/noah\n");
+    expect(overlay).toContain("OIDC_JWKS_URL: http://keycloak:8080/sso/realms/noah/protocol/openid-connect/certs\n");
+    expect(overlay).toMatch(/\n  gateway:\n    environment:\n[\s\S]*?\n    networks:\n      noah-auth: \{\}\n/);
+    // The audience pi requires is the one the realm's `noah` client puts into every access token.
+    const mapper = (realm.clients[0] as unknown as { protocolMappers: { protocolMapper: string; config: Record<string, string> }[] }).protocolMappers;
+    expect(mapper.find((m) => m.protocolMapper === "oidc-audience-mapper")?.config).toMatchObject({ "included.custom.audience": "pi", "access.token.claim": "true" });
+    expect(mapper.find((m) => m.protocolMapper === "oidc-group-membership-mapper")?.config).toMatchObject({ "claim.name": "groups", "full.path": "false", "access.token.claim": "true" });
+  });
+
   it("runs Keycloak behind nginx at /sso with the browser's address in every token", () => {
     expect(overlay).toContain("KC_HOSTNAME: https://${NOAH_SERVER_NAME}/sso\n");
     expect(overlay).toContain('KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"\n');
