@@ -43,3 +43,10 @@
 .admin-vault-slot:is(.cmp-admin-view, .cmp-admin-view *) {
   margin-top: var(--s-4);
 }
+
+/* ---- 사용자 tab: single sign-on, accounts whose password has not moved yet ---- */
+.admin-users-note:is(.cmp-admin-view, .cmp-admin-view *) {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}

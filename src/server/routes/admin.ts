@@ -4,6 +4,8 @@ import { Router, type Response } from "express";
 import { hashPassword, requireAdmin, requireAuth, type AuthenticatedRequest } from "../auth.js";
 import logger from "../logger.js";
 import { knowledgeClonePath } from "../knowledgeRepo.js";
+import { keycloakFor } from "../keycloak.js";
+import { logoutKeycloakUser, setKeycloakPassword, syncRegistrationToKeycloak, syncUserToKeycloak } from "../keycloakSync.js";
 import { memoryClientFor } from "../memory/memoryClient.js";
 import { withVaultWriteLock } from "../personalVault.js";
 import { sanitizeName } from "../marketplace.js";
@@ -243,6 +245,9 @@ export function createAdminRouter(deps: RouterDeps): Router {
       }
       auditAs(req, "delete_user", `deleted user ${req.params.id}`);
       logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "user deleted");
+      // The account in Keycloak goes with the user (the sync finds no Noah user
+      // and deletes it). Best effort, like the cleanup below.
+      void syncUserToKeycloak(store, config, req.params.id);
       // The owner's wiki in the memory service (their personal vault). Best
       // effort, like the disk sweep below: the account is gone either way, and
       // a wiki that could not be deleted is logged for the operator. It runs in
@@ -343,6 +348,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
       }
       auditAs(req, "set_role", `${grant ? "grant" : "revoke"} ${role} for ${req.params.id}`);
       logger.warn({ actorId: req.user!.id, targetId: req.params.id, role, grant }, "role changed");
+      // Whatever else trusts the Keycloak sees the admin role there. Best effort.
+      void syncUserToKeycloak(store, config, req.params.id);
       res.json({ user });
     },
   );
@@ -350,6 +357,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
   // Admin password reset. Also force-logs-out the target so the old password's
   // sessions can't linger. The actor's own sessions are untouched. Hashing is
   // awaited here (crypto.scrypt on the threadpool), never run inside the store.
+  // On an install with Keycloak the password goes THERE, never into Noah: it
+  // is set in Keycloak first, and a failure changes nothing on either side.
   router.post(
     "/api/admin/users/:id/password",
     requireAuth(store),
@@ -366,12 +375,35 @@ export function createAdminRouter(deps: RouterDeps): Router {
           apiError(res, 404, "사용자를 찾을 수 없습니다.");
           return;
         }
-        // False = the account was deleted while the digest was being derived.
-        if (!store.setPasswordHash(req.params.id, await hashPassword(password))) {
+        const viaKeycloak = keycloakFor(store, config) !== null;
+        // `setKeycloakPassword` also drops Noah's digest, in the account's own turn (one password per account).
+        const outcome = viaKeycloak ? await setKeycloakPassword(store, config, req.params.id, password) : null;
+        if (outcome && !outcome.ok && outcome.reason !== "username_taken") {
+          if (outcome.reason === "no_user") apiError(res, 404, "사용자를 찾을 수 없습니다.");
+          else if (outcome.reason === "policy") {
+            apiError(res, 400, "로그인 서버의 비밀번호 규칙에 맞지 않습니다. 다른 비밀번호를 입력해 주세요.");
+          } else {
+            apiError(res, 502, "로그인 서버에 연결하지 못했습니다. 비밀번호는 바뀌지 않았습니다. 잠시 후 다시 시도해 주세요.");
+          }
+          return;
+        }
+        if (outcome?.ok) {
+          // Deleted while Keycloak was answering (the delete removes the Keycloak account in its own turn).
+          if (!store.getUserById(req.params.id)) {
+            apiError(res, 404, "사용자를 찾을 수 없습니다.");
+            return;
+          }
+        } else if (!store.setPasswordHash(req.params.id, await hashPassword(password))) {
+          // No Keycloak — or an account Keycloak cannot hold (`username_taken`: its name is another
+          // account's there, e.g. two old names that differ only by case). Such an account keeps logging
+          // in with Noah's built-in password, so the reset goes where its login is.
+          // False = the account was deleted while the digest was being derived.
           apiError(res, 404, "사용자를 찾을 수 없습니다.");
           return;
         }
         const revoked = store.revokeAllSessions(req.params.id);
+        // The old password's Keycloak sessions end too. Best effort.
+        if (viaKeycloak) void logoutKeycloakUser(store, config, req.params.id);
         auditAs(req, "reset_password", `reset password for ${req.params.id} (revoked ${revoked} sessions)`);
         logger.warn({ actorId: req.user!.id, targetId: req.params.id }, "admin reset password");
         res.json({ ok: true });
@@ -408,6 +440,9 @@ export function createAdminRouter(deps: RouterDeps): Router {
         `${suspended ? "suspended" : "activated"} ${req.params.id}`,
       );
       logger.warn({ actorId: req.user!.id, targetId: req.params.id, suspended }, "suspension changed");
+      // Approved = in Keycloak's teammates group; suspending also ends the
+      // account's Keycloak sessions. Best effort.
+      void syncUserToKeycloak(store, config, req.params.id);
       res.json({ user });
     },
   );
@@ -425,6 +460,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
       const revoked = store.revokeAllSessions(req.params.id);
       auditAs(req, "force_logout", `revoked ${revoked} sessions for ${req.params.id}`);
       logger.warn({ actorId: req.user!.id, targetId: req.params.id, revoked }, "force logout");
+      // A session that began at Keycloak would log straight back in: end those too. Best effort.
+      void logoutKeycloakUser(store, config, req.params.id);
       res.json({ ok: true, revoked });
     },
   );
@@ -570,6 +607,8 @@ export function createAdminRouter(deps: RouterDeps): Router {
     store.setSignupMode(mode);
     auditAs(req, "set_signup_mode", `signup mode = ${mode}`);
     logger.warn({ actorId: req.user!.id, mode }, "signup mode changed");
+    // Keycloak's login page offers registration only in `approval`. Best effort.
+    void syncRegistrationToKeycloak(store, config);
     res.json({ signupMode: mode });
   });
 

@@ -40,6 +40,20 @@ export interface MemoryServiceConfig {
   apiKey: string;
 }
 
+/**
+ * The bundled Keycloak, as this server reaches it (`parseKeycloakConfig`,
+ * `keycloak.ts`): the login of an install that has one. Realm and client are
+ * fixed names (`KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`), not configuration.
+ */
+export interface KeycloakConfig {
+  /** Keycloak's base as the BROWSER reaches it, no trailing slash (e.g. `https://noah.corp.example/sso`). */
+  publicUrl: string;
+  /** The same Keycloak on the internal network, no trailing slash (e.g. `http://keycloak:8080/sso`). */
+  internalUrl: string;
+  /** The `noah` client's secret. Read from a file only; server-only, never logged. */
+  clientSecret: string;
+}
+
 export interface AppConfig {
   /** Operator-configured policy controller, never a user-selected URL. */
   egressControlUrl?: string;
@@ -174,6 +188,12 @@ export interface AppConfig {
    * every use of a personal vault fails as unavailable (`personalVault.ts`).
    */
   memory?: MemoryServiceConfig;
+  /**
+   * The bundled Keycloak (env `KEYCLOAK_PUBLIC_URL` + `KEYCLOAK_INTERNAL_URL`
+   * + `KEYCLOAK_CLIENT_SECRET_FILE`, all three or none). Undefined = this
+   * server has no Keycloak: login is the built-in username + password.
+   */
+  keycloak?: KeycloakConfig;
 }
 
 /**
@@ -945,6 +965,8 @@ export interface AdminUserSummary {
   createdAt: string;
   lastSeenAt: string | null;
   activeSessions: number;
+  /** The account still has a built-in password — on an install with Keycloak: it has not moved there yet. */
+  builtInPassword: boolean;
 }
 
 /** How new self-service signups are handled. Always allows the very first

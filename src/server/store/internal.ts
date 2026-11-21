@@ -761,6 +761,9 @@ export class StoreBase {
     this.addColumnIfMissing("messages", "sdk_session_id", "TEXT");
     this.addColumnIfMissing("messages", "sdk_uuid", "TEXT");
     this.addColumnIfMissing("users", "auto_approve", "INTEGER DEFAULT 0");
+    // A session that began at Keycloak keeps that login's refresh token
+    // (encrypted) to end the Keycloak session at logout (store/users.ts).
+    this.addColumnIfMissing("sessions", "keycloak_refresh_enc", "TEXT");
     // Account suspension: blocks login and kills active sessions. Also the
     // "pending approval" state for signups created while signup mode = approval.
     this.addColumnIfMissing("users", "suspended", "INTEGER DEFAULT 0");

@@ -362,6 +362,40 @@ fresh under it; nothing on the server changes.
 rather than append to what a client sent. [`docker/nginx/noah.conf.template`](docker/nginx/noah.conf.template)
 is the reference.
 
+### Login through Keycloak
+
+Optional. `docker-compose.keycloak.yml` is a third overlay — it needs the nginx overlay above — that hands
+Noah's login to a bundled [Keycloak](https://www.keycloak.org/): one login that pi-gateway will share too.
+Without it Noah's built-in username + password login is unchanged.
+
+```bash
+sudo docker/pi/setup-host.sh     # also makes Keycloak's secrets (once; they are kept afterwards)
+docker compose -f docker-compose.yml -f docker-compose.nginx.yml -f docker-compose.keycloak.yml up -d --build
+```
+
+(Or put the three files in `COMPOSE_FILE` in `.env`, colon-separated, so `docker compose` and
+`scripts/deploy.sh` pick them up.)
+
+- **What it adds:** `keycloak` and its own database `keycloak-db` (volume `keycloak-db-data` — back it up with
+  Noah's data volume). Keycloak's pages are served at `https://<NOAH_SERVER_NAME>/sso/`; nothing new is
+  published on the host, and Keycloak's admin console is not reachable from outside. Keycloak is a Java server
+  with a database of its own: size the host for them from Keycloak's own guidance.
+- **Existing accounts keep working.** On the first start Noah creates every existing account in Keycloak under
+  its own id, without a password. The login screen asks for the name first; a person who has not logged in
+  since types the old password once more, and that login moves the password to Keycloak. From then on the
+  person logs in on Keycloak's page. The admin screen marks the accounts still to move (`비밀번호 미이전`).
+- **Approval is unchanged:** a new person registers on Keycloak's page and then waits for an admin's approval
+  in Noah, exactly as before. Approving, suspending, making someone an admin and deleting an account are still
+  done in Noah's admin screen — Noah writes them into Keycloak.
+- **Do not turn the overlay off again once passwords have moved** — Noah no longer has them. (An admin can
+  still set a new password for an account from Noah's admin screen.)
+- **Closed network:** `NOAH_KEYCLOAK_IMAGE` and `NOAH_KEYCLOAK_DB_IMAGE` name the registry's copies of
+  `quay.io/keycloak/keycloak:26.8.2` and `postgres:17-alpine`.
+- **Operator access to Keycloak itself** (rarely needed): `docker compose exec keycloak
+  /opt/keycloak/bin/kcadm.sh …` with the admin in `$PI_GATEWAY_SECRETS/keycloak/keycloak.env`.
+
+Detail: [`docs/architecture/login-keycloak.md`](docs/architecture/login-keycloak.md).
+
 ### Sizing pi-gateway
 
 pi-gateway's defaults fit a small team. They are pi's own settings: set them in **pi-gateway's `.env`**, then

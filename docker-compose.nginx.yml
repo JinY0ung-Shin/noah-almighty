@@ -40,6 +40,8 @@ services:
     environment:
       NOAH_SERVER_NAME: ${NOAH_SERVER_NAME:?NOAH_SERVER_NAME is required in .env (the domain name users open, e.g. noah.corp.example)}
       NOAH_UPSTREAM: noah-almighty:${PORT:-48787}
+      # Where /sso/ goes (docker-compose.keycloak.yml). Resolved per request, so nginx starts without it.
+      NOAH_KEYCLOAK_UPSTREAM: keycloak:8080
       # File names inside ./docker/tls on the deploy host (the certificate must carry NOAH_SERVER_NAME;
       # a full chain: leaf first, then the intermediates).
       NOAH_TLS_CERT: /etc/nginx/tls/${NOAH_NGINX_TLS_CERT:-fullchain.pem}

@@ -22,10 +22,13 @@ function localizeApiError(raw: string): string {
  */
 export class ApiError extends Error {
   readonly status: number;
+  /** The refusal's JSON body, for the few callers that act on a field next to `error`. */
+  readonly data: Record<string, unknown>;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, data: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
+    this.data = data;
   }
 }
 
@@ -92,6 +95,7 @@ export async function api<T = any>(path: string, options: RequestInit = {}): Pro
         localizeApiError(raw) ||
         `서버 오류가 발생했습니다. (코드 ${response.status}) 잠시 후 다시 시도해 주세요.`,
       response.status,
+      body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {},
     );
   }
   return body as T;

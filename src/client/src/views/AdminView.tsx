@@ -406,6 +406,8 @@ export default function AdminView() {
   // Per-filter counts, recomputed with the user list so the chips follow a
   // suspend/delete/role change.
   const userFilterCounts = new Map(userFilters.map((f) => [f.id, state.adminUsers.filter(f.match).length]));
+  // Single sign-on only: accounts that still log in with their built-in password.
+  const passwordNotMovedCount = state.bootstrap?.sso ? state.adminUsers.filter((u) => u.builtInPassword).length : 0;
 
   async function load() {
     if (loadBusyRef.current) return;
@@ -851,6 +853,11 @@ export default function AdminView() {
                       </button>
                     ))}
                   </div>
+                  {passwordNotMovedCount > 0 && (
+                    <p className="muted admin-users-note">
+                      비밀번호를 아직 통합 로그인으로 옮기지 않은 계정 {passwordNotMovedCount}개 · 각 계정이 다음에 로그인할 때 옮겨집니다.
+                    </p>
+                  )}
                   <div className="admin-list">
                     {!filteredUsers.length ? (
                       <div className="muted pad">

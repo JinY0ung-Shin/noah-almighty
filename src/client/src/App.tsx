@@ -16,6 +16,7 @@ import { watchUnsentDrafts } from "./lib/chatDrafts";
 import { cx, useAppState } from "./lib/hooks";
 import { loadRailCollapsed, persistRailCollapsed } from "./lib/layout";
 import { loadInboxData, startKnowledgeWatch, stopKnowledgeWatch } from "./lib/loaders";
+import { restoreLoginReturnHash } from "./lib/loginServer";
 import { applyInitialRoute, installRouteListener, syncHash } from "./lib/nav";
 import { Presence } from "./lib/presence";
 import { notify, readState, replaceState, updateState } from "./lib/state";
@@ -61,6 +62,9 @@ async function boot(): Promise<void> {
     watchSystemTheme();
     themeWatcherInstalled = true;
   }
+  // Back from the login server (single sign-on): a share link's fragment that
+  // was in the address before the round trip goes back before any route is read.
+  restoreLoginReturnHash();
   replaceState({ booted: false, bootError: "", themePref });
   try {
     const bootstrap = await api<BootstrapInfo>("/api/bootstrap");

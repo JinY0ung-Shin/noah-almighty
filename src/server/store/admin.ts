@@ -60,6 +60,7 @@ export function withAdmin<TBase extends Constructor<StoreBase>>(Base: TBase) {
           row.id,
           current,
         ),
+        builtInPassword: Boolean(row.password_hash),
       };
     }
 

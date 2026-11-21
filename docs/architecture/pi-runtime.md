@@ -38,8 +38,30 @@ are described as code where they live ("Memory service" below, [`repo-knowledge.
   - runs nobody is present for (routines, the task API, consultations) have no user token — Noah calls pi as a
     service account and names the user, as the service key does today;
   - a suspension bites at once (short-lived tokens, and Noah keeps its own per-request check).
-  Keycloak takes login, the admin role (pi's admin screen then needs no key proxy) and the approved-teammate
-  group; per-avatar relations (visibility, shared account, ownership) and run-kind limits stay Noah's.
+  Keycloak takes login, the admin role and the approved-teammate group; per-avatar relations (visibility,
+  shared account, ownership) and run-kind limits stay Noah's.
+- **Screens for a person's own harness live in pi, once, and Noah RELAYS them (user, 2026-11-21).** pi is also
+  run on its own (there, people use only its admin screen and `/v1` callers are programs), so "my brain" (read,
+  edit, history, restore) and later the team brain's reader are pi screens, not a second copy in Noah. Noah
+  shows them under its own address, the way `/admin` is proxied today — never a new window to pi's address —
+  and the relay carries the PERSON's token instead of pi's admin key, so pi checks the person itself. What
+  follows for step 2:
+  - pi logs in EVERY teammate, not only admins. The token decides: admin role → the admin panel; the token's
+    user → only that user's brain; the approved-teammate group → the team brain. For a screen identity IS
+    enough (the viewer is the owner); the "identity alone was not the answer" case above is agent RUNS only.
+  - pi must see who is an approved teammate, and today only Noah's DB knows: Noah writes an approval and a
+    suspension into the Keycloak group, and pi reads the group from the token. pi has no per-request check of
+    Noah's DB, so a short token lifetime is what makes a suspension bite there.
+  - A pi with NO issuer configured keeps its admin-key login, for now (user, 2026-11-21) — one way per
+    install: an issuer set means OIDC only, none means the key.
+  - Existing passwords move at each user's NEXT LOGIN (user, 2026-11-21): Keycloak cannot verify Noah's
+    scrypt hashes (checked on 26.8.2: argon2 and pbkdf2 only), so accounts are imported with their id and no
+    password, Noah's old form checks the old hash one last time and puts that password into Keycloak, and the
+    form and the hash column are retired when no old hash is left.
+  - Keycloak's browser address is a path of Noah's own address behind the nginx overlay (checked: relative
+    path, only `…/realms/` and `…/resources/` passed, the admin console not), and its image comes from the
+    operator's mirror. Noah and pi reach it on the internal network; only the browser needs the public path.
+  - Still open: whether `/v1` keeps keys for programs (leaning yes — its callers are programs).
 - **Personal brain (step 1 DONE 2026-11-20; step 3 ahead).** What is true now: the memory service is the
   ONLY home of a personal vault, for every owner. The `repo` home, the git mirror, the deletion ledger and
   the cutover / rollback are retired (names reserved). History is a LOCAL git inside pi, one repository per
@@ -66,7 +88,8 @@ are described as code where they live ("Memory service" below, [`repo-knowledge.
   `retirementGate()` and quarantine; retired names stay reserved.
 - **Order:** (0) pi's memory service keeps history in a local git — DONE, pi `2759ae2`, bumped 2026-11-20 →
   (1) the retirements in Noah (mirror, deletion ledger, migration, the `repo` home) — DONE 2026-11-20 →
-  (2) Keycloak + OIDC, Noah first, then pi → (3) personal brain tools in pi, and with them a brain without a
+  (2) Keycloak + OIDC, Noah first (BUILT 2026-11-21 as an optional overlay — [`login-keycloak.md`](login-keycloak.md);
+  the built-in login is not retired yet), then pi → (3) personal brain tools in pi, and with them a brain without a
   repository → (4) team brain in pi. 2 is independent of the rest; 3 needed 1 (done) and can start on the
   service key, switching the identity check to tokens later; 4 needs 2. **0 came before 1 (user,
   2026-11-20): the mirror was not dropped until pi kept history**, so there was never a time with neither a

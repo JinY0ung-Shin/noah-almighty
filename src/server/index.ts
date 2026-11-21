@@ -7,6 +7,7 @@ import logger from "./logger.js";
 import { startAvatarTaskDispatcher } from "./avatarTaskRunner.js";
 import { startRoutineScheduler } from "./scheduler.js";
 import { resumeVaultImports } from "./vaultImport.js";
+import { reconcileKeycloak } from "./keycloakSync.js";
 import { retirePersonalAgents } from "./retirePersonalAgents.js";
 import { retireExternalAvatars } from "./retireExternalAvatars.js";
 import { retireGroupAgents } from "./retireGroupAgents.js";
@@ -137,6 +138,10 @@ const stopAvatarTaskDispatcher = startAvatarTaskDispatcher(services);
 // continue what an earlier process left pending, and — at the boot that retired the vault tables — look at
 // every owner who had a repository but was never moved into the memory service.
 resumeVaultImports(services.store, services.config);
+// With the bundled Keycloak as the login: write what Noah holds — who is an approved teammate, who is an
+// admin, whether signup is open — into it, and create the accounts it lacks (keycloakSync.ts). In the
+// background, retried while Keycloak is still coming up; a no-op without Keycloak.
+reconcileKeycloak(services.store, services.config);
 
 // A rejected promise from an async Express 4 route handler is NOT routed to the
 // error middleware — it surfaces here. Log and CONTINUE: a single bad request

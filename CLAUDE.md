@@ -37,6 +37,12 @@ These are the invariants the project is built around. New work should reinforce 
   teammate, all equal and mutually trusted (no guest tier). `isTrustedFor` stays the single choke point
   every trust check flows through — add new trust sources (or restrictions) THERE, never at call sites.
   **Signup approval IS the trust gate**, so an `open` signup mode must never return (`approval` | `closed`).
+- **Keycloak says WHO; Noah says TEAMMATE (2026-11-21).** An install either has the bundled Keycloak or the
+  built-in login. With it, an account has ONE id on both sides and is matched by id only (a name under another
+  id is never merged), a Keycloak account alone is nobody until an admin approves it in Noah, and Noah WRITES
+  its decisions into Keycloak (teammates group, admin role, delete) — never the other way round. Noah takes no
+  Keycloak password and verifies no token. **A new way to change who is a teammate or an admin also calls
+  `syncUserToKeycloak`.** → `login-keycloak.md`.
 - **Avatar visibility is `group` (팀 공개) | `private` (비공개)** — `public` is retired; nothing reaches
   beyond the team. Visibility and trust stay separate axes: a private avatar's owner is still a trusted
   teammate. Reach, trust and skill sharing ride ONE team relation, so they never drift apart.
