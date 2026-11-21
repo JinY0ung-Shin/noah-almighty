@@ -1,8 +1,8 @@
-// Personal vault in the memory service (noah-almighty#84), Lane B — the readers
-// that are not avatar tools: the knowledge-graph builder over a note source
-// (knowledgeGraph.ts), the graph / note routes and the repo-connect hook
-// (routes/knowledgeRepo.ts), and the standing CLAUDE.md memory (plugins.ts).
-// Each with a repo-home regression next to it.
+// The personal vault's readers that are not avatar tools: the knowledge-graph
+// builder over a note source (knowledgeGraph.ts), the graph / note routes and
+// the repo-connect hook (routes/knowledgeRepo.ts), and the standing CLAUDE.md
+// memory (plugins.ts). All of them read vault notes from the memory service —
+// never from the knowledge repository's clone.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -10,8 +10,8 @@ import path from "node:path";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../src/server/vaultMigration.js", async (importOriginal) => {
-  const real = await importOriginal<typeof import("../src/server/vaultMigration.js")>();
+vi.mock("../src/server/vaultImport.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/server/vaultImport.js")>();
   return { ...real, onKnowledgeRepoChanged: vi.fn() };
 });
 
@@ -25,7 +25,7 @@ import {
   loadKnowledgeRepoMemory,
 } from "../src/server/plugins.js";
 import type { AppConfig } from "../src/server/types.js";
-import { onKnowledgeRepoChanged } from "../src/server/vaultMigration.js";
+import { onKnowledgeRepoChanged } from "../src/server/vaultImport.js";
 import { makeBareRemote, signup, withTempDir } from "./helpers.js";
 import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 
@@ -142,11 +142,11 @@ describe("buildKnowledgeGraphFromNotes (a note source that is not a directory)",
   });
 });
 
-describe("GET /api/me/knowledge-repo/graph and /note for a vault in the memory service", () => {
+describe("GET /api/me/knowledge-repo/graph and /note read the vault in the memory service", () => {
   async function memoryOwner(name: string) {
     const ctx = bootstrap();
     const { agent, userId } = await newUser(ctx.app, name);
-    // The repository holds DIFFERENT notes (a mirror that is behind): they must not be what the viewer sees.
+    // The repository holds DIFFERENT notes (copies the retired mirror left): they must not be what the viewer sees.
     const remote = seedRemote(name, {
       ".claude-plugin/marketplace.json": JSON.stringify({ name, plugins: [] }),
       "wiki/concepts/stale.md": "---\ntitle: Stale\n---\nOnly in the repository.",
@@ -154,7 +154,6 @@ describe("GET /api/me/knowledge-repo/graph and /note for a vault in the memory s
       "wiki/.obsidian/plugin.md": "a repo file, not a vault note",
     });
     ctx.store.setKnowledgeRepo(userId, remote, "main");
-    ctx.store.setPersonalVaultMemory(userId, { sourceRepo: remote, sourceCommit: null });
     for (const [p, c] of Object.entries(VAULT)) ctx.fake.seed(userId, p, c);
     return { ...ctx, agent, userId };
   }
@@ -178,7 +177,6 @@ describe("GET /api/me/knowledge-repo/graph and /note for a vault in the memory s
     // A vault with nothing under wiki/ or raw/ is the "no vault yet" answer.
     const other = await newUser(s.app, "graph-empty");
     s.store.setKnowledgeRepo(other.userId, "owner/brain", "main");
-    s.store.setPersonalVaultMemory(other.userId, { sourceRepo: "owner/brain", sourceCommit: null });
     const none = await other.agent.get("/api/me/knowledge-repo/graph").expect(200);
     expect(none.body.graph).toEqual({ nodes: [], edges: [], noVault: true });
   });
@@ -196,7 +194,7 @@ describe("GET /api/me/knowledge-repo/graph and /note for a vault in the memory s
     s.fake.failNext(new MemoryRefusedError("invalid_request", 400, "the request does not have the expected fields"), { op: "read" });
     const refused = await s.agent.get("/api/me/knowledge-repo/graph").expect(502);
     expect(refused.body.error).toContain("지식 그래프를 만들지 못했습니다");
-    // Server not configured for memory at all, while the owner's vault lives there.
+    // Server not configured for memory at all: there is no other place the notes could be.
     setMemoryClientForTests(s.store, null);
     await s.agent.get("/api/me/knowledge-repo/graph").expect(503);
     // Without a repository the route still answers 404 first.
@@ -227,55 +225,57 @@ describe("GET /api/me/knowledge-repo/graph and /note for a vault in the memory s
     expect(s.fake.calls.length).toBe(calls);
   });
 
-  it("regression: a repo-home viewer's graph and note come from the clone, with no service call", async () => {
+  it("never serves the clone's files at vault paths: a viewer with an empty vault sees no graph and no note", async () => {
     const ctx = bootstrap();
-    const { agent, userId } = await newUser(ctx.app, "repohome");
-    const remote = seedRemote("repohome", {
+    const { agent, userId } = await newUser(ctx.app, "cloneonly");
+    const remote = seedRemote("cloneonly", {
       ".claude-plugin/marketplace.json": JSON.stringify({ name: "r", plugins: [] }),
       "wiki/concepts/foo.md": "---\ntitle: Foo\n---\n\nRelated: [[Bar]].",
       "wiki/concepts/bar.md": "---\ntitle: Bar\n---\n\nStandalone.",
       "wiki/index.md": "# Index\n\n- [[Foo]]",
     });
     ctx.store.setKnowledgeRepo(userId, remote, "main");
-    ctx.fake.seed(userId, "wiki/concepts/other.md", "must not be read: this owner's vault is the repo");
+    await agent.get("/api/me/knowledge-repo/contents").expect(200); // clones
+    expect(fs.existsSync(path.join(knowledgeClonePath(userId, ctx.config), "wiki/concepts/foo.md"))).toBe(true);
 
     const graph = await agent.get("/api/me/knowledge-repo/graph").expect(200);
-    expect(graph.body.graph).toEqual(await buildKnowledgeGraph(knowledgeClonePath(userId, ctx.config)));
-    expect((graph.body.graph.nodes as Array<{ id: string }>).map((n) => n.id).sort()).toEqual(["wiki/concepts/bar.md", "wiki/concepts/foo.md"]);
-    const note = await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/concepts/foo.md" }).expect(200);
-    expect(note.body.note.content).toContain("Related: [[Bar]].");
-    await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/concepts/other.md" }).expect(404);
-    expect(ctx.fake.calls).toEqual([]);
+    expect(graph.body.graph).toEqual({ nodes: [], edges: [], noVault: true });
+    const note = await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/concepts/foo.md" }).expect(404);
+    expect(note.body.error).toBe("노트를 찾을 수 없습니다.");
+    // Another viewer's notes are never this viewer's.
+    ctx.fake.seed("someone-else", "wiki/concepts/foo.md", "theirs");
+    await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/concepts/foo.md" }).expect(404);
+    expect(ctx.fake.calls.every((c) => c.owner === userId)).toBe(true);
   });
 });
 
-describe("PUT /api/me/knowledge-repo tells the vault migration about a new connection", () => {
+describe("PUT /api/me/knowledge-repo tells the vault import about a new connection", () => {
   it("fires on a first connection, a different repository and a different branch — not on a re-save or a disconnect", async () => {
     const { app, store, config } = bootstrap();
     const { agent, userId } = await newUser(app, "connect");
 
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/brain" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(1);
-    expect(repoChangedSpy).toHaveBeenLastCalledWith(store, config, userId, null);
+    expect(repoChangedSpy.mock.lastCall).toEqual([store, config, userId]);
 
     // The same repository and branch saved again: not a change.
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/brain" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(1);
 
-    // Only the branch changed: the mirror would write into another branch's vault files, so the hook runs.
+    // Only the branch changed: another branch holds its own files, so the hook runs.
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/brain", branch: "dev" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(2);
-    expect(repoChangedSpy).toHaveBeenLastCalledWith(store, config, userId, "owner/brain");
+    expect(repoChangedSpy.mock.lastCall).toEqual([store, config, userId]);
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/brain", branch: "dev" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(2);
     // Back to the default branch (no branch given) is a branch change too.
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/brain" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(3);
-    expect(repoChangedSpy).toHaveBeenLastCalledWith(store, config, userId, "owner/brain");
+    expect(repoChangedSpy.mock.lastCall).toEqual([store, config, userId]);
 
     await agent.put("/api/me/knowledge-repo").send({ repo: "owner/other" }).expect(200);
     expect(repoChangedSpy).toHaveBeenCalledTimes(4);
-    expect(repoChangedSpy).toHaveBeenLastCalledWith(store, config, userId, "owner/brain");
+    expect(repoChangedSpy.mock.lastCall).toEqual([store, config, userId]);
 
     await agent.put("/api/me/knowledge-repo").send({ repo: null }).expect(200);
     await agent.put("/api/me/knowledge-repo").send({ repo: "not a repo!" }).expect(400);
@@ -290,14 +290,13 @@ describe("PUT /api/me/knowledge-repo tells the vault migration about a new conne
   });
 });
 
-describe("standing memory (CLAUDE.md) for a vault in the memory service", () => {
-  function owner(name: string, opts: { memory: boolean }) {
+describe("standing memory (CLAUDE.md) is the vault's note in the memory service", () => {
+  function owner(name: string) {
     const { store, config } = createServices({ dataDir: path.join(tempDir, name), agentRuntime: "local", sessionSecret: "t" });
     const user = store.createUser({ username: name, displayName: name, password: "password123" });
     store.setKnowledgeRepo(user.id, "owner/brain", "main");
     const fake = createFakeMemoryClient();
     setMemoryClientForTests(store, fake);
-    if (opts.memory) store.setPersonalVaultMemory(user.id, { sourceRepo: "owner/brain", sourceCommit: null });
     // The runs that load standing memory are pi runs (the local stub loads none).
     const piConfig = { ...config, agentRuntime: "pi" } as AppConfig;
     const clone = knowledgeClonePath(user.id, piConfig);
@@ -308,27 +307,21 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
     return { store, config: piConfig, localConfig: config, userId: user.id, fake, writeCloneClaudeMd };
   }
 
-  it("reads CLAUDE.md from the service with the same trim, cap and truncation mark as the clone read", async () => {
-    const long = `  # Rules\n${"가".repeat(7000)}\n  `;
-    const m = owner("mem", { memory: true });
-    const r = owner("rep", { memory: false });
-    for (const content of ["  standing rules\n\n", long]) {
-      m.fake.seed(m.userId, "CLAUDE.md", content);
-      r.writeCloneClaudeMd(content);
-      const fromService = await loadKnowledgeRepoMemory(m.store, m.userId, m.config);
-      const fromClone = await loadKnowledgeRepoMemory(r.store, r.userId, r.config);
-      expect(fromService).toEqual(fromClone);
-      expect(fromService.personal).not.toBeNull();
-    }
+  it("reads CLAUDE.md from the service, trimmed, capped and with a truncation mark", async () => {
+    const m = owner("mem");
+    m.fake.seed(m.userId, "CLAUDE.md", "  standing rules\n\n");
+    expect(await loadKnowledgeRepoMemory(m.store, m.userId, m.config)).toEqual({ personal: "standing rules" });
+    m.fake.seed(m.userId, "CLAUDE.md", `  # Rules\n${"가".repeat(7000)}\n  `);
     const capped = (await loadKnowledgeRepoMemory(m.store, m.userId, m.config)).personal!;
+    expect(capped.startsWith("# Rules\n가")).toBe(true);
     expect(capped.length).toBe(6000 + "\n…(truncated)".length);
     expect(capped.endsWith("\n…(truncated)")).toBe(true);
-    expect(r.fake.calls).toEqual([]);
+    expect(m.fake.calls.every((c) => c.op === "read" && c.owner === m.userId && c.path === "CLAUDE.md")).toBe(true);
   });
 
-  it("is null for a missing or empty note, and never falls back to the clone's copy", async () => {
-    const m = owner("missing", { memory: true });
-    m.writeCloneClaudeMd("THE MIRROR'S COPY — must not be read");
+  it("is null for a missing or empty note, and never falls back to the clone's file", async () => {
+    const m = owner("missing");
+    m.writeCloneClaudeMd("THE CLONE'S FILE — must not be read");
     expect(await loadKnowledgeRepoMemory(m.store, m.userId, m.config)).toEqual({ personal: null });
     m.fake.seed(m.userId, "CLAUDE.md", "  \n ");
     expect(await loadKnowledgeRepoMemory(m.store, m.userId, m.config)).toEqual({ personal: null });
@@ -346,9 +339,9 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
   });
 
   it("puts a notice in the memory's place when the service is unavailable — never a silent 'no memory'", async () => {
-    const m = owner("outage", { memory: true });
+    const m = owner("outage");
     m.fake.seed(m.userId, "CLAUDE.md", "the owner's rules");
-    m.writeCloneClaudeMd("THE MIRROR'S COPY");
+    m.writeCloneClaudeMd("THE CLONE'S FILE");
     m.fake.failNext(down());
     const memory = await loadKnowledgeRepoMemory(m.store, m.userId, m.config);
     expect(memory.personal).toBe(STANDING_MEMORY_UNAVAILABLE_NOTICE);
@@ -358,7 +351,7 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
     expect(memory.personal).not.toMatch(/pi-gateway/i);
     expect(memory.personal).not.toContain("the owner's rules");
     expect(memory.personal!.length).toBeLessThan(6000);
-    // The server has no memory service configured while the vault lives there: the same notice.
+    // The server has no memory service configured at all: the same notice (never the clone's file).
     setMemoryClientForTests(m.store, null);
     expect((await loadKnowledgeRepoMemory(m.store, m.userId, m.config)).personal).toBe(STANDING_MEMORY_UNAVAILABLE_NOTICE);
     // The next conversation, with the service back, gets the real text.
@@ -369,7 +362,7 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
   it("does not hold a turn for a memory service that hangs: past the deadline the notice takes the memory's place", async () => {
     // The read is awaited at the start of every turn; the client's own timeout is 15 s.
     expect(STANDING_MEMORY_VAULT_DEADLINE_MS).toBe(3000);
-    const m = owner("slow", { memory: true });
+    const m = owner("slow");
     m.fake.seed(m.userId, "CLAUDE.md", "the owner's rules");
     m.fake.beforeNext("read", () => new Promise<void>((resolve) => setTimeout(resolve, 500)));
     const started = Date.now();
@@ -380,7 +373,7 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect((await loadKnowledgeRepoMemory(m.store, m.userId, m.config, { vaultDeadlineMs: 2000 })).personal).toBe("the owner's rules");
     // A missing note inside the deadline is still "no standing memory", not the notice.
-    const none = owner("slow-none", { memory: true });
+    const none = owner("slow-none");
     expect(await loadKnowledgeRepoMemory(none.store, none.userId, none.config, { vaultDeadlineMs: 2000 })).toEqual({ personal: null });
   });
 
@@ -394,11 +387,7 @@ describe("standing memory (CLAUDE.md) for a vault in the memory service", () => 
     ctx.store.setKnowledgeRepo(userId, remote, "main");
     await agent.get("/api/me/knowledge-repo/contents").expect(200); // clones
     fs.symlinkSync("concepts", path.join(knowledgeClonePath(userId, ctx.config), "wiki", ".link"));
-    // Repo home: the clone is the vault, the link reads as it always did.
-    const before = await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/.link/a.md" }).expect(200);
-    expect(before.body.note.content).toBe("the clone's copy\n");
-    // Vault in the memory service: that file is not served; the note itself comes from the service.
-    ctx.store.setPersonalVaultMemory(userId, { sourceRepo: remote, sourceCommit: null });
+    // That file is not served; the note itself comes from the service.
     ctx.fake.seed(userId, "wiki/concepts/a.md", "the vault's text\n");
     await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki/.link/a.md" }).expect(404);
     const note = await agent.get("/api/me/knowledge-repo/note").query({ path: "wiki//concepts/a.md" }).expect(200);

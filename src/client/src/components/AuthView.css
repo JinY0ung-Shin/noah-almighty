@@ -10,3 +10,8 @@
   font-weight: 600;
   line-height: 1.5;
 }
+/* Single sign-on: the one line under 가입 신청. */
+.auth-switch-note:is(.cmp-auth-view, .cmp-auth-view *) {
+  margin: var(--s-1) 0 0;
+  line-height: 1.5;
+}

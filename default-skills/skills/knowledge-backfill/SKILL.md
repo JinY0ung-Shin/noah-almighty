@@ -51,11 +51,10 @@ it up.
 When the owner answers a gap — or states any durable fact (a decision and its rationale, a stable
 preference, internal context) — RETAIN it:
 
-1. Run the **brain-ingest** skill to capture the fact: `mcp__repo__write_file` into `raw/` then
-   `mcp__repo__commit`. (There is no separate "brain write" tool — capture is a repo write plus a
-   commit, and the commit is never skipped: it is what pushes the capture to the repository.) This
-   is what makes the answer durable, so you can recall it later with brain-search instead of asking
-   again.
+1. Run the **brain-ingest** skill to capture the fact: `mcp__repo__write_file` into `raw/`. (There
+   is no separate "brain write" tool — capture is a repo-tool write, and a brain note is saved the
+   moment it is written, with nothing to commit.) This is what makes the answer durable, so you can
+   recall it later with brain-search instead of asking again.
 2. If the gap came from a `request_info` entry, call **`resolve_request`** with that request's id to
    close it from the pending list. (The owner can also close it directly from the information-request
    list in settings.)

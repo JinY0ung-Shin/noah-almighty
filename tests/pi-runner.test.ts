@@ -56,6 +56,8 @@ import { activeRepoHolder } from "../src/server/activeRepoLock.js";
 import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
 import { setWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { piRepoCopyLockKey } from "../src/server/agent/pi/piRepoCopy.js";
+import { setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 
 const dir = withTempDir("pi-runner");
 
@@ -292,11 +294,14 @@ describe("runPiAgent: run classes and their sandboxes (U8, P1)", () => {
     // owner = the CONSULTED avatar (C), asker = the asking avatar's owner (A).
     const asker = store.createUser({ username: "asker", displayName: "Asker", password: "password123" });
     // Both are active users, so they are teammates (single team).
-    // C's knowledge: a real vault the recall tools clone and search.
+    // C's knowledge: a connected repository (the brain needs one) and a vault in the memory service that
+    // the recall tools search.
     const seed = path.join(dir(), "kb-seed");
     gitInit(seed);
-    fs.mkdirSync(path.join(seed, "wiki"), { recursive: true });
-    fs.writeFileSync(path.join(seed, "wiki", "release.md"), "---\ntitle: Release policy\n---\nReleases ship every Tuesday after the freeze.\n");
+    fs.writeFileSync(path.join(seed, "README.md"), "# kb\n");
+    const memory = createFakeMemoryClient();
+    setMemoryClientForTests(store, memory);
+    memory.seed(owner.id, "wiki/release.md", "---\ntitle: Release policy\n---\nReleases ship every Tuesday after the freeze.\n");
     const remote = makeBareRemote(path.join(dir(), "kb.git"));
     const git = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
     git("add", "-A");

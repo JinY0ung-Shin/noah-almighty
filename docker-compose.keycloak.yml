@@ -1,0 +1,149 @@
+# Optional: ONE login for the team through a bundled Keycloak (README "Login through Keycloak").
+# Use together with docker-compose.yml AND docker-compose.nginx.yml — Keycloak's pages are served as a
+# path of Noah's own address (https://<NOAH_SERVER_NAME>/sso/), so it needs the nginx overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nginx.yml -f docker-compose.keycloak.yml up -d --build
+#
+# What it adds: Keycloak and its own PostgreSQL, and three values on Noah that turn its login over to
+# Keycloak (src/server/keycloak.ts). Existing accounts keep their Noah ids and move their passwords the
+# next time each person logs in. Without this overlay Noah's built-in login is unchanged.
+#
+# Secrets are files made by docker/pi/setup-host.sh (run it before the first `up` with this overlay):
+#   $PI_GATEWAY_SECRETS/keycloak/keycloak.env        Keycloak's own environment (DB password, its first admin,
+#                                                    the `noah` client's secret for the realm import); uid 1000,
+#                                                    0400 — the uid Keycloak runs as
+#   $PI_GATEWAY_SECRETS/keycloak/db_password         the same DB password, for PostgreSQL
+#   $PI_GATEWAY_SECRETS/noah/keycloak_client_secret  Noah's copy of the client secret (uid 1000, 0400)
+#
+# docker/keycloak/noah-realm.json is imported ONCE, when the realm does not exist yet. Later changes to
+# that file do not reach an existing realm.
+
+services:
+  noah-almighty:
+    environment:
+      # The browser's address of Keycloak, and the same Keycloak on the internal network.
+      KEYCLOAK_PUBLIC_URL: https://${NOAH_SERVER_NAME:?NOAH_SERVER_NAME is required in .env (the keycloak overlay needs the nginx overlay)}/sso
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080/sso
+      KEYCLOAK_CLIENT_SECRET_FILE: /run/secrets/keycloak_client_secret_noah
+    secrets:
+      - source: keycloak_client_secret_noah
+        target: keycloak_client_secret_noah
+    networks:
+      noah-auth: {}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  # nginx passes only Keycloak's login pages (docker/nginx/noah.conf.template).
+  noah-nginx:
+    depends_on:
+      - keycloak
+
+  # pi's gateway checks a person's token ITSELF (its admin API, relayed by Noah's /admin): it needs the
+  # issuer's name exactly as tokens carry it, and the signing keys — fetched on the internal network.
+  # With an issuer set, pi's own admin-key screen login is off; programs' `Bearer <admin key>` stays.
+  gateway:
+    environment:
+      OIDC_ISSUER: https://${NOAH_SERVER_NAME}/sso/realms/noah
+      OIDC_JWKS_URL: http://keycloak:8080/sso/realms/noah/protocol/openid-connect/certs
+    networks:
+      noah-auth: {}
+
+  keycloak:
+    image: ${NOAH_KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.2}
+    # Keycloak takes its secrets from its environment only. They are NOT an `env_file`: compose itself would
+    # have to read that file, and whoever runs `docker compose` cannot (the secrets folder is root's). Mounted
+    # as a secret (the daemon reads it) and loaded into the environment before Keycloak starts.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - set -a && . /run/secrets/keycloak_env && set +a && exec /opt/keycloak/bin/kc.sh start --import-realm
+    secrets:
+      - source: keycloak_env
+        target: keycloak_env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      # The address in every token (`iss`) and on every page is the browser's; Noah (and later pi) still
+      # reach the token, key and userinfo endpoints on the internal address.
+      KC_HOSTNAME: https://${NOAH_SERVER_NAME}/sso
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_RELATIVE_PATH: /sso
+      # TLS ends in nginx: believe its forwarded headers, and only its.
+      KC_PROXY_HEADERS: xforwarded
+      KC_PROXY_TRUSTED_ADDRESSES: ${NOAH_NGINX_IP:-172.16.249.10}
+      # For the placeholders of the realm import.
+      NOAH_SERVER_NAME: ${NOAH_SERVER_NAME}
+    volumes:
+      - ./docker/keycloak/noah-realm.json:/opt/keycloak/data/import/noah-realm.json:ro
+    networks:
+      noah-auth: {}
+      noah-front: {}
+      keycloak-db: {}
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      # Healthy = the `noah` realm answers. Keycloak's own readiness page turns UP before the first start's
+      # realm import is done (it answers "Bootstrap in progress" meanwhile), and Noah waits on this check.
+      # The image has no curl: ask over bash's /dev/tcp.
+      test:
+        - CMD-SHELL
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080
+          && printf 'GET /sso/realms/noah/.well-known/openid-configuration HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3
+          && grep -q '"issuer"' <&3
+      interval: 15s
+      timeout: 5s
+      start_period: 90s
+      retries: 8
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  keycloak-db:
+    image: ${NOAH_KEYCLOAK_DB_IMAGE:-postgres:17-alpine}
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD_FILE: /run/secrets/keycloak_db_password
+    secrets:
+      - source: keycloak_db_password
+        target: keycloak_db_password
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks:
+      keycloak-db: {}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+secrets:
+  keycloak_env:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/keycloak/keycloak.env
+  keycloak_client_secret_noah:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/noah/keycloak_client_secret
+  keycloak_db_password:
+    file: ${PI_GATEWAY_SECRETS:-${PI_GATEWAY_HOME}/secrets}/keycloak/db_password
+
+networks:
+  # Noah ↔ Keycloak (token, userinfo and admin calls) and pi's gateway ↔ Keycloak (signing keys). Nothing leaves it.
+  noah-auth:
+    internal: true
+  # Keycloak ↔ its database only.
+  keycloak-db:
+    internal: true
+
+volumes:
+  # Every account, password and session of the login. Back it up with Noah's data volume.
+  keycloak-db-data:

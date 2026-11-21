@@ -30,14 +30,28 @@ export interface UploadRelayConfig {
 
 /**
  * The memory service of the bundled stack, as this server reaches it
- * (`loadMemoryConfig`, `memory/memoryClient.ts`): where the personal vault of
- * an owner whose vault home is `memory` lives.
+ * (`loadMemoryConfig`, `memory/memoryClient.ts`): where every owner's
+ * personal vault lives.
  */
 export interface MemoryServiceConfig {
   /** Absolute http(s) base URL, no trailing slash (e.g. `http://memory:7090`). */
   url: string;
   /** Sent as `Authorization: Bearer`. Read from a file only; server-only, never logged. */
   apiKey: string;
+}
+
+/**
+ * The bundled Keycloak, as this server reaches it (`parseKeycloakConfig`,
+ * `keycloak.ts`): the login of an install that has one. Realm and client are
+ * fixed names (`KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`), not configuration.
+ */
+export interface KeycloakConfig {
+  /** Keycloak's base as the BROWSER reaches it, no trailing slash (e.g. `https://noah.corp.example/sso`). */
+  publicUrl: string;
+  /** The same Keycloak on the internal network, no trailing slash (e.g. `http://keycloak:8080/sso`). */
+  internalUrl: string;
+  /** The `noah` client's secret. Read from a file only; server-only, never logged. */
+  clientSecret: string;
 }
 
 export interface AppConfig {
@@ -170,10 +184,16 @@ export interface AppConfig {
   pi?: PiRuntimeConfig;
   /**
    * The memory service (env `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE`, set
-   * together or not at all). Undefined = the feature is off: no owner can be
-   * moved to vault home `memory` (`personalVault.ts`).
+   * together or not at all). Undefined = this server has no memory service:
+   * every use of a personal vault fails as unavailable (`personalVault.ts`).
    */
   memory?: MemoryServiceConfig;
+  /**
+   * The bundled Keycloak (env `KEYCLOAK_PUBLIC_URL` + `KEYCLOAK_INTERNAL_URL`
+   * + `KEYCLOAK_CLIENT_SECRET_FILE`, all three or none). Undefined = this
+   * server has no Keycloak: login is the built-in username + password.
+   */
+  keycloak?: KeycloakConfig;
 }
 
 /**
@@ -945,6 +965,8 @@ export interface AdminUserSummary {
   createdAt: string;
   lastSeenAt: string | null;
   activeSessions: number;
+  /** The account still has a built-in password — on an install with Keycloak: it has not moved there yet. */
+  builtInPassword: boolean;
 }
 
 /** How new self-service signups are handled. Always allows the very first
@@ -1596,14 +1618,6 @@ export interface AgentRequest {
    * direct unit calls.
    */
   knowledgeRepoConfigured?: boolean;
-  /**
-   * Where the avatar owner's personal vault lived when the prompt was built
-   * (`OwnerState.vault.home`). Stamped ONLY as `"memory"` — an owner whose
-   * vault is in the repository leaves it unset, so their prompt is exactly
-   * what it always was. The prompt is frozen per conversation, so this is the
-   * home at the conversation's first turn; describe_system reports the live one.
-   */
-  vaultHome?: "memory";
   /**
    * Whether the avatar owner has stored the internal GIT_TOKEN. Lets the
    * prompt guide direct knowledge-repo creation (via the repo tool) vs. asking

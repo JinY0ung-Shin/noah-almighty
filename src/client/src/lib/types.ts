@@ -421,6 +421,11 @@ export interface BootstrapInfo {
   needsSetup: boolean;
   githubHost: string;
   signupMode: import("../../../server/types.js").SignupMode;
+  /**
+   * The server has the single sign-on login configured: the login screen asks for the username
+   * first, and accounts are created on the login server (absent on an older server = off).
+   */
+  sso?: boolean;
   confluenceConfigured: boolean;
   /** The attach button opens the upload relay's page (absent on an older server = off). */
   uploadRelay?: boolean;

@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createServices } from "../src/server/app.js";
 import {
   MemoryRefusedError,
@@ -8,26 +9,23 @@ import {
   setMemoryClientForTests,
 } from "../src/server/memory/memoryClient.js";
 import {
-  VAULT_HOME_CHANGED,
-  VAULT_LOST_ANSWER_REMARK_MS,
   VAULT_NOTE_MAX_BYTES,
   VAULT_WRITER_CLOSED,
   isPersonalVaultPath,
   memoryVaultFor,
   normalizeVaultPath,
-  vaultHomeOf,
   withVaultWrite,
   withVaultWriteLock,
   type MemoryVault,
   type MemoryVaultWriter,
-  type VaultWriteTarget,
 } from "../src/server/personalVault.js";
+import { PERSONAL_VAULT_REPO_HOME_RETIRED_KEY } from "../src/server/store/internal.js";
 import { createFakeMemoryClient, fakeMemoryHash, type FakeMemoryClient } from "./helpers/fakeMemory.js";
 import { withTempDir } from "./helpers.js";
 
-// The personal vault's home (personalVault.ts): the path predicate, the
-// `personal_vaults` row + the instance mode (store), and MemoryVault — the
-// owner's vault over the memory service, here the in-process fake.
+// The personal vault (personalVault.ts): the path predicate, the store's
+// pending repository imports and the retirement of the old vault tables, and
+// MemoryVault — the owner's vault over the memory service, here the in-process fake.
 
 const getTempDir = withTempDir("personal-vault");
 
@@ -38,14 +36,12 @@ function setup() {
   return { store, config, ownerId: owner.id, otherId: other.id };
 }
 
-/** An owner whose vault home is `memory`, over a fresh fake service. */
+/** An owner's vault over a fresh fake service. */
 function setupVault(): ReturnType<typeof setup> & { fake: FakeMemoryClient; vault: MemoryVault } {
   const base = setup();
   const fake = createFakeMemoryClient();
   setMemoryClientForTests(base.store, fake);
-  base.store.setPersonalVaultMemory(base.ownerId, { sourceRepo: "owner/brain", sourceCommit: "abc123" });
   const vault = memoryVaultFor(base.store, base.config, base.ownerId);
-  if (!vault) throw new Error("expected a memory vault");
   return { ...base, fake, vault };
 }
 
@@ -160,478 +156,145 @@ describe("personal vault paths", () => {
   });
 });
 
-describe("personal vault store", () => {
-  it("has no row (home repo) until the vault is moved to memory", () => {
-    const { store, ownerId } = setup();
-    expect(store.getPersonalVault(ownerId)).toBeNull();
-    expect(vaultHomeOf(store, ownerId)).toBe("repo");
-    expect(store.listPersonalVaults()).toEqual([]);
-  });
-
-  it("creates the row clean, and deletes it again", () => {
+describe("personal vault store: pending repository imports", () => {
+  it("records, advances and clears an owner's pending import", () => {
     const { store, ownerId, otherId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: "abc123" });
-    const row = store.getPersonalVault(ownerId);
-    expect(row).toMatchObject({
-      userId: ownerId,
-      sourceRepo: "owner/brain",
-      sourceCommit: "abc123",
-      mirrorDirty: false,
-      mirrorSeq: 0,
-      mirrorSyncedAt: null,
-      mirrorError: null,
-      mirrorNotice: null,
-      mirrorHold: null,
-    });
-    // The row is exactly these fields: the one-shot "replace all" flag is gone.
-    expect(Object.keys(row!).sort()).toEqual(
-      ["migratedAt", "mirrorDirty", "mirrorError", "mirrorHold", "mirrorNotice", "mirrorSeq", "mirrorSyncedAt", "sourceCommit", "sourceRepo", "userId"],
-    );
-    expect(Number.isNaN(Date.parse(row!.migratedAt))).toBe(false);
-    expect(vaultHomeOf(store, ownerId)).toBe("memory");
-    expect(vaultHomeOf(store, otherId)).toBe("repo");
-
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    expect(store.getPersonalVault(otherId)?.sourceCommit).toBeNull();
-    expect(store.listPersonalVaults().map((r) => r.userId).sort()).toEqual([ownerId, otherId].sort());
-
-    store.clearPersonalVault(ownerId);
-    expect(store.getPersonalVault(ownerId)).toBeNull();
-    expect(vaultHomeOf(store, ownerId)).toBe("repo");
-    expect(store.listPersonalVaults().map((r) => r.userId)).toEqual([otherId]);
-    // Clearing a home that is already `repo` is fine.
-    store.clearPersonalVault(ownerId);
+    expect(store.listVaultImports()).toEqual({});
+    store.setVaultImport(ownerId, "check");
+    store.setVaultImport(otherId, "check");
+    store.setVaultImport(ownerId, "import");
+    expect(store.listVaultImports()).toEqual({ [ownerId]: "import", [otherId]: "check" });
+    store.clearVaultImport(ownerId);
+    store.clearVaultImport(ownerId);
+    expect(store.listVaultImports()).toEqual({ [otherId]: "check" });
+    store.clearVaultImport(otherId);
+    expect(store.listVaultImports()).toEqual({});
   });
 
-  it("a repeated cutover replaces the provenance and keeps the mirror state", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: "abc123" });
-    store.markVaultMirrorDirty(ownerId);
-    store.setVaultMirrorHold(ownerId, "confirm");
-    store.recordVaultDelete(ownerId, "wiki/gone.md");
-    store.recordVaultDeletes(ownerId, ["raw/confirmed.md", "wiki/confirmed.md"]);
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain2", sourceCommit: null });
-    expect(store.getPersonalVault(ownerId)).toMatchObject({
-      sourceRepo: "owner/brain2",
-      sourceCommit: null,
-      mirrorDirty: true,
-      mirrorSeq: 1,
-      mirrorHold: "confirm",
-    });
-    expect(store.listVaultDeletes(ownerId)).toEqual(["raw/confirmed.md", "wiki/confirmed.md", "wiki/gone.md"]);
-    expect(store.listPersonalVaults()).toHaveLength(1);
-  });
-
-  it("tracks the mirror: dirty on a write, clean after a pass that saw every write", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-
-    store.markVaultMirrorDirty(ownerId);
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorSeq: 1 });
-
-    store.recordVaultMirror(ownerId, { ok: false, error: "repo has uncommitted changes" });
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorError: "repo has uncommitted changes", mirrorSyncedAt: null });
-
-    store.recordVaultMirror(ownerId, { ok: true });
-    const synced = store.getPersonalVault(ownerId)!;
-    expect(synced).toMatchObject({ mirrorDirty: false, mirrorError: null, mirrorSeq: 1 });
-    expect(Number.isNaN(Date.parse(synced.mirrorSyncedAt!))).toBe(false);
-
-    // A pass that started at seq 1 and finished after another write must leave the row dirty.
-    const startedAt = store.getPersonalVault(ownerId)!.mirrorSeq;
-    store.markVaultMirrorDirty(ownerId);
-    store.recordVaultMirror(ownerId, { ok: true, seq: startedAt });
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorSeq: 2, mirrorError: null });
-    // The next pass saw that write too.
-    store.recordVaultMirror(ownerId, { ok: true, seq: 2 });
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(false);
-  });
-
-  it("keeps a stored mirror error short", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.recordVaultMirror(ownerId, { ok: false, error: "x".repeat(5000) });
-    expect(store.getPersonalVault(ownerId)?.mirrorError).toHaveLength(300);
-  });
-
-  it("the mirror hold has two states and is lifted with null", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBeNull();
-    store.setVaultMirrorHold(ownerId, "checking");
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBe("checking");
-    store.setVaultMirrorHold(ownerId, "confirm");
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBe("confirm");
-    expect(store.listPersonalVaults()[0].mirrorHold).toBe("confirm");
-    store.setVaultMirrorHold(ownerId, null);
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBeNull();
-    // Anything else can only become the state that asks the owner — never "no hold"…
-    store.setVaultMirrorHold(ownerId, "whatever" as "confirm");
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBe("confirm");
-    // …and a caller still passing the old boolean does what it meant: false lifts, true asks.
-    store.setVaultMirrorHold(ownerId, false as unknown as null);
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBeNull();
-    store.setVaultMirrorHold(ownerId, true as unknown as "confirm");
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBe("confirm");
-    // A mirror pass does not touch the hold.
-    store.recordVaultMirror(ownerId, { ok: true });
-    expect(store.getPersonalVault(ownerId)?.mirrorHold).toBe("confirm");
-  });
-
-  it("a successful pass stores its notice, or clears the last one; a failed pass leaves it", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.recordVaultMirror(ownerId, { ok: true, notice: "3 repository notes are not in the memory service" });
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorNotice: "3 repository notes are not in the memory service", mirrorError: null });
-    store.recordVaultMirror(ownerId, { ok: false, error: "push failed" });
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorNotice: "3 repository notes are not in the memory service", mirrorError: "push failed" });
-    // The call shapes that existed before the notice still work, and mean "nothing to tell".
-    store.recordVaultMirror(ownerId, { ok: true, seq: 0 });
-    expect(store.getPersonalVault(ownerId)?.mirrorNotice).toBeNull();
-    store.recordVaultMirror(ownerId, { ok: true, notice: "again" });
-    store.recordVaultMirror(ownerId, { ok: true });
-    expect(store.getPersonalVault(ownerId)?.mirrorNotice).toBeNull();
-    store.recordVaultMirror(ownerId, { ok: true, notice: "again" });
-    store.recordVaultMirror(ownerId, { ok: true, notice: null });
-    expect(store.getPersonalVault(ownerId)?.mirrorNotice).toBeNull();
-    store.recordVaultMirror(ownerId, { ok: true, notice: "n".repeat(5000) });
-    expect(store.getPersonalVault(ownerId)?.mirrorNotice).toHaveLength(300);
-  });
-
-  it("keeps a deletion ledger per owner: one entry per path, in path order, cleared by path", () => {
-    const { store, ownerId, otherId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    store.recordVaultDelete(ownerId, "wiki/b.md");
-    store.recordVaultDelete(ownerId, "raw/z.md");
-    store.recordVaultDelete(ownerId, "CLAUDE.md");
-    store.recordVaultDelete(ownerId, "wiki/b.md");
-    store.recordVaultDelete(otherId, "wiki/theirs.md");
-    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "raw/z.md", "wiki/b.md"]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-
-    store.clearVaultDeletes(ownerId, ["raw/z.md", "wiki/never-recorded.md", "wiki/theirs.md"]);
-    store.clearVaultDeletes(ownerId, []);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "wiki/b.md"]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-    // A mirror pass leaves the ledger alone: the mirror clears what it settled, by path.
-    store.recordVaultMirror(ownerId, { ok: true });
-    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "wiki/b.md"]);
-  });
-
-  it("records many deletions at once (the owner's confirmation): one entry per path, whatever was there before", () => {
-    const { store, ownerId, otherId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    store.recordVaultDelete(ownerId, "wiki/b.md");
-    store.recordVaultDelete(otherId, "wiki/theirs.md");
-
-    // The repository-only vault paths as they were at the press — one already in the ledger, one named twice.
-    store.recordVaultDeletes(ownerId, ["wiki/z.md", "wiki/b.md", "CLAUDE.md", "raw/2026/src.md", "wiki/z.md"]);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "raw/2026/src.md", "wiki/b.md", "wiki/z.md"]);
-    // Pressing again with the same list changes nothing, and nothing leaks to another owner.
-    store.recordVaultDeletes(ownerId, ["wiki/z.md", "wiki/b.md", "CLAUDE.md", "raw/2026/src.md", "wiki/z.md"]);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["CLAUDE.md", "raw/2026/src.md", "wiki/b.md", "wiki/z.md"]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-
-    // An empty list is nothing to record.
-    store.recordVaultDeletes(ownerId, []);
-    expect(store.listVaultDeletes(ownerId)).toHaveLength(4);
-
-    // They are ordinary ledger entries: the mirror settles them by path, and they die with the row.
-    store.clearVaultDeletes(ownerId, ["CLAUDE.md", "wiki/z.md"]);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["raw/2026/src.md", "wiki/b.md"]);
-    store.clearPersonalVault(ownerId);
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-  });
-
-  it("many deletions are recorded together or not at all", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.recordVaultDelete(ownerId, "wiki/before.md");
-    // The third path cannot be stored (not a string): the two before it must not stay behind.
-    const paths = ["wiki/a.md", "wiki/b.md", {} as unknown as string, "wiki/c.md"];
-    expect(() => store.recordVaultDeletes(ownerId, paths)).toThrow();
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/before.md"]);
-    // The ledger is still usable after the failed press.
-    store.recordVaultDeletes(ownerId, ["wiki/a.md", "wiki/b.md", "wiki/c.md"]);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/a.md", "wiki/b.md", "wiki/before.md", "wiki/c.md"]);
-  });
-
-  it("many deletions for an owner without a row record nothing — not even for a later cutover", () => {
-    const { store, ownerId, otherId } = setup();
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    store.recordVaultDeletes(ownerId, ["wiki/a.md", "wiki/b.md", "CLAUDE.md"]);
-    store.recordVaultDeletes(ownerId, []);
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    expect(store.listVaultDeletes(otherId)).toEqual([]);
-    expect(store.getPersonalVault(ownerId)).toBeNull();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-  });
-
-  it("the ledger exists only with the row: nothing is recorded for home repo, and going back to repo empties it", () => {
-    const { store, ownerId, otherId } = setup();
-    store.recordVaultDelete(ownerId, "wiki/a.md");
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    store.recordVaultDelete(ownerId, "wiki/a.md");
-    store.recordVaultDelete(otherId, "wiki/theirs.md");
-    store.clearPersonalVault(ownerId);
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-    // A later cutover starts with an empty ledger.
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-  });
-
-  it("mirror writes for an owner without a row change nothing", () => {
-    const { store, ownerId } = setup();
-    store.markVaultMirrorDirty(ownerId);
-    store.recordVaultMirror(ownerId, { ok: true });
-    store.recordVaultMirror(ownerId, { ok: false, error: "x" });
-    store.setVaultMirrorHold(ownerId, "confirm");
-    store.recordVaultDelete(ownerId, "wiki/a.md");
-    store.recordVaultDeletes(ownerId, ["wiki/b.md", "wiki/c.md"]);
-    store.clearVaultDeletes(ownerId, ["wiki/a.md"]);
-    expect(store.getPersonalVault(ownerId)).toBeNull();
-    expect(store.listPersonalVaults()).toEqual([]);
-  });
-
-  it("deleting the user removes their row and nobody else's", () => {
-    const { store, ownerId, otherId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    store.recordVaultDelete(ownerId, "wiki/mine.md");
-    store.recordVaultDelete(otherId, "wiki/theirs.md");
-    expect(store.deleteUser(ownerId)).toBe(true);
-    expect(store.getPersonalVault(ownerId)).toBeNull();
-    expect(store.listPersonalVaults().map((r) => r.userId)).toEqual([otherId]);
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    expect(store.listVaultDeletes(otherId)).toEqual(["wiki/theirs.md"]);
-  });
-
-  it("brings up a table an earlier build made: the boolean hold becomes confirm, once", () => {
+  it("retires the vault tables of an older build, and hands over the owners who were never moved — once", () => {
     const dataDir = path.join(getTempDir(), "old-build");
     const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
-    const columns = (db: Database.Database) => (db.prepare("PRAGMA table_info(personal_vaults)").all() as { name: string }[]).map((c) => c.name);
+    const tables = (db: Database.Database) =>
+      (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'personal_vault%'").all() as { name: string }[]).map((t) => t.name);
 
-    // A database of this build never has the old column.
+    // A database of this build has neither table.
     const first = boot();
     const dbPath = first.config.dbPath;
-    const held = first.store.createUser({ username: "held", displayName: "Held", password: "password123" }).id;
-    const free = first.store.createUser({ username: "free", displayName: "Free", password: "password123" }).id;
+    const moved = first.store.createUser({ username: "moved", displayName: "Moved", password: "password123" }).id;
+    const unmoved = first.store.createUser({ username: "unmoved", displayName: "Unmoved", password: "password123" }).id;
+    const noRepo = first.store.createUser({ username: "norepo", displayName: "No repo", password: "password123" }).id;
+    first.store.setKnowledgeRepo(moved, "moved/brain", "main");
+    first.store.setKnowledgeRepo(unmoved, "unmoved/brain", "main");
     first.store.close();
-    let db = new Database(dbPath);
-    expect(columns(db)).not.toContain("mirror_hold");
+    const db = new Database(dbPath);
+    expect(tables(db)).toEqual([]);
 
-    // The table as the earlier build of this feature created it, with one owner on hold and one not.
+    // The tables as the build before the retirement left them: one owner moved, one with a repository but no row.
     db.exec(`
-      DROP TABLE personal_vaults;
-      DROP TABLE personal_vault_deletes;
       CREATE TABLE personal_vaults (
-        user_id TEXT PRIMARY KEY,
-        migrated_at TEXT NOT NULL,
-        source_repo TEXT NOT NULL,
-        source_commit TEXT,
-        mirror_dirty INTEGER NOT NULL DEFAULT 0,
-        mirror_seq INTEGER NOT NULL DEFAULT 0,
-        mirror_synced_at TEXT,
-        mirror_error TEXT,
-        mirror_hold INTEGER NOT NULL DEFAULT 0
+        user_id TEXT PRIMARY KEY, migrated_at TEXT NOT NULL, source_repo TEXT NOT NULL, source_commit TEXT,
+        mirror_dirty INTEGER NOT NULL DEFAULT 0, mirror_seq INTEGER NOT NULL DEFAULT 0, mirror_synced_at TEXT,
+        mirror_error TEXT, mirror_notice TEXT, mirror_hold_state TEXT
       );
+      CREATE TABLE personal_vault_deletes (user_id TEXT NOT NULL, path TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, path));
     `);
-    const insert = db.prepare(
-      "INSERT INTO personal_vaults (user_id, migrated_at, source_repo, source_commit, mirror_dirty, mirror_seq, mirror_error, mirror_hold) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    insert.run(held, "2026-11-17T00:00:00.000Z", "held/brain", "abc123", 1, 4, "repo has uncommitted changes", 1);
-    insert.run(free, "2026-11-17T00:00:00.000Z", "free/brain", null, 0, 0, null, 0);
+    db.prepare("INSERT INTO personal_vaults (user_id, migrated_at, source_repo, mirror_dirty) VALUES (?, ?, ?, 1)").run(moved, "2026-11-18T00:00:00.000Z", "moved/brain");
+    db.prepare("INSERT INTO personal_vault_deletes (user_id, path, created_at) VALUES (?, ?, ?)").run(moved, "wiki/gone.md", "2026-11-18T00:00:00.000Z");
+    // That build never stamped the marker this build's first boot leaves.
+    db.prepare("DELETE FROM app_config WHERE key = ?").run(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY);
+    db.close();
+
+    // The boot backs the database up first, then drops both tables.
+    const second = boot();
+    const backups = fs.readdirSync(path.join(dataDir, "backups")).filter((name) => name.startsWith("pre-retire-"));
+    expect(backups).toHaveLength(1);
+    const backup = new Database(path.join(dataDir, "backups", backups[0]!), { readonly: true });
+    expect(tables(backup).sort()).toEqual(["personal_vault_deletes", "personal_vaults"]);
+    backup.close();
+    // The owner with a repository and no row is handed to the import, which starts at `import` (their
+    // repository IS their vault) — the moved one and the one without a repository are not.
+    expect(second.store.takeVaultImportStragglers()).toEqual([unmoved]);
+    expect(second.store.listVaultImports()).toEqual({ [unmoved]: "import" });
+    expect(second.store.takeVaultImportStragglers()).toEqual([]);
+    void noRepo;
+    second.store.close();
+    const after = new Database(dbPath);
+    expect(tables(after)).toEqual([]);
+    after.close();
+
+    // Nothing to retire on the next boot: no second backup, nobody handed over again.
+    const third = boot();
+    expect(fs.readdirSync(path.join(dataDir, "backups")).filter((name) => name.startsWith("pre-retire-"))).toHaveLength(1);
+    expect(third.store.takeVaultImportStragglers()).toEqual([]);
+    expect(third.store.listVaultImports()).toEqual({ [unmoved]: "import" });
+    third.store.close();
+  });
+
+  it("a database from before the vault tables existed hands over EVERY owner with a repository, once", () => {
+    const dataDir = path.join(getTempDir(), "older-release");
+    const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    const first = boot();
+    const dbPath = first.config.dbPath;
+    const a = first.store.createUser({ username: "a", displayName: "A", password: "password123" }).id;
+    const b = first.store.createUser({ username: "b", displayName: "B", password: "password123" }).id;
+    first.store.createUser({ username: "norepo", displayName: "No repo", password: "password123" });
+    first.store.setKnowledgeRepo(a, "a/brain", "main");
+    first.store.setKnowledgeRepo(b, "b/brain", "main");
+    first.store.close();
+    // That release had neither the tables nor the marker.
+    const db = new Database(dbPath);
+    db.prepare("DELETE FROM app_config WHERE key = ?").run(PERSONAL_VAULT_REPO_HOME_RETIRED_KEY);
     db.close();
 
     const second = boot();
-    expect(second.store.getPersonalVault(held)).toEqual({
-      userId: held,
-      migratedAt: "2026-11-17T00:00:00.000Z",
-      sourceRepo: "held/brain",
-      sourceCommit: "abc123",
-      mirrorDirty: true,
-      mirrorSeq: 4,
-      mirrorSyncedAt: null,
-      mirrorError: "repo has uncommitted changes",
-      mirrorNotice: null,
-      mirrorHold: "confirm",
-    });
-    expect(second.store.getPersonalVault(free)).toMatchObject({ mirrorHold: null, mirrorNotice: null });
-    // Everything new works on the migrated table, including an insert that never names the old column.
-    second.store.recordVaultDelete(held, "wiki/a.md");
-    expect(second.store.listVaultDeletes(held)).toEqual(["wiki/a.md"]);
-    second.store.recordVaultMirror(held, { ok: true, notice: "n" });
-    const later = second.store.createUser({ username: "later", displayName: "Later", password: "password123" }).id;
-    second.store.setPersonalVaultMemory(later, { sourceRepo: "later/brain", sourceCommit: null });
-    expect(second.store.getPersonalVault(later)?.mirrorHold).toBeNull();
-    // The owner confirms: the hold is lifted…
-    second.store.setVaultMirrorHold(held, null);
-    second.store.setVaultMirrorHold(free, "checking");
+    expect(second.store.takeVaultImportStragglers().sort()).toEqual([a, b].sort());
     second.store.close();
 
-    // …and the next boots (migrate() runs on every one) do not put it back, nor touch a state set since.
-    for (let i = 0; i < 2; i += 1) {
-      const again = boot();
-      expect(again.store.getPersonalVault(held)).toMatchObject({ mirrorHold: null, mirrorNotice: "n" });
-      expect(again.store.getPersonalVault(free)?.mirrorHold).toBe("checking");
-      expect(again.store.getPersonalVault(later)?.mirrorHold).toBeNull();
-      again.store.close();
-    }
-    db = new Database(dbPath);
-    expect(db.prepare("SELECT COUNT(*) AS n FROM personal_vaults WHERE mirror_hold <> 0").get()).toEqual({ n: 0 });
-
-    // Only a hold the OLD build wrote is folded in — e.g. after a deploy was rolled back and forward again.
-    db.prepare("UPDATE personal_vaults SET mirror_hold = 1 WHERE user_id = ?").run(later);
-    db.prepare("UPDATE personal_vaults SET mirror_hold = 1 WHERE user_id = ?").run(free);
-    db.close();
-    const last = boot();
-    expect(last.store.getPersonalVault(later)?.mirrorHold).toBe("confirm");
-    // A state this build already holds is kept (checking is still a hold).
-    expect(last.store.getPersonalVault(free)?.mirrorHold).toBe("checking");
-    expect(last.store.getPersonalVault(held)?.mirrorHold).toBeNull();
-    last.store.close();
+    // An older build booted in between re-creates the table, empty: nobody is handed over a second time.
+    const again = new Database(dbPath);
+    again.exec("CREATE TABLE personal_vaults (user_id TEXT PRIMARY KEY, migrated_at TEXT NOT NULL, source_repo TEXT NOT NULL)");
+    again.close();
+    const third = boot();
+    expect(third.store.takeVaultImportStragglers()).toEqual([]);
+    third.store.close();
   });
 
-  it("a database that still has the retired mirror_replace_all column opens, reads and writes as any other", () => {
-    const dataDir = path.join(getTempDir(), "replace-all-build");
+  it("a new database hands nobody over, also once it has users with repositories", () => {
+    const dataDir = path.join(getTempDir(), "new-install");
     const boot = () => createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
-    const columns = (db: Database.Database) => (db.prepare("PRAGMA table_info(personal_vaults)").all() as { name: string }[]).map((c) => c.name);
-
-    // A database of this build has no such column.
     const first = boot();
-    const dbPath = first.config.dbPath;
-    const armed = first.store.createUser({ username: "armed", displayName: "Armed", password: "password123" }).id;
-    const plain = first.store.createUser({ username: "plain", displayName: "Plain", password: "password123" }).id;
+    const user = first.store.createUser({ username: "new", displayName: "New", password: "password123" }).id;
+    first.store.setKnowledgeRepo(user, "new/brain", "main");
+    expect(first.store.takeVaultImportStragglers()).toEqual([]);
     first.store.close();
-    let db = new Database(dbPath);
-    expect(columns(db)).not.toContain("mirror_replace_all");
-
-    // The table as the earlier build of this branch created it: the one-shot flag, armed for one owner.
-    db.exec(`
-      DROP TABLE personal_vaults;
-      CREATE TABLE personal_vaults (
-        user_id TEXT PRIMARY KEY,
-        migrated_at TEXT NOT NULL,
-        source_repo TEXT NOT NULL,
-        source_commit TEXT,
-        mirror_dirty INTEGER NOT NULL DEFAULT 0,
-        mirror_seq INTEGER NOT NULL DEFAULT 0,
-        mirror_synced_at TEXT,
-        mirror_error TEXT,
-        mirror_notice TEXT,
-        mirror_hold_state TEXT,
-        mirror_replace_all INTEGER NOT NULL DEFAULT 0
-      );
-    `);
-    const insert = db.prepare(
-      "INSERT INTO personal_vaults (user_id, migrated_at, source_repo, source_commit, mirror_dirty, mirror_seq, mirror_synced_at, mirror_notice, mirror_hold_state, mirror_replace_all) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    );
-    insert.run(armed, "2026-11-17T00:00:00.000Z", "armed/brain", "abc123", 1, 7, "2026-11-17T01:00:00.000Z", "2 repository notes are not in the memory service", null, 1);
-    insert.run(plain, "2026-11-17T00:00:00.000Z", "plain/brain", null, 0, 0, null, null, "checking", 0);
-    db.close();
-
-    // It opens (twice: migrate() runs on every boot) and every row reads as a row of this build.
-    for (let i = 0; i < 2; i += 1) {
-      const { store } = boot();
-      expect(store.getPersonalVault(armed)).toEqual({
-        userId: armed,
-        migratedAt: "2026-11-17T00:00:00.000Z",
-        sourceRepo: "armed/brain",
-        sourceCommit: "abc123",
-        mirrorDirty: true,
-        mirrorSeq: 7,
-        mirrorSyncedAt: "2026-11-17T01:00:00.000Z",
-        mirrorError: null,
-        mirrorNotice: "2 repository notes are not in the memory service",
-        mirrorHold: null,
-      });
-      expect(store.listPersonalVaults().map((row) => [row.userId, row.mirrorHold]).sort()).toEqual(
-        [
-          [armed, null],
-          [plain, "checking"],
-        ].sort(),
-      );
-      store.close();
-    }
-
-    // Every write works on it — also a cutover of a NEW owner, whose insert never names the old column.
-    const { store } = boot();
-    const later = store.createUser({ username: "later", displayName: "Later", password: "password123" }).id;
-    store.setPersonalVaultMemory(later, { sourceRepo: "later/brain", sourceCommit: null });
-    expect(store.getPersonalVault(later)).toMatchObject({ sourceRepo: "later/brain", mirrorDirty: false, mirrorHold: null });
-    store.setPersonalVaultMemory(armed, { sourceRepo: "armed/brain2", sourceCommit: null });
-    store.markVaultMirrorDirty(armed);
-    store.setVaultMirrorHold(armed, "confirm");
-    store.recordVaultDeletes(armed, ["wiki/a.md", "wiki/b.md"]);
-    store.recordVaultMirror(armed, { ok: true, seq: 8 });
-    expect(store.getPersonalVault(armed)).toMatchObject({
-      sourceRepo: "armed/brain2",
-      mirrorDirty: false,
-      mirrorSeq: 8,
-      mirrorNotice: null,
-      mirrorHold: "confirm",
-    });
-    expect(store.listVaultDeletes(armed)).toEqual(["wiki/a.md", "wiki/b.md"]);
-    // The flag the earlier build armed is neither read nor acted on: a pass recorded ok deleted nothing by it.
-    store.clearPersonalVault(plain);
-    expect(store.deleteUser(later)).toBe(true);
-    expect(store.listPersonalVaults().map((row) => row.userId)).toEqual([armed]);
-    store.close();
-
-    // Nothing wrote the retired column either: it is as the earlier build left it.
-    db = new Database(dbPath);
-    expect(db.prepare("SELECT mirror_replace_all AS flag FROM personal_vaults WHERE user_id = ?").get(armed)).toEqual({ flag: 1 });
-    db.close();
-  });
-
-  it("personalVaultMode defaults to repo and stores only repo | memory", () => {
-    const { store } = setup();
-    expect(store.getPersonalVaultMode()).toBe("repo");
-    store.setPersonalVaultMode("memory");
-    expect(store.getPersonalVaultMode()).toBe("memory");
-    store.setPersonalVaultMode("repo");
-    expect(store.getPersonalVaultMode()).toBe("repo");
-    store.setPersonalVaultMode("anything" as "memory");
-    expect(store.getPersonalVaultMode()).toBe("repo");
-  });
-
-  it("the mode is the target, not an owner's home", () => {
-    const { store, ownerId } = setup();
-    store.setPersonalVaultMode("memory");
-    expect(vaultHomeOf(store, ownerId)).toBe("repo");
+    const second = boot();
+    expect(second.store.takeVaultImportStragglers()).toEqual([]);
+    second.store.close();
   });
 });
 
 describe("memoryVaultFor", () => {
-  it("is null for an owner whose home is repo, whatever the client", () => {
-    const { store, config, ownerId } = setup();
-    expect(memoryVaultFor(store, config, ownerId)).toBeNull();
-    setMemoryClientForTests(store, createFakeMemoryClient());
-    expect(memoryVaultFor(store, config, ownerId)).toBeNull();
+  it("is every owner's vault — nobody is on another home", async () => {
+    const { store, config, ownerId, otherId } = setup();
+    const fake = createFakeMemoryClient();
+    setMemoryClientForTests(store, fake);
+    await memoryVaultFor(store, config, ownerId).write("wiki/a.md", "mine");
+    await memoryVaultFor(store, config, otherId).write("wiki/a.md", "theirs");
+    expect(fake.dump(ownerId)).toEqual({ "wiki/a.md": "mine" });
+    expect(fake.dump(otherId)).toEqual({ "wiki/a.md": "theirs" });
   });
 
-  it("an owner in memory on a server without a memory service gets an unavailable vault, never the clone", async () => {
+  it("on a server without a memory service the vault is unavailable on every method, never empty", async () => {
     const { store, config, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
     const vault = memoryVaultFor(store, config, ownerId);
-    expect(vault).not.toBeNull();
     for (const call of [
-      () => vault!.list(),
-      () => vault!.read("wiki/a.md"),
-      () => vault!.exists("wiki/a.md"),
-      () => vault!.write("wiki/a.md", "x"),
-      () => vault!.edit("wiki/a.md", "a", "b"),
-      () => vault!.remove("wiki/a.md"),
-      () => vault!.search("x"),
+      () => vault.list(),
+      () => vault.read("wiki/a.md"),
+      () => vault.exists("wiki/a.md"),
+      () => vault.write("wiki/a.md", "x"),
+      () => vault.edit("wiki/a.md", "a", "b"),
+      () => vault.remove("wiki/a.md"),
+      () => vault.search("x"),
     ]) {
       const error = await failure(call());
       expect(error).toBeInstanceOf(MemoryUnavailableError);
@@ -696,7 +359,6 @@ describe("MemoryVault: notes", () => {
       expect(await message(vault.remove(rel)), rel).toBe("INVALID_PATH");
     }
     expect(fake.calls).toEqual([]);
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(false);
   });
 
   it("a note over 512 KiB is FILE_TOO_LARGE, by Noah's own check and by the service's refusal", async () => {
@@ -746,14 +408,13 @@ describe("MemoryVault: notes", () => {
 
   it("keeps owners apart", async () => {
     const { vault, fake, store, config, ownerId, otherId } = setupVault();
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    const theirs = memoryVaultFor(store, config, otherId)!;
+    const theirs = memoryVaultFor(store, config, otherId);
     await vault.write("wiki/a.md", "mine");
     await theirs.write("wiki/a.md", "theirs");
     expect(await vault.read("wiki/a.md")).toBe("mine");
     expect(await theirs.read("wiki/a.md")).toBe("theirs");
     expect(fake.dump(ownerId)).toEqual({ "wiki/a.md": "mine" });
-    expect(store.getPersonalVault(otherId)?.mirrorSeq).toBe(1);
+    expect(fake.dump(otherId)).toEqual({ "wiki/a.md": "theirs" });
   });
 });
 
@@ -766,9 +427,8 @@ describe("MemoryVault: edit (knowledgeRepo.editFile's contract)", () => {
   });
 
   it("throws the sentinels: NO_CHANGE, NOT_FOUND, STRING_NOT_FOUND, STRING_NOT_UNIQUE, FILE_TOO_LARGE", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
+    const { vault, fake } = setupVault();
     await vault.write("wiki/a.md", "one two two");
-    store.recordVaultMirror(ownerId, { ok: true });
     const puts = () => fake.calls.filter((call) => call.op === "put").length;
     const before = puts();
 
@@ -783,8 +443,6 @@ describe("MemoryVault: edit (knowledgeRepo.editFile's contract)", () => {
 
     expect(await vault.read("wiki/a.md")).toBe("one two two");
     expect(puts()).toBe(before);
-    // A refused edit changed nothing, so the mirror is still clean.
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(false);
   });
 
   it("replaceAll replaces every occurrence and returns the count", async () => {
@@ -804,56 +462,6 @@ describe("MemoryVault: edit (knowledgeRepo.editFile's contract)", () => {
   });
 });
 
-describe("MemoryVault: the mirror is marked dirty", () => {
-  it("on every successful write, edit and remove — and not by reads", async () => {
-    const { vault, store, ownerId } = setupVault();
-    const state = () => {
-      const row = store.getPersonalVault(ownerId)!;
-      return { dirty: row.mirrorDirty, seq: row.mirrorSeq };
-    };
-    expect(state()).toEqual({ dirty: false, seq: 0 });
-
-    await vault.write("wiki/a.md", "one two");
-    expect(state()).toEqual({ dirty: true, seq: 1 });
-
-    store.recordVaultMirror(ownerId, { ok: true });
-    await vault.read("wiki/a.md");
-    await vault.exists("wiki/a.md");
-    await vault.list();
-    await vault.search("one");
-    expect(state()).toEqual({ dirty: false, seq: 1 });
-
-    await vault.edit("wiki/a.md", "one", "1");
-    expect(state()).toEqual({ dirty: true, seq: 2 });
-
-    store.recordVaultMirror(ownerId, { ok: true });
-    await vault.remove("wiki/a.md");
-    expect(state()).toEqual({ dirty: true, seq: 3 });
-  });
-
-  it("a write whose answer was lost still marks it: the vault may have changed", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    fake.failNext(new MemoryUnavailableError("memory service unavailable (put): no answer within 15000 ms", "timeout"), { op: "put", applied: true });
-    expect(await failure(vault.write("wiki/a.md", "landed"))).toBeInstanceOf(MemoryUnavailableError);
-    expect(fake.dump(ownerId)).toEqual({ "wiki/a.md": "landed" });
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(true);
-  });
-
-  it("a delete repeated after a lost answer marks it too, though the note is already gone", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    await vault.write("wiki/a.md", "x");
-    store.recordVaultMirror(ownerId, { ok: true });
-    fake.failNext(new MemoryUnavailableError(), { op: "read" });
-    expect(await failure(vault.remove("wiki/a.md"))).toBeInstanceOf(MemoryUnavailableError);
-    // Nothing was sent, so nothing to mirror yet.
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(false);
-    fake.seed(ownerId, "wiki/keep.md", "k");
-    await vault.remove("wiki/a.md");
-    store.recordVaultMirror(ownerId, { ok: true });
-    await vault.remove("wiki/a.md");
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(true);
-  });
-});
 
 describe("MemoryVault: the service cannot be used", () => {
   it("passes MemoryUnavailableError through untouched from every method — never NOT_FOUND, never an empty result", async () => {
@@ -905,7 +513,6 @@ describe("MemoryVault: writes of one owner are serialized", () => {
     const results = await Promise.all([vault.write("wiki/a.md", "A"), vault.write("wiki/b.md", "B")]);
     expect(results).toEqual([{ created: true }, { created: true }]);
     expect(fake.dump(ownerId)).toEqual({ "wiki/a.md": "A", "wiki/b.md": "B" });
-    expect(store.getPersonalVault(ownerId)?.mirrorSeq).toBe(2);
   });
 
   it("concurrent writes of the SAME note run one after the other: the last one wins, none is refused", async () => {
@@ -940,8 +547,7 @@ describe("MemoryVault: writes of one owner are serialized", () => {
 
   it("different owners do not wait for each other", async () => {
     const { vault, store, config, otherId, fake } = setupVault();
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    const theirs = memoryVaultFor(store, config, otherId)!;
+    const theirs = memoryVaultFor(store, config, otherId);
     let release!: () => void;
     const held = withVaultWriteLock(store, otherId, () => new Promise<void>((resolve) => (release = resolve)));
     await vault.write("wiki/a.md", "mine");
@@ -994,235 +600,12 @@ describe("MemoryVault: writes of one owner are serialized", () => {
     expect(await message(vault.edit("wiki/a.md", "keep", "kept"))).toBe("STRING_NOT_FOUND");
     expect(fake.dump(ownerId)["wiki/a.md"]).toBe("rewritten");
   });
-
-  it("a write that waited while the home went back to repo writes nothing", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    let release!: () => void;
-    const rollback = withVaultWriteLock(store, ownerId, async () => {
-      await new Promise<void>((resolve) => (release = resolve));
-      store.clearPersonalVault(ownerId);
-    });
-    const pending = message(vault.write("wiki/a.md", "late"));
-    // The lock starts its holder on the next tick.
-    await new Promise((resolve) => setImmediate(resolve));
-    release();
-    await rollback;
-    expect(await pending).toBe(VAULT_HOME_CHANGED);
-    expect(fake.dump(ownerId)).toEqual({});
-    expect(fake.calls).toEqual([]);
-  });
 });
 
-describe("MemoryVault: the deletion ledger", () => {
-  it("remove records the path BEFORE it asks the service", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    await vault.write("wiki/a.md", "x");
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    const seen: { ledger: string[]; callsBefore: string[] }[] = [];
-    fake.beforeNext("read", () => {
-      seen.push({ ledger: store.listVaultDeletes(ownerId), callsBefore: fake.calls.slice(2, -1).map((call) => call.op) });
-    });
-    await vault.remove("./wiki//a.md");
-    // The first thing remove asked the service came after the entry, under the normalized path.
-    expect(seen).toEqual([{ ledger: ["wiki/a.md"], callsBefore: [] }]);
-    expect(fake.dump(ownerId)).toEqual({});
-    // The entry stays until the mirror settles it.
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/a.md"]);
-  });
-
-  it("records a delete of a note that is already gone, and one the service then fails to carry out", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    // Already gone (e.g. the answer of an earlier delete was lost): the clone may still hold the file.
-    await vault.remove("wiki/gone.md");
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/gone.md"]);
-
-    await vault.write("wiki/kept.md", "x");
-    fake.failNext(new MemoryUnavailableError(), { op: "remove" });
-    expect(await failure(vault.remove("wiki/kept.md"))).toBeInstanceOf(MemoryUnavailableError);
-    // Harmless: the note is still in the service, and the mirror deletes only what the service no longer has.
-    expect(fake.dump(ownerId)).toEqual({ "wiki/kept.md": "x" });
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/gone.md", "wiki/kept.md"]);
-  });
-
-  it("records nothing for a path that is not a vault note, and nothing for writes and edits", async () => {
-    const { vault, store, ownerId } = setupVault();
-    expect(await message(vault.remove("skills/x/SKILL.md"))).toBe("INVALID_PATH");
-    await vault.write("wiki/a.md", "one");
-    await vault.edit("wiki/a.md", "one", "two");
-    await vault.read("wiki/a.md");
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-  });
-
-  it("a note Noah writes again is no longer a deletion", async () => {
-    const { vault, fake, store, ownerId } = setupVault();
-    await vault.write("wiki/a.md", "x");
-    await vault.write("wiki/b.md", "y");
-    await vault.remove("wiki/a.md");
-    await vault.remove("wiki/b.md");
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/a.md", "wiki/b.md"]);
-    await vault.write("wiki/a.md", "back");
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/b.md"]);
-    // An edit can only happen on a note that exists: its entry is settled as well.
-    fake.seed(ownerId, "wiki/b.md", "restored elsewhere");
-    await vault.edit("wiki/b.md", "restored", "kept");
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-    // A write whose outcome is unknown settles nothing.
-    await vault.remove("wiki/a.md");
-    fake.failNext(new MemoryUnavailableError(), { op: "put", applied: true });
-    expect(await failure(vault.write("wiki/a.md", "maybe"))).toBeInstanceOf(MemoryUnavailableError);
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/a.md"]);
-  });
-
-  it("a write that waited while the home went back to repo records nothing", async () => {
-    const { vault, store, ownerId } = setupVault();
-    let release!: () => void;
-    const rollback = withVaultWriteLock(store, ownerId, async () => {
-      await new Promise<void>((resolve) => (release = resolve));
-      store.clearPersonalVault(ownerId);
-    });
-    const pending = message(vault.remove("wiki/a.md"));
-    await tick();
-    release();
-    await rollback;
-    expect(await pending).toBe(VAULT_HOME_CHANGED);
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
-  });
-});
-
-describe("MemoryVault: a change whose answer was lost", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  const lost = () => new MemoryUnavailableError("memory service unavailable (put): no answer within 15000 ms", "timeout");
-  const seq = (store: ReturnType<typeof setup>["store"], userId: string) => store.getPersonalVault(userId)!.mirrorSeq;
-
-  it("marks the mirror dirty now and ONCE more about a minute later", async () => {
-    // The fake yields with setImmediate, which stays real; only the re-mark's timer is faked.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { vault, fake, store, ownerId } = setupVault();
-    expect(VAULT_LOST_ANSWER_REMARK_MS).toBe(60_000);
-
-    fake.failNext(lost(), { op: "put", applied: true });
-    expect(await failure(vault.write("wiki/a.md", "landed late"))).toBeInstanceOf(MemoryUnavailableError);
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorSeq: 1 });
-
-    // A mirror pass runs in between, reads the old content and records itself clean.
-    store.recordVaultMirror(ownerId, { ok: true, seq: 1 });
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(false);
-
-    vi.advanceTimersByTime(VAULT_LOST_ANSWER_REMARK_MS - 1);
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: false, mirrorSeq: 1 });
-    vi.advanceTimersByTime(1);
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorSeq: 2 });
-
-    // Once: nothing more follows.
-    store.recordVaultMirror(ownerId, { ok: true });
-    vi.advanceTimersByTime(10 * VAULT_LOST_ANSWER_REMARK_MS);
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: false, mirrorSeq: 2 });
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("covers edit and remove too, and the vault withVaultWrite hands out", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { vault, fake, store, config, ownerId } = setupVault();
-    await vault.write("wiki/a.md", "alpha");
-    const calls: [string, "put" | "remove", () => Promise<unknown>][] = [
-      ["edit", "put", () => vault.edit("wiki/a.md", "alpha", "beta")],
-      ["remove", "remove", () => vault.remove("wiki/a.md")],
-      [
-        "withVaultWrite",
-        "put",
-        () => withVaultWrite(store, config, ownerId, (target) => (target.home === "memory" ? target.vault.write("wiki/b.md", "x") : Promise.resolve(null))),
-      ],
-    ];
-    for (const [name, op, call] of calls) {
-      store.recordVaultMirror(ownerId, { ok: true });
-      const before = seq(store, ownerId);
-      fake.failNext(lost(), { op });
-      expect(await failure(call()), name).toBeInstanceOf(MemoryUnavailableError);
-      expect(seq(store, ownerId), name).toBe(before + 1);
-      vi.advanceTimersByTime(VAULT_LOST_ANSWER_REMARK_MS);
-      expect(seq(store, ownerId), name).toBe(before + 2);
-      expect(vi.getTimerCount(), name).toBe(0);
-    }
-  });
-
-  it("keeps one pending re-mark per owner: a later lost answer pushes it back", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { vault, fake, store, config, ownerId, otherId } = setupVault();
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
-    const theirs = memoryVaultFor(store, config, otherId)!;
-
-    fake.failNext(lost(), { op: "put" });
-    await failure(vault.write("wiki/a.md", "1"));
-    vi.advanceTimersByTime(30_000);
-    fake.failNext(lost(), { op: "put" });
-    await failure(vault.write("wiki/a.md", "2"));
-    fake.failNext(lost(), { op: "put" });
-    await failure(theirs.write("wiki/a.md", "3"));
-    expect(vi.getTimerCount()).toBe(2);
-    expect([seq(store, ownerId), seq(store, otherId)]).toEqual([2, 1]);
-
-    // 60 s after the FIRST lost answer nothing fires; 60 s after the latest, each owner is marked once.
-    vi.advanceTimersByTime(30_000);
-    expect([seq(store, ownerId), seq(store, otherId)]).toEqual([2, 1]);
-    vi.advanceTimersByTime(30_000);
-    expect([seq(store, ownerId), seq(store, otherId)]).toEqual([3, 2]);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("schedules nothing for a refusal, for an outage before anything was sent, or for a success", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { vault, fake, store, ownerId } = setupVault();
-    await vault.write("wiki/a.md", "alpha");
-    fake.failNext(new MemoryRefusedError("wiki_full", 507), { op: "put" });
-    expect(await failure(vault.write("wiki/b.md", "x"))).toBeInstanceOf(MemoryRefusedError);
-    // The read that precedes every change failed: nothing was sent, so nothing can land later.
-    for (const call of [() => vault.write("wiki/a.md", "x"), () => vault.edit("wiki/a.md", "alpha", "x"), () => vault.remove("wiki/a.md")]) {
-      fake.failNext(lost(), { op: "read" });
-      expect(await failure(call())).toBeInstanceOf(MemoryUnavailableError);
-    }
-    expect(vi.getTimerCount()).toBe(0);
-    const before = seq(store, ownerId);
-    vi.advanceTimersByTime(10 * VAULT_LOST_ANSWER_REMARK_MS);
-    expect(seq(store, ownerId)).toBe(before);
-  });
-
-  it("a store closed before the re-mark is due is left alone, without an error", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { vault, fake, store } = setupVault();
-    fake.failNext(lost(), { op: "put" });
-    await failure(vault.write("wiki/a.md", "x"));
-    store.close();
-    expect(() => vi.advanceTimersByTime(VAULT_LOST_ANSWER_REMARK_MS)).not.toThrow();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("the re-mark's timer never keeps the process alive", async () => {
-    const { vault, fake } = setupVault();
-    const timers = vi.spyOn(globalThis, "setTimeout");
-    fake.failNext(lost(), { op: "put" });
-    await failure(vault.write("wiki/a.md", "x"));
-    const scheduled = timers.mock.calls.findIndex((call) => call[1] === VAULT_LOST_ANSWER_REMARK_MS);
-    expect(scheduled).not.toBe(-1);
-    const timer = timers.mock.results[scheduled].value as NodeJS.Timeout;
-    expect(timer.hasRef()).toBe(false);
-    clearTimeout(timer);
-  });
-});
-
-describe("withVaultWrite: the home is decided inside the owner's queue", () => {
-  it("hands a repo-home owner the repo target, a memory-home owner a vault that writes without queueing again", async () => {
-    const { store, config, fake, ownerId, otherId } = setupVault();
-    const repo = await withVaultWrite(store, config, otherId, async (target) => target);
-    expect(repo).toEqual({ home: "repo" });
-
-    const result = await withVaultWrite(store, config, ownerId, async (target) => {
-      if (target.home !== "memory") throw new Error("expected the memory target");
-      const vault: MemoryVaultWriter = target.vault;
+describe("withVaultWrite: one writer at a time per owner", () => {
+  it("hands the owner a vault that writes without queueing again", async () => {
+    const { store, config, fake, ownerId } = setupVault();
+    const result = await withVaultWrite(store, config, ownerId, async (vault: MemoryVaultWriter) => {
       expect(vault.inQueue).toBe(true);
       expect(vault.userId).toBe(ownerId);
       // Several changes in ONE turn of the queue — a move is a write and a remove with nothing in between.
@@ -1234,16 +617,11 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
     });
     expect(result).toEqual({ listed: ["wiki/new.md"], exists: false });
     expect(fake.dump(ownerId)).toEqual({ "wiki/new.md": "alpha gamma" });
-    // The same bookkeeping as the public vault: the mirror is behind, the delete is in the ledger.
-    expect(store.getPersonalVault(ownerId)).toMatchObject({ mirrorDirty: true, mirrorSeq: 4 });
-    expect(store.listVaultDeletes(ownerId)).toEqual(["wiki/old.md"]);
   });
 
   it("the handed-out vault keeps the public vault's errors", async () => {
     const { store, config, fake, ownerId } = setupVault();
-    await withVaultWrite(store, config, ownerId, async (target) => {
-      if (target.home !== "memory") throw new Error("expected the memory target");
-      const { vault } = target;
+    await withVaultWrite(store, config, ownerId, async (vault) => {
       expect(await message(vault.write("README.md", "x"))).toBe("INVALID_PATH");
       expect(await message(vault.edit("wiki/missing.md", "a", "b"))).toBe("NOT_FOUND");
       expect(await message(vault.write("wiki/big.md", "x".repeat(VAULT_NOTE_MAX_BYTES + 1)))).toBe("FILE_TOO_LARGE");
@@ -1254,60 +632,6 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
     expect(fake.dump(ownerId)).toEqual({});
   });
 
-  it("a repo-home write that waited behind a cutover lands in the service, not in the clone", async () => {
-    const { store, config, ownerId } = setup();
-    const fake = createFakeMemoryClient();
-    setMemoryClientForTests(store, fake);
-    expect(vaultHomeOf(store, ownerId)).toBe("repo");
-
-    // The cutover holds the owner's queue while it imports, and flips the home at its end.
-    let finishCutover!: () => void;
-    const cutover = withVaultWriteLock(store, ownerId, async () => {
-      await new Promise<void>((resolve) => (finishCutover = resolve));
-      store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: "abc123" });
-    });
-    await tick();
-
-    // A tool call starts while the home is still `repo`…
-    const cloneWrites: string[] = [];
-    const seen: VaultWriteTarget["home"][] = [];
-    const write = withVaultWrite(store, config, ownerId, async (target) => {
-      seen.push(target.home);
-      if (target.home === "repo") {
-        cloneWrites.push("wiki/a.md");
-        return "clone";
-      }
-      await target.vault.write("wiki/a.md", "written during the cutover");
-      return "service";
-    });
-    await tick();
-    await tick();
-    expect(seen).toEqual([]);
-
-    // …and is carried out after the flip, in the home that is the vault NOW.
-    finishCutover();
-    await cutover;
-    expect(await write).toBe("service");
-    expect(seen).toEqual(["memory"]);
-    expect(cloneWrites).toEqual([]);
-    expect(fake.dump(ownerId)).toEqual({ "wiki/a.md": "written during the cutover" });
-    expect(store.getPersonalVault(ownerId)?.mirrorDirty).toBe(true);
-  });
-
-  it("a memory-home write that waited behind a rollback is handed the repo target", async () => {
-    const { store, config, fake, ownerId } = setupVault();
-    let finishRollback!: () => void;
-    const rollback = withVaultWriteLock(store, ownerId, async () => {
-      await new Promise<void>((resolve) => (finishRollback = resolve));
-      store.clearPersonalVault(ownerId);
-    });
-    await tick();
-    const write = withVaultWrite(store, config, ownerId, async (target) => target.home);
-    finishRollback();
-    await rollback;
-    expect(await write).toBe("repo");
-    expect(fake.calls).toEqual([]);
-  });
 
   it("is the same queue as the public vault's writes and withVaultWriteLock", async () => {
     const { store, config, vault, fake, ownerId } = setupVault();
@@ -1337,15 +661,11 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
 
   it("two owners do not block each other", async () => {
     const { store, config, fake, ownerId, otherId } = setupVault();
-    store.setPersonalVaultMemory(otherId, { sourceRepo: "other/brain", sourceCommit: null });
     let release!: () => void;
     const held = withVaultWrite(store, config, ownerId, () => new Promise<void>((resolve) => (release = resolve)));
     await tick();
     // The other owner's write runs to its end while the first owner's queue is still held.
-    const theirs = await withVaultWrite(store, config, otherId, async (target) => {
-      if (target.home !== "memory") throw new Error("expected the memory target");
-      return target.vault.write("wiki/a.md", "theirs");
-    });
+    const theirs = await withVaultWrite(store, config, otherId, (vault) => vault.write("wiki/a.md", "theirs"));
     expect(theirs).toEqual({ created: true });
     expect(fake.dump(otherId)).toEqual({ "wiki/a.md": "theirs" });
     // …and the first owner's own next write is still waiting.
@@ -1371,7 +691,7 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
           throw boom;
         }),
       ),
-      withVaultWrite(store, config, ownerId, async (target) => (target.home === "memory" ? target.vault.write("wiki/a.md", "x") : null)),
+      withVaultWrite(store, config, ownerId, (vault) => vault.write("wiki/a.md", "x")),
     ]);
     expect(first).toBe(boom);
     expect(second).toEqual({ created: true });
@@ -1381,8 +701,8 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
   it("the handed-out vault stops writing once the callback is over", async () => {
     const { store, config, fake, ownerId } = setupVault();
     let kept: MemoryVaultWriter | null = null;
-    await withVaultWrite(store, config, ownerId, async (target) => {
-      if (target.home === "memory") kept = target.vault;
+    await withVaultWrite(store, config, ownerId, async (handed) => {
+      kept = handed;
     });
     const vault = kept as MemoryVaultWriter | null;
     expect(vault).not.toBeNull();
@@ -1390,20 +710,13 @@ describe("withVaultWrite: the home is decided inside the owner's queue", () => {
     expect(await message(vault!.edit("wiki/a.md", "a", "b"))).toBe(VAULT_WRITER_CLOSED);
     expect(await message(vault!.remove("wiki/a.md"))).toBe(VAULT_WRITER_CLOSED);
     expect(fake.calls).toEqual([]);
-    expect(store.listVaultDeletes(ownerId)).toEqual([]);
     // Reads were never the queue's business.
     expect(await vault!.exists("wiki/a.md")).toBe(false);
   });
 
-  it("an owner in memory on a server without a memory service gets the memory target, whose writes are unavailable", async () => {
+  it("on a server without a memory service the handed-out vault's writes are unavailable", async () => {
     const { store, config, ownerId } = setup();
-    store.setPersonalVaultMemory(ownerId, { sourceRepo: "owner/brain", sourceCommit: null });
-    const error = await failure(
-      withVaultWrite(store, config, ownerId, async (target) => {
-        expect(target.home).toBe("memory");
-        return target.home === "memory" ? target.vault.write("wiki/a.md", "x") : null;
-      }),
-    );
+    const error = await failure(withVaultWrite(store, config, ownerId, (vault) => vault.write("wiki/a.md", "x")));
     expect(error).toBeInstanceOf(MemoryUnavailableError);
     expect((error as MemoryUnavailableError).reason).toBe("not_configured");
   });

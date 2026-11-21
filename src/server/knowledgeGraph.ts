@@ -83,8 +83,8 @@ export async function buildKnowledgeGraph(
 }
 
 /**
- * Notes that are not files of a directory — the personal vault of an owner
- * whose vault lives in the memory service.
+ * Notes that are not files of a directory — an owner's personal vault, which
+ * lives in the memory service.
  */
 export interface KnowledgeNoteSource {
   /** Every note of the vault (any order). */

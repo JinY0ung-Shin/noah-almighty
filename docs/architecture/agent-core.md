@@ -130,10 +130,12 @@ sends none, so nothing joins. Policy/columns → [`secrets-ssh.md`](secrets-ssh.
   `buildPiTurnPreamble` in the turn input; live numbers (the pending knowledge-request count, the 할 일 counts,
   the KST date) belong in `describe_system` or tool results (`/todo` carries its date in the input).
   A fact that holds for a conversation but can change between conversations is stated "as of this
-  conversation's start", with the live one in `describe_system`: the personal vault's home
-  (`AgentRequest.vaultHome`, stamped only as `"memory"`; the mirror's state and the service's reachability are
-  `describe_system`-only) → [`repo-knowledge.md`](repo-knowledge.md) "Self-knowledge". The instruction next to
-  such a fact must stay right if the fact changes mid-conversation ("commit after writing" does, for both homes).
+  conversation's start", with the live one in `describe_system` (the team size is one). The personal vault
+  needs no such fact: where it lives (the memory service) and how a note is saved (when written, nothing to
+  commit) are the same for every owner and ride the prompt as standing text (`vaultMemoryHomeParagraph`);
+  whether the service answers right now is `describe_system`-only →
+  [`repo-knowledge.md`](repo-knowledge.md) "Self-knowledge". The instruction next to a frozen fact must stay
+  right if the fact changes mid-conversation.
 - **Interactive-only capabilities gate on BOTH `headless` and `externalTaskApi`** (and never consultations), the way
   `shareLinkToolActive` does in `runCapabilities.ts` — an API-submitted turn has no human at the keyboard. See
   [`avatar-task-api.md`](avatar-task-api.md) "Provenance".

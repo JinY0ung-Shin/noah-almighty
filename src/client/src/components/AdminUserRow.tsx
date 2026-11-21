@@ -61,6 +61,8 @@ export default function AdminUserRow({ user, reload }: AdminUserRowProps) {
 
   const isMe = user.id === appState.user?.id;
   const isAdmin = user.roles?.includes("admin");
+  // Single sign-on only: this account still logs in with its built-in password.
+  const passwordNotMoved = Boolean(appState.bootstrap?.sso && user.builtInPassword);
   const visibilityDesc = VISIBILITY_OPTIONS.find((o) => o.value === user.visibility)?.desc || "";
   const userBaseId = user.id.replace(/[^a-zA-Z0-9_-]/g, "-");
   const detailId = `admin-user-detail-${userBaseId}`;
@@ -230,6 +232,11 @@ export default function AdminUserRow({ user, reload }: AdminUserRowProps) {
             {/* 팀 공개가 기본값이라 태그를 달지 않고, 비공개일 때만 표시합니다. */}
             {user.visibility === "private" && <span className="tag">비공개</span>}
             {user.suspended && <span className="tag danger">정지</span>}
+            {passwordNotMoved && (
+              <span className="tag" title="이 계정은 다음 로그인 때 비밀번호가 통합 로그인으로 옮겨집니다">
+                비밀번호 미이전
+              </span>
+            )}
             {user.activeSessions ? <span className="tag read">세션 {user.activeSessions}</span> : null}
             {isMe && <span className="tag">나</span>}
           </div>

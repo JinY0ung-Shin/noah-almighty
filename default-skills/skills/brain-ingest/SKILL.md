@@ -1,6 +1,6 @@
 ---
 name: brain-ingest
-description: Capture a durable fact, decision, preference, or source into the personal knowledge repo's raw/ capture area, then commit. Use whenever the owner states something worth remembering long-term. Works on the personal repo (mcp__repo__*) only — the second brain is personal.
+description: Capture a durable fact, decision, preference, or source into the personal brain's raw/ capture area. Use whenever the owner states something worth remembering long-term. Works on the personal repo (mcp__repo__*) only — the second brain is personal.
 ---
 
 # brain-ingest — capture into the second brain
@@ -14,7 +14,7 @@ a useful source/link, a definition. Do NOT capture transient chit-chat or anythi
 not actually say. Never invent facts.
 
 ## Scope
-- **Personal repo:** `mcp__repo__write_file` then `mcp__repo__commit`.
+- **Personal brain:** `mcp__repo__write_file` — a brain note is saved when it is written.
 - **Personal only:** this skill writes the owner's OWN repo. The team brain is a separate wiki
   every teammate writes through cards — this skill never writes it (its `raw/`/`wiki/` layout is Noah's, not this repo's).
 - **Which brain:** follow the Brain policy (`mcp__system__read_manual` topic `brain-policy`) — PERSONAL KNOWLEDGE, WHERE IT GOES, ONE FACT
@@ -39,9 +39,8 @@ not actually say. Never invent facts.
    changed to Y on <date>" / "기존 … 였으나 … 로 변경" narrative to a `wiki/` note: the `raw/` file
    you just wrote carries the date and the old context, and brain-lint deletes such narrative on
    sight.
-4. **Always commit** after writing (`mcp__repo__commit`) — the commit is what pushes the capture to
-   the repository. Read each write's tool result before you report: a result that says "Not committed
-   yet" is NOT saved until `mcp__repo__commit` succeeds; a result that says the vault note "is saved
-   now" is saved, and the commit pushes its copy. If the commit fails, say exactly what is saved and
-   what is not instead of calling the capture done or lost.
+4. **Read each write's tool result before you report.** A result that says the vault note "is saved
+   now" is saved — there is nothing to commit for a brain note. A result that says "Not committed
+   yet" (a repository file, not a brain note) is NOT saved until `mcp__repo__commit` succeeds. If a
+   write fails, say exactly what is saved and what is not instead of calling the capture done or lost.
 5. Confirm briefly what you captured and where.

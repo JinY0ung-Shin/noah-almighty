@@ -19,8 +19,11 @@
 #   copies  it → $PI_GATEWAY_SECRETS/noah/pi_gateway_admin_api_key, uid 1000, 0400, the same way: Noah serves
 #           pi's admin panel at /admin to Noah admins and injects this key (re-run after rotating pi's admin key)
 #   copies  $PI_GATEWAY_SECRETS/memory/api_key → $PI_GATEWAY_SECRETS/noah/pi_memory_api_key, uid 1000, 0400:
-#           Noah's server calls pi's memory service itself (personal vaults). pi's own script creates the
-#           service's key; without Noah's copy the stack does not start (compose mounts it as a secret)
+#           Noah's server calls pi's memory service itself (the home of every personal vault). pi's own script
+#           creates the service's key; without Noah's copy the stack does not start (compose mounts it as a secret)
+#   creates $PI_GATEWAY_SECRETS/keycloak/{keycloak.env (uid 1000, 0400),db_password (root)} and Noah's copy
+#           $PI_GATEWAY_SECRETS/noah/keycloak_client_secret (uid 1000, 0400), once: the bundled Keycloak's
+#           secrets (docker-compose.keycloak.yml). Existing values are kept — never regenerated
 #   adds    PI_GATEWAY_HOME, PI_GATEWAY_SECRETS to Noah's .env (only when missing)
 #   checks  an EXISTING noah-almighty-data volume's root is uid 1000 (#79) — detection only: it fails with
 #           the repair to run (README.md "Upgrade" → "Data volume ownership"), it never changes the volume
@@ -103,6 +106,50 @@ MEMORY_KEY="$SECRETS/memory/api_key"
   || fail "$MEMORY_KEY is missing or empty after pi-gateway's setup-host.sh — is the pi-gateway checkout older than its memory service? (git submodule update --init)"
 DEST="$SECRETS/noah/pi_memory_api_key"
 copy_for_noah "$MEMORY_KEY"
+
+# Keycloak (docker-compose.keycloak.yml): its secrets are made here once and kept — a changed value would
+# no longer match what Keycloak and its database stored on their first start. Made whether or not the
+# overlay is in use (three small files), so turning it on later needs no other step than this script.
+install -d -o 0 -g 0 -m 0700 "$SECRETS/keycloak"
+KEYCLOAK_ENV="$SECRETS/keycloak/keycloak.env"
+KEYCLOAK_DB_PASSWORD="$SECRETS/keycloak/db_password"
+# keycloak.env is read INSIDE Keycloak's container (mounted as a secret), by the uid Keycloak runs as.
+KEYCLOAK_UID=1000
+if [ -s "$KEYCLOAK_ENV" ] && [ -s "$KEYCLOAK_DB_PASSWORD" ]; then
+  chown "$KEYCLOAK_UID:$KEYCLOAK_UID" "$KEYCLOAK_ENV"; chmod 0400 "$KEYCLOAK_ENV"
+  chown 0:0 "$KEYCLOAK_DB_PASSWORD"; chmod 0400 "$KEYCLOAK_DB_PASSWORD"
+  echo "keep   $KEYCLOAK_ENV"
+  echo "keep   $KEYCLOAK_DB_PASSWORD"
+else
+  [ ! -e "$KEYCLOAK_ENV" ] && [ ! -e "$KEYCLOAK_DB_PASSWORD" ] \
+    || fail "$SECRETS/keycloak holds only part of Keycloak's secrets — restore the missing file from a backup (a new value would not match the existing database)"
+  rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+  db_password="$(rand)"
+  # In a subshell: the tight umask must not outlive these two files (the .env created below stays readable).
+  (
+  umask 077
+  printf '%s\n' "$db_password" > "$KEYCLOAK_DB_PASSWORD"
+  {
+    printf 'KC_DB_PASSWORD=%s\n' "$db_password"
+    # Keycloak's own first administrator (its `master` realm) — for the operator, through
+    # `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh`. Noah never uses it.
+    printf 'KC_BOOTSTRAP_ADMIN_USERNAME=%s\n' "keycloak-admin"
+    printf 'KC_BOOTSTRAP_ADMIN_PASSWORD=%s\n' "$(rand)"
+    # The `noah` client's secret, read by the realm import (docker/keycloak/noah-realm.json).
+    printf 'NOAH_KEYCLOAK_CLIENT_SECRET=%s\n' "$(rand)"
+  } > "$KEYCLOAK_ENV"
+  )
+  chown "$KEYCLOAK_UID:$KEYCLOAK_UID" "$KEYCLOAK_ENV"; chmod 0400 "$KEYCLOAK_ENV"; chmod 0400 "$KEYCLOAK_DB_PASSWORD"
+  echo "create $KEYCLOAK_ENV"
+  echo "create $KEYCLOAK_DB_PASSWORD"
+fi
+# Noah's copy of the client secret (the value after `=`; never printed).
+KEYCLOAK_CLIENT_SECRET_TMP="$(mktemp "$SECRETS/noah/.tmp.XXXXXX")"
+sed -n 's/^NOAH_KEYCLOAK_CLIENT_SECRET=//p' "$KEYCLOAK_ENV" | tail -n 1 > "$KEYCLOAK_CLIENT_SECRET_TMP"
+[ -s "$KEYCLOAK_CLIENT_SECRET_TMP" ] || { rm -f "$KEYCLOAK_CLIENT_SECRET_TMP"; fail "$KEYCLOAK_ENV has no NOAH_KEYCLOAK_CLIENT_SECRET"; }
+DEST="$SECRETS/noah/keycloak_client_secret"
+copy_for_noah "$KEYCLOAK_CLIENT_SECRET_TMP"
+rm -f "$KEYCLOAK_CLIENT_SECRET_TMP"
 
 touch "$ENV_FILE"
 add_env() {

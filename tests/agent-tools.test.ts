@@ -72,7 +72,9 @@ import {
   type SystemToolsContext,
 } from "../src/server/agent/systemTools.js";
 import { buildBrainTools, BRAIN_SERVER_NAME, BRAIN_TOOL_NAMES } from "../src/server/agent/brainTools.js";
-import { NO_CHANGES, NO_GIT_TOKEN } from "../src/server/agent/repoToolKit.js";
+import { NO_CHANGES, NO_GIT_TOKEN, VAULT_NOTES_NEED_NO_COMMIT } from "../src/server/agent/repoToolKit.js";
+import { setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 import { normalizeWikiPath } from "../src/server/agent/brainSearch.js";
 import {
   buildConfluenceTools,
@@ -583,10 +585,14 @@ describe("server proxy self-state", () => {
 
 describe("repo tools (knowledge-repo management)", () => {
   // A store + owner pointed at a local bare git remote, so commit/push works
-  // offline. Returns the config so tools can resolve the clone path.
+  // offline. Returns the config so tools can resolve the clone path. The
+  // owner's vault notes (CLAUDE.md, wiki/, raw/) live in the memory service
+  // (`memory`, the in-process fake) — never in that clone.
   function setup(dir: string) {
     const dataDir = path.join(tempDir, dir);
     const { store, config } = createServices({ dataDir, agentRuntime: "local", sessionSecret: "t" });
+    const memory = createFakeMemoryClient();
+    setMemoryClientForTests(store, memory);
     const owner = store.createUser({ username: "owner", displayName: "Owner", password: "password123" });
     // A bare remote + an initial commit so `ensureClone` has a branch to track.
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
@@ -599,7 +605,7 @@ describe("repo tools (knowledge-repo management)", () => {
     store.setKnowledgeRepo(owner.id, remote, "main");
     store.setGitToken(owner.id, "tok"); // gate for commit; local file remote ignores it
     const owns = { id: owner.id, username: "owner", displayName: "Owner" };
-    return { store, config, ownerId: owner.id, owner: owns };
+    return { store, config, ownerId: owner.id, owner: owns, memory };
   }
 
   function ownerTools(s: ReturnType<typeof setup>) {
@@ -630,13 +636,18 @@ describe("repo tools (knowledge-repo management)", () => {
       onMemory: (e) => void events.push(e),
     });
 
-    // wiki/ write → "add"; wiki/ edit → "update".
-    await callTool(tools, "write_file", { path: "wiki/people/kim.md", content: "# Kim\n" });
-    await callTool(tools, "edit_file", {
+    // wiki/ write → "add"; wiki/ edit → "update". Both are saved in the memory service as they are made.
+    const added = await callTool(tools, "write_file", { path: "wiki/people/kim.md", content: "# Kim\n" });
+    expect(added.isError).toBeFalsy();
+    expect(added.content[0].text).toContain("is saved now");
+    expect(added.content[0].text).not.toContain("Not committed yet");
+    expect(s.memory.dump(s.ownerId)).toEqual({ "wiki/people/kim.md": "# Kim\n" });
+    const updated = await callTool(tools, "edit_file", {
       path: "wiki/people/kim.md",
       old_string: "# Kim",
       new_string: "# Kim (dev)",
     });
+    expect(updated.isError).toBeFalsy();
     // Outside wiki/ → no notice (a skill edit is not a memory).
     await callTool(tools, "write_file", { path: "notes/misc.md", content: "x" });
     // Failed edit under wiki/ (no match) → no notice.
@@ -651,6 +662,32 @@ describe("repo tools (knowledge-repo management)", () => {
       { action: "add", path: "wiki/people/kim.md" },
       { action: "update", path: "wiki/people/kim.md" },
     ]);
+    // The memory is in the service (the failed edit changed nothing) and is no file of the clone.
+    expect(s.memory.dump(s.ownerId)).toEqual({ "wiki/people/kim.md": "# Kim (dev)\n" });
+    const clone = knowledgeClonePath(s.ownerId, s.config);
+    expect(fs.existsSync(path.join(clone, "wiki"))).toBe(false);
+    expect(fs.readFileSync(path.join(clone, "notes/misc.md"), "utf8")).toBe("x");
+  });
+
+  it("raises no memory notice when the memory service did not take the write", async () => {
+    const s = setup("rt-memory-down");
+    const events: Array<{ action: string; path: string }> = [];
+    const tools = buildRepoTools(s.store, {
+      avatarUserId: s.ownerId,
+      owner: s.owner,
+      viewerIsOwner: true,
+      config: s.config,
+      onMemory: (e) => void events.push(e),
+    });
+    // A server with no memory service: a vault note has no other home, so the write fails — and says why.
+    setMemoryClientForTests(s.store, null);
+    const res = await callTool(tools, "write_file", { path: "wiki/people/kim.md", content: "# Kim\n" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0].text).toContain("The memory service");
+    expect(res.content[0].text).toContain("is unavailable right now");
+    expect(events).toEqual([]);
+    // Nothing was written into the clone instead.
+    expect(fs.existsSync(path.join(knowledgeClonePath(s.ownerId, s.config), "wiki"))).toBe(false);
   });
 
   it("edit_file replaces an exact snippet without resending the whole file, and reports the recovery path on misses", async () => {
@@ -4394,13 +4431,34 @@ describe("repoToolKit commit messages", () => {
       viewerIsOwner: true,
       config,
     });
+    const memory = createFakeMemoryClient();
+    setMemoryClientForTests(store, memory);
     // list_files clones the working tree without dirtying it; commit then finds
     // nothing to commit (commitAndPush operates on the already-synced clone).
-    await callTool(tools, "list_files", {});
+    expect((await callTool(tools, "list_files", {})).isError).toBeFalsy();
     const res = await callTool(tools, "commit", { message: "m" });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toBe(NO_CHANGES);
+    // NO_CHANGES verbatim, then the sentence that says why a vault note is not among the changes.
+    expect(res.content[0].text).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
     expect(NO_CHANGES).toBe("There are no changes to commit.");
+    expect(VAULT_NOTES_NEED_NO_COMMIT).toBe(
+      "Vault notes (CLAUDE.md and the .md notes under wiki/ and raw/) are saved in the memory service the moment they are written — there is nothing to commit for them, and they are not copied to the repository.",
+    );
+
+    // A vault note written just before changes nothing about that: it is saved in the service,
+    // nothing is staged in the clone for it, and the remote does not receive it.
+    const note = await callTool(tools, "write_file", { path: "wiki/concepts/deploy.md", content: "# Deploy\n" });
+    expect(note.isError).toBeFalsy();
+    expect(note.content[0].text).toBe(
+      "Saved the file wiki/concepts/deploy.md. (Vault note: it is saved now — vault notes live in the memory service, not in the repository. There is nothing to commit for it.)",
+    );
+    expect(memory.dump(owner.id)).toEqual({ "wiki/concepts/deploy.md": "# Deploy\n" });
+    const clone = knowledgeClonePath(owner.id, config);
+    expect(execFileSync("git", ["-C", clone, "status", "--porcelain"]).toString()).toBe("");
+    const again = await callTool(tools, "commit", { message: "m" });
+    expect(again.isError).toBeFalsy();
+    expect(again.content[0].text).toBe(`${NO_CHANGES} ${VAULT_NOTES_NEED_NO_COMMIT}`);
+    expect(execFileSync("git", ["-C", remote, "ls-tree", "-r", "--name-only", "main"]).toString()).not.toContain("wiki/");
   });
 
 });

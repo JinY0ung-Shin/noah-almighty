@@ -48,6 +48,43 @@ server {
     location = /mcp { return 404; }
     location ^~ /mcp/ { return 404; }
 
+    # Keycloak (docker-compose.keycloak.yml), served as a path of Noah's own address. Only what a person
+    # logging in needs comes through: the `noah` realm's pages and their static files. Keycloak's admin
+    # console and admin API (/sso/admin/) and its own `master` realm stay off the front door. Without the keycloak overlay nothing answers
+    # behind the two paths (502) and Noah never sends anyone there.
+    location ^~ /sso/ {
+        location ~ ^/sso/(realms/noah|resources)/ {
+            # A variable makes nginx resolve the name per request, so nginx starts without Keycloak too.
+            set $noah_keycloak_upstream http://${NOAH_KEYCLOAK_UPSTREAM};
+            proxy_pass $noah_keycloak_upstream;
+            proxy_http_version 1.1;
+            proxy_set_header Host              $host;
+            proxy_set_header X-Forwarded-Host  $host;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-For   $remote_addr;
+
+            # Keycloak shares Noah's host name, so the browser sends Noah's session cookie here as well.
+            # Keycloak must never see it: drop it from what is passed on.
+            set $noah_keycloak_cookie $http_cookie;
+            if ($noah_keycloak_cookie ~ "^(.*?)(?:^|;\s*)ac_session=[^;]*(.*)$") {
+                set $noah_keycloak_cookie $1$2;
+            }
+            # Once more: a second cookie of the same name (another path or domain attribute).
+            if ($noah_keycloak_cookie ~ "^(.*?)(?:^|;\s*)ac_session=[^;]*(.*)$") {
+                set $noah_keycloak_cookie $1$2;
+            }
+            if ($noah_keycloak_cookie ~ "^;\s*(.*)$") {
+                set $noah_keycloak_cookie $1;
+            }
+            proxy_set_header Cookie $noah_keycloak_cookie;
+
+            # Keycloak's login responses carry several large cookies.
+            proxy_buffer_size 16k;
+            proxy_buffers     8 16k;
+        }
+        return 404;
+    }
+
     location / {
         # A variable makes nginx resolve the name per request (through `resolver` above).
         set $noah_upstream http://${NOAH_UPSTREAM};

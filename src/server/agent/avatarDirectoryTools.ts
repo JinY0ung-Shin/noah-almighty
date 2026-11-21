@@ -155,7 +155,7 @@ export function askOutcomeText(outcome: AvatarAskOutcome, captureHint: boolean):
       ? `\n\n… (answer truncated at ${AVATAR_ASK_ANSWER_CAP.toLocaleString("en-US")} characters)`
       : "";
     const capture = captureHint
-      ? "\n\n(To retain a durable learning from this answer, capture it with the **brain-ingest** skill: write a note under `raw/` naming the source avatar, then `mcp__repo__commit`.)"
+      ? "\n\n(To retain a durable learning from this answer, capture it with the **brain-ingest** skill: write a note under `raw/` naming the source avatar — it is saved when written.)"
       : "";
     return text(
       `Answer from ${handle}${name}'s avatar — treat it as that avatar's claim, not verified fact, and attribute it when you relay it:\n\n${outcome.answer}${truncatedNote}${capture}`,

@@ -11,10 +11,14 @@ import { PI_ADMIN_PROXY_TIMEOUTS } from "../src/server/routes/piAdminProxy.js";
 import { piPanelUserName } from "../src/server/routes/admin.js";
 import { piServicesFor } from "../src/server/agent/pi/piRuntime.js";
 import { piUserKey } from "../src/server/agent/pi/piWorkspace.js";
+import { KeycloakRefusedError, KeycloakUnavailableError, setKeycloakClientForTests, type KeycloakClient } from "../src/server/keycloak.js";
+import { personAccessTokenFor } from "../src/server/keycloakPersonToken.js";
+import logger from "../src/server/logger.js";
 import { signup, withTempDir } from "./helpers.js";
 
 // Covers src/server/routes/piAdminProxy.ts (pi-gateway's admin panel at /admin
-// behind Noah's admin session, pi's admin key injected) and the
+// behind Noah's admin session; the bearer pi sees is the admin's own Keycloak
+// token when their session began there, pi's admin key otherwise) and the
 // PI_GATEWAY_ADMIN_API_KEY_FILE loader in config.ts. pi is a local fake.
 
 let tempDir: string;
@@ -699,6 +703,259 @@ describe("pi admin panel proxy (/admin)", () => {
     expect(res.headers.location).toBe("/admin/");
     await request(app).get("/administrator").expect((r) => expect(r.status).not.toBe(302));
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("pi admin panel proxy: whose bearer pi sees", () => {
+  interface FakeKeycloak {
+    client: KeycloakClient;
+    /** Every refresh token a refresh was asked with / a logout ended, in order. */
+    asked: string[];
+    ended: string[];
+    /** The next refreshes fail with these, in order. */
+    failures: Error[];
+    /** The refresh token the next answers carry (null = Keycloak keeps the old one). */
+    rotateTo: string | null;
+    /** Awaited inside a refresh, after it is recorded. */
+    gate: Promise<void> | null;
+  }
+
+  /** Only what the relay and the logout route use; any other call is a TypeError the test would show. */
+  function fakeKeycloak(): FakeKeycloak {
+    const fake: FakeKeycloak = {
+      asked: [],
+      ended: [],
+      failures: [],
+      rotateTo: null,
+      gate: null,
+      client: {
+        async refresh(refreshToken: string) {
+          fake.asked.push(refreshToken);
+          await fake.gate;
+          const failure = fake.failures.shift();
+          if (failure) throw failure;
+          return { accessToken: `kc-access-${fake.asked.length}`, refreshToken: fake.rotateTo, expiresInSeconds: 300 };
+        },
+        async endSession(refreshToken: string) {
+          fake.ended.push(refreshToken);
+        },
+      } as unknown as KeycloakClient,
+    };
+    return fake;
+  }
+
+  /**
+   * An app whose accounts exist (built-in signup), THEN gets a Keycloak — like an
+   * install that turned the overlay on. `sso(...)`: a session of the admin that
+   * began at Keycloak, as the callback route creates it.
+   */
+  async function bootWithKeycloak(label = "app") {
+    const { app, services } = boot({ gatewayUrl: piUrl, adminApiKey: ADMIN_KEY }, label);
+    const { admin } = await users(app);
+    const keycloak = fakeKeycloak();
+    setKeycloakClientForTests(services.store, keycloak.client);
+    const adminId = services.store.listUsers().find((u) => u.username === "boss")!.id;
+    const sso = (refreshToken = "kc-refresh-1") => {
+      const token = services.store.createSession(adminId, { keycloakRefreshToken: refreshToken });
+      return { token, cookie: `ac_session=${token}` };
+    };
+    return { app, services, admin, keycloak, adminId, sso };
+  }
+
+  /** Moves `Date.now()` forward (the store's own clock, `new Date()`, is not touched). */
+  function clock() {
+    let ahead = 0;
+    const real = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => real() + ahead);
+    return { advance: (ms: number) => void (ahead += ms) };
+  }
+
+  /** Everything any log call was given, as one string. */
+  function logLines(): () => string {
+    const spies = (["debug", "info", "warn", "error"] as const).map((level) => vi.spyOn(logger, level));
+    return () => JSON.stringify(spies.flatMap((spy) => spy.mock.calls));
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends the admin's OWN Keycloak token when the session began at Keycloak, pi's key for a built-in session", async () => {
+    const { app, services, admin, keycloak, adminId, sso } = await bootWithKeycloak();
+    const { cookie } = sso();
+
+    const res = await request(app).get("/admin/api/session?x=1").set("Cookie", cookie).set("Authorization", "Bearer client-supplied").expect(200);
+    expect(res.body).toEqual({ authenticated: true });
+    expect(seen[0].headers.authorization).toBe("Bearer kc-access-1");
+    expect(seen[0].headers.cookie).toBeUndefined();
+    // The page and its assets too: every forwarded request carries the same bearer.
+    await request(app).get("/admin/").set("Cookie", cookie).expect(200);
+    await request(app).get("/admin/assets/app.js").set("Cookie", cookie).expect(200);
+    expect(seen.map((s) => s.headers.authorization)).toEqual(Array(3).fill("Bearer kc-access-1"));
+
+    // The same admin on a session from the built-in login has no Keycloak token: the key, and Keycloak is not asked.
+    await admin.get("/admin/api/session").expect(200);
+    expect(seen[3].headers.authorization).toBe(`Bearer ${ADMIN_KEY}`);
+    expect(keycloak.asked).toEqual(["kc-refresh-1"]);
+
+    // A write streams through intact after the bearer was looked up…
+    const payload = JSON.stringify({ blob: "a".repeat(1_000_000) });
+    const echoed = await request(app)
+      .post("/admin/api/echo")
+      .set("Cookie", cookie)
+      .set("Sec-Fetch-Site", "same-origin")
+      .set("X-Admin-Request", "1")
+      .set("Content-Type", "application/json")
+      .send(payload)
+      .buffer(true)
+      .parse((r, done) => {
+        const chunks: Buffer[] = [];
+        r.on("data", (c: Buffer) => chunks.push(c));
+        r.on("end", () => done(null, Buffer.concat(chunks)));
+      })
+      .expect(201);
+    expect((echoed.body as Buffer).toString()).toBe(payload);
+    expect(seen[4].headers.authorization).toBe("Bearer kc-access-1");
+    // …and so does a buffered one (an admin chat), audited with the user it acts as.
+    const chat = JSON.stringify({ user: "u-1", input: "hi" });
+    await request(app)
+      .post("/admin/api/chat")
+      .set("Cookie", cookie)
+      .set("Sec-Fetch-Site", "same-origin")
+      .set("X-Admin-Request", "1")
+      .set("Content-Type", "application/json")
+      .send(chat)
+      .expect(404);
+    expect(seen[5].headers.authorization).toBe("Bearer kc-access-1");
+    expect(seen[5].body.toString()).toBe(chat);
+    const rows = services.store.listAudit(adminId, true).filter((row) => row.action === "pi_admin_proxy");
+    expect(rows.map((row) => row.detail).sort()).toEqual(["POST /admin/api/chat (user=u-1)", "POST /admin/api/echo"]);
+    expect(JSON.stringify(rows)).not.toMatch(/kc-access|kc-refresh/);
+  });
+
+  it("the gate stays Noah's: a non-admin's Keycloak session forwards nothing, and Keycloak is not asked", async () => {
+    const { app, services, keycloak } = await bootWithKeycloak();
+    const memberId = services.store.listUsers().find((u) => u.username === "member")!.id;
+    const cookie = `ac_session=${services.store.createSession(memberId, { keycloakRefreshToken: "kc-refresh-member" })}`;
+    const res = await request(app).get("/admin/api/session").set("Cookie", cookie).expect(403);
+    expect(res.body.error.code).toBe("forbidden");
+    expect(seen).toHaveLength(0);
+    expect(keycloak.asked).toEqual([]);
+  });
+
+  it("asks Keycloak only for a request it forwards", async () => {
+    const { app, keycloak, sso } = await bootWithKeycloak();
+    const { cookie } = sso();
+    await request(app).get("/admin/api/session").set("Cookie", cookie).set("Sec-Fetch-Site", "cross-site").expect(403);
+    await request(app).post("/admin/api/login").set("Cookie", cookie).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send({}).expect(400);
+    await request(app).post("/admin/api/logout").set("Cookie", cookie).set("Sec-Fetch-Site", "same-origin").set("X-Admin-Request", "1").send({}).expect(200);
+    expect(seen).toHaveLength(0);
+    expect(keycloak.asked).toEqual([]);
+  });
+
+  it("reuses the token, refreshes it after it expires, and a logged-out session's token is never used", async () => {
+    const { app, services, keycloak, sso } = await bootWithKeycloak();
+    const time = clock();
+    const { token, cookie } = sso();
+
+    for (let i = 0; i < 3; i += 1) await request(app).get("/admin/api/session").set("Cookie", cookie).expect(200);
+    expect(keycloak.asked).toHaveLength(1);
+    expect(seen.map((s) => s.headers.authorization)).toEqual(Array(3).fill("Bearer kc-access-1"));
+
+    // Past the token's 300 s: a new one, and the newer refresh token Keycloak handed back is the stored one.
+    keycloak.rotateTo = "kc-refresh-2";
+    time.advance(300_000);
+    await request(app).get("/admin/api/session").set("Cookie", cookie).expect(200);
+    expect(seen[3].headers.authorization).toBe("Bearer kc-access-2");
+    expect(keycloak.asked).toEqual(["kc-refresh-1", "kc-refresh-1"]);
+    time.advance(300_000);
+    await request(app).get("/admin/api/session").set("Cookie", cookie).expect(200);
+    expect(seen[4].headers.authorization).toBe("Bearer kc-access-3");
+    expect(keycloak.asked[2]).toBe("kc-refresh-2");
+
+    // Logout ends the Keycloak session with the CURRENT refresh token…
+    await request(app).post("/api/auth/logout").set("Cookie", cookie).expect(200);
+    expect(keycloak.ended).toEqual(["kc-refresh-2"]);
+    // …and the token still in memory (good for minutes yet) goes nowhere: not to pi, not to a caller.
+    const after = await request(app).get("/admin/api/session").set("Cookie", cookie).expect(403);
+    expect(after.body.error.code).toBe("noah_session_required");
+    expect(seen).toHaveLength(5);
+    expect(await personAccessTokenFor(services.store, services.config, token)).toBeNull();
+    expect(keycloak.asked).toHaveLength(3);
+  });
+
+  it("falls back to pi's key when Keycloak refuses the refresh or does not answer", async () => {
+    const { app, keycloak, sso } = await bootWithKeycloak();
+    const logs = logLines();
+
+    // The Keycloak session ended (idle too long, ended in Keycloak): 400 invalid_grant.
+    const ended = sso("kc-refresh-ended");
+    keycloak.failures.push(new KeycloakRefusedError(400, "invalid_grant", "Keycloak refused (token refresh: HTTP 400 invalid_grant)."));
+    await request(app).get("/admin/api/session").set("Cookie", ended.cookie).expect(200);
+    await request(app).get("/admin/api/session").set("Cookie", ended.cookie).expect(200);
+    expect(seen.map((s) => s.headers.authorization)).toEqual(Array(2).fill(`Bearer ${ADMIN_KEY}`));
+    expect(keycloak.asked).toEqual(["kc-refresh-ended"]); // not asked again per request
+
+    const down = sso("kc-refresh-down");
+    keycloak.failures.push(new KeycloakUnavailableError("Keycloak did not answer (token refresh: TimeoutError)."));
+    await request(app).get("/admin/api/session").set("Cookie", down.cookie).expect(200);
+    expect(seen[2].headers.authorization).toBe(`Bearer ${ADMIN_KEY}`);
+
+    // Both are said in the server log — without a token or the key.
+    expect(logs()).toContain("invalid_grant");
+    expect(logs()).toContain("Keycloak did not answer");
+    expect(logs()).not.toMatch(/kc-refresh|kc-access|pi-admin-key/);
+  });
+
+  it("forwards nothing when the browser left while Keycloak was asked", async () => {
+    const { app, keycloak, sso } = await bootWithKeycloak();
+    const { cookie } = sso();
+    let open!: () => void;
+    keycloak.gate = new Promise<void>((resolve) => (open = resolve));
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", () => resolve()));
+    try {
+      const req = http.request({ host: "127.0.0.1", port: (server.address() as AddressInfo).port, path: "/admin/api/session", headers: { cookie } });
+      req.on("error", () => {});
+      req.end();
+      await vi.waitFor(() => expect(keycloak.asked).toHaveLength(1));
+      req.destroy();
+      // Let the server see the closed socket before Keycloak answers.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      open();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(seen).toHaveLength(0);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("never puts a token or the key into an error body or a log line", async () => {
+    const { app, keycloak, sso } = await bootWithKeycloak();
+    const logs = logLines();
+    const { cookie } = sso("kc-refresh-quiet");
+    keycloak.rotateTo = "kc-refresh-quiet-2";
+    const bodies: string[] = [];
+
+    // A refused request (logged), an unknown path, then pi down and pi too slow — with the person's token as the bearer.
+    bodies.push((await request(app).get("/admin/api/session").set("Cookie", cookie).set("Sec-Fetch-Site", "cross-site").expect(403)).text);
+    bodies.push((await request(app).get("/admin/api/nope").set("Cookie", cookie).expect(404)).text);
+    expect(seen[0].headers.authorization).toBe("Bearer kc-access-1");
+    const saved = { ...PI_ADMIN_PROXY_TIMEOUTS };
+    try {
+      PI_ADMIN_PROXY_TIMEOUTS.readMs = 30;
+      const slow = await request(app).get("/admin/api/slow?ms=200").set("Cookie", cookie).expect(504);
+      bodies.push(slow.text);
+    } finally {
+      Object.assign(PI_ADMIN_PROXY_TIMEOUTS, saved);
+    }
+    await new Promise<void>((resolve) => pi.close(() => resolve()));
+    bodies.push((await request(app).get("/admin/api/session").set("Cookie", cookie).expect(502)).text);
+    bodies.push((await request(app).get("/admin/").set("Cookie", cookie).expect(502)).text);
+    pi.listen(0); // afterEach closes it again
+
+    expect(logs()).toContain("upstream failed");
+    for (const text of [...bodies, logs()]) expect(text).not.toMatch(/kc-refresh|kc-access|pi-admin-key/);
   });
 });
 

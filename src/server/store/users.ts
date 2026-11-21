@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { hashPasswordSync, hashToken, verifyPassword } from "../auth.js";
+import { decryptSecret, encryptSecret } from "../crypto.js";
 import { INTERNAL_GIT_TOKEN_SECRET_NAME } from "../gitCredentials.js";
 import { normalizeExperimentalFeatures } from "../experimentalFeatures.js";
 import { CURRENT_RELEASE_ID, FEATURE_HINT_IDS } from "../releaseNotes.js";
@@ -163,9 +164,13 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
      *   (`Admin` next to `admin`). Existing rows are never rewritten: accounts
      *   that already differ only by case keep working, and login stays an exact
      *   match (`verifyLogin`).
+     * - `id`: an account that was born in Keycloak takes Keycloak's id (the
+     *   token's `sub`), so the two never need a mapping; it arrives with
+     *   `passwordHash: ""` — no built-in password (`hasBuiltInPassword`).
+     *   Throws `DUPLICATE_ID` when the id is taken.
      */
     createUser(
-      input: { username: string; displayName: string } & (
+      input: { username: string; displayName: string; id?: string } & (
         | { password: string; passwordHash?: undefined }
         | { passwordHash: string; password?: undefined }
       ),
@@ -176,7 +181,10 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       }
       const passwordHash = input.passwordHash ?? hashPasswordSync(input.password);
       const timestamp = now();
-      const id = crypto.randomUUID();
+      const id = input.id ?? crypto.randomUUID();
+      if (input.id !== undefined && (!input.id || this.userRowById(input.id))) {
+        throw new Error("DUPLICATE_ID");
+      }
       const isFirstUser = this.count("SELECT COUNT(*) AS c FROM users") === 0;
 
       const insertUser = this.db.prepare(`
@@ -253,6 +261,57 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       return row ? this.toUser(row) : null;
     }
 
+    /**
+     * Whether this account still has a password of Noah's own (the built-in
+     * login's scrypt digest). False once the password moved to Keycloak, and
+     * for an account born there: such an account logs in through Keycloak only
+     * (`verifyLogin` never matches an empty digest).
+     */
+    hasBuiltInPassword(userId: string): boolean {
+      return Boolean(this.userRowById(userId)?.password_hash);
+    }
+
+    /**
+     * Where an account stands for a login that did not go through
+     * `verifyLogin` (a Keycloak login resolves by id): `pending` = a signup
+     * still waiting for an admin (the `countPendingSignups` rule), `suspended`
+     * = stopped after it was in use, null = no such account.
+     */
+    accountGate(userId: string): "active" | "pending" | "suspended" | null {
+      const row = this.userRowById(userId);
+      if (!row) return null;
+      if (row.suspended !== 1) return "active";
+      return row.last_seen_at === null || row.last_seen_at === row.created_at ? "pending" : "suspended";
+    }
+
+    /** The account's built-in digest as stored; "" when it has none (or there is no such account). */
+    builtInPasswordDigest(userId: string): string {
+      return this.userRowById(userId)?.password_hash ?? "";
+    }
+
+    /** The exact-name variant of {@link hasBuiltInPassword} for the login screen; false for an unknown name. */
+    usernameHasBuiltInPassword(username: string): boolean {
+      return Boolean(this.userRowByUsername(username.trim())?.password_hash);
+    }
+
+    /** Accounts whose password has not moved to Keycloak yet. */
+    countBuiltInPasswords(): number {
+      return this.count("SELECT COUNT(*) AS c FROM users WHERE password_hash <> ''");
+    }
+
+    /**
+     * The password now lives in Keycloak: drop Noah's digest. Only when it is
+     * still `expectedHash` — a reset that landed meanwhile keeps its new
+     * digest. Returns whether it was dropped.
+     */
+    clearBuiltInPassword(userId: string, expectedHash?: string): boolean {
+      const info =
+        expectedHash === undefined
+          ? this.db.prepare("UPDATE users SET password_hash = '' WHERE id = ? AND password_hash <> ''").run(userId)
+          : this.db.prepare("UPDATE users SET password_hash = '' WHERE id = ? AND password_hash = ?").run(userId, expectedHash);
+      return info.changes > 0;
+    }
+
     /** True once at least one account exists. False only on a fresh install. */
     hasAnyUser(): boolean {
       return this.count("SELECT COUNT(*) AS c FROM users") > 0;
@@ -266,8 +325,19 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
      * landed during the derivation is honoured.
      */
     async verifyLogin(username: string, password: string): Promise<User | "suspended" | null> {
+      const verified = await this.verifyBuiltInLogin(username, password);
+      return verified === null || verified === "suspended" ? verified : verified.user;
+    }
+
+    /**
+     * {@link verifyLogin}, also handing back the digest the password verified
+     * against — the move of a built-in password to Keycloak acts only while
+     * that digest is still the account's (`builtInPasswordDigest`).
+     */
+    async verifyBuiltInLogin(username: string, password: string): Promise<{ user: User; digest: string } | "suspended" | null> {
       const row = this.userRowByUsername(username.trim());
-      if (!row) {
+      // No digest = no built-in password (it lives in Keycloak): never a match.
+      if (!row || !row.password_hash) {
         return null;
       }
       if (!(await verifyPassword(password, row.password_hash))) {
@@ -281,7 +351,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       if (current.suspended === 1) {
         return "suspended";
       }
-      return this.toUser(current);
+      return { user: this.toUser(current), digest: current.password_hash };
     }
 
     // ---- Roles ------------------------------------------------------------
@@ -322,7 +392,14 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
 
     // ---- Sessions ---------------------------------------------------------
 
-    createSession(userId: string): string {
+    /**
+     * `keycloakRefreshToken`: a session that began at Keycloak keeps that
+     * login's refresh token (encrypted, like every stored secret) — to end the
+     * Keycloak session when this one logs out, and until then to get the
+     * person's own access token (`takeSessionKeycloakToken`,
+     * `keycloakPersonToken.ts`).
+     */
+    createSession(userId: string, opts: { keycloakRefreshToken?: string | null } = {}): string {
       const token = crypto.randomBytes(32).toString("base64url");
       const createdAt = now();
       const expiresAt = new Date(
@@ -330,8 +407,8 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
       ).toISOString();
       this.db
         .prepare(
-          `INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at)
-           VALUES (?, ?, ?, ?, ?)`,
+          `INSERT INTO sessions (id, token_hash, user_id, created_at, expires_at, keycloak_refresh_enc)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
         .run(
           crypto.randomUUID(),
@@ -339,6 +416,7 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
           userId,
           createdAt,
           expiresAt,
+          opts.keycloakRefreshToken ? encryptSecret(opts.keycloakRefreshToken, this.secret) : null,
         );
       return token;
     }
@@ -378,6 +456,37 @@ export function withUsers<TBase extends Constructor<StoreBase>>(Base: TBase) {
           .run(current, row.id);
       }
       return this.toUser(row);
+    }
+
+    /**
+     * The Keycloak refresh token of this session (READ, not removed): the one
+     * it was created with, or the newer one a refresh stored since. Null for a
+     * built-in-login session, an unknown token, or a value that no longer
+     * decrypts (a rotated SESSION_SECRET).
+     */
+    takeSessionKeycloakToken(token: string | undefined): string | null {
+      if (!token) {
+        return null;
+      }
+      const row = this.db
+        .prepare("SELECT keycloak_refresh_enc FROM sessions WHERE token_hash = ?")
+        .get(hashToken(token)) as { keycloak_refresh_enc: string | null } | undefined;
+      return row?.keycloak_refresh_enc ? decryptSecret(row.keycloak_refresh_enc, this.secret) : null;
+    }
+
+    /**
+     * Keycloak answered a refresh with a NEWER refresh token: it replaces the
+     * stored one, so the next refresh and the logout use a token Keycloak still
+     * takes. Only a session that already holds one is written — a built-in
+     * session never gains a Keycloak login, and a session that is gone stays gone.
+     */
+    setSessionKeycloakToken(token: string | undefined, refreshToken: string): void {
+      if (!token || !refreshToken) {
+        return;
+      }
+      this.db
+        .prepare("UPDATE sessions SET keycloak_refresh_enc = ? WHERE token_hash = ? AND keycloak_refresh_enc IS NOT NULL")
+        .run(encryptSecret(refreshToken, this.secret), hashToken(token));
     }
 
     revokeSession(token: string | undefined): void {

@@ -204,7 +204,7 @@ export function createApp(services = createServices()) {
   app.use(createBrowserExtensionRouter(deps));
   app.use(createBrowserClipboardRouter({ store }));
   app.use(createAdminRouter(deps));
-  // Personal vault: its home and mirror (settings), the migration (admin).
+  // Personal vault: whether the memory service answers (settings), how full each wiki is (admin).
   app.use(createPersonalVaultRouter(deps));
 
   // Unknown API requests must stay API-shaped. Without this boundary, GET

@@ -173,13 +173,10 @@ function knowledgeRepoSection(
       "You can directly manage your own **knowledge repository** (an owner-only personal repo): `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit`. " +
       "To change part of a file that already exists, use `mcp__repo__edit_file` (a targeted text replacement) rather than rewriting the whole file with `mcp__repo__write_file`. " +
       "If you organize work knowledge and skills here, you will use them starting from the next conversation; use `mcp__repo__delete_file` to remove outdated knowledge/skills (a file or a whole skill folder) and `mcp__repo__move_file` to rename/relocate them. " +
-      // Home `memory`: a vault note is saved when written and its repository
-      // copy is pushed by Noah as well, so "not pushed until you commit" is
-      // true only of the files that still live in git (the vault paragraph in
-      // `brainSection` states the rest). Home `repo`: today's sentence, unchanged.
-      (request.vaultHome === "memory"
-        ? "Repository files outside your vault (skills, plugins, non-markdown files) are **not pushed until you call `mcp__repo__commit`**, and the same commit pushes the repository's copy of your vault notes, so commit when a unit of work is finished or the owner asks."
-        : "Changes from these write tools are **not pushed until you call `mcp__repo__commit`**, so commit when a unit of work is finished or the owner asks.")
+      // A vault note is saved when written (the vault paragraph in
+      // `brainSection` says so), so "not pushed until you commit" is true only
+      // of the files that live in git.
+      "Repository files that are not vault notes are **not pushed until you call `mcp__repo__commit`**, so commit when a unit of work on them is finished or the owner asks."
     );
   }
   // No repo yet → the `create_repo` tool IS available (exposed only in this
@@ -190,11 +187,10 @@ function knowledgeRepoSection(
   const noRepo = request.gitTokenSet
     ? `You do not have a knowledge repository yet. **You have the \`mcp__repo__create_repo\` tool.** The internal GitHub host where repositories are currently created is \`${githubHost}\`. When the owner asks you to create or connect a repository — do not walk them through manual steps — just take a repository name and create and connect a private repo directly with \`mcp__repo__create_repo\` (\`GIT_TOKEN\` is already set). \`mcp__repo__scaffold_skill\`/\`mcp__repo__write_file\`/\`mcp__repo__commit\` fail before a repository is connected, so you MUST call \`mcp__repo__create_repo\` **first**.`
     : "You do not have a knowledge repository yet, and `GIT_TOKEN` is not set either. If the owner wants to create a repository, first guide them to register an internal Git token (the `GIT_TOKEN` secret) under Settings → **Git credentials** (once registered, you can create one directly with `mcp__repo__create_repo`). `mcp__repo__scaffold_skill`/`mcp__repo__write_file`/`mcp__repo__commit` fail before a repository is connected.";
-  // The vault outlived its repository (it lives in the memory service, `vaultHome`): the notes are still
-  // there, and nothing above may be read as "there is no brain". Said only for such an owner.
-  return request.vaultHome === "memory"
-    ? `${noRepo} Your personal vault outlived the repository: ${VAULT_MEMORY_NO_REPO_SENTENCE}.`
-    : noRepo;
+  // A vault outlives its repository (it lives in the memory service): notes written while one was
+  // connected are still there, and nothing above may be read as "there is no brain". Whether this owner
+  // has any is not known here (the prompt asks the service nothing), so the sentence is conditional.
+  return `${noRepo} Any ${VAULT_MEMORY_NO_REPO_SENTENCE}.`;
 }
 
 /**
@@ -269,44 +265,34 @@ function brainSection(
   const base =
     "**Second brain**: your knowledge repository is a vault — `wiki/` holds curated, durable notes and `raw/` holds unprocessed captures. Use `mcp__brain__search` to recall what you already know BEFORE answering from memory or asking the user to repeat themselves; `mcp__brain__get_note` reads one note in full.";
   const migrate =
-    " If `mcp__brain__search` reports the vault is missing (NO_VAULT), the repository predates the vault layout — run the `brain-migrate` skill ONCE (it never overwrites existing files), then retry.";
-  // Where the vault lives, stated only for an owner whose vault is in the
-  // memory service (`vaultHome`, the home at this conversation's first turn —
-  // the prompt is frozen). An owner whose vault is the repository gets exactly
-  // the text they always got: `inMemory` false leaves every string below as it was.
-  const inMemory = request.vaultHome === "memory";
-  // `owner` may ask describe_system for the live state; a shared-account teammate (`writer`) writes notes
-  // but gets no owner state from describe_system, so their text does not promise it.
-  const vaultHome = (viewer: "owner" | "writer" | "reader") => (inMemory ? ` ${vaultMemoryHomeParagraph(viewer)}` : "");
-  // "Commit after a brain edit" is the instruction for BOTH homes; only the
-  // reason differs (repository: the edit is not pushed before it; memory
-  // service: the note is already saved and the commit pushes its copy).
-  const commitRule = inMemory
-    ? " A brain note is saved the moment you write it; commit after a brain edit all the same — the commit pushes the repository's copy."
-    : " Brain edits are not pushed until you commit.";
+    " If `mcp__brain__search` reports NO_VAULT (the vault holds no notes yet), run the `brain-migrate` skill ONCE (it never overwrites an existing note), then retry.";
+  // Where the vault lives (the memory service, for every owner) and what that means for saving: a note is
+  // saved when written, with nothing to commit. `owner` may ask describe_system whether the service answers;
+  // a shared-account teammate (`writer`) writes notes but gets no owner state from describe_system, so their
+  // text does not promise it.
+  const vaultParagraph = (viewer: "owner" | "writer" | "reader") => ` ${vaultMemoryHomeParagraph(viewer)}`;
   if (mode === "consultation") {
     // A consultation run cannot write anything (repo writes are withheld even
     // on a shared account, so brain-migrate can't run either): recall only.
-    return `${base} (Recall is read-only in this consultation; capturing or editing notes is unavailable.)${vaultHome("reader")}`;
+    return `${base} (Recall is read-only in this consultation; capturing or editing notes is unavailable.)${vaultParagraph("reader")}`;
   }
   if (mode === "teammate") {
     // On a shared (communal) account the teammate's writes go through the same
     // repo-write tools the capture skills use, so capture is open to them too.
     return request.sharedAccount
-      ? `${base} This avatar is a shared (communal) account, so you may also capture on this teammate's behalf: record a durable fact or decision with the **brain-ingest** skill.${currentTruth}${commitRule}${migrate}${vaultHome("writer")}`
-      : `${base} (You can search the owner's second brain; capturing or editing notes is owner-only.)${migrate}${vaultHome("reader")}`;
+      ? `${base} This avatar is a shared (communal) account, so you may also capture on this teammate's behalf: record a durable fact or decision with the **brain-ingest** skill.${currentTruth}${migrate}${vaultParagraph("writer")}`
+      : `${base} (You can search the owner's second brain; capturing or editing notes is owner-only.)${migrate}${vaultParagraph("reader")}`;
   }
   const capture =
     " To capture a durable fact or decision use the **brain-ingest** skill; to consolidate `raw/` into clean `wiki/` notes use **brain-reflect**; to audit the vault use **brain-lint**." +
-    currentTruth +
-    commitRule;
+    currentTruth;
   // The owner branch is the frozen prompt of routines too (the nightly
   // consolidation), so the review route rides it.
   const conv =
     mcpToolGroupEnabled(request, "system")
       ? " For a consolidation task you may review the owner's OWN recent conversations with `mcp__system__list_recent_conversations`/`mcp__system__read_conversation` (owner-scoped) to find durable facts to capture; never read anyone else's conversations."
       : "";
-  return `${base}${capture}${migrate}${conv}${vaultHome("owner")}`;
+  return `${base}${capture}${migrate}${conv}${vaultParagraph("owner")}`;
 }
 
 /**
@@ -1288,7 +1274,7 @@ export function buildSystemPromptAppend(
       const captureNote =
         mcpToolGroupEnabled(request, "personal_knowledge") &&
         request.knowledgeRepoConfigured !== false
-          ? " Capture a durable learning from an answer with the **brain-ingest** skill (note the source avatar, then commit)."
+          ? " Capture a durable learning from an answer with the **brain-ingest** skill (note the source avatar)."
           : "";
       lines.push(
         "Consulting teammate avatars: when the owner needs knowledge you lack but a teammate's avatar likely has (their projects, decisions, expertise), ask that avatar directly with `mcp__avatars__ask_avatar` — one self-contained question per call; only active teammates' avatars that are not private will answer. " +
@@ -1615,11 +1601,7 @@ export function buildSystemPromptAppend(
         // (standing per-turn guidance + tool-description trigger, per CLAUDE.md).
         lines.push(
           request.sharedAccount
-            ? "This avatar is a **shared (communal) account**: this trusted teammate may not only read but also **update the owner's personal knowledge repository** — `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit`. When they ask you to record knowledge or skills, apply the change and push it with `mcp__repo__commit` (" +
-              (request.vaultHome === "memory"
-                ? "a vault note is saved when written, and the commit pushes the repository's copy of it together with every other change"
-                : "changes are not pushed until you commit") +
-              "). Creating/connecting the repository itself stays owner-only."
+            ? "This avatar is a **shared (communal) account**: this trusted teammate may not only read but also **update the owner's personal knowledge repository** — `mcp__repo__list_files`/`mcp__repo__read_file`/`mcp__repo__write_file`/`mcp__repo__edit_file`/`mcp__repo__delete_file`/`mcp__repo__move_file`/`mcp__repo__scaffold_skill`/`mcp__repo__commit`. When they ask you to record knowledge or skills, apply the change (a brain note is saved when written; any other repository file is not pushed until you call `mcp__repo__commit`). Creating/connecting the repository itself stays owner-only."
             : "You may **read** the owner's personal **knowledge repository** with `mcp__repo__list_files`/`mcp__repo__read_file` to draw on the owner's accumulated knowledge and skills when helping this teammate. Modifying it (write/edit/delete/move/scaffold/commit) is owner-only, so do not attempt those.",
         );
         const teammateBrainBlock = brainSection(request, "teammate");

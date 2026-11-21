@@ -555,7 +555,9 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   `stale`, with the current one → 200, again → 404 `not_found`; `DELETE /wiki/<owner>` → `{"deleted":true}` and
   the list is empty after it. **Noah's routes:** `GET /api/admin/personal-vaults` as the admin →
   `serviceConfigured:true`, `mode:"repo"`, both accounts `no_repo`; a member gets 403 there and
-  `{"home":"repo","mirror":null}` for its own view; a dry run reports both accounts `no_repo` with 0 notes.
+  `{"home":"repo","mirror":null}` for its own view; a dry run reports both accounts `no_repo` with 0 notes
+  (the routes as they were at that commit — the list, the dry run and the two homes were retired on
+  2026-11-20, `repo-knowledge.md` "Retired 2026-11-20"; this and the later records below are of their runs).
   **Not one of pi's MCP servers:** pi's broker lists Noah's 19 servers through the `/admin` proxy and no
   `memory`. Noah's log holds no line about the memory service; the service's own log is its four start lines.
   **`55-systemone.mjs` follows pi's new field** (it asserted `compare`, which pi no longer stores): `use:
@@ -612,7 +614,7 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   **Changed in Noah next to this bump** (not in the tree this run exported, and not something this stack
   exercises): `MemoryVault.search` kept only a BLANK query from the service, which was the service's whole rule
   before; a query with no letter or digit is now answered as no hit without being sent (`hasSearchWord`), and
-  `repo-knowledge.md` "Search: what differs from `rankBrainNotes`" lists the new differences.
+  `repo-knowledge.md` "Search: what differs" lists the new differences.
   **NOT seen:** the search of an owner actually MOVED and the text a model reads for it (the stack has no
   knowledge repository; that path rests on Noah's tests against the double, whose ranking is still the old
   count); pi's new refusals when LLM settings are saved (no step saves an over-large window — pi's test); the
@@ -885,7 +887,35 @@ model, tool or plugin, uses no network, writes no file and has no randomness.
   dev box outside the stack; Noah's client gives a request 15 s); git's own packing of a long history; the
   upgrade of the deployed stack, where every existing wiki gets its first commit at its next change.
   After the run: gateway 186 MiB, broker 89 MiB, memory 40 MiB.
-  **A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
+  **pi d6411c9 (2026-11-21, the admin API takes a person's OIDC access token when `OIDC_ISSUER` +
+`OIDC_JWKS_URL` are set — pi's own commit ran its verifier and the admin API in-process, against keys it
+generated itself; it did not run the gateway image and had no real issuer):** run
+`~/.noah-work/boot-test-2026-11-21a`, Noah `7e22c1e` (the `/admin` relay that carries the admin's own Keycloak
+token is in that tree). This stack has NO Keycloak overlay, so it shows the half that must not change: 10-accounts
+6/6, 21-admin-proxy 11/11, 24-llm-no-falcon-tier 3/3, 23-admin-ui-assets 5/5, 30-documents 30/30,
+31-documents-extra 21/21, 32-second-user-own 3/3, 50-subagent 9/9, 55-systemone 25/25, 65-shell-step-verdicts
+33/33, 71-tracing-turn 25/25, 75-trace-stats 37/37, 25-admin-ui-real 48/48, 85-workspace-files 26/26, 86-mcp-files
+20/20, 87-mcp-file-args 19/19, 88-plugin-refresh 23/23, 90-pi-validation 22/22, 92-grep-glob 10/10,
+93-tool-call-limit 23/23, 94-turn-timings 13/13, 80-context-usage 19/19, 96-memory 29/29, 97-memory-search 10/10,
+98-mining 34/34, 26-admin-user-names 17/17, 100-history-pages 11/11, 101-turn-limits 5/5, 102-mining-model 23/23,
+103-mining-prompt 20/20, 104-mining-rename 10/10, 105-admin-memory 7/7, 106-memory-history 14/14, 95-final-state
+1/1 (no error-level line in any service's log but the one 102 makes on purpose). New check
+`107-admin-oidc-off.mjs` 6/6: the gateway container's two values are empty (`[][]`); `GET /admin/api/session`
+through Noah's relay as a Noah admin → `200 {"authenticated":true}`; straight at the gateway from inside Noah's
+container with Noah's copy of the admin key: Bearer key → 200, a JWT-shaped bearer → 401 (only a wrong key here),
+`POST /admin/api/login` with the key → 200 and a `pi_gw_admin` cookie that `GET /admin/api/session` accepts (200),
+`POST /admin/api/logout` → 200 and the cookie → 401 afterwards. The half WITH an issuer was seen in the other
+stack, `scripts/keycloak-login-check/run.sh` (6 + 42 checks, pi's gateway built from `d6411c9`, a real Keycloak
+26.8.2): a Noah admin on a Keycloak session reaches pi's admin API through the relay → `200
+{"authenticated":true}` while Noah's copy of pi's admin key is wrong on purpose (so pi let the PERSON's token
+in); the same admin on a built-in session → pi's 401 (the wrong key); a non-admin teammate → 403 at Noah's
+relay; at the gateway itself a program's Bearer admin key → 200 and `POST /admin/api/login` → 403
+`key_login_disabled`. **NOT seen:** pi refusing a real token for each single reason (expired, another audience,
+no admin role, not a teammate, a removed signing key, an ID token) — those rest on pi's tests; a signing-key
+rotation in a running stack; the two stacks together (sandboxes and turns WITH Keycloak on); a real browser on
+pi's panel with a token-carrying relay. After the run: gateway 213 MiB, broker 128 MiB.
+
+**A model-driven check in that stack** (first done for `/compact`, 2026-11-10; now the skill's
   `04-fake-llm.sh`, `fake-llm.mjs` and `e2e-common.mjs`): run the scripted fake LLM (`node:22-bookworm-slim`)
   as a SIBLING container on `noahcompose-net`
   with a fixed `--ip`, `PUT /admin/api/llm` on the gateway's `edge` address with pi's admin key, then drive

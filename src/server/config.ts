@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentRuntime, AppConfig, MemoryServiceConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
+import type { AgentRuntime, AppConfig, KeycloakConfig, MemoryServiceConfig, PiRuntimeConfig, UploadRelayConfig } from "./types.js";
 import { DEFAULT_GITHUB_HOST, normalizeGithubHost } from "./marketplace.js";
 import { parseMcpNetworkAcl } from "./mcpHttp/networkAcl.js";
 import { parseTrustedProxyCidrs, TRUSTED_PROXY_CIDRS_ENV } from "./trustedProxies.js";
@@ -122,14 +122,15 @@ function loadPiRuntimeConfig(): PiRuntimeConfig {
 
 /**
  * The memory service (`AppConfig.memory`): `PI_MEMORY_URL` +
- * `PI_MEMORY_API_KEY_FILE`, or undefined when neither is set (the feature is
- * off and every personal vault stays in its knowledge repo). The key is read
- * ONLY from a file, for the reason pi's admin key is
+ * `PI_MEMORY_API_KEY_FILE`, or undefined when neither is set (this server has
+ * no memory service: every use of a personal vault fails as unavailable — the
+ * service is the vault's only home, nothing falls back to the knowledge repo).
+ * The key is read ONLY from a file, for the reason pi's admin key is
  * (`readPiGatewayAdminApiKey`): an inline `PI_MEMORY_API_KEY` would sit in
  * process.env, where every child Noah spawns could inherit it, so it stops the
- * boot. Half a configuration stops the boot too — a vault that already lives
- * in the service must never be served from a server that cannot reach it. No
- * message here carries the key.
+ * boot. Half a configuration stops the boot too — every personal vault lives
+ * in the service, so a server must never come up as if it had none because one
+ * of the two values is missing. No message here carries the key.
  */
 export function parseMemoryConfig(values: { url: string; apiKeyFile: string; inlineApiKey: string }): MemoryServiceConfig | undefined {
   if (values.inlineApiKey) {
@@ -160,6 +161,60 @@ export function parseMemoryConfig(values: { url: string; apiKeyFile: string; inl
   // It becomes an Authorization header value: a second line or inner blank is a wrong file.
   if (/\s/.test(key)) throw new Error(`PI_MEMORY_API_KEY_FILE (${file}) must hold the key alone on one line.`);
   return { url: `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`, apiKey: key };
+}
+
+/**
+ * The bundled Keycloak (`AppConfig.keycloak`): `KEYCLOAK_PUBLIC_URL` +
+ * `KEYCLOAK_INTERNAL_URL` + `KEYCLOAK_CLIENT_SECRET_FILE`, or undefined when
+ * none is set (login is then the built-in username + password). Part of a
+ * configuration stops the boot: a server must never come up with the built-in
+ * login because one value is missing, while its users' passwords have moved
+ * to Keycloak. The secret is read ONLY from a file, like the memory service's
+ * key (an inline `KEYCLOAK_CLIENT_SECRET` stops the boot). No message here
+ * carries it.
+ */
+export function parseKeycloakConfig(values: {
+  publicUrl: string;
+  internalUrl: string;
+  clientSecretFile: string;
+  inlineClientSecret: string;
+}): KeycloakConfig | undefined {
+  if (values.inlineClientSecret) {
+    throw new Error("KEYCLOAK_CLIENT_SECRET is not read: put the client secret in a file and set KEYCLOAK_CLIENT_SECRET_FILE.");
+  }
+  const { publicUrl, internalUrl, clientSecretFile: file } = values;
+  if (!publicUrl && !internalUrl && !file) return undefined;
+  if (!publicUrl || !internalUrl || !file) {
+    throw new Error(
+      "Keycloak needs KEYCLOAK_PUBLIC_URL, KEYCLOAK_INTERNAL_URL and KEYCLOAK_CLIENT_SECRET_FILE (set all three, or none to keep the built-in login).",
+    );
+  }
+  const base = (name: string, raw: string): string => {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      throw new Error(`${name} must be an absolute URL.`);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error(`${name} must be an http(s) URL.`);
+    if (parsed.username || parsed.password) throw new Error(`${name} must not carry credentials.`);
+    if (parsed.search || parsed.hash) throw new Error(`${name} must not carry a query or fragment.`);
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+  };
+  let secret: string;
+  try {
+    secret = fs.readFileSync(file, "utf8").trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? "read error";
+    throw new Error(`KEYCLOAK_CLIENT_SECRET_FILE (${file}) cannot be read (${code}).`);
+  }
+  if (!secret) throw new Error(`KEYCLOAK_CLIENT_SECRET_FILE (${file}) is empty.`);
+  if (/\s/.test(secret)) throw new Error(`KEYCLOAK_CLIENT_SECRET_FILE (${file}) must hold the secret alone on one line.`);
+  return {
+    publicUrl: base("KEYCLOAK_PUBLIC_URL", publicUrl),
+    internalUrl: base("KEYCLOAK_INTERNAL_URL", internalUrl),
+    clientSecret: secret,
+  };
 }
 
 function parseMinutes(value: string, fallbackMinutes: number): number {
@@ -297,6 +352,14 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       apiKeyFile: env("PI_MEMORY_API_KEY_FILE"),
       inlineApiKey: env("PI_MEMORY_API_KEY"),
     });
+  const keycloak =
+    overrides.keycloak ??
+    parseKeycloakConfig({
+      publicUrl: env("KEYCLOAK_PUBLIC_URL"),
+      internalUrl: env("KEYCLOAK_INTERNAL_URL"),
+      clientSecretFile: env("KEYCLOAK_CLIENT_SECRET_FILE"),
+      inlineClientSecret: env("KEYCLOAK_CLIENT_SECRET"),
+    });
 
   return {
     // `|| 48787` guards a typo'd PORT (NaN would ERR_SOCKET_BAD_PORT at boot).
@@ -320,6 +383,7 @@ export function loadConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     // Off unless both the URL and the key file are set; half a configuration
     // or an inline key stops the boot (parseMemoryConfig).
     ...(memory ? { memory } : {}),
+    ...(keycloak ? { keycloak } : {}),
     // Default browser-control allowlist, seeded into browsers whose extension
     // allowlist is still empty (see AppConfig). Normalized here once; the
     // self-host filtering happens per request, where Noah's host is known.

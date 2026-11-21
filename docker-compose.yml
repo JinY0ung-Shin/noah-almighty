@@ -12,8 +12,8 @@
 #   edge      pi's gateway network; Noah joins it to call http://gateway:8080.
 #   noah-mcp  internal, broker ↔ Noah only: pi's mcp-broker calls Noah's /mcp/<server> from a pinned
 #             address, and Noah's NOAH_MCP_ALLOWED_CIDRS admits exactly that address.
-#   noah-memory  internal, Noah ↔ pi's memory service only: Noah's server keeps the personal vaults of
-#             moved owners there (docs/architecture/repo-knowledge.md "Personal vault: two homes").
+#   noah-memory  internal, Noah ↔ pi's memory service only: Noah's server keeps every owner's personal
+#             vault there, and nowhere else (docs/architecture/repo-knowledge.md "Personal vault").
 #   User sandboxes have NO network (pi's sandboxd: network_mode none); their only way out is pi's
 #   egress-proxy, which opens nothing unless pi's SANDBOX_EGRESS_ALLOW lists it. Never list Noah there:
 #   the broker, not the sandbox, calls Noah.
@@ -74,7 +74,7 @@ services:
       PI_GATEWAY_API_KEY_FILE: /run/secrets/pi_gateway_api_key
       # pi's ADMIN key (Noah's own copy): Noah serves pi's admin panel at /admin to Noah admins.
       PI_GATEWAY_ADMIN_API_KEY_FILE: /run/secrets/pi_gateway_admin_api_key_noah
-      # pi's memory service, where the personal vault of a moved owner lives. Noah's server calls it itself
+      # pi's memory service, where every owner's personal vault lives. Noah's server calls it itself
       # over noah-memory with its own copy of the service's key; it is never registered in pi's broker
       # (a registered server would show every session a second, ungated set of memory tools).
       PI_MEMORY_URL: http://memory:7090

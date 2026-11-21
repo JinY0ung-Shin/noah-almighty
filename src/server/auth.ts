@@ -110,6 +110,36 @@ export function clearSessionCookie(res: Response): void {
   res.clearCookie(SESSION_COOKIE, { path: "/" });
 }
 
+// ---- The Keycloak login in flight ---------------------------------------
+//
+// `state` + the PKCE verifier of a login this browser started, until Keycloak
+// sends it back (routes/auth.ts). It is what binds the returned code to THIS
+// browser, so it is HttpOnly, scoped to the two flow routes and short-lived.
+
+const KEYCLOAK_FLOW_COOKIE = "ac_login_flow";
+const KEYCLOAK_FLOW_PATH = "/api/auth/oidc";
+export const KEYCLOAK_FLOW_MINUTES = 10;
+
+export function setKeycloakFlowCookie(res: Response, flow: { state: string; verifier: string }): void {
+  res.cookie(KEYCLOAK_FLOW_COOKIE, `${flow.state}.${flow.verifier}`, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: secureCookies,
+    path: KEYCLOAK_FLOW_PATH,
+    maxAge: KEYCLOAK_FLOW_MINUTES * 60 * 1000,
+  });
+}
+
+export function clearKeycloakFlowCookie(res: Response): void {
+  res.clearCookie(KEYCLOAK_FLOW_COOKIE, { path: KEYCLOAK_FLOW_PATH });
+}
+
+/** Null when the cookie is missing or not the two base64url parts `setKeycloakFlowCookie` wrote. */
+export function keycloakFlowFromRequest(req: Request): { state: string; verifier: string } | null {
+  const match = /^([A-Za-z0-9_-]{16,128})\.([A-Za-z0-9_-]{16,128})$/.exec(readCookie(req, KEYCLOAK_FLOW_COOKIE) ?? "");
+  return match ? { state: match[1], verifier: match[2] } : null;
+}
+
 export function sessionTokenFromRequest(req: Request): string | undefined {
   return readCookie(req, SESSION_COOKIE);
 }

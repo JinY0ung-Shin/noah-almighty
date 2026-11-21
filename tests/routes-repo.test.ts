@@ -25,6 +25,8 @@ import { resolveActiveWorkspaceRepo } from "../src/server/activeRepoResolve.js";
 import { getWorkspaceRepo, setWorkspaceRepo } from "../src/server/repoWorkspace.js";
 import { generateSshKeyPair } from "../src/server/sshIdentity.js";
 import { signup, makeBareRemote, withTempDir } from "./helpers.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
+import { MemoryRefusedError, setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 
 // Coverage target: the repo/git surface —
 //  - src/server/routes/knowledgeRepo.ts  (git-token/secret/identity + knowledge-
@@ -55,7 +57,10 @@ function bootstrap() {
     agentRuntime: "local",
     sessionSecret: "test",
   });
-  return { app: createApp(services), store: services.store, config: services.config };
+  // The memory service: where every user's vault notes (wiki/, raw/) live — the graph and note routes read it.
+  const memory = createFakeMemoryClient();
+  setMemoryClientForTests(services.store, memory);
+  return { app: createApp(services), store: services.store, config: services.config, memory };
 }
 
 async function newUser(app: ReturnType<typeof createApp>, username: string) {
@@ -282,46 +287,65 @@ describe("knowledge-repo content routes", () => {
     await agent.get("/api/me/knowledge-repo/contents").expect(502);
   });
 
-  it("builds the wikilink graph, 404s without a repo, and 502s on a broken clone", async () => {
-    const { app, store, config } = bootstrap();
+  it("builds the wikilink graph from the vault's notes, 404s without a repo, and 502s / 503s when the notes cannot be read", async () => {
+    const { app, store, config, memory } = bootstrap();
     const { agent, userId } = await newUser(app, "kbgraph");
 
     await agent.get("/api/me/knowledge-repo/graph").expect(404);
 
     const remote = seedRemote(config.dataDir, "kbg", {
       ".claude-plugin/marketplace.json": JSON.stringify({ name: "kbg", plugins: [] }),
-      "wiki/concepts/foo.md": "---\ntitle: Foo\n---\n\nRelated: [[Bar]].",
-      "wiki/concepts/bar.md": "---\ntitle: Bar\n---\n\nStandalone.",
-      // Structural vault files — readable, but never graph nodes.
-      "wiki/index.md": "# Index\n\n- [[Foo]]",
-      "wiki/log.md": "# Reflection log",
+      // A copy the repository still holds at a vault path: never a graph node.
+      "wiki/concepts/stale.md": "---\ntitle: Stale\n---\n\nOnly in the repository.",
     });
     store.setKnowledgeRepo(userId, remote, "main");
+    // The vault's notes live in the memory service.
+    memory.seed(userId, "wiki/concepts/foo.md", "---\ntitle: Foo\n---\n\nRelated: [[Bar]].");
+    memory.seed(userId, "wiki/concepts/bar.md", "---\ntitle: Bar\n---\n\nStandalone.");
+    // Structural vault files — readable, but never graph nodes.
+    memory.seed(userId, "wiki/index.md", "# Index\n\n- [[Foo]]");
+    memory.seed(userId, "wiki/log.md", "# Reflection log");
     const graph = await agent.get("/api/me/knowledge-repo/graph").expect(200);
     expect(Array.isArray(graph.body.graph.nodes)).toBe(true);
     expect(graph.body.graph.nodes.length).toBe(2);
     const nodeIds = graph.body.graph.nodes.map((n: { id: string }) => n.id);
+    expect(nodeIds.sort()).toEqual(["wiki/concepts/bar.md", "wiki/concepts/foo.md"]);
     expect(nodeIds).not.toContain("wiki/index.md");
     expect(nodeIds).not.toContain("wiki/log.md");
     expect(Array.isArray(graph.body.graph.edges)).toBe(true);
+    expect(graph.body.graph.edges.length).toBe(1);
 
-    store.setKnowledgeRepo(userId, path.join(config.dataDir, "missing.git"), "main");
+    // The service refusing a note → 502 (the graph is never served with a hole in it).
+    memory.failNext(new MemoryRefusedError("invalid_request", 400, "the request does not have the expected fields"), { op: "read" });
     await agent.get("/api/me/knowledge-repo/graph").expect(502);
+
+    // A repo that can't be cloned no longer matters to the graph: the notes are not in the clone.
+    store.setKnowledgeRepo(userId, path.join(config.dataDir, "missing.git"), "main");
+    const stillThere = await agent.get("/api/me/knowledge-repo/graph").expect(200);
+    expect(stillThere.body.graph.nodes.length).toBe(2);
+
+    // No memory service on this server → 503: there is no other place the notes could be.
+    setMemoryClientForTests(store, null);
+    const off = await agent.get("/api/me/knowledge-repo/graph").expect(503);
+    expect(off.body.graph).toBeUndefined();
   });
 
   it("reads a vault note and gates non-vault / missing / repo-less requests", async () => {
-    const { app, store, config } = bootstrap();
+    const { app, store, config, memory } = bootstrap();
     const { agent, userId } = await newUser(app, "kbnote");
 
     const remote = seedRemote(config.dataDir, "kbn", {
       ".claude-plugin/marketplace.json": JSON.stringify({ name: "kbn", plugins: [] }),
-      "wiki/concepts/foo.md": "---\ntitle: Foo\n---\n\nHello note.",
+      // A copy the repository still holds at a vault path: never what the route serves.
+      "wiki/concepts/repo-only.md": "---\ntitle: Repo only\n---\n\nOnly in the repository.",
     });
     store.setKnowledgeRepo(userId, remote, "main");
+    memory.seed(userId, "wiki/concepts/foo.md", "---\ntitle: Foo\n---\n\nHello note.");
 
-    // Missing / non-vault paths are rejected before any clone.
+    // Missing / non-vault paths are rejected before the service is asked.
     await agent.get("/api/me/knowledge-repo/note").expect(400);
     await agent.get("/api/me/knowledge-repo/note?path=README.md").expect(400);
+    expect(memory.calls).toEqual([]);
 
     // A real vault note is returned.
     const note = await agent
@@ -330,9 +354,12 @@ describe("knowledge-repo content routes", () => {
     expect(note.body.note.path).toBe("wiki/concepts/foo.md");
     expect(note.body.note.content).toContain("Hello note.");
 
-    // A vault-shaped path that doesn't exist → 404 (mapped from the fs error).
+    // A vault-shaped path that doesn't exist → 404 — also when the repository has a file there.
     await agent
       .get("/api/me/knowledge-repo/note?path=wiki/concepts/ghost.md")
+      .expect(404);
+    await agent
+      .get("/api/me/knowledge-repo/note?path=wiki/concepts/repo-only.md")
       .expect(404);
 
     // A different user with no repo, valid vault path → 404 (no repo).
@@ -340,6 +367,12 @@ describe("knowledge-repo content routes", () => {
     await noRepo
       .get("/api/me/knowledge-repo/note?path=wiki/concepts/foo.md")
       .expect(404);
+
+    // No memory service on this server → 503, never the clone's file.
+    setMemoryClientForTests(store, null);
+    await agent
+      .get("/api/me/knowledge-repo/note?path=wiki/concepts/foo.md")
+      .expect(503);
   });
 
   it("refreshes a connected repo and 404s without one", async () => {

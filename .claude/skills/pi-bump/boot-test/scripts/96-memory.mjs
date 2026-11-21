@@ -4,8 +4,8 @@
 // This looks at the pieces only a real stack has: the service container under the stack's hardening, the
 // `noah-memory` network and what Noah can and cannot reach, Noah's own copy of the key, and the service's real
 // answers to the requests Noah's client makes (from INSIDE Noah's container, with Noah's env and key file).
-//   - nobody is moved here (no knowledge repository exists in this stack): the cutover, the mirror and the tools
-//     for a moved owner are NOT exercised — they rest on Noah's tests.
+//   - no knowledge repository exists in this stack, so nobody has a brain set up: the avatar's tools writing a
+//     vault note through Noah and the one-time repository import are NOT exercised — they rest on Noah's tests.
 import { check, client, dind, dindTry, finish, loadState } from "./e2e-common.mjs";
 
 const state = loadState();
@@ -116,19 +116,19 @@ check("M  delete needs the current hash; deleting a note that is gone is 404 not
 check("M  deleting the whole wiki leaves nothing", is("delete-wiki", 200, (b) => b.deleted === true) && is("list-after-delete", 200, (b) => b.notes.length === 0));
 
 // ---------------------------------------------------------------------------------------------- Noah's routes
-const view = await admin.get("/api/admin/personal-vaults");
+// The vault has ONE home (the memory service) since 2026-11-20: the migration routes are gone, what is left is
+// how full each brain is (admins) and whether the service answers (everybody).
+const view = await admin.get("/api/admin/personal-vaults/usage");
 const body = await view.json().catch(() => null);
-note("GET /api/admin/personal-vaults (admin)", JSON.stringify(body).slice(0, 600));
-check("M  Noah's admin view: the service is configured, mode `repo`, nothing running, every account `no_repo`", view.status === 200 && body?.serviceConfigured === true && body?.mode === "repo" && body?.running === false && Array.isArray(body?.owners) && body.owners.length >= 2 && body.owners.every((o) => o.state === "no_repo" && o.mirror === null));
-const denied = await member.get("/api/admin/personal-vaults");
+note("GET /api/admin/personal-vaults/usage (admin)", JSON.stringify(body).slice(0, 600));
+check("M  Noah's admin usage view: the service is configured, its limits are named, and nobody is listed (no account has a repository)", view.status === 200 && body?.serviceConfigured === true && body?.limits?.notes === 10000 && body?.limits?.bytes === 256 * 1024 * 1024 && Array.isArray(body?.owners) && body.owners.length === 0, JSON.stringify(body).slice(0, 300));
+const denied = await member.get("/api/admin/personal-vaults/usage");
 check("M  a member is refused the admin view", denied.status === 403, `status ${denied.status}`);
 const mine = await member.get("/api/me/personal-vault");
 const mineBody = await mine.json().catch(() => null);
-check("M  a member's own view: home `repo`, no copy state", mine.status === 200 && mineBody?.home === "repo" && mineBody?.mirror === null, JSON.stringify(mineBody));
-const dry = await admin.post("/api/admin/personal-vaults/dry-run");
-const dryBody = await dry.json().catch(() => null);
-note("POST /api/admin/personal-vaults/dry-run", JSON.stringify(dryBody).slice(0, 600));
-check("M  a dry run reports every account as having no repository and changes nothing", dry.status === 200 && Array.isArray(dryBody?.reports) && dryBody.reports.length >= 2 && dryBody.reports.every((r) => r.state === "no_repo" && r.notes === 0));
+check("M  a member's own view: the service is configured and answers", mine.status === 200 && mineBody?.serviceConfigured === true && mineBody?.service === "ok", JSON.stringify(mineBody));
+const retired = await admin.post("/api/admin/personal-vaults/dry-run");
+check("M  the retired migration route is gone (not a 200)", retired.status === 404, `status ${retired.status}`);
 
 // ---------------------------------------------------------------------------------------------- not one of pi's MCP servers
 const servers = await admin.get("/admin/api/mcp/servers");
@@ -139,9 +139,9 @@ check("M  the memory service is NOT registered in pi's broker (no session gets a
 
 // ---------------------------------------------------------------------------------------------- logs
 const noahLog = dindTry("docker", "logs", NOAH_C);
-const memoryWarn = noahLog.out.split("\n").filter((l) => l.includes('"module":"memory"') || /vault mirror|personal vault/i.test(l));
+const memoryWarn = noahLog.out.split("\n").filter((l) => l.includes('"module":"memory"') || /vault import|personal vault/i.test(l));
 note("Noah log lines about the memory service", memoryWarn.length ? memoryWarn.join("\n").slice(0, 1500) : "(none)");
-check("M  Noah's log has no failure line about the memory service or the vault mirror", !memoryWarn.some((l) => /"level":(40|50|60)/.test(l)), `${memoryWarn.length} line(s)`);
+check("M  Noah's log has no failure line about the memory service or the vault import", !memoryWarn.some((l) => /"level":(40|50|60)/.test(l)), `${memoryWarn.length} line(s)`);
 const serviceLog = dindTry("docker", "logs", MEMORY_C);
 note("memory service log (tail)", serviceLog.out.trim().split("\n").slice(-6).join("\n"));
 check("M  the memory service logged no error", !/"level":(50|60)/.test(serviceLog.out));

@@ -41,6 +41,10 @@ const RETIRED_TABLES = [
   "groups",
   "group_members",
   "shared_skill_group_blocks",
+  // The personal vault's home/mirror row and deletion ledger (retired
+  // 2026-11-20: the memory service is the only home).
+  "personal_vaults",
+  "personal_vault_deletes",
 ] as const;
 
 /**
@@ -60,6 +64,8 @@ const RETIRED_APP_CONFIG_KEYS = [
   "retired:personal_agents:pending",
   "retired:external_avatars:pending",
   "retired:group_agents:pending",
+  // The vault migration's target (retired 2026-11-20 with the `repo` home).
+  "personal_vault_mode",
 ] as const;
 
 /**

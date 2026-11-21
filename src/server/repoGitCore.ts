@@ -43,8 +43,8 @@ export function git(repoRoot: string, args: string[], timeout = 120_000, config:
  * How much output one git command may print before Node kills it (Node's own
  * default is 1 MiB). git names every path of a large change — `status`, the
  * summary `commit` prints (`create mode … <path>`), a fast-forward's diffstat —
- * so one commit of thousands of files (a vault mirrored into an empty
- * repository) passes 1 MiB. Only a cap: nothing is allocated until it is printed.
+ * so one commit of thousands of files passes 1 MiB. Only a cap: nothing is
+ * allocated until it is printed.
  */
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 
@@ -63,6 +63,29 @@ export async function originUrl(repoRoot: string): Promise<string | null> {
   }
 }
 
+/** Path arguments per git command (argv has a size limit; a path is at most a few hundred bytes). */
+const PATHS_PER_COMMAND = 100;
+
+/**
+ * Take every staged path that satisfies `leaveOut` out of the index again —
+ * back to what HEAD holds, or out of the index altogether in a repository
+ * without a commit. The working tree is not touched. Paths go to git as
+ * literal pathspecs, exactly as on disk (`-z`: no quoting of non-ASCII names).
+ */
+async function unstage(repoRoot: string, leaveOut: (path: string) => boolean): Promise<void> {
+  const { stdout } = await git(repoRoot, ["diff", "--cached", "--name-only", "-z", "--no-renames"]);
+  const paths = stdout.split("\0").filter((file) => file && leaveOut(file));
+  if (paths.length === 0) return;
+  const hasHead = await git(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD"]).then(
+    () => true,
+    () => false,
+  );
+  for (let i = 0; i < paths.length; i += PATHS_PER_COMMAND) {
+    const chunk = paths.slice(i, i + PATHS_PER_COMMAND);
+    await git(repoRoot, ["--literal-pathspecs", ...(hasHead ? ["reset", "-q", "HEAD"] : ["rm", "--cached", "-q", "-f"]), "--", ...chunk]);
+  }
+}
+
 /**
  * The clone's current branch name, or null when detached (`HEAD`) or on error.
  * Identical to the inline `currentBranch` each repo module used.
@@ -75,56 +98,6 @@ export async function currentBranch(repoRoot: string): Promise<string | null> {
   } catch {
     return null;
   }
-}
-
-/**
- * Relative paths with uncommitted changes, parsed from `git status --porcelain`.
- *
- * CRITICAL: the porcelain flag is parameterized so each caller keeps its CURRENT
- * behavior — knowledge/group repos use plain `--porcelain`, the user-registered
- * git repos use `--porcelain -uall` (list untracked files individually). This is
- * a deferred breaking item; do NOT unify the flags here.
- */
-export async function dirtyPaths(
-  repoRoot: string,
-  extraStatusArgs: string[] = [],
-): Promise<string[]> {
-  const { stdout } = await git(repoRoot, ["status", "--porcelain", ...extraStatusArgs]);
-  return stdout
-    .split("\n")
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
-}
-
-/**
- * Every uncommitted change of the working tree, one entry per path, with the
- * path EXACTLY as it is on disk (`-z`: no quoting of non-ASCII names, no
- * `old -> new` pairs) and untracked files listed one by one. `code` is git's
- * two-letter XY status (`" M"`, `"??"`, `"A "`, …). For callers that must
- * judge each path — {@link dirtyPaths} keeps its own, coarser reading.
- */
-export async function statusEntries(repoRoot: string): Promise<{ code: string; path: string }[]> {
-  const { stdout } = await git(repoRoot, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]);
-  const fields = stdout.split("\0");
-  const entries: { code: string; path: string }[] = [];
-  for (let i = 0; i < fields.length; i += 1) {
-    const field = fields[i];
-    if (field.length < 4) continue;
-    const code = field.slice(0, 2);
-    entries.push({ code, path: field.slice(3) });
-    // A rename/copy record (only if git ignored --no-renames) carries its origin as the next field.
-    if (/[RC]/.test(code) && fields[i + 1]) {
-      i += 1;
-      entries.push({ code, path: fields[i] });
-    }
-  }
-  return entries;
-}
-
-/** The paths staged in the index (what a `git commit` would record), exactly as on disk. */
-export async function stagedPaths(repoRoot: string): Promise<string[]> {
-  const { stdout } = await git(repoRoot, ["diff", "--cached", "--name-only", "-z", "--no-renames"]);
-  return stdout.split("\0").filter(Boolean);
 }
 
 /**
@@ -230,101 +203,6 @@ export async function restoreTrackedMcpJson(repoRoot: string): Promise<void> {
   }
 }
 
-/** The unmerged paths of a stopped rebase/merge, exactly as on disk, each with the index stages it has (1 base, 2 ours, 3 theirs). */
-async function unmergedPaths(repoRoot: string): Promise<Map<string, Set<number>>> {
-  const { stdout } = await git(repoRoot, ["ls-files", "-u", "-z"]);
-  const unmerged = new Map<string, Set<number>>();
-  for (const entry of stdout.split("\0")) {
-    // `<mode> <object> <stage>\t<path>`
-    const tab = entry.indexOf("\t");
-    if (tab === -1) continue;
-    const stage = Number.parseInt(entry.slice(0, tab).split(" ")[2] ?? "", 10);
-    const file = entry.slice(tab + 1);
-    if (!file || !Number.isFinite(stage)) continue;
-    const stages = unmerged.get(file) ?? new Set<number>();
-    stages.add(stage);
-    unmerged.set(file, stages);
-  }
-  return unmerged;
-}
-
-/** Path arguments per git command (argv has a size limit; a path is at most a few hundred bytes). */
-const PATHS_PER_COMMAND = 100;
-/** A rebase stops at most once per replayed commit; this only bounds a loop that would otherwise never end. */
-const MAX_REBASE_STOPS = 1000;
-
-/**
- * Settle every unmerged path of a stopped rebase in favour of the LOCAL side —
- * in a rebase that is "theirs" (stage 3), the commit being replayed: its
- * content where it has the file, a deletion where it deleted a file both sides
- * knew (stage 1 without 3). A path only the remote side added (stage 2 alone —
- * a rename on the remote) is not the local side's to delete and is kept as the
- * remote has it. Paths go to git as literal pathspecs, after `--`.
- */
-async function keepLocalSide(repoRoot: string, unmerged: Map<string, Set<number>>): Promise<void> {
-  const pick = (test: (stages: Set<number>) => boolean) => [...unmerged].filter(([, stages]) => test(stages)).map(([file]) => file);
-  const settle = async (files: string[], commands: string[][]): Promise<void> => {
-    for (let i = 0; i < files.length; i += PATHS_PER_COMMAND) {
-      const chunk = files.slice(i, i + PATHS_PER_COMMAND);
-      for (const command of commands) await git(repoRoot, ["--literal-pathspecs", ...command, "--", ...chunk]);
-    }
-  };
-  await settle(pick((stages) => stages.has(3)), [["checkout", "--theirs"], ["add"]]);
-  await settle(pick((stages) => !stages.has(3) && stages.has(1)), [["rm", "-q", "-f"]]);
-  await settle(pick((stages) => !stages.has(3) && !stages.has(1)), [["checkout", "--ours"], ["add"]]);
-}
-
-/**
- * Replay the local commits onto `origin/<branch>`. A conflict stops it: when
- * the caller gave `vaultPaths` and EVERY conflicted path satisfies it, the
- * local side is kept and the rebase goes on (to the next commit, which may
- * stop again); any other conflict — or a rebase that cannot start — is
- * aborted, which leaves the local commits exactly as they were, and thrown as
- * `REBASE_CONFLICT:<files>`.
- */
-async function rebaseOntoRemote(repoRoot: string, branch: string, vaultPaths?: (path: string) => boolean): Promise<void> {
-  // `rebase --continue` re-commits the replayed commit with its own message: no editor.
-  const noEditor: GitConfigPairs = [["core.editor", "true"]];
-  let step: () => Promise<unknown> = () => git(repoRoot, ["rebase", `origin/${branch}`]);
-  for (let stops = 0; ; stops += 1) {
-    try {
-      await step();
-      return;
-    } catch {
-      // Conflicting external change (or a rebase that could not start): capture
-      // the conflicted paths. The file list is best-effort.
-      let unmerged = new Map<string, Set<number>>();
-      try {
-        unmerged = await unmergedPaths(repoRoot);
-      } catch {
-        /* an unreadable list is "not ours to settle" */
-      }
-      const conflicted = [...unmerged.keys()];
-      let settled = false;
-      if (vaultPaths && conflicted.length > 0 && stops < MAX_REBASE_STOPS && conflicted.every((file) => vaultPaths(file))) {
-        try {
-          await keepLocalSide(repoRoot, unmerged);
-          settled = true;
-        } catch {
-          /* falls through to the abort */
-        }
-      }
-      if (!settled) {
-        // Restore the pre-rebase state (local commits preserved) and surface a
-        // decodable sentinel — the generic push-failure hint would mislead.
-        await git(repoRoot, ["rebase", "--abort"]).catch(() => {});
-        throw new Error(`REBASE_CONFLICT:${conflicted.join(", ")}`);
-      }
-      // Keeping the local side can leave the replayed commit with nothing to add (the remote already says the same).
-      const empty = await git(repoRoot, ["diff", "--cached", "--quiet"]).then(
-        () => true,
-        () => false,
-      );
-      step = () => git(repoRoot, ["rebase", empty ? "--skip" : "--continue"], undefined, noEditor);
-    }
-  }
-}
-
 /**
  * Stage all changes, commit with the given identity, and push to the remote
  * branch — the body of the knowledge commitAndPush path. Returns false when there is nothing to do (clean tree AND nothing
@@ -339,9 +217,7 @@ async function rebaseOntoRemote(repoRoot: string, branch: string, vaultPaths?: (
  * clone permanently diverged. A CONFLICTING rebase is aborted — the local
  * commits stay intact — and surfaces as `REBASE_CONFLICT:<files>` so the tool
  * layer can explain the real cause (see repoToolKit.commitFailureMessage)
- * instead of hinting at token/branch-protection problems. A caller that owns some
- * paths outright (`vaultPaths`) gets conflicts confined to them settled for its
- * side, and its `afterRebase` hook before the push — see the options.
+ * instead of hinting at token/branch-protection problems.
  *
  * PRESERVE: restoreTrackedMcpJson runs BEFORE `git add -A`, and auth is routed
  * per-host via tokenForGitUrl — this is the security-sensitive auth/push path.
@@ -359,45 +235,15 @@ export async function commitAndPushClone(
     log: Record<string, unknown>;
     pushedMessage: string;
     /**
-     * A last look before a commit is made: called with every path `git add -A`
-     * staged (exactly as on disk), only when there is something to commit. A
-     * throw stops here — nothing is committed or pushed (the paths stay staged,
-     * which the next `git add -A` re-reads anyway). Absent = today's behaviour.
+     * Paths this commit must NOT carry, whatever the working tree holds there:
+     * a staged change at such a path is taken out of the index again before the
+     * commit (the file itself is left as it is). The knowledge repository uses
+     * it for vault-note paths — the notes live in the memory service, so a
+     * change at such a path in the clone is nobody's to push (what the retired
+     * mirror left behind, or a repository's own notes waiting for the import).
+     * Absent = everything `git add -A` staged is committed.
      */
-    checkStaged?: (staged: string[]) => void | Promise<void>;
-    /**
-     * Paths whose content the CALLER owns outright (the vault notes of an owner
-     * whose vault lives in the memory service: the clone only holds a copy). A
-     * rebase conflict whose conflicted paths ALL satisfy it is resolved in
-     * favour of the local side and the rebase continues — a direct git edit of
-     * such a file never blocks a commit. Any other conflict aborts as always.
-     * Absent = every conflict aborts (today's behaviour).
-     */
-    vaultPaths?: (path: string) => boolean;
-    /**
-     * Runs after local commits were rebased onto remote commits and before the
-     * push: the remote's commits changed the working tree, so the caller may
-     * write its own files again. What it changed is committed too
-     * (`followUpMessage`, else the commit message; `checkStaged` looks at it
-     * as well). Not called when nothing was rebased.
-     */
-    afterRebase?: () => Promise<void>;
-    followUpMessage?: string;
-    /**
-     * A look at what this push would carry, BEFORE anything is committed,
-     * rebased or pushed: the paths that the unpushed local commits AND the
-     * staged changes change against the remote branch (the diff from their
-     * merge base to the index, after the fetch; null = the remote has no such
-     * branch yet, or HEAD is detached). A throw stops here: the clone is left
-     * exactly as it was before the call — its commits untouched, the pending
-     * changes still uncommitted (staged) in the working tree — so nothing is
-     * stranded on a local branch and a refused push can still be redirected
-     * (the branch set back). It looks once: NOT at a follow-up commit
-     * `afterRebase` makes. Histories with no common commit are compared tree
-     * to tree (then paths only the remote has are listed too). Absent =
-     * today's behaviour (and no fetch before the commit).
-     */
-    beforePush?: (changed: string[] | null) => void | Promise<void>;
+    leaveOut?: (path: string) => boolean;
   },
 ): Promise<boolean> {
   if (!(await pathExists(path.join(repoRoot, ".git")))) {
@@ -412,85 +258,56 @@ export async function commitAndPushClone(
   // runtime-only edit never gets committed/pushed. MUST run before `git add -A`.
   await restoreTrackedMcpJson(repoRoot);
   await git(repoRoot, ["add", "-A"]);
-  const hasChanges = (await dirtyPaths(repoRoot)).length > 0;
+  if (options.leaveOut) await unstage(repoRoot, options.leaveOut);
+  // What the commit would record — not merely "the tree is dirty": a path left out above is still dirty.
+  const hasChanges = await git(repoRoot, ["diff", "--cached", "--quiet"]).then(
+    () => false,
+    () => true,
+  );
   const branch = safePushBranch(options.branch || (await currentBranch(repoRoot)) || "HEAD");
-  // commitMsg is the value of `-m` (a discrete argv element), so it's never
-  // parsed as a flag even if it starts with `-`.
-  const commitMsg = options.message.trim() || options.defaultMessage;
-  if (!hasChanges && (branch === "HEAD" || !(await aheadOfRemote(repoRoot, branch)))) {
+  if (hasChanges) {
+    // commitMsg is the value of `-m` (a discrete argv element), so it's never
+    // parsed as a flag even if it starts with `-`.
+    const commitMsg = options.message.trim() || options.defaultMessage;
+    await git(repoRoot, ["commit", "-m", commitMsg]);
+  } else if (branch === "HEAD" || !(await aheadOfRemote(repoRoot, branch))) {
     // Clean tree and nothing stacked locally → genuinely nothing to do. (With
     // unpushed commits we fall through and push them instead of reporting "no
     // changes" until the next edit.)
     return false;
   }
-  if (hasChanges && options.checkStaged) {
-    await options.checkStaged(await stagedPaths(repoRoot));
-  }
 
   const auth = gitAuthConfig(options.url, tokenForGitUrl(options.url, options.config, options.tokens));
   // Absorb remote commits pushed since the last sync BEFORE pushing. Fetch is
   // best-effort: offline, the push below reports the real network error.
-  const fetchRemote = async (): Promise<void> => {
-    if (branch === "HEAD") return;
+  if (branch !== "HEAD") {
     try {
       await git(repoRoot, ["fetch", "origin", branch], undefined, auth);
     } catch {
       /* fall through to push */
     }
-  };
-  if (options.beforePush) {
-    // The look needs the remote as it is now, and comes before the commit: a refusal leaves no commit behind.
-    await fetchRemote();
-    await options.beforePush(branch === "HEAD" ? null : await pathsCarriedByPush(repoRoot, branch));
-  }
-  if (hasChanges) {
-    await git(repoRoot, ["commit", "-m", commitMsg]);
-  }
-  if (!options.beforePush) {
-    await fetchRemote();
-  }
-  if (branch !== "HEAD") {
     if ((await behindRemote(repoRoot, branch)) > 0) {
-      await rebaseOntoRemote(repoRoot, branch, options.vaultPaths);
-      if (options.afterRebase) {
-        await options.afterRebase();
-        // Same order as the first commit: the `.mcp.json` restore BEFORE `git add -A`.
-        await restoreTrackedMcpJson(repoRoot);
-        await git(repoRoot, ["add", "-A"]);
-        if ((await dirtyPaths(repoRoot)).length > 0) {
-          if (options.checkStaged) {
-            await options.checkStaged(await stagedPaths(repoRoot));
-          }
-          await git(repoRoot, ["commit", "-m", options.followUpMessage?.trim() || commitMsg]);
+      try {
+        await git(repoRoot, ["rebase", `origin/${branch}`]);
+      } catch {
+        // Conflicting external change (or a rebase that could not start):
+        // capture the conflicted paths exactly as on disk (`-z`: no quoting of
+        // non-ASCII names), restore the pre-rebase state (local commits
+        // preserved), and surface a decodable sentinel — the generic
+        // push-failure hint would mislead.
+        let conflicted: string[] = [];
+        try {
+          const { stdout } = await git(repoRoot, ["diff", "--name-only", "--diff-filter=U", "-z"]);
+          conflicted = stdout.split("\0").filter(Boolean);
+        } catch {
+          /* file list is best-effort */
         }
+        await git(repoRoot, ["rebase", "--abort"]).catch(() => {});
+        throw new Error(`REBASE_CONFLICT:${conflicted.join(", ")}`);
       }
     }
   }
   await git(repoRoot, ["push", "origin", `HEAD:${branch}`], undefined, auth);
   logger.info({ ...options.log, branch }, options.pushedMessage);
   return true;
-}
-
-/**
- * The paths a push would bring to `origin/<branch>`: what the unpushed local
- * commits and the staged changes change — the diff from the merge base of the
- * remote branch and HEAD to the INDEX (everything is staged by then) — or null
- * when the remote has no such branch. A rename counts as both of its paths.
- * Histories with no common commit (and a clone without a commit) are compared
- * against the remote branch's tree.
- */
-async function pathsCarriedByPush(repoRoot: string, branch: string): Promise<string[] | null> {
-  try {
-    await git(repoRoot, ["rev-parse", "--verify", "--quiet", `origin/${branch}`]);
-  } catch {
-    return null;
-  }
-  let base = `origin/${branch}`;
-  try {
-    base = (await git(repoRoot, ["merge-base", `origin/${branch}`, "HEAD"])).stdout.trim() || base;
-  } catch {
-    /* no common commit: the remote branch's tree */
-  }
-  const { stdout } = await git(repoRoot, ["diff", "--name-only", "-z", "--no-renames", "--cached", base]);
-  return stdout.split("\0").filter(Boolean);
 }

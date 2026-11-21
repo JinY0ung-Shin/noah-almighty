@@ -172,6 +172,8 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   shared_mcp_check: "공용 MCP 서버 연결 확인",
   shared_mcp_bind: "공용 MCP 서버 시크릿 연결",
   shared_mcp_unbind: "공용 MCP 서버 시크릿 연결 해제",
+  // Retired with the vault migration and the repository copy (2026-11-20): nothing writes these any more,
+  // the labels stay so that old audit rows read as what they were.
   set_personal_vault_mode: "개인 브레인 보관 방식 변경",
   personal_vault_run: "개인 브레인 이전 실행",
   personal_vault_rollback: "개인 브레인 되돌리기",
@@ -404,6 +406,8 @@ export default function AdminView() {
   // Per-filter counts, recomputed with the user list so the chips follow a
   // suspend/delete/role change.
   const userFilterCounts = new Map(userFilters.map((f) => [f.id, state.adminUsers.filter(f.match).length]));
+  // Single sign-on only: accounts that still log in with their built-in password.
+  const passwordNotMovedCount = state.bootstrap?.sso ? state.adminUsers.filter((u) => u.builtInPassword).length : 0;
 
   async function load() {
     if (loadBusyRef.current) return;
@@ -849,6 +853,11 @@ export default function AdminView() {
                       </button>
                     ))}
                   </div>
+                  {passwordNotMovedCount > 0 && (
+                    <p className="muted admin-users-note">
+                      비밀번호를 아직 통합 로그인으로 옮기지 않은 계정 {passwordNotMovedCount}개 · 각 계정이 다음에 로그인할 때 옮겨집니다.
+                    </p>
+                  )}
                   <div className="admin-list">
                     {!filteredUsers.length ? (
                       <div className="muted pad">
@@ -1340,11 +1349,11 @@ export default function AdminView() {
                   </section>
                 </div>
               ) : null}
-              {/* 시스템 ▸ 개인 브레인 이전: always mounted (its messages and the last dry-run survive a
-                  tab switch), below the system cards; it reads its own route, so it shows even when
-                  the system info could not be loaded. */}
+              {/* 시스템 ▸ 개인 브레인 사용량: always mounted (what it read survives a tab switch), below
+                  the system cards; it reads its own route, so it shows even when the system info could
+                  not be loaded (an owner whose name is not known then shows as their id). */}
               <div className={state.adminTab === "system" ? "admin-list admin-vault-slot" : undefined}>
-                <AdminPersonalVaultPanel active={state.adminTab === "system"} />
+                <AdminPersonalVaultPanel active={state.adminTab === "system"} users={state.adminUsers} />
               </div>
             </div>
           </>

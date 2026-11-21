@@ -10,10 +10,12 @@ deterministic stub for tests and the e2e harness, which also replays scripted `d
 included) stops the boot. No
 pi-gateway code is changed — everything pi lacks is a Noah-side degrade, stated on BOTH metacognition surfaces.
 
-## Direction: pi owns the harness (user decisions, 2026-11-20 — NOT built yet)
+## Direction: pi owns the harness (user decisions, 2026-11-20 — steps 0 and 1 DONE, the rest NOT built yet)
 
 **Everything below this section describes the code as it is.** This section is the decided target; until a
-step lands, the invariants in `CLAUDE.md` and in these pages hold as written.
+step lands, the invariants in `CLAUDE.md` and in these pages hold as written. Steps 0 and 1 have landed and
+are described as code where they live ("Memory service" below, [`repo-knowledge.md`](repo-knowledge.md)
+"Personal vault").
 
 - **The boundary.** pi-gateway becomes the team's harness-management system: *what an agent knows and what it
   can do* — memory and both brains, skills, tools, prompts, and the policies over them. Noah keeps *the
@@ -36,24 +38,46 @@ step lands, the invariants in `CLAUDE.md` and in these pages hold as written.
   - runs nobody is present for (routines, the task API, consultations) have no user token — Noah calls pi as a
     service account and names the user, as the service key does today;
   - a suspension bites at once (short-lived tokens, and Noah keeps its own per-request check).
-  Keycloak takes login, the admin role (pi's admin screen then needs no key proxy) and the approved-teammate
-  group; per-avatar relations (visibility, shared account, ownership) and run-kind limits stay Noah's.
-- **Personal brain (steps 1 and 3).** The one deployment (the user's company server — there is no other)
-  has every owner on home `memory` (reported 2026-11-20). `memory` becomes the ONLY home, for every user and
-  without a connected knowledge repository (a wiki is created by its first write; the starter notes need a
-  seed that is not the repository template). The git mirror, the deletion ledger, the cutover / rollback and
-  the `repo` home path are retired. History is a LOCAL git inside pi, one repository per wiki, one commit per
-  change naming who made it; nothing is pushed to an external git. **pi's memory volume is then the only
-  copy — its backup is an operator duty**, and the memory → repository rollback is gone. Copies already in
-  users' repositories stay as last written. Then the brain tools themselves move to pi (step 3).
-  **"A brain without a repository" is NOT built on Noah's repo tools — it arrives WITH step 3** (user,
-  2026-11-20): the brain is tied to the repository by structure, not by a few gates (notes are written only
-  through `mcp__repo__*`, a `personal_vaults` row needs a source repository, the starter notes ride
-  `create_repo`, the screens key on `user.knowledgeRepo`, and the prompt, manual and seven bundled skills
-  describe capture as "repo write + commit"), so cutting it in step 1 would be built and reworded twice.
-  Until step 3 the brain is shown only to users who have it set up — as today, a connected knowledge
-  repository — and step 1 keeps the one path that gives a newly connected repository's owner a vault in pi.
-  After step 3 a repository's `wiki/` folder is plain repository files again.
+  Keycloak takes login, the admin role and the approved-teammate group; per-avatar relations (visibility,
+  shared account, ownership) and run-kind limits stay Noah's.
+- **Screens for a person's own harness live in pi, once, and Noah RELAYS them (user, 2026-11-21).** pi is also
+  run on its own (there, people use only its admin screen and `/v1` callers are programs), so "my brain" (read,
+  edit, history, restore) and later the team brain's reader are pi screens, not a second copy in Noah. Noah
+  shows them under its own address, the way `/admin` is proxied today — never a new window to pi's address —
+  and the relay carries the PERSON's token instead of pi's admin key, so pi checks the person itself. What
+  follows for step 2:
+  - pi logs in EVERY teammate, not only admins. The token decides: admin role → the admin panel; the token's
+    user → only that user's brain; the approved-teammate group → the team brain. For a screen identity IS
+    enough (the viewer is the owner); the "identity alone was not the answer" case above is agent RUNS only.
+  - pi must see who is an approved teammate, and today only Noah's DB knows: Noah writes an approval and a
+    suspension into the Keycloak group, and pi reads the group from the token. pi has no per-request check of
+    Noah's DB, so a short token lifetime is what makes a suspension bite there.
+  - A pi with NO issuer configured keeps its admin-key login, for now (user, 2026-11-21) — one way per
+    install: an issuer set means OIDC only, none means the key.
+  - Existing passwords move at each user's NEXT LOGIN (user, 2026-11-21): Keycloak cannot verify Noah's
+    scrypt hashes (checked on 26.8.2: argon2 and pbkdf2 only), so accounts are imported with their id and no
+    password, Noah's old form checks the old hash one last time and puts that password into Keycloak, and the
+    form and the hash column are retired when no old hash is left.
+  - Keycloak's browser address is a path of Noah's own address behind the nginx overlay (checked: relative
+    path, only `…/realms/` and `…/resources/` passed, the admin console not), and its image comes from the
+    operator's mirror. Noah and pi reach it on the internal network; only the browser needs the public path.
+  - Still open: whether `/v1` keeps keys for programs (leaning yes — its callers are programs).
+- **Personal brain (step 1 DONE 2026-11-20; step 3 ahead).** What is true now: the memory service is the
+  ONLY home of a personal vault, for every owner. The `repo` home, the git mirror, the deletion ledger and
+  the cutover / rollback are retired (names reserved). History is a LOCAL git inside pi, one repository per
+  wiki, one commit per change naming who made it; nothing is pushed to an external git. **pi's memory volume
+  is the only copy — its backup is an operator duty**, and there is no way back to a repository home. Copies
+  already in users' repositories stay as last written and are never updated. A repository's own notes enter
+  a vault only through the one-time import: into an EMPTY vault when a repository or branch is connected,
+  and once — creating what is missing — for owners who were never moved, at the first boot of this build.
+  **Still ahead (step 3): the brain tools themselves move to pi, and with them a brain without a
+  repository** (user, 2026-11-20). Until then the brain is tied to the repository by structure, not by a few
+  gates: notes are written only through `mcp__repo__*`, the starter notes ride `create_repo`, the screens key
+  on `user.knowledgeRepo`, and the prompt, manual and bundled skills describe capture as a repo-tool write —
+  so the brain is shown only to users who have a knowledge repository connected, and notes written while one
+  was connected are unreachable (never lost) without one. Step 3 also needs a seed for the starter notes that
+  is not the repository template (a wiki is created by its first write). After step 3 a repository's `wiki/`
+  folder is plain repository files again.
 - **Team brain (step 4) moves to pi too:** the vault with its history (the existing local git repository
   moves as it is), the read tools, the schema and policy validation (whoever holds the original must enforce
   them), a draft → commit pair where a commit needs a PERSON's token, and the admins' policy in pi's admin
@@ -62,12 +86,15 @@ step lands, the invariants in `CLAUDE.md` and in these pages hold as written.
   survive the move: the model only drafts; one press by the drafter per card; no delete; a page changed since
   it was read is refused; wiki text reaches an avatar marked as untrusted; the move goes through
   `retirementGate()` and quarantine; retired names stay reserved.
-- **Order:** (0) pi's memory service keeps history in a local git — DONE, pi `2759ae2`, bumped 2026-11-20 → (1) the retirements in Noah (mirror,
-  deletion ledger, migration, the `repo` home's dead branches) → (2) Keycloak + OIDC, Noah first, then pi →
-  (3) personal brain tools in pi, and with them a brain without a repository → (4) team brain in pi. 1 and 2
-  are independent; 3 needs 1 (and can start on the service key, switching the identity check to tokens
-  later); 4 needs 2. **0 comes before 1 (user, 2026-11-20): the mirror is not dropped until pi keeps
-  history**, so there is never a time with neither a second copy nor a history.
+- **Order:** (0) pi's memory service keeps history in a local git — DONE, pi `2759ae2`, bumped 2026-11-20 →
+  (1) the retirements in Noah (mirror, deletion ledger, migration, the `repo` home) — DONE 2026-11-20 →
+  (2) Keycloak + OIDC, Noah first (BUILT 2026-11-21 as an optional overlay — [`login-keycloak.md`](login-keycloak.md);
+  the built-in login is not retired yet), then pi (its ADMIN API takes the person's token since pi `d6411c9`,
+  2026-11-21; no browser login of pi's own, nothing on `/v1`) → (3) personal brain tools in pi, and with them a brain without a
+  repository → (4) team brain in pi. 2 is independent of the rest; 3 needed 1 (done) and can start on the
+  service key, switching the identity check to tokens later; 4 needs 2. **0 came before 1 (user,
+  2026-11-20): the mirror was not dropped until pi kept history**, so there was never a time with neither a
+  second copy nor a history.
 
 ## Run classes and the sandbox principal
 
@@ -844,8 +871,8 @@ boot-test recipe: `build-run-verify.md`). No pi-gateway code or compose file is 
   wider blast radius: the admin key configures pi itself.
 - **Workspaces** — `$PI_GATEWAY_HOME/workspaces` is bind-mounted at `/srv/pi-workspaces` (`PI_WORKSPACES_DIR`,
   fixed), uid 1000 on both sides.
-- **Memory service** — pi's `memory` service (the home of personal vaults that were moved out of their
-  repositories) joins `noah-memory`, an INTERNAL network only it and Noah are on (it stays on pi's own
+- **Memory service** — pi's `memory` service (the home of every owner's personal vault) joins
+  `noah-memory`, an INTERNAL network only it and Noah are on (it stays on pi's own
   internal `control` too, as pi's compose puts it; sandboxes have no network at all); Noah reads it through the
   fixed `PI_MEMORY_URL=http://memory:7090` and its own 0400 uid-1000 copy of the service's key
   (`PI_MEMORY_API_KEY_FILE=/run/secrets/pi_memory_api_key_noah`). Detail: "Memory service (personal vaults,
@@ -933,15 +960,16 @@ PI_GATEWAY_ADMIN_KEY=… node scripts/pi-register-mcp.mjs --gateway http://pi-ga
 ## Memory service (personal vaults, #84)
 
 pi-gateway ships a second service next to the gateway, `apps/memory`: one markdown wiki per owner. Noah keeps
-the personal vault of an owner whose vault home is `memory` there (`personalVault.ts`; the rules, the client
-and the contract → [`repo-knowledge.md`](repo-knowledge.md) "Personal vault: two homes"). This section is what
+EVERY owner's personal vault there — it is the vault's only home (`personalVault.ts`; the rules, the client
+and the contract → [`repo-knowledge.md`](repo-knowledge.md) "Personal vault"). This section is what
 Noah needs from the STACK.
 
 **In Noah's code:**
 - `PI_MEMORY_URL` + `PI_MEMORY_API_KEY_FILE` → `config.memory` (`parseMemoryConfig`). Both or neither; the key
   from a file only (an inline `PI_MEMORY_API_KEY` stops the boot, like pi's admin key), so it is never in
-  `process.env`. Neither set (a native run without the service) = the feature is off: no owner can be moved,
-  the mirror loop does not start, and the admin screen says the service is not configured.
+  `process.env`. Neither set (a native run without the service) = this server has no personal brain: every
+  vault use fails as unavailable (`not_configured`) — there is no fallback to the knowledge repository's
+  clone — and both vault screens say the service is not configured.
 - Noah calls the service DIRECTLY (`memory/memoryClient.ts`, `/wiki/<owner>/…`, bearer key). It is never
   registered in pi's broker (`PI_NOAH_SERVER_NAMES`, `scripts/pi-register-mcp.mjs` are unchanged): pi has no
   per-request server filter, so a registered memory server would give every session a second, ungated set of
@@ -954,9 +982,10 @@ Noah needs from the STACK.
   `memory`, the key from `$PI_GATEWAY_SECRETS/memory/api_key` — for pi used standalone, and pi's
   `setup-host.sh` prints the key for it. Noah proxies that very page at `/admin` to Noah admins. A registered
   server shows EVERY session a second set of memory tools that never pass Noah: no run-class gate (a
-  teammate's chat, a consultation), no `isPersonalVaultPath`, no vault write queue, no deletion ledger, the
-  wiki chosen by the requesting principal instead of the avatar owner — and the mirror then copies whatever
-  landed in an owner's wiki into their repository. **Nothing in the code prevents or detects it:** the
+  teammate's chat, a consultation), no `isPersonalVaultPath`, no vault write queue, the wiki chosen by the
+  requesting principal instead of the avatar owner — and whatever such a tool writes into an owner's wiki IS
+  that owner's brain from then on (the service is the only home; Noah's tools read it back like any note).
+  **Nothing in the code prevents or detects it:** the
   `/admin` proxy forwards MCP-page writes like any other, `pi-setup` (`scripts/pi-register-mcp.mjs`) only
   registers and retires Noah's own ids and does not look for `memory`, and the client assumes it is the
   wiki's only writer (`repo-knowledge.md` "What Noah does not verify").
@@ -980,11 +1009,11 @@ Noah needs from the STACK.
   (uid 1000, 0400, the same `copy_for_noah` as the service and admin keys — same same-uid caveat, #71) and
   FAILS when pi's key is missing or empty (a pi checkout older than its memory service). Compose mounts
   Noah's copy as the secret `pi_memory_api_key_noah`.
-- **Without Noah's copy the stack does not start** — compose mounts it as a secret, so this holds also for an
-  instance where nobody was moved. `setup-host.sh` therefore runs before `docker compose up` on the upgrade
-  that brings the service in, as on every upgrade.
-- **No `depends_on`:** Noah does not wait for the memory service. An outage degrades the brain of moved
-  owners (reported as an outage on every surface — `repo-knowledge.md`); it does not stop the app.
+- **Without Noah's copy the stack does not start** — compose mounts it as a secret. `setup-host.sh`
+  therefore runs before `docker compose up` on the upgrade that brings the service in, as on every upgrade.
+- **No `depends_on`:** Noah does not wait for the memory service. An outage takes every owner's brain away
+  for as long as it lasts (reported as an outage on every surface — `repo-knowledge.md`); it does not stop
+  the app.
 - **Pin:** the service arrived with pi-gateway `e0e5b8c` (the memory service and its JSON API).
 - **The service keeps every wiki's history (pi `2759ae2`, 2026-11-20):** a local git repository per wiki inside
   its own volume, one commit per change (`create` / `replace` / `edit` / `delete` + the note path, authored by the
@@ -994,25 +1023,26 @@ Noah needs from the STACK.
   change whose commit failed answers 500 — Noah's client reports it as an outage and "read again before
   repeating", which is right, because the note may already be changed; and a wiki's FIRST change after the
   upgrade also commits every note it already held (about 1 s for 3,000 notes on the dev box, inside the
-  client's 15 s). The git mirror is still what Noah does today; this is step 0 of "Direction" above.
+  client's 15 s). This history is the only one there is: Noah pushes no copy of a vault to any git (the
+  mirror into users' repositories was retired on 2026-11-20 — step 1 of "Direction" above; this was step 0).
 - **Seen on a real stack** (boot test at pi `60f4b59`, `96-memory.mjs`; → `build-run-verify.md`): the service
   healthy under pi's hardening, the two-member `noah-memory` network, Noah's 0400 key copy, and — from inside
   Noah's container with that key — every answer the client depends on (an owner without a wiki lists as
   empty with 200, `not_found` vs `no_route`, `exists`, `stale`, `invalid_path`, search, deleting a wiki), and
-  no `memory` server in pi's broker. **Not seen there:** an owner actually moved (cutover, tools, mirror,
-  rollback) — the boot stack has no git host with a knowledge repository; that path rests on the tests
-  against the hand-written double (`tests/helpers/fakeMemory.ts`).
-- **The service's search is BM25 since pi `1d4a1fe` (2026-11-19) — it no longer ranks like the clone's
-  `rankBrainNotes`.** Title/aliases, tags and the whole note are scored separately and weighted 5·3·1 (so
-  title > tag > body still holds), an English word matches only as a WHOLE word (`deploy` does not find
-  `deployment`; the clone ranker's substring match does), Korean is cut into two-character pieces (`결함을`
+  no `memory` server in pi's broker. **Not seen there:** an owner's vault tools over a connected knowledge
+  repository, or the import of a repository's own notes — the boot stack has no git host with a knowledge
+  repository; that path rests on the tests against the hand-written double (`tests/helpers/fakeMemory.ts`).
+- **The service's search is BM25 since pi `1d4a1fe` (2026-11-19) — it does not rank like Noah's own
+  `rankBrainNotes`, which still ranks the team brain.** Title/aliases, tags and the whole note are scored
+  separately and weighted 5·3·1 (so title > tag > body still holds), an English word matches only as a WHOLE
+  word (`deploy` does not find `deployment`; `rankBrainNotes`' substring match does), Korean is cut into two-character pieces (`결함을`
   finds `결함이`), scores are decimals, and a query with no letter or digit in it is refused with 400
   `invalid_query` — Noah answers such a query itself as no hit and never sends it (`hasSearchWord`,
   `personalVault.ts`; → `repo-knowledge.md` "Search: what differs"). Seen through Noah's built client in the
   boot test at pi `9f579dd` (`97-memory-search.mjs`; → `build-run-verify.md`).
 - **Not sized:** the service's volume, its backup and its limits (10,000 notes / 256 MiB per wiki) are pi's
-  and the operator's. Noah backs up nothing of it: the only other copy of a moved vault is its repository
-  mirror.
+  and the operator's. Noah backs up nothing of it, and there is no other copy of a vault: `scripts/deploy.sh
+  --backup` is the stack's way to archive the `memory-data` volume (README "Upgrading").
 
 ## pi admin panel proxy (`routes/piAdminProxy.ts`)
 
@@ -1035,6 +1065,12 @@ sandbox (`chat/file?user=`), and run the test chat — full bash — in any user
 - **Key** — Noah's cookies, any client `Authorization` and client `X-Forwarded-*` are stripped; pi's admin key
   (`PiRuntimeConfig.adminApiKey`, `PI_GATEWAY_ADMIN_API_KEY_FILE` ONLY — an inline `PI_GATEWAY_ADMIN_API_KEY` stops
   the boot) is injected as `Authorization: Bearer`. Without the key `/admin` answers a Korean 503.
+- **Whose bearer (2026-11-21)** — when the admin's Noah session began at Keycloak, the relay sends that PERSON's
+  Keycloak access token instead of the key (`keycloakPersonToken.ts`: `personAccessTokenFor(...) ?? adminKey`, per
+  forwarded request); pi verifies it itself, so pi knows who acts. The key still goes out for a built-in-login
+  session, an install without Keycloak, and a refresh Keycloak refused or could not answer (a warn line) — so it
+  stays REQUIRED and Noah's gate is unchanged. Access tokens live in memory only; the Noah session is looked up
+  before every use, so a logged-out session's token goes nowhere. A token pi refuses is NOT retried with the key.
 - **CSRF** — pi skips its own `X-Admin-Request` check for bearer callers, and an injected bearer is ambient, so
   Noah checks instead: a non-GET/HEAD/OPTIONS call needs `Sec-Fetch-Site: same-origin` (or, without it, an
   `Origin` whose host is the request's Host; the scheme is not compared, for TLS-terminating proxies) AND

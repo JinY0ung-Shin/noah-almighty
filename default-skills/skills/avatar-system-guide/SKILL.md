@@ -52,7 +52,7 @@ them — perform them directly with the MCP tools provided.
 - Enable/disable a plugin: `action: "set_enabled"` with its `id` and `enabled`.
 - Write work knowledge or a new skill: when a knowledge repo is connected, apply it in the order
   `mcp__repo__scaffold_skill`, `mcp__repo__write_file`, `mcp__repo__commit`. To retain a durable fact
-  rather than a whole skill, use the brain-ingest skill (a `raw/` write plus a commit).
+  rather than a whole skill, use the brain-ingest skill (a `raw/` note, saved when written — no commit).
 - Register/work a general git repo: when the owner asks to manage a repo, register it with
   `mcp__git_repo__register_repo`, then use `mcp__git_repo__sync_repo`/`mcp__git_repo__push` for remote git and
   `mcp__git_repo__open_repo` to make it the working directory (editing and local git happen with native

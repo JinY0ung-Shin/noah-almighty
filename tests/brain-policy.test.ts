@@ -3,13 +3,17 @@
 // enforces + guidelines), and the recorded personal-note → team-page links that
 // are marked at read time (never forced into the personal repo). Since
 // 2026-11-13 every teammate writes the team brain directly: no rule here may
-// assume a queue or an approving admin.
+// assume a queue or an approving admin. Since 2026-11-20 a personal note lives
+// in the memory service only: the notes these tests link are placed there, and
+// the copy the knowledge repository holds is never what a tool reads.
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { callTool, gitInit, makeBareRemote, withTempDir } from "./helpers.js";
+import { createFakeMemoryClient } from "./helpers/fakeMemory.js";
 import { createServices } from "../src/server/app.js";
+import { setMemoryClientForTests } from "../src/server/memory/memoryClient.js";
 import { buildBrainTools, isKeptPersonalNote } from "../src/server/agent/brainTools.js";
 import type { TeamBrainToolsContext } from "../src/server/agent/teamBrainTools.js";
 import { TEAM_INTAKE, TEAM_WRITE_FLOW, teamGuidelinesBlock } from "../src/server/agent/teamBrainTools.js";
@@ -75,7 +79,10 @@ function setup(dir: string) {
   const mate = store.createUser({ username: "mate", displayName: "팀원", password: "password123" });
   store.touchConversation(admin.id, "conv-a", admin.id, "대화");
   store.touchConversation(mate.id, "conv-m", mate.id, "대화");
-  return { config, store, admin, mate };
+  // The memory service: the one home of every owner's personal notes.
+  const memory = createFakeMemoryClient();
+  setMemoryClientForTests(store, memory);
+  return { config, store, admin, mate, memory };
 }
 
 function knobs(over: Partial<TeamPolicyKnobs> = {}): TeamPolicyKnobs {
@@ -340,13 +347,22 @@ describe("prepare_team_policy → 팀 정책 반영", () => {
 });
 
 describe("personal notes linked to a team-brain card", () => {
+  /** What the knowledge repository holds at a note's path: a stale copy, which no tool may read. */
+  const STALE_COPY = "---\ntitle: 저장소에 남은 옛 사본\n---\n저장소의 사본 — 읽히면 안 된다.\n";
+
+  /**
+   * A connected knowledge repository plus the owner's personal notes. The notes
+   * (`files`) are in the memory service; the repository holds a DIFFERENT text
+   * at each of those paths, so a read from the clone would show in every assertion.
+   */
   function withPersonalRepo(s: ReturnType<typeof setup>, dir: string, files: Record<string, string>, owner: { id: string } = s.mate) {
     const remote = makeBareRemote(path.join(tempDir, dir, "remote.git"));
     const seed = path.join(tempDir, dir, "seed");
     gitInit(seed);
     for (const [rel, content] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(seed, rel)), { recursive: true });
-      fs.writeFileSync(path.join(seed, rel), content);
+      fs.writeFileSync(path.join(seed, rel), STALE_COPY);
+      s.memory.seed(owner.id, rel, content);
     }
     const g = (...a: string[]) => execFileSync("git", ["-C", seed, ...a], { stdio: "pipe" });
     g("add", "-A");
@@ -356,10 +372,9 @@ describe("personal notes linked to a team-brain card", () => {
     g("push", "-q", "origin", "main");
     s.store.setKnowledgeRepo(owner.id, remote, "main");
     return {
+      /** The owner rewrites a note: it changes in the memory service (the repository's copy stays as it was). */
       update(rel: string, content: string) {
-        fs.writeFileSync(path.join(seed, rel), content);
-        g("commit", "-qam", "edit");
-        g("push", "-q", "origin", "main");
+        s.memory.seed(owner.id, rel, content);
       },
     };
   }
@@ -621,9 +636,14 @@ describe("the Brain policy is ONE source", () => {
     expect(TEAM_SHARE_PASS_RULE).not.toContain("모두 제출");
     expect(TEAM_SHARE_PASS_RULE).toContain("an unpressed card of this conversation already holds");
     expect(TEAM_SHARE_PASS_RULE).toContain("a note marked `team_share: no`");
-    // A declined note is marked in the owner's own repo, by the avatar, and never asked about again.
+    // A declined note is marked in the owner's own vault, by the avatar, and never asked about again.
     expect(BRAIN_KEPT_PERSONAL_RULE).toContain("add the frontmatter line `team_share: no`");
     expect(BRAIN_KEPT_PERSONAL_RULE).toContain("never offered or selected again");
+    // A brain note is saved by the edit itself (2026-11-20): the rule never sends the avatar to commit one,
+    // neither to set the mark nor to remove it.
+    expect(BRAIN_KEPT_PERSONAL_RULE).toContain("with `mcp__repo__edit_file` (a brain note is saved when written — nothing to commit), and say in one line");
+    expect(BRAIN_KEPT_PERSONAL_RULE).toContain("then remove the mark first.");
+    expect(BRAIN_KEPT_PERSONAL_RULE.replace("nothing to commit", "")).not.toMatch(/commit/i);
     const manual = brainPolicyManualText();
     for (const rule of [TEAM_SHARE_LEVEL_RULE, TEAM_SHARE_PASS_RULE, BRAIN_KEPT_PERSONAL_RULE]) expect(manual).toContain(rule);
   });

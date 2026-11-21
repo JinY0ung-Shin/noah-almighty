@@ -24,8 +24,8 @@
 #                 service (Noah's server must be its only caller); SANDBOX_EGRESS_ALLOW names neither Noah
 #                 nor the memory service
 #
-# What it does NOT do: move anyone's brain to the memory service. That stays an admin's press in
-# 관리자 → 시스템 → 개인 브레인 이전 (미리 확인 first), after reading what the dry run reports.
+# What it does NOT do by itself: back up the memory service's volume. Every personal brain lives there (notes
+# and their history, nowhere else) — pass --backup, or keep that volume in your own backups.
 # Values from .env and the secret files are never printed.
 set -euo pipefail
 
@@ -248,12 +248,12 @@ echo
 if [ "$problems" -eq 0 ]; then
   echo "deployed: Noah $(git rev-parse --short HEAD), pi-gateway $(git -C "$PI_GATEWAY_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
 else
-  echo "deployed with $problems warning(s) above — fix them before moving anyone's brain to the memory service"
+  echo "deployed with $problems warning(s) above — fix them: personal brains live in the memory service"
 fi
 cat <<'NEXT'
 
-next (by hand, in the browser):
-  - 관리자 → 시스템 → 개인 브레인 이전 → 미리 확인: who would move, and what blocks whom
-  - only then 보관 방식 → 메모리 서비스로 이전 (per user 되돌리기 is the way back)
+remember: every personal brain (notes and their history) lives ONLY in the memory service's volume (memory-data).
+Nothing copies it anywhere — run this script with --backup, or keep that volume in your own backups.
+How full each brain is: 관리자 → 시스템 → 개인 브레인 사용량.
 NEXT
 [ "$problems" -eq 0 ]

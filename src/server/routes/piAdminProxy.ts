@@ -3,6 +3,7 @@ import https from "node:https";
 import { Router, type Request, type Response } from "express";
 import { sessionTokenFromRequest, type AuthenticatedRequest } from "../auth.js";
 import { piServicesFor } from "../agent/pi/piRuntime.js";
+import { personAccessTokenFor } from "../keycloakPersonToken.js";
 import logger from "../logger.js";
 import { sameOrigin, type RouterDeps } from "./_shared.js";
 
@@ -15,8 +16,14 @@ import { sameOrigin, type RouterDeps } from "./_shared.js";
  *
  * - Every request needs a Noah session of an ADMIN; nothing else is forwarded.
  *   A page load without one goes to `/`; an API call gets pi's error shape.
- * - Noah's cookies and any client `Authorization` are stripped and pi's admin
- *   key is injected as `Authorization: Bearer`, so pi's own login never shows.
+ * - Noah's cookies and any client `Authorization` are stripped and a bearer of
+ *   Noah's choosing is injected as `Authorization: Bearer`, so pi's own login
+ *   never shows. The bearer is the ADMIN'S OWN Keycloak access token when their
+ *   Noah session began at Keycloak (`keycloakPersonToken.ts`; pi verifies it
+ *   itself — signature, issuer, audience, expiry, the admin role — so pi knows
+ *   WHO acts), and pi's shared admin key otherwise: a built-in-login session,
+ *   an install without Keycloak, a refresh Keycloak refused or could not answer.
+ *   Either way the gate above is Noah's, and the key stays required configuration.
  *   pi skips its CSRF header check for bearer callers, so Noah does it instead:
  *   a mutating call must be same-origin (`Sec-Fetch-Site`, else `Origin`) AND
  *   carry pi's `X-Admin-Request: 1`. The ambient key also makes a GET dangerous
@@ -300,7 +307,7 @@ function fromPanel(req: Request): boolean {
 /** Content types relayed as-is on an API response; anything else is `application/octet-stream`. */
 const INERT_API_CONTENT_TYPE = /^\s*(?:application\/json|text\/event-stream|text\/plain|image\/[a-z0-9.+-]+)\s*(?:;|$)/i;
 
-function forwardedRequestHeaders(req: Request, adminKey: string): http.OutgoingHttpHeaders {
+function forwardedRequestHeaders(req: Request, bearer: string): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
     if (value === undefined) continue;
@@ -308,7 +315,7 @@ function forwardedRequestHeaders(req: Request, adminKey: string): http.OutgoingH
     if (DROPPED_REQUEST_HEADERS.has(lower) || lower.startsWith("x-forwarded-")) continue;
     headers[lower] = value;
   }
-  headers.authorization = `Bearer ${adminKey}`;
+  headers.authorization = `Bearer ${bearer}`;
   return headers;
 }
 
@@ -420,11 +427,11 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       }
     });
 
-    /** Sends the request on to pi: the buffered `body`, or the live request stream when null. */
-    const forward = (body: Buffer | null, bodyUser: string) => {
+    /** Sends the request on to pi as `bearer`: the buffered `body`, or the live request stream when null. */
+    const forward = (body: Buffer | null, bodyUser: string, bearer: string) => {
       const users = [...target.searchParams.getAll("user"), ...(bodyUser ? [bodyUser] : [])].join(",");
       const auditDetail = `${req.method} ${routed.slice(0, 256)}${users ? ` (user=${users.slice(0, 128)})` : ""}`;
-      const headers = forwardedRequestHeaders(req, adminKey);
+      const headers = forwardedRequestHeaders(req, bearer);
       // The page document is read here (`relayPageDocument`): ask for it as it is, not compressed.
       // Only a page load asks for HTML; pi's assets keep the browser's own header.
       if (!api && req.method === "GET" && (req.get("accept") ?? "").includes("text/html")) delete headers["accept-encoding"];
@@ -499,8 +506,30 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
       else req.pipe(request);
     };
 
+    /**
+     * Picks the bearer, then forwards: the admin's own Keycloak token when this
+     * session has one, else pi's admin key (see the module comment). The request
+     * body is not read meanwhile (nothing listens to it until `forward` pipes it).
+     */
+    const send = (body: Buffer | null, bodyUser: string) => {
+      void personAccessTokenFor(store, config, sessionTokenFromRequest(req))
+        .catch(() => null)
+        .then((personToken) => {
+          // The browser left while Keycloak was asked: nothing was forwarded, so there is nothing to audit.
+          if (clientGone) return;
+          forward(body, bodyUser, personToken ?? adminKey);
+        })
+        .catch((error: unknown) => {
+          // `forward` threw, outside Express now: answered here, never an unhandled rejection that stops Noah.
+          logger.error({ err: error instanceof Error ? error.name : "error", path: routed }, "pi admin proxy: could not forward");
+          if (res.headersSent) res.destroy();
+          else if (api) piError(res, 502, "upstream_unreachable", "pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
+          else res.status(502).type("text/plain; charset=utf-8").send("pi-gateway에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
+        });
+    };
+
     if (!(mutating && BODY_USER_WRITES.has(pathname))) {
-      forward(null, "");
+      send(null, "");
       return;
     }
     // An admin chat names the pi user it runs as in its JSON body: read it whole
@@ -522,7 +551,7 @@ export function createPiAdminProxyRouter(deps: RouterDeps): Router {
     req.on("end", () => {
       if (tooLarge || clientGone) return;
       const body = Buffer.concat(chunks);
-      forward(body, jsonBodyUser(body));
+      send(body, jsonBodyUser(body));
     });
     req.on("error", () => {
       // The browser went away mid-body: nothing was forwarded, so there is nothing to audit.
