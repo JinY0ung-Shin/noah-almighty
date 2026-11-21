@@ -90,6 +90,7 @@ text is in `$RUN/logs/drive.log`; each step's full output is in `$RUN/evidence/`
 101-turn-limits 5/5            (pi's limits 48 / 6: one user's seven turns at once — six run, the seventh waits)
 102-mining-model 23/23         (the model a mining run uses; fails ONE run on purpose — its model is gone)
 103-mining-prompt 20/20        (mining's 추가 프롬프트: the route, the dialog on the page, a run with it set)
+107-admin-oidc-off 6/6         (no issuer in this stack: pi's admin key paths are what they were)
 95-final-state 1/1             (no error-level line in any service's log but that run's one; prints memory)
 ```
 
@@ -128,7 +129,7 @@ not look at. Minutes of work, seconds of run time.
   file into `.claude/skills/pi-bump/boot-test/scripts/` and add its `extra` line to `drive.sh` THERE too — a
   check that lives only in a run directory is lost. It is a regression guard from then on.
 - Name: `NN-<what>.mjs`; the number only groups files (drive.sh's order is explicit). Bump guards are `90`–`94`,
-  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100`–`106` are taken; the next free one is `107`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
+  `96`–`98`, then `100`+ (`94`, `96`–`98` and `100`–`107` are taken; the next free one is `108`). Evidence file: one capital letter + name (`L-tool-call-limit.log`).
 - Helpers, all in `scripts/e2e-common.mjs`: `loadState()` (the `owner` — a Noah admin — and `second`, a member:
   `{id, username, cookie}`), `client(cookie)` (`.get/.post/.put`), `turn(client, {avatarId, conversationId,
   message})` → `{status, frames, of(event)}`, `fake.enqueue(key, turns)` / `fake.requests(key)` /

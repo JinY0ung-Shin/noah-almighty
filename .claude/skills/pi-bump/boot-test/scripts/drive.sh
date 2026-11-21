@@ -88,6 +88,9 @@ checks_stage() {
   # The memory service's history (pi 2759ae2): one commit per change in a local git, with the IMAGE's git under the
   # stack's hardening; a note from before the history is committed first; nothing has a remote.
   extra 106-memory-history       J-memory-history.log          node 106-memory-history.mjs
+  # pi's admin API WITHOUT an issuer (pi d6411c9 added OIDC tokens to it): the key paths are what they were — the
+  # relay, a program's Bearer key, the key's screen login — and a JWT-shaped bearer is only a wrong key.
+  extra 107-admin-oidc-off       B-admin-oidc-off.log          node 107-admin-oidc-off.mjs
   # A new bump's ONE quick check goes here, with the next free number (SKILL.md "Adding a check").
   echo "== final state"
   extra 95-final-state           final-state.txt               ./95-final-state.sh
